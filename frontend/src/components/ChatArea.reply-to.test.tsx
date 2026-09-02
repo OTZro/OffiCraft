@@ -74,7 +74,7 @@ vi.mock("../hooks/useChat", () => ({
   useChat: () => ({
     messages,
     messagesPeer: "m1",
-    peerLastReadTs: 0,
+    peerLastRead: { peer: "", tsFor: () => 0 },
     send,
     markRead: vi.fn(() => Promise.resolve()),
   }),
@@ -944,6 +944,7 @@ describe("ChatArea 回覆這則", () => {
       attachments: [
         {
           key: "k-theirs",
+          target: "m1",
           dataUri: "data:image/png;base64,AAAA",
           filename: "後來貼的.png",
           mime: "image/png",

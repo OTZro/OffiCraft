@@ -20,9 +20,9 @@ import { useOwnerDisplayName } from "../hooks/useOwnerName";
 import { formatDayLabel, splitByDay } from "../lib/dateFormat";
 import {
   ATTACH_ACCEPT,
-  CHAT_MAX_ATTACHMENTS,
   useAttachmentStaging,
 } from "../hooks/useAttachmentStaging";
+import type { PendingAttachment } from "../hooks/useAttachmentStaging";
 import { useWindowActive } from "../hooks/useWindowActive";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { useKeyedRecord } from "../hooks/useKeyedRecord";
@@ -248,6 +248,41 @@ function freshChatSession(unreadCount: number): ChatSession {
   };
 }
 
+/** A file that finished reading for a room the owner is no longer looking at —
+ * another conversation, or no conversation at all because the page was left. It
+ * is invisible either way (the composer renders only the rows stamped with the
+ * room on screen); this is purely about not LOSING it, since the staged list is
+ * wiped on the next conversation switch and dies outright on an unmount. It goes
+ * into ITS OWN room's draft, which is what that room's composer restores from.
+ *
+ * Dedup is by `key` because the same row may already be in the draft: the
+ * persist effect below saves the live staged list on every change, so a file
+ * that was staged and then abandoned is in the draft AND in state.
+ *
+ * 🔴 THE COUNT CAP IS NOT APPLIED HERE, AND THAT IS THE FIX FOR R10-3. The
+ * previous shape refused a file when the target draft already held
+ * CHAT_MAX_ATTACHMENTS and reported success — the file was destroyed with no
+ * notice in either room. The cap is a staging-time rule about ONE message; a
+ * file that has already been read is not a candidate to refuse, it is data
+ * somebody is holding. So the draft is allowed over the cap and the owner sees
+ * every file waiting when they come back, with the over-cap ones there to
+ * remove. Sending over the cap is refused by the server, visibly (§3 rule 4:
+ * blocking a commit is never a licence to destroy the file). */
+function keepAttachmentsWithTheirRoom(
+  peer: string,
+  arriving: PendingAttachment[],
+): void {
+  const saved = getChatDraft(peer);
+  const kept = saved?.attachments ?? [];
+  const fresh = arriving.filter((a) => !kept.some((k) => k.key === a.key));
+  if (fresh.length === 0) return;
+  saveChatDraft(peer, {
+    text: saved?.text ?? "",
+    attachments: [...kept, ...fresh],
+    replyTo: saved?.replyTo,
+  });
+}
+
 export function ChatArea({
   member,
   members = [],
@@ -421,7 +456,7 @@ export function ChatArea({
   const {
     messages,
     messagesPeer,
-    peerLastReadTs,
+    peerLastRead,
     send,
     markRead,
     hasMore,
@@ -545,12 +580,12 @@ export function ChatArea({
   // The staged attachments (pasted images AND/OR picked/dropped files), held
   // until the message is sent — the SHARED staging state machine
   // (useAttachmentStaging: size/count caps, paste/pick funnels, previews).
-  // 🔴 R9-1: this component is NOT remounted on a conversation switch, so a
-  // FileReader started in A can complete while B is on screen. `memberIdRef`
-  // answers "who is on screen NOW" for that late callback; `session` answers
-  // "which visit picked the file".
-  const memberIdRef = useRef(member.id);
-  memberIdRef.current = member.id;
+  // 🔴 R9-1, AND WHY IT IS NO LONGER A GUARD (owner ruling). This component is
+  // NOT remounted on a conversation switch, so a FileReader started in A can
+  // complete while B is on screen. The first fix was a commit guard on the
+  // visit token; this is the shape the owner asked for instead — each staged
+  // file carries the room it was picked for, and the composer renders only the
+  // ones stamped with the room on screen. Nothing here has to REMEMBER to ask.
   const {
     pendingAttachments,
     attachError,
@@ -560,35 +595,7 @@ export function ChatArea({
     removeAttachment,
     clearAttachments,
     restoreAttachments,
-  } = useAttachmentStaging({
-    token: session,
-    stashLate: (attachment) => {
-      // Captured at PICK time: the peer whose composer the owner dropped this
-      // file into.
-      const stagePeer = member.id;
-      // A LATER VISIT TO THE SAME PEER is not a wrong room. The visit token
-      // changed (A→B→A mints a fresh record), but the composer on screen is
-      // that file's composer, so it is staged normally — the guard blocks a
-      // cross-ROOM commit, and this is §5.2's question ("whose file is this?")
-      // answered with a string, deliberately.
-      if (stagePeer === memberIdRef.current) return false;
-      // Otherwise it goes back to the room it was picked for, the same way
-      // `submit()`'s failure branch saves to `sendPeer` BEFORE its guard
-      // (§3 rule 4's counter-example). The draft is what the composer restores
-      // from on the next entry, so the file is waiting there.
-      const saved = getChatDraft(stagePeer);
-      const kept = saved?.attachments ?? [];
-      // The count cap is the staging machine's rule; honour it here too rather
-      // than growing a draft the composer would refuse to accept back.
-      if (kept.length >= CHAT_MAX_ATTACHMENTS) return true;
-      saveChatDraft(stagePeer, {
-        text: saved?.text ?? "",
-        attachments: [...kept, attachment],
-        replyTo: saved?.replyTo,
-      });
-      return true;
-    },
-  });
+  } = useAttachmentStaging(member.id, keepAttachmentsWithTheirRoom);
   // What the in-cockpit full-view overlay is showing (null = closed). THREE
   // ways in, one surface: a stored ATTACHMENT (T-a1c4 — the overlay fetches the
   // blob, offers 下載 and a share link, so it carries the blob's id), an
@@ -598,7 +605,21 @@ export function ChatArea({
   // URI, so 下載 is honest but no blob id exists to share). The kind is carried
   // explicitly so no branch has to be guessed from which field happens to be
   // set.
-  const [mdPreview, setMdPreview] = useState<
+  // 🔴 PER VISIT (T-48, R10-1 — the twelfth instance of this family). This was
+  // left as a plain `useState` when its twin `galleryOpen` was keyed, on the
+  // written premise that `.md-preview`'s full-screen backdrop blocks every
+  // gesture that could change the peer. The tenth review drove it and the
+  // premise is false TODAY: the site routes on the hash (`OfficePage`'s
+  // `useHashRoute`, whose `route.chatId` IS the selected peer), so the browser's
+  // back/forward buttons and any link into another conversation swap `member`
+  // without the backdrop being touched. Measured: open A's document preview,
+  // switch to B — the header says Bruno while the overlay still shows A's
+  // filename and A's content.
+  //
+  // Keying the overlay is also what makes the 22 unguarded async landing points
+  // inside `MarkdownPreviewOverlay` structurally safe: the overlay itself cannot
+  // outlive the visit, so none of its writers can either.
+  const [mdPreview, setMdPreview] = useKeyedState<
     | {
         kind: "attachment";
         title: string;
@@ -608,7 +629,7 @@ export function ChatArea({
     | { kind: "message"; title: string; source: string }
     | { kind: "staged-image"; title: string; imageSrc: string }
     | null
-  >(null);
+  >(session, null);
   // 「看原訊息」 — reading that one message and showing it whole is NOT this
   // component's business any more (T-0b78). It lives in
   // hooks/useQuotedMessageOverlay. ⚠️ The quote row on a chat bubble is now the
@@ -1637,7 +1658,11 @@ export function ChatArea({
     // Per-message read state (LINE-style): every own message the peer's real
     // last-read watermark covers shows its own "已讀". Honest — driven only by a
     // recorded watermark, never fabricated.
-    const read = mine && peerLastReadTs >= m.ts;
+    // The watermark is asked for THIS room by name — there is no bare number to
+    // read (see useChat's PeerLastRead). A watermark still in flight for another
+    // room answers 0, which draws no tick, rather than lighting one off somebody
+    // else's reading (R8-2).
+    const read = mine && peerLastRead.tsFor(member.id) >= m.ts;
     // ONE bubble per message (owner feedback): text and attachments share the
     // SAME bubble container — text on top, attachments stacked below — one
     // rounded surface, one background, so a text+attachment message reads as a

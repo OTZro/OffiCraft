@@ -273,10 +273,15 @@ export function ChatGalleryPanel({
     // below cannot catch it (it only drops ids absent from EVERY row, and 「我」
     // is in plenty of B's rows — just not B's images).
     setSenderSelByTab({ images: new Set(), files: new Set() });
-    // T-48 R9-2: the open PREVIEW belongs to the same gallery. A key minted for
-    // one member's row still resolves against the rows on screen until the new
-    // member's fetch replaces them, so without this the previous member's image
-    // stays open over the new member's gallery.
+    // T-48 R10-7: THIS PANEL'S OWN INVARIANT, not a fix for an observed
+    // symptom. A key minted for one member's row would still resolve against
+    // the rows on screen until the new member's fetch replaced them — but from
+    // the one caller in the tree that cannot happen: `galleryOpen` is keyed on
+    // the visit, so the switching render closes the panel and unmounts it
+    // before this effect could ever run with a changed `member.id`. It is kept
+    // as defence for the day somebody renders this panel outside that gate;
+    // removing it reddens `ChatGalleryPanel.test.tsx` and nothing else, and
+    // that is the honest extent of what it holds.
     setPreviewKey(null);
   }, [member.id]);
 

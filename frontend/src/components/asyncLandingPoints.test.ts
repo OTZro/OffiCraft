@@ -57,16 +57,27 @@ const IN_SCOPE = /\/src\/(components|hooks|lib)\//;
 
 /** The shapes that put a gap between "queued" and "commits". */
 const KINDS: ReadonlyArray<readonly [string, RegExp]> = [
-  ["await", /\bawait\b/],
-  [".then/.catch/.finally", /\.(then|catch|finally)\s*\(/],
-  ["setTimeout/setInterval", /\bset(Timeout|Interval)\s*\(/],
-  ["queueMicrotask", /\bqueueMicrotask\s*\(/],
-  ["requestAnimationFrame", /\brequestAnimationFrame\s*\(/],
-  ["addEventListener", /\baddEventListener\s*\(/],
-  ["Observer", /\bnew (Resize|Intersection|Mutation)Observer\b/],
-  ["FileReader/Image handler", /\bnew FileReader\b|\.(onload|onerror|onloadend)\s*=/],
-  ["JSX onLoad/onError", /\bon(Load|Error)=\{/],
-  ["subscribe", /\bsubscribe[A-Za-z]*\s*\(/],
+  ["await", /\bawait\b/g],
+  [".then/.catch/.finally", /\.(then|catch|finally)\s*\(/g],
+  ["setTimeout/setInterval", /\bset(Timeout|Interval)\s*\(/g],
+  ["queueMicrotask", /\bqueueMicrotask\s*\(/g],
+  ["requestAnimationFrame", /\brequestAnimationFrame\s*\(/g],
+  ["addEventListener", /\baddEventListener\s*\(/g],
+  ["Observer", /\bnew (Resize|Intersection|Mutation)Observer\b/g],
+  ["FileReader/Image handler", /\bnew FileReader\b|\.(onload|onerror|onloadend)\s*=/g],
+  ["JSX onLoad/onError", /\bon(Load|Error)=\{/g],
+  ["subscribe", /\bsubscribe[A-Za-z]*\s*\(/g],
+  // 🔴 THE CATCH-ALL (T-48, R10-5 B4). The nine shapes above were the ones this
+  // codebase happened to use, and the tenth review showed the list was CLOSED
+  // against nothing: `requestIdleCallback`, `window.onmessage =`,
+  // `new Promise(` and `new BroadcastChannel(...).onmessage =` could all be
+  // added to `ChatArea` itself and the census stayed green. This row is written
+  // to catch a shape nobody has used yet, so it is deliberately broad, and the
+  // lookaheads only keep it from double-counting the rows above it.
+  [
+    "other async primitive",
+    /\.on(?!load\b|error\b|loadend\b)[a-z]+\s*=|\bnew (?!Resize|Intersection|Mutation)[A-Z]\w*Observer\b|\brequestIdleCallback\s*\(|\bnew (Promise|BroadcastChannel|MessageChannel|Worker|EventSource|WebSocket|SharedWorker)\s*\(/g,
+  ],
 ];
 
 /** file → kind → count, each with the verdict its author signed.
@@ -102,27 +113,40 @@ const REGISTRY: ReadonlyArray<{
   { file: "hooks/useChat.ts", kind: "addEventListener", count: 2, verdict: "focus / visibilitychange; removed in the same effect's cleanup, deps [withId, refetchReads, conv]" },
   { file: "hooks/useChat.ts", kind: "subscribe", count: 1, verdict: "the SSE delta sink; unsubscribed in the same cleanup" },
   { file: "hooks/useQuotedMessageOverlay.tsx", kind: "await", count: 1, verdict: "open(); `visitRef.current !== firedFor` on both arms, visit token REQUIRED by the type (S11)" },
-  { file: "hooks/useAttachmentStaging.ts", kind: "FileReader/Image handler", count: 2, verdict: "🔴 R9-1 lived here with ZERO guard and no `await` to hint at one. Now: the commit is guarded on the visit token, and a late file is handed back to the room that picked it (S12/S13/S14)" },
+  { file: "hooks/useAttachmentStaging.ts", kind: "FileReader/Image handler", count: 2, verdict: "🔴 R9-1 lived here with ZERO guard and no `await` to hint at one. Now: the ROW carries its room. Every staged file is stamped at pick time and the composer renders only the rows for the room on screen, so a late landing has nowhere wrong to go; a file for a room not on screen — or for no mounted composer at all (R10-4) — is handed to that room's draft, never dropped (S12/S13/S14/S18/S19/S20)" },
 
   // ─── Rendered by ChatArea without a key — they survive a switch ───
   { file: "components/ChatGalleryPanel.tsx", kind: ".then/.catch/.finally", count: 2, verdict: "gallery fetch; `alive` + deps [member.id]. Since R9-2 the panel also closes on a switch, so it remounts per visit" },
   { file: "components/ChatGalleryPanel.tsx", kind: "addEventListener", count: 1, verdict: "Escape layer; removed on unmount" },
   { file: "components/ChatGalleryPanel.tsx", kind: "subscribe", count: 1, verdict: "gallery SSE; unsubscribed on unmount" },
   { file: "components/Avatar.tsx", kind: "JSX onLoad/onError", count: 1, verdict: "<img onError>; records the URL that failed, which can never match the next room's avatar, and the [personal, theme] effect clears it" },
-  { file: "components/MarkdownPreviewOverlay.tsx", kind: "await", count: 1, verdict: "⚠️ share-link copy, unguarded — see the ⚠️ below" },
-  { file: "components/MarkdownPreviewOverlay.tsx", kind: ".then/.catch/.finally", count: 5, verdict: "⚠️ blob fetch + copy, unguarded — see the ⚠️ below" },
-  { file: "components/MarkdownPreviewOverlay.tsx", kind: "setTimeout/setInterval", count: 2, verdict: "⚠️ the 已複製 flash timers, unguarded — see the ⚠️ below" },
-  { file: "components/MarkdownPreviewOverlay.tsx", kind: "addEventListener", count: 13, verdict: "⚠️ keydown pager, wheel/touch/gesture zoom, resize, pointermove — see the ⚠️ below" },
+  { file: "components/MarkdownPreviewOverlay.tsx", kind: "await", count: 1, verdict: "share-link copy; the overlay is keyed on the visit (R10-1) so it cannot outlive the room that opened it" },
+  { file: "components/MarkdownPreviewOverlay.tsx", kind: ".then/.catch/.finally", count: 5, verdict: "blob fetch + copy; writes only this overlay's own state, and the overlay dies with the visit (R10-1)" },
+  { file: "components/MarkdownPreviewOverlay.tsx", kind: "setTimeout/setInterval", count: 2, verdict: "the 已複製 flash timers; write only this overlay's own state, and the overlay dies with the visit (R10-1)" },
+  { file: "components/MarkdownPreviewOverlay.tsx", kind: "addEventListener", count: 13, verdict: "keydown pager, wheel/touch/gesture zoom, resize, pointermove; all removed on unmount, and the overlay unmounts with the visit (R10-1)" },
   { file: "components/MarkdownPreviewOverlay.tsx", kind: "JSX onLoad/onError", count: 1, verdict: "<img onLoad> sizing; writes only this overlay's own layout" },
-  // ⚠️ THE `mdPreview` EXEMPTION, AND ITS PRECONDITION (R9-4). `.md-preview` is
-  // `position: fixed; inset: 0` WITH a backdrop, so while it is open the roster
-  // cannot be clicked and these writers cannot be outlived by a switch. The
-  // precondition that exemption rests on is NOT "it covers the screen" — it is
-  // "EVERY gesture that can change the peer is blocked by it". This site routes
-  // on the hash, so the browser's back/forward buttons and a notification link
-  // change `member` without touching the overlay. Nobody has driven that path
-  // (it needs a hash-routing integration test). Add a new way to change peer
-  // and this exemption is what you have just broken.
+  // 🔴 THE `mdPreview` EXEMPTION IS GONE, AND ITS EPITAPH IS THE POINT (R10-1).
+  // Those five rows used to point at an exemption reading: `.md-preview` is
+  // `position: fixed; inset: 0` with a backdrop, so while it is open nothing
+  // can change the peer and these writers cannot be outlived by a switch. It
+  // even named its own precondition honestly ("EVERY gesture that can change
+  // the peer is blocked by it") and admitted nobody had driven the hash-routing
+  // path. The tenth review drove it: open A's preview, change `member`, and the
+  // header says Bruno while the overlay still shows A's filename and A's
+  // content. The premise was already false when it was written.
+  //
+  // The fix is not in this file and not in that overlay: `ChatArea` now holds
+  // `mdPreview` in `useKeyedState(session, …)`, so the overlay cannot outlive
+  // the visit and all five rows below are structurally safe without one of
+  // their callbacks being touched.
+  //
+  // ⚠️ READ THIS BEFORE TRUSTING ANY VERDICT HERE. That exemption was careful,
+  // explicit about its own assumptions, and WRONG — and this test had nothing
+  // to say about it, because a verdict is a human's claim and a wrong claim is
+  // still a claim. What this file guarantees is that a claim EXISTS for every
+  // landing point and gets re-read whenever the code under it moves. It does
+  // not, and cannot, check that the claim is true. That has now cost one live
+  // bug, so it is a demonstrated limit rather than a theoretical one.
 
   // ─── Global / conversation-independent ───
   { file: "hooks/sharedServerSettings.ts", kind: "addEventListener", count: 2, verdict: "storage + auth invalidation; global, not per conversation" },
@@ -136,7 +160,7 @@ const REGISTRY: ReadonlyArray<{
   { file: "lib/hashRoute.ts", kind: "subscribe", count: 1, verdict: "route subscribers; same" },
   { file: "lib/scrollToLatest.ts", kind: "setTimeout/setInterval", count: 1, verdict: "settle timer; writes scrollTop on an element handed in by the caller, and the caller clears it" },
   { file: "lib/scrollToLatest.ts", kind: "Observer", count: 1, verdict: "ResizeObserver on that same element; disconnected by the same caller" },
-  { file: "lib/shareLink.ts", kind: "await", count: 2, verdict: "returns a value to its caller; commits nothing itself" },
+  { file: "lib/shareLink.ts", kind: "await", count: 3, verdict: "returns a value to its caller; commits nothing itself. The count was 2 while this census counted LINES — one line here holds two awaits (R10-5 B5)" },
   { file: "lib/sharedSnapshot.ts", kind: ".then/.catch/.finally", count: 1, verdict: "single-flight settings snapshot; global generation, not per conversation" },
 ];
 
@@ -155,7 +179,15 @@ function walkFromChatArea(): string[] {
     const file = queue.shift() as string;
     if (seen.has(file)) continue;
     seen.add(file);
-    for (const m of readFileSync(file, "utf8").matchAll(/from\s+"([^"]+)"/g)) {
+    // 🔴 EVERY IMPORT SYNTAX, NOT JUST THE PRETTY ONE (T-48, R10-5 B1/B2/B3).
+    // The walk used to match `from "…"` only, so a side-effect import
+    // (`import "./x"`), a single-quoted specifier and a dynamic `import("./x")`
+    // each dropped a file out of the population SILENTLY. B3 is the one that
+    // matters: the day somebody `React.lazy`-splits `MarkdownPreviewOverlay`,
+    // its 22 landing points would have left the census with nothing going red.
+    for (const m of readFileSync(file, "utf8").matchAll(
+      /(?:\bfrom|\bimport)\s*\(?\s*['"]([^'"]+)['"]/g,
+    )) {
       const r = resolveSpec(file, m[1]);
       if (r && !r.includes(".test.") && IN_SCOPE.test(r)) queue.push(r);
     }
@@ -173,7 +205,12 @@ function scan(): Map<string, number> {
         const t = line.trim();
         // Prose about a landing point is not a landing point.
         if (t.startsWith("//") || t.startsWith("*")) continue;
-        if (re.test(line)) n++;
+        // 🔴 OCCURRENCES, NOT LINES (T-48, R10-5 B5). The header promised that
+        // "adding a second `setTimeout` to a file that already had one still
+        // reddens this test", and that was only true on a NEW line — a second
+        // one appended to a counted line was free. `lib/shareLink.ts` had
+        // already walked into it: one line there holds two `await`s.
+        n += line.match(re)?.length ?? 0;
       }
       if (n > 0) found.set(`${file.slice(SRC.length + 1)} | ${kind}`, n);
     }
@@ -197,6 +234,17 @@ describe("async landing points reachable from ChatArea", () => {
 
   it("carry a verdict each — an entry with nothing said about it is not an entry", () => {
     expect(REGISTRY.filter((r) => r.verdict.trim().length < 20)).toEqual([]);
+  });
+
+  it("keep every shape they have ever scanned for", () => {
+    // Deleting a KIND is the one edit that shrinks the population without
+    // adding a single row to the diff's register — every file that only ever
+    // landed through that shape simply stops being counted, and both directions
+    // of the comparison above agree. So the list's LENGTH is pinned too, and
+    // growing it is deliberate work: the number below moves only with a new row
+    // and the verdicts it drags in.
+    expect(KINDS.length).toBe(11);
+    expect(KINDS.map(([k]) => k)).toContain("other async primitive");
   });
 
   it("start from a file set that is walked, not typed in", () => {

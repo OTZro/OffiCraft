@@ -32,7 +32,7 @@ vi.mock("../hooks/useChat", () => ({
   useChat: () => ({
     messages,
     messagesPeer: "mira",
-    peerLastReadTs: 0,
+    peerLastRead: { peer: "", tsFor: () => 0 },
     send: vi.fn(() => Promise.resolve()),
     markRead: vi.fn(() => Promise.resolve()),
   }),

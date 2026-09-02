@@ -34,7 +34,7 @@
 // existing thread by id (older messages kept in front) instead of replacing
 // the whole array — a replace would silently eat the loaded history.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatMessage, ChatAttachmentInput } from "../api/adapter";
 import { api } from "../api";
 import { ApiError } from "../api/errors";
@@ -131,9 +131,11 @@ interface UseChat {
   // entry positioning) MUST gate on `messagesPeer === <current peer>` instead
   // of trusting `messages` blindly.
   messagesPeer: string;
-  // The peer's last-read watermark for THIS conversation (epoch seconds), or 0
-  // when the peer has not read anything yet. Drives the per-message "read ✓" badge.
-  peerLastReadTs: number;
+  // The peer's last-read watermark — VALUE AND WHOSE IT IS, in one object, and
+  // there is no way to read the number without naming the room you are drawing.
+  // See PeerLastRead: this used to be a bare `number`, and a bare number is a
+  // thing every consumer had to REMEMBER to pair with a peer check.
+  peerLastRead: PeerLastRead;
   // Send text and/or a LIST of staged attachments (files + images mixed) — all
   // riding the SAME message.
   send: (
@@ -196,6 +198,46 @@ interface UseChat {
   // the range between them is genuinely unloaded, and pretending otherwise is
   // the T-b0bb hole with a friendlier name.
   resetToLatest: () => Promise<void>;
+}
+
+// 🔴 A WATERMARK THAT KNOWS WHOSE IT IS (T-48, owner ruling).
+//
+// This was `peerLastReadTs: number` — a bare value, and R8-2 was the bug that
+// shape makes: `refetchReads` fired on entry to B, the owner left before the
+// receipts landed, and B's watermark was written into A's room, lighting 已讀
+// ticks on A's outgoing rows off somebody else's reading. The fix at the time
+// was one more line somebody had to remember to write. Eleven instances of this
+// family were each "somebody did not write that line".
+//
+// So the value carries its owner, exactly like `messagesPeer` carries the
+// thread's — the shape this codebase already had. The number is reachable only
+// through `tsFor`, which is to say only by answering "whose room is this?".
+// Forgetting is not a thing you can do: there is no unanswered value to use.
+//
+// 🔴 THIS IS NOT ABOUT WHICH VISIT, AND MUST NOT BECOME ABOUT IT. A watermark
+// that lands late from the SAME peer is still that peer's own watermark, merely
+// older — dropping it as "stale" would throw away a true fact. `mergePeerRead`
+// therefore keeps the LARGER of the two (monotonic) and only refuses a
+// watermark belonging to somebody ELSE. Identity and recency are two questions;
+// one guard answering both is how R7-1 and R8-1 got misfiled.
+export interface PeerLastRead {
+  /** Whose watermark this is (the peer id it was fetched for). */
+  readonly peer: string;
+  /** The watermark in epoch seconds for the room you name, or 0 when this is
+   * not that room's watermark (and 0 when the peer has read nothing). Drives
+   * the per-message 「已讀」 badge. */
+  tsFor(peer: string): number;
+}
+
+/** The one rule for writing a watermark, so no caller carries it. */
+export function mergePeerRead(
+  prev: { peer: string; ts: number },
+  next: { peer: string; ts: number },
+): { peer: string; ts: number } {
+  // Somebody else's room: this value has nothing to say here.
+  if (prev.peer !== next.peer) return prev;
+  // Same room, so it is ours whichever visit fetched it — take the further one.
+  return next.ts > prev.ts ? next : prev;
 }
 
 // What `loadAround` actually did, and the reason it is not a boolean (T-48, F3).
@@ -461,7 +503,12 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     gapSuspected: false,
     hasNewer: false,
   }));
-  const [peerLastReadTs, setPeerLastReadTs] = useState(0);
+  // The peer's read watermark, and the peer it belongs to, in ONE state — the
+  // same reason `Thread` keeps `peer` beside `messages` (see Thread's note).
+  const [peerRead, setPeerRead] = useState<{ peer: string; ts: number }>(() => ({
+    peer: withId,
+    ts: 0,
+  }));
   // Live mirror of `thread` for the async loadOlder (a state read inside an
   // await would be a stale closure) + the in-flight lock: one older page at a
   // time, so a scroll handler firing repeatedly near the top can't stack
@@ -647,9 +694,17 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       // A writes *B's* watermark into A's room — read ticks lit on A's outgoing
       // rows off somebody else's reading, and nothing corrects it until the next
       // `chat_read` delta or the next entry. One mis-click reaches it.
-      if (convRef.current !== conv) return;
       const peerReceipt = reads.find((r) => r.readerId === withId);
-      setPeerLastReadTs(peerReceipt ? peerReceipt.lastReadTs : 0);
+      // No visit guard here, and that is deliberate — see PeerLastRead. The
+      // value names the room it is for; `mergePeerRead` refuses another room's
+      // and keeps the larger of this room's own, so a watermark that lands after
+      // the owner has come BACK to this peer is used rather than discarded.
+      setPeerRead((prev) =>
+        mergePeerRead(prev, {
+          peer: withId,
+          ts: peerReceipt ? peerReceipt.lastReadTs : 0,
+        }),
+      );
     } catch (e) {
       console.warn("useChat: reads refetch failed", e);
     }
@@ -836,7 +891,7 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       gapSuspected: false,
       hasNewer: false,
     });
-    setPeerLastReadTs(0);
+    setPeerRead({ peer: withId, ts: 0 });
 
     // ONE load path (initial + SSE + refocus), and since T-48 ONE door: the
     // load never marks anything read, so a backgrounded window loads exactly
@@ -1309,10 +1364,18 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     [withId],
   );
 
+  const peerLastRead = useMemo<PeerLastRead>(
+    () => ({
+      peer: peerRead.peer,
+      tsFor: (peer: string) => (peer === peerRead.peer ? peerRead.ts : 0),
+    }),
+    [peerRead],
+  );
+
   return {
     messages: thread.messages,
     messagesPeer: thread.peer,
-    peerLastReadTs,
+    peerLastRead,
     send,
     markRead,
     hasMore: thread.hasMore,

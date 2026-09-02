@@ -199,7 +199,7 @@ describe("useChat load routing (active vs background)", () => {
   // above and all 2248 tests stayed green — a message that never left would
   // then vanish with no restore, no draft and not even a console.warn. This is
   // the assertion that makes that a red.
-  // T-48 ④ 已讀勾. `peerLastReadTs` is the ONLY input to the outgoing rows'
+  // T-48 ④ 已讀勾. The peer watermark is the ONLY input to the outgoing rows'
   // 已讀 tick, and until now nothing in the repo exercised how it is derived —
   // every ChatArea test hard-codes it to 0. So the hook could read the wrong
   // ROW of the right table and stay green forever, which is exactly what it
@@ -228,7 +228,7 @@ describe("useChat load routing (active vs background)", () => {
     });
 
     const { result } = renderHook(() => useChat("b"));
-    await waitFor(() => expect(result.current.peerLastReadTs).toBe(4242));
+    await waitFor(() => expect(result.current.peerLastRead.tsFor("b")).toBe(4242));
     expect(h.listChatReads).toHaveBeenCalledWith(OWNER_ID);
     expect(h.listChatReads).not.toHaveBeenCalledWith("b");
   });
@@ -240,17 +240,16 @@ describe("useChat load routing (active vs background)", () => {
     ]);
     const { result } = renderHook(() => useChat("b"));
     await waitFor(() => expect(h.listChat).toHaveBeenCalledTimes(1));
-    expect(result.current.peerLastReadTs).toBe(0);
+    expect(result.current.peerLastRead.tsFor("b")).toBe(0);
   });
 
   it("切走再切回,上一間房晚到的已讀水位不准畫成這一間的已讀勾", async () => {
-    // 🔴 T-48 R8-2。這一格以前被文件豁免掉,理由是「同一個人的資料只是舊一格」——
-    // 那個前提不成立:訂閱 effect 一進房就打 `void refetchReads()`,而
-    // `peerLastReadTs` 是同一支 useState(ChatArea 換人不會 remount),閉包捕獲的
-    // `withId` 是**那一間**的人。所以進 B、reads 還在路上、馬上切回 A,B 那通落地
-    // 就把 B 的水位寫進 A 的房間 —— 不是退一格,是憑別人的水位在 A 的訊息上點亮
-    // 已讀勾,而且要等下一則 chat_read delta 或下一次進房才會蓋回來。
-    // 一次手滑就到得了,是這一族裡最好觸發的一條。
+    // 🔴 T-48 R8-2。訂閱 effect 一進房就打 `void refetchReads()`,而水位是同一支
+    // useState(ChatArea 換人不會 remount),閉包捕獲的 `withId` 是**那一間**的人。
+    // 進 B、reads 還在路上、馬上切回 A,B 那通落地就把 B 的水位寫進 A 的房間
+    // —— 憑別人的水位在 A 的訊息上點亮已讀勾。一次手滑就到得了。
+    // 現在擋住它的不是某一句守衛,而是水位自己帶著「我是誰的」:B 的那筆
+    // 在 `mergePeerRead` 眼裡 peer 對不上,寫不進去。
     h.listChat.mockResolvedValue([mkMsg("c1", "owner", "a", 1000)]);
     let landB!: (rows: unknown[]) => void;
     h.listChatReads
@@ -270,7 +269,7 @@ describe("useChat load routing (active vs background)", () => {
     const { result, rerender } = renderHook(({ id }) => useChat(id), {
       initialProps: { id: "a" },
     });
-    await waitFor(() => expect(result.current.peerLastReadTs).toBe(100));
+    await waitFor(() => expect(result.current.peerLastRead.tsFor("a")).toBe(100));
 
     await act(async () => {
       rerender({ id: "b" });
@@ -280,7 +279,7 @@ describe("useChat load routing (active vs background)", () => {
       rerender({ id: "a" });
       await new Promise((r) => setTimeout(r, 10));
     });
-    expect(result.current.peerLastReadTs, "前提:回到 A 的這一趟拿到的是 A 的水位").toBe(100);
+    expect(result.current.peerLastRead.tsFor("a"), "前提:回到 A 的這一趟拿到的是 A 的水位").toBe(100);
 
     await act(async () => {
       landB([
@@ -289,9 +288,10 @@ describe("useChat load routing (active vs background)", () => {
       ]);
       await new Promise((r) => setTimeout(r, 10));
     });
-    expect(result.current.peerLastReadTs, "A 的房間不准顯示 B 的已讀水位").toBe(
-      100,
-    );
+    expect(
+      result.current.peerLastRead.tsFor("a"),
+      "A 的房間不准顯示 B 的已讀水位",
+    ).toBe(100);
   });
 
   it("a send whose POST FAILED still rejects — the caller must be able to tell", async () => {
