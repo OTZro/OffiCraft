@@ -387,12 +387,11 @@ func (d *DAL) PutMember(m Member) error {
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			name = excluded.name, kind = excluded.kind,
-			role_key = excluded.role_key, runtime = excluded.runtime,
-			model = excluded.model, actual_model = excluded.actual_model,
+			role_key = excluded.role_key,
+			actual_model = excluded.actual_model,
 			actual_runtime = excluded.actual_runtime,
 			actual_effort = excluded.actual_effort,
-			effort = excluded.effort, desired_state = excluded.desired_state,
-			desired_machine_id = excluded.desired_machine_id,
+			desired_state = excluded.desired_state,
 			last_machine_id = excluded.last_machine_id,
 			session_boot_ts = excluded.session_boot_ts,
 			waking_since = excluded.waking_since,
@@ -400,7 +399,6 @@ func (d *DAL) PutMember(m Member) error {
 			stopped_since = excluded.stopped_since,
 			refocus_since = excluded.refocus_since,
 			refocus_op = excluded.refocus_op,
-			banked_cost = excluded.banked_cost,
 			last_op = excluded.last_op, last_op_ok = excluded.last_op_ok,
 			last_op_log = excluded.last_op_log,
 			last_op_reason = excluded.last_op_reason,
@@ -418,6 +416,19 @@ func (d *DAL) PutMember(m Member) error {
 			-- survives every other writer — the property the avatar pointer
 			-- and the session anchor each needed their own seam for.
 			forced_stop_at = max(forced_stop_at, excluded.forced_stop_at)
+			-- banked_cost is DELIBERATELY ABSENT from this SET list (T-14
+			-- 項目 6). It is a running TOTAL, and a total is the one thing a
+			-- whole-row writer can never carry safely: every HTTP face that
+			-- writes a member row holds a snapshot read before the banking
+			-- edge, so landing its stale figure here silently REFUNDS spend
+			-- the owner already saw — and the worker half is worse, because
+			-- memberFromWorker rebuilds the row from an OutsourceWorker that
+			-- was read at the same stale moment. The INSERT still carries it
+			-- so a new row starts at whatever it was born with;
+			-- AddMemberBankedCost is the only writer that moves it, and it
+			-- accumulates in SQL so two concurrent banking edges cannot lose
+			-- each other's contribution.
+			--
 			-- handover_noticed_ts is DELIBERATELY ABSENT from this SET list
 			-- (T-6ebc). It is session-scoped state cleared at a session
 			-- boundary, and the boundary runs next to HTTP faces that write
@@ -437,7 +448,23 @@ func (d *DAL) PutMember(m Member) error {
 			-- superseded generation's credentials back in service. The INSERT
 			-- carries it so a new row starts at 0 (no floor, nothing refused);
 			-- SetMemberAgentIatFloor is the only writer that moves it, and it
-			-- moves it forward only.`,
+			-- moves it forward only.
+			--
+			-- desired_machine_id, model, runtime and effort are DELIBERATELY
+			-- ABSENT for the ordinary reason, not a special one (T-55): they are
+			-- OWNER INTENT, edited from faces that hold no common lock, and every
+			-- one of those faces reaches this statement carrying a whole snapshot
+			-- read before the others landed. An activate in flight put its own
+			-- older pin back over a relocate that had just moved the member; a
+			-- 成員設定 save that touched only effort restated the model beside
+			-- it. Nothing goes red either time — the row simply disagrees with
+			-- what the owner last pressed. The INSERT still carries all four so a
+			-- new row is born with the intent it was created with;
+			-- SetMemberDesiredMachineID / SetMemberModel / SetMemberRuntime /
+			-- SetMemberEffort are the only writers that move them.
+			-- Guarded by TestPutMemberNeverOverwritesSingleColumnOwnedFields:
+			-- putting any of these four back into this list turns it red NAMING
+			-- the column.`,
 		m.ID, m.Name, m.Kind, m.RoleKey, m.Runtime, m.Model, m.ActualModel, m.Effort,
 		m.ActualRuntime, m.ActualEffort,
 		m.DesiredState, m.DesiredMachineID, m.LastMachineID, m.SessionBootTS,
@@ -447,6 +474,32 @@ func (d *DAL) PutMember(m Member) error {
 		linkedTaskID, codename, m.CreatedTS, m.ReleasedTS, m.ActivatedTS,
 		m.AvatarAttachmentID, m.ForcedStopAt, m.HandoverNoticedTS, m.AgentIatFloor,
 	)
+	return err
+}
+
+// AddMemberBankedCost adds delta to ONLY member.banked_cost (T-14 項目 6) — the
+// durable cumulative spend of a staff member OR an outsource worker, since P7d
+// made both a row of the same table (outsource_worker.banked_cost is this
+// column). It is the SOLE writer that moves it: PutMember's upsert carries the
+// column on INSERT but never in its DO UPDATE SET.
+//
+// ACCUMULATES IN SQL, not in Go, for the reason SetMemberAgentIatFloor uses
+// max() in SQL: a read-modify-write in Go loses to whichever caller writes
+// last, and here the loser is money the owner has already been shown. The
+// banking edges are exactly the ones that can overlap — an SSE last-disconnect
+// racing a kill funnel (respawnWorkerNow / stopWorkerNow) on the same actor —
+// so `banked_cost + ?` is what makes the fold loss-free rather than merely
+// exactly-once.
+//
+// It does NOT fan a member delta: the delta is the service layer's job, the
+// same split PutMember documents. bankLiveCost's member branch publishes one;
+// its worker branch deliberately does not (a worker's changes ride the
+// outsource_worker projection).
+//
+// A missing row is a clean no-op (0 rows affected, no error).
+func (d *DAL) AddMemberBankedCost(id string, delta float64) error {
+	_, err := d.wdb.Exec(
+		`UPDATE member SET banked_cost = banked_cost + ? WHERE id = ?`, delta, id)
 	return err
 }
 
@@ -520,6 +573,62 @@ func (d *DAL) SetMemberSessionBootTS(id string, ts float64) error {
 // A missing row is a clean no-op (0 rows affected, no error).
 func (d *DAL) SetMemberWakingSince(id string, ts float64) error {
 	_, err := d.wdb.Exec(`UPDATE member SET waking_since = ? WHERE id = ?`, ts, id)
+	return err
+}
+
+// SetMemberDesiredMachineID writes ONLY member.desired_machine_id (T-55) — the
+// owner's placement pin, "" when the member waits for a placement. It is the
+// SOLE writer that moves the column; PutMember carries it on INSERT and never
+// in its DO UPDATE SET.
+//
+// The pin is written by three faces that do not share a lock — the member
+// relocate, the member activate, and the worker relocate — and each of them
+// reaches this row holding a snapshot read before the others landed. While the
+// column rode the whole-row SET list, an activate that happened to be in flight
+// put its own (older) pin back over a relocate that had just moved the member,
+// and the member then booted on the machine the owner had just moved it OFF.
+// Nothing goes red when that happens; the placement simply disagrees with what
+// the cockpit shows.
+//
+// A missing row is a clean no-op (0 rows affected, no error).
+func (d *DAL) SetMemberDesiredMachineID(id, machineID string) error {
+	_, err := d.wdb.Exec(
+		`UPDATE member SET desired_machine_id = ? WHERE id = ?`, machineID, id)
+	return err
+}
+
+// SetMemberModel / SetMemberRuntime / SetMemberEffort write ONLY their own
+// column (T-55) — the three LAUNCH INTENTS the owner edits in 成員設定 and in
+// the outsource worker's twin face. Each is the SOLE writer of its column;
+// PutMember carries all three on INSERT and none of them in its DO UPDATE SET.
+//
+// They are three writers rather than one because the two editing faces write
+// them INDEPENDENTLY: every field arrives optional, and a save that carries
+// only `effort` must not restate the model the row already holds — restating it
+// is precisely how a stale snapshot lands. The faces also sit next to the
+// owner-op wind-down, which re-reads and re-writes the same row while the edit
+// is still being answered.
+//
+// A missing row is a clean no-op (0 rows affected, no error).
+func (d *DAL) SetMemberModel(id, model string) error {
+	_, err := d.wdb.Exec(`UPDATE member SET model = ? WHERE id = ?`, model, id)
+	return err
+}
+
+// SetMemberRuntime writes ONLY member.runtime — see SetMemberModel.
+//
+// ⚠️ It stores what it is given, WITHOUT NormalizeRuntime: "" is a durable
+// third state ("nobody has picked yet"), distinct from an owner who picked
+// claude, and resolveEmptyRuntimeForPlacement depends on telling them apart.
+// PutMember's INSERT binds the raw value for the same reason.
+func (d *DAL) SetMemberRuntime(id, runtime string) error {
+	_, err := d.wdb.Exec(`UPDATE member SET runtime = ? WHERE id = ?`, runtime, id)
+	return err
+}
+
+// SetMemberEffort writes ONLY member.effort — see SetMemberModel.
+func (d *DAL) SetMemberEffort(id, effort string) error {
+	_, err := d.wdb.Exec(`UPDATE member SET effort = ? WHERE id = ?`, effort, id)
 	return err
 }
 

@@ -825,7 +825,11 @@ func TestGetMonitoring_SessionModelRoundTrips(t *testing.T) {
 		t.Fatalf("seed worker: %v", err)
 	}
 	wk.Model = "sonnet"
-	if err := s.dal.PutOutsourceWorker(*wk); err != nil {
+	// Through model's sole writer (T-55): seedWorker already INSERTed this row
+	// with "opus", and a whole-row write no longer carries the column — leaving
+	// the configured model at "opus" would quietly undo the setup this test's
+	// comment above depends on (configured must differ from reported).
+	if err := s.dal.SetMemberModel(wk.ID, "sonnet"); err != nil {
 		t.Fatalf("seed worker model: %v", err)
 	}
 

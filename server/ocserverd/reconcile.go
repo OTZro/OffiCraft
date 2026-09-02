@@ -1265,9 +1265,18 @@ func (s *apiServer) resolveEmptyRuntimeForPlacement(m *Member, warden string) {
 	}
 	m.Runtime = resolved
 	fresh.Runtime = resolved
-	if err := s.putMember(*fresh, triggerServer); err != nil {
+	// runtime left PutMember's DO UPDATE SET in T-55, so a whole-row write here
+	// would persist nothing at all. It should not be one anyway: this runs on
+	// the reconcile tick, next to HTTP faces writing member rows from their own
+	// snapshots, and it only ever means to move this one column. The member
+	// delta putMember used to fan for free is re-issued explicitly — without it
+	// the cockpit would keep showing the unresolved runtime until some unrelated
+	// write happened to land.
+	if err := s.dal.SetMemberRuntime(m.ID, resolved); err != nil {
 		reconcileLog("%s: runtime resolution persist failed: %v", m.ID, err)
+		return
 	}
+	s.publishMemberPatch(*fresh, triggerServer)
 }
 
 // ── decide → dispatch (controller.py ServerReconciler.reconcile_one) ─────────

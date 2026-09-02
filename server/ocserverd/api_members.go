@@ -40,6 +40,18 @@ func (s *apiServer) putMember(m Member, trigger string) error {
 	if err := s.dal.PutMember(m); err != nil {
 		return err
 	}
+	s.publishMemberPatch(m, trigger)
+	return nil
+}
+
+// publishMemberPatch fans the member delta and nothing else. It is putMember's
+// wire half, split out so a SINGLE-COLUMN writer (AddMemberBankedCost and the
+// setters beside it) can keep the push a caller used to get for free from the
+// whole-row write, WITHOUT dragging a stale snapshot of every other column back
+// into the database with it. Migrating a column out of PutMember's SET list and
+// forgetting this call is a silent loss: nothing goes red, the cockpit simply
+// stops converging.
+func (s *apiServer) publishMemberPatch(m Member, trigger string) {
 	op := "patch"
 	if m.RosterStatus == RosterStatusRemoved {
 		op = "remove"
@@ -49,7 +61,6 @@ func (s *apiServer) putMember(m Member, trigger string) error {
 	// owner cockpit; other agents ignore it (spec/sse.md §4).
 	s.hub.Publish("member", op, "member", wireOwnerID+"::"+m.ID, s.offboardDeltaPayload(m),
 		audienceMembers(m.ID), trigger)
-	return nil
 }
 
 // memberDeltaPayload is the member delta's partial convenience payload
@@ -810,14 +821,22 @@ func (s *apiServer) HandleUpdateMemberApiMembersMemberIdPatch(w http.ResponseWri
 	// live session — the owner pressed 儲存, got a 200, and the member went on
 	// running the OLD model until something unrelated respawned it. Now the
 	// change opens the SAME graceful wind-down 重新聚焦 has always had, so the
-	// member finishes what it was doing and comes back on the new value. Same
-	// single write: the epoch and the new value can never land apart.
+	// member finishes what it was doing and comes back on the new value.
+	//
+	// ⚠️ SINCE T-55 THE EPOCH AND THE NEW VALUE NO LONGER LAND TOGETHER. This
+	// was one write, so they could not land apart; the three launch intents have
+	// since left PutMember's SET list and land through their own setters, which
+	// run AFTER the whole-row write below. Only that order converges on a partial
+	// failure — the 🔴 block sitting above those setters is the whole argument,
+	// and it is the one to read. Do not restore the claim that was here.
 	heldDown := false
 	if launchIntentChanged {
 		// A member the owner has stopped takes the new value on its next 活化 and
 		// NOTHING happens now — which is right, and used to be indistinguishable
-		// from "it took effect". The receipt is folded into this same putMember so
-		// the value and the explanation land in one write and one delta.
+		// from "it took effect". The receipt is folded into this same putMember, so
+		// the EXPLANATION still rides one write and one delta. The value does not
+		// (T-55: its setter runs after this write) — so "one write" now describes
+		// the receipt alone, never the pair.
 		heldDown = !s.armMemberOwnerOpHandover(m, memberOpModel) &&
 			m.DesiredState == DesiredStateOffline
 		if heldDown {
@@ -827,6 +846,54 @@ func (s *apiServer) HandleUpdateMemberApiMembersMemberIdPatch(w http.ResponseWri
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
 		return
+	}
+	// The three launch intents left PutMember's DO UPDATE SET in T-55, so the
+	// write above no longer carries them — their sole writers do, and ONLY for a
+	// field this request actually carried. That asymmetry is the point: a save
+	// that touches effort alone must not restate the model beside it, because the
+	// model it would restate is the one this handler read before the owner-op
+	// wind-down (or another face) touched the row.
+	//
+	// 🔴 THEY RUN AFTER THE WHOLE-ROW WRITE, AND THE ORDER IS THE WHOLE POINT.
+	// What used to be one write is now two, so one of them can fail alone — and
+	// the two orders fail differently. The wind-down epoch armed above is what
+	// makes a launch-intent change TAKE EFFECT (T-b6d9: without it the member
+	// runs on the old model until something unrelated respawns it), and it lands
+	// with the whole-row write. Put the setters first and a failure here leaves
+	// the new model stored with NO epoch — the exact bug T-b6d9 fixed, arriving
+	// through a different door, and nothing ever converges it. This way round, a
+	// failure leaves the epoch open with the OLD value: the member winds down and
+	// comes back on what it was already running — one wasted recycle, and the
+	// retry still sees a difference.
+	//
+	// ⚠️ The 500 is NOT "nothing was stored": the whole-row write above has
+	// already landed, so a `name` carried by the SAME request is saved even
+	// though the launch intent is not. What the failure guarantees is only that
+	// the launch intent did not land — which is what makes the retry work.
+	//
+	// relocate and activate are deliberately NOT reordered this way. Their
+	// wind-down is unconditional (relocate always arms one, activate always
+	// force-revives), so their retry always re-dispatches and the residue
+	// converges on its own. Only the launch-intent faces gate the wind-down on
+	// "the value actually changed", and that gate is what a value landing early
+	// closes.
+	if body.Model != nil {
+		if err := s.dal.SetMemberModel(m.ID, m.Model); err != nil {
+			internalError(w, err)
+			return
+		}
+	}
+	if body.Runtime != nil {
+		if err := s.dal.SetMemberRuntime(m.ID, m.Runtime); err != nil {
+			internalError(w, err)
+			return
+		}
+	}
+	if body.Effort != nil {
+		if err := s.dal.SetMemberEffort(m.ID, m.Effort); err != nil {
+			internalError(w, err)
+			return
+		}
 	}
 	s.writeMemberDTO(w, *m)
 }
@@ -860,6 +927,15 @@ func (s *apiServer) HandleActivateMemberApiMembersMemberIdActivatePost(w http.Re
 	m.DesiredState = DesiredStateOnline
 	if body.MachineId != nil {
 		m.DesiredMachineID = *body.MachineId
+		// desired_machine_id left PutMember's SET list in T-55: the pin moves
+		// through its sole writer, and an activate that carries NO machine_id
+		// now genuinely leaves it alone instead of writing back the value this
+		// handler read — which is what used to undo a relocate that landed in
+		// between.
+		if err := s.dal.SetMemberDesiredMachineID(m.ID, m.DesiredMachineID); err != nil {
+			internalError(w, err)
+			return
+		}
 	}
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
@@ -975,13 +1051,26 @@ func (s *apiServer) HandleRelocateMemberApiMembersMemberIdRelocatePost(w http.Re
 	// The placement pin is the only INTENT mutation — desired_state is
 	// deliberately left untouched (the activate contrast).
 	m.DesiredMachineID = machineID
+	// The pin itself lands through its sole writer (T-55); PutMember no longer
+	// carries the column, so the whole-row write below moves only the wind-down
+	// anchors and the receipt.
+	if err := s.dal.SetMemberDesiredMachineID(m.ID, machineID); err != nil {
+		internalError(w, err)
+		return
+	}
 	// T-b6d9: a LIVE member used to be robust-STOPped on the spot by the
 	// reconcile below — no 預告, no grace, not even a stopping_since, so it just
 	// vanished from the cockpit with whatever it was mid-way through. It now
 	// gets the same wind-down 重新聚焦 has always had; the winding-down anchors
-	// ARE written in that case, and only in that case. Same putMember, so the
-	// new pin and the epoch land together and the delta the agent wakes on
-	// already names the destination.
+	// ARE written in that case, and only in that case.
+	//
+	// ⚠️ THE PIN NO LONGER RIDES THIS WRITE (T-55) — it landed through its sole
+	// writer a few lines above, BEFORE the epoch. That is the REVERSE of the
+	// launch-intent faces, and deliberately so: relocate arms its wind-down
+	// unconditionally, so nothing here gates on "the value actually changed" and
+	// a retry re-dispatches regardless — the residue converges on its own. The
+	// delta the agent wakes on still names the destination, because the pin is
+	// already on the row by the time this write fans it.
 	windDown := s.armMemberOwnerOpHandover(m, memberOpRelocate)
 	// Held down: the pin is stored and nothing is moved. Same receipt, same
 	// single write — see memberHeldDownReceipt.

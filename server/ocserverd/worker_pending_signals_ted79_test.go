@@ -93,9 +93,14 @@ func TestRestartWorker_UndispatchedSurfacesActivationPending(t *testing.T) {
 	delete(api.workerSpawnTarget, workerID)
 	w, _ := api.dal.GetOutsourceWorker(workerID)
 	w.DesiredState = DesiredStateOffline
-	w.DesiredMachineID = "m-nowhere" // a pin that names no active machine
 	if err := api.dal.PutOutsourceWorker(*w); err != nil {
 		t.Fatalf("seed: %v", err)
+	}
+	// A pin that names no active machine. It goes through the pin's sole writer
+	// since T-55 — desired_machine_id left PutMember's DO UPDATE SET, so the
+	// whole-row seed above carries every other field but not this one.
+	if err := api.dal.SetMemberDesiredMachineID(workerID, "m-nowhere"); err != nil {
+		t.Fatalf("pin: %v", err)
 	}
 
 	body := workerBody(t, postWorker(t, api, workerID, "restart", nil,

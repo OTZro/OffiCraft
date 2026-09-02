@@ -42,6 +42,16 @@ func wakeSeedAssistant(t *testing.T, s *apiServer) Member {
 	}
 	m.DesiredState = DesiredStateOnline
 	m.DesiredMachineID = ServerSelfHost
+	// The pin needs its sole writer (T-55). The seed row already exists, so the
+	// whole-row write below carries desired_state but NOT this — and today that
+	// happens to be harmless only because the seed is born on ServerSelfHost
+	// anyway. This helper's doc says it returns "the row as stored"; leaving the
+	// pin to that coincidence would make the returned struct and the row disagree
+	// the moment anyone changes what the seed is born with, and the readers here
+	// are split (reconcileOne takes the VALUE, the placement arms re-read the ROW).
+	if err := s.dal.SetMemberDesiredMachineID(m.ID, ServerSelfHost); err != nil {
+		t.Fatalf("pin the seed assistant: %v", err)
+	}
 	putTestMember(t, s, *m)
 	return *m
 }
@@ -161,7 +171,14 @@ func TestExplicitClaudeChoiceIsNeverOverridden(t *testing.T) {
 		t.Fatalf("telemetry ingest: %d %s", rec.Code, rec.Body.String())
 	}
 	m := wakeSeedAssistant(t, s)
+	// The owner's explicit pick, stored the way the 成員設定 face stores it since
+	// T-55: through runtime's sole writer. The seed row already exists (with an
+	// empty runtime, which is the whole point of this test), so a whole-row write
+	// would persist nothing and storedRuntime below would read "".
 	m.Runtime = RuntimeClaude
+	if err := s.dal.SetMemberRuntime(m.ID, RuntimeClaude); err != nil {
+		t.Fatalf("store the explicit choice: %v", err)
+	}
 	putTestMember(t, s, m)
 
 	s.reconcileOne(m, reconcileState{}, 1000)

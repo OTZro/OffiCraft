@@ -344,9 +344,10 @@ func TestBankLiveCost(t *testing.T) {
 	})
 
 	// P7d fold: a worker IS a member row now, so banked_cost lands on the same
-	// row either way — the branch discriminator is the WIRE: the worker branch
-	// writes through PutOutsourceWorker (delta rides the outsource_worker
-	// projection), never putMember, so no member patch naming an ow- id fans.
+	// row either way — both branches call AddMemberBankedCost. The branch
+	// discriminator is the WIRE: the worker branch fans nothing (its changes
+	// ride the outsource_worker projection), so no member patch naming an ow-
+	// id ever goes out.
 	t.Run("outsource actor rides the worker branch, no member patch", func(t *testing.T) {
 		api := newTasksTestServer(t)
 		api.noOutsource = true
@@ -375,10 +376,30 @@ func TestBankLiveCost(t *testing.T) {
 			t.Fatalf("seed member: %v", err)
 		}
 		prior := m.BankedCost // fullMember seeds a non-zero banked figure
+		l, err := api.hub.Connect("m-bank", "")
+		if err != nil {
+			t.Fatalf("connect member SSE: %v", err)
+		}
+		t.Cleanup(func() { api.hub.Disconnect(l) })
 		api.telemetry.Set("m-bank", map[string]any{"cost": 0.75})
 		api.bankLiveCost("m-bank")
 		if got, _ := api.dal.GetMember("m-bank"); got == nil || got.BankedCost != prior+0.75 {
 			t.Fatalf("member bank = %+v, want banked %v", got, prior+0.75)
+		}
+		// The push is the half a single-column migration silently drops: the
+		// member branch stopped writing the whole row (T-14 項目 6), and the
+		// delta the whole-row write used to fan must survive that — the
+		// wind-down / recycle hooks key on a member delta naming self, and this
+		// fold runs on the last-disconnect edge.
+		fanned := false
+		for frame := l.pop(); frame != nil; frame = l.pop() {
+			if strings.Contains(string(frame), `"topic":"member"`) &&
+				strings.Contains(string(frame), "m-bank") {
+				fanned = true
+			}
+		}
+		if !fanned {
+			t.Fatal("banking a member's cost must still fan its member delta")
 		}
 	})
 }
@@ -683,7 +704,10 @@ func TestSetWorkerModel_ActiveWindsDownThenRespawns(t *testing.T) {
 	}
 
 	// The worker finishes its SOP and says so — the respawn is immediate, and it
-	// carries the NEW model (the row was written before the window opened).
+	// carries the NEW model. Since T-55 the row is written AFTER the window
+	// opens (the launch-intent setters run past respawnWorkerForOwnerOp), which
+	// this arm does not care about: the collect happens on a later request, long
+	// past both writes.
 	rec = httptest.NewRecorder()
 	api.HandleReportStoppedApiSelfStoppedPost(rec,
 		taskReq(t, "POST", "/api/self/stopped", nil, workerID, "agent"))
@@ -700,6 +724,112 @@ func TestSetWorkerModel_ActiveWindsDownThenRespawns(t *testing.T) {
 	rpc, args := decodeWardenFrame(t, frames[1].Frame)
 	if rpc != reconcileCmdStart || args["model"] != "claude-opus-4-8" {
 		t.Fatalf("respawn frame = %s %v, want a start carrying the new model", rpc, args)
+	}
+}
+
+// TestSetWorkerModel_ImmediateRespawnCarriesTheNewModel covers the OTHER arm of
+// respawnWorkerForOwnerOp — the one that dispatches a START synchronously, from
+// inside the handler, INSTEAD of opening a wind-down. It is reached when the
+// epoch has already been collected (stopped_since latched) while the dying
+// session still reads as online, which is the window
+// TestOwnerOp_VerbAfterTheCollectIsNotSwallowed opens.
+//
+// 🔴 WHY IT HAS TO EXIST SINCE T-55: on that arm the frame goes out BEFORE the
+// setters store the values, so the START can only be right because
+// respawnWorkerForOwnerOp takes the worker BY VALUE and nothing under it
+// re-reads the row for the launch spec. That was an incidental property before;
+// it is load-bearing now. Mutant: make notifyWorkerSpawn (or anything below it)
+// build the frame from a fresh GetOutsourceWorker and this test goes red with
+// the OLD values — which is exactly what the owner would get in production, on a
+// 200, with no receipt.
+//
+// ALL THREE launch intents are sent and asserted, not just the model: the same
+// window carries runtime and effort through the same by-value chain, and a
+// single-field pin would leave the other two riding on nothing. runtime is the
+// one that hurts most when it slips, because it has a SECOND consumer the frame
+// column does not show — buildWorkerBootContext feeds w.Runtime to
+// workerBootSequence, so a stale runtime boots the worker on the OTHER runtime's
+// 啟動步驟 document. That failure is invisible from every direction: 200, no
+// receipt, nothing red, and the row afterwards holds the NEW value.
+//
+// The sibling above covers the wind-down arm, where the row is written long
+// before the collect dispatches. Neither one covers the other.
+func TestSetWorkerModel_ImmediateRespawnCarriesTheNewModel(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	workerID := newActiveOnlineWorker(t, api)
+	// The warden must be able to take a CODEX worker, or step 3's runtime change
+	// would be refused at placement and dispatch nothing — a green that proves
+	// the opposite of what this test is for.
+	if rec := doIngestTelemetry(api, ServerSelfHost, ServerSelfHost, bothRuntimes); rec.Code != 200 {
+		t.Fatalf("fixture: telemetry ingest: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// 1) The first 換 model opens a wind-down and dispatches nothing.
+	setWorkerModelBody(t, api, workerID, map[string]any{"model": "claude-opus-4-8"})
+
+	// 2) The worker answers; the shared FSM collects on the next tick. The latch
+	//    lands while the old session is still online — the window this arm lives in.
+	rec := httptest.NewRecorder()
+	api.HandleReportStoppedApiSelfStoppedPost(rec,
+		taskReq(t, "POST", "/api/self/stopped", nil, workerID, "agent"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("report_stopped: %d %s", rec.Code, rec.Body.String())
+	}
+	workerTickPass(t, api, workerID, nowSecs())
+	if w, _ := api.dal.GetOutsourceWorker(workerID); w.StoppedSince <= 0 {
+		t.Fatal("fixture: the collect must have latched stopped_since, or this test " +
+			"is walking the wind-down arm the sibling already covers")
+	}
+	if !api.hub.IsOnline(workerID) {
+		t.Fatal("fixture: the dying session must still look online for the immediate arm")
+	}
+	api.hub.DrainWardenCommands(ServerSelfHost)
+
+	// 3) The owner changes all three launch intents at once. This one dispatches NOW.
+	setWorkerModelBody(t, api, workerID, map[string]any{
+		"model": "claude-opus-4-9", "runtime": RuntimeCodex, "effort": "high"})
+
+	frames := api.hub.DrainWardenCommands(ServerSelfHost)
+	var starts int
+	for _, f := range frames {
+		rpc, args := decodeWardenFrame(t, f.Frame)
+		if rpc != reconcileCmdStart {
+			continue
+		}
+		starts++
+		// Errorf, not Fatalf: the three are independent facts about one frame, and
+		// a re-read stales all three at once. Failing fast would show only the
+		// first and hide that the other two are equally unpinned.
+		//
+		// Three calls rather than a table: a {field, value} slice literal reads to
+		// lint-effort-vocab as a hand-written effort vocabulary and it correctly
+		// reports the list as incomplete. Silencing that with a SKIP_FILES line
+		// would blind this whole file to the guard for the sake of one row.
+		assertArg := func(field, want string) {
+			t.Helper()
+			if args[field] != want {
+				t.Errorf("the synchronous respawn dispatched %s %v, want %q — "+
+					"the frame is built from the VALUE the handler holds, and the launch-intent "+
+					"setters run AFTER it (T-55). Something under notifyWorkerSpawn re-read the "+
+					"row, which still carries the previous value at that instant.",
+					field, args[field], want)
+			}
+		}
+		assertArg("model", "claude-opus-4-9")
+		assertArg("runtime", RuntimeCodex)
+		assertArg("effort", "high")
+	}
+	if starts != 1 {
+		t.Fatalf("a 換 model landing after the collect must dispatch exactly one START "+
+			"now, got %d (0 means it opened a second wind-down instead and this test "+
+			"is no longer covering the immediate arm)", starts)
+	}
+	// …and the row caught up on all three, so the two writes did not disagree.
+	w, _ := api.dal.GetOutsourceWorker(workerID)
+	if w.Model != "claude-opus-4-9" || w.Runtime != RuntimeCodex || w.Effort != "high" {
+		t.Fatalf("row = model %q / runtime %q / effort %q, want claude-opus-4-9 / %s / high",
+			w.Model, w.Runtime, w.Effort, RuntimeCodex)
 	}
 }
 
@@ -1267,11 +1397,19 @@ func TestPutOutsourceWorker_KeepsWindDownAnchors(t *testing.T) {
 		t.Fatal("report_stopping must stamp the worker's stopping_since")
 	}
 
-	// Any unrelated read-modify-write of the worker row (the tick shape).
+	// Any unrelated read-modify-write of the worker row (the tick shape). The
+	// unrelated field has to be one the whole-row write still CARRIES: effort
+	// left PutMember's DO UPDATE SET in T-55, so writing it here would make this
+	// an upsert that changes nothing at all — the test would still pass, while no
+	// longer standing for the thing it is named after.
 	w, _ := api.dal.GetOutsourceWorker(workerID)
-	w.Effort = "high"
+	w.LastOp = "tick"
 	if err := api.dal.PutOutsourceWorker(*w); err != nil {
 		t.Fatalf("put worker: %v", err)
+	}
+	if reread, _ := api.dal.GetOutsourceWorker(workerID); reread == nil || reread.LastOp != "tick" {
+		t.Fatalf("the unrelated write must actually land, else this test asserts "+
+			"nothing: %+v", reread)
 	}
 	after, _ := api.dal.GetOutsourceWorker(workerID)
 	if after.StoppingSince != before.StoppingSince {

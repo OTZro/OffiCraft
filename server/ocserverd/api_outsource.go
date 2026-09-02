@@ -323,6 +323,16 @@ func (s *apiServer) relocateWorkerByID(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 	worker.DesiredMachineID = machineID
+	// The ow- row IS a member row (00025 folded the table), so the worker pin
+	// goes through the SAME sole writer as the staff pin (T-55) — PutMember's
+	// SET list no longer carries desired_machine_id, and PutOutsourceWorker is
+	// PutMember. Without this line the relocate would answer 200 and move
+	// nothing.
+	if err := s.dal.SetMemberDesiredMachineID(worker.ID, machineID); err != nil {
+		s.outsourceMu.Unlock()
+		internalError(w, err)
+		return
+	}
 	if err := s.dal.PutOutsourceWorker(*worker); err != nil {
 		s.outsourceMu.Unlock()
 		internalError(w, err)
@@ -779,7 +789,11 @@ func (s *apiServer) HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost
 		// Folded onto the row this handler is about to persist, not written
 		// through stampWorkerPlacementBlocked: that helper re-reads and writes on
 		// its own, and the whole-row PutOutsourceWorker below would then clobber
-		// it. One write, one delta — the rule every owner verb here follows.
+		// it. One write, one delta — still true of THIS verb, whose columns
+		// (desired_state and the receipt) the whole-row write all still carries.
+		// ⚠️ It is NO LONGER the rule every owner verb here follows: since T-55
+		// the 換 model verb stores its three launch intents through their own
+		// setters, which run AFTER its whole-row write (see the 🔴 block there).
 		stampWorkerOpReceipt(worker, spawnReasonSessionAlive+
 			": this worker was still running — 重啟 is replacing that session, not "+
 			"starting a first one. If it does not come back, its previous session "+
@@ -914,6 +928,9 @@ func (s *apiServer) HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost(
 		launchIntentChanged = launchIntentChanged || effort != worker.Effort
 		worker.Effort = effort
 	}
+	// The values this request means to store, held apart from `worker` because
+	// the re-read below replaces that pointer.
+	wantModel, wantRuntime, wantEffort := worker.Model, NormalizeRuntime(worker.Runtime), worker.Effort
 	if err := s.dal.PutOutsourceWorker(*worker); err != nil {
 		s.outsourceMu.Unlock()
 		internalError(w, err)
@@ -924,11 +941,70 @@ func (s *apiServer) HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost(
 	// is deliberately NOT re-asked here — respawnWorkerForOwnerOp owns that single
 	// branch point for all three owner verbs, and asking twice is how the two
 	// copies drift (this one used to skip silently, leaving no receipt).
+	// 🔴 THIS RUNS BEFORE THE SETTERS, SO THE FRAME IT MAY DISPATCH READS THE
+	// VALUE, NOT THE ROW — and that is now a load-bearing invariant.
+	// respawnWorkerForOwnerOp has two arms: the wind-down arm dispatches nothing,
+	// but the immediate arm (reached when the epoch has already been collected
+	// while the session is still online) kills and re-dispatches a START right
+	// here. It takes `*worker` BY VALUE and every step below it does too
+	// (respawnWorkerForOwnerOpNow → respawnWorkerNow → notifyWorkerSpawn), so the
+	// frame carries the intent this request just set, which has not reached the
+	// row yet.
+	// ⇒ notifyWorkerSpawn and everything under it must NEVER re-read the member
+	// row for the launch spec. Doing so would dispatch the OLD model while the
+	// setter below stores the new one, and the worker would run the old value
+	// with a 200, no receipt and nothing red — T-b6d9's bug through a third door.
+	// Pinned by TestSetWorkerModel_ImmediateRespawnCarriesTheNewModel.
 	if launchIntentChanged && worker.Status == WorkerStatusActive && s.hub.IsOnline(worker.ID) {
 		s.respawnWorkerForOwnerOp(*worker, ownerOpModel)
-		if fresh, ferr := s.dal.GetOutsourceWorker(id); ferr == nil && fresh != nil {
-			worker = fresh
+	}
+	// Same seam as the staff face (T-55): the three intents left PutMember's SET
+	// list, so PutOutsourceWorker no longer carries them and each one lands
+	// through its sole writer — only for a field this request actually carried.
+	//
+	// 🔴 AFTER the respawn, and for the reason HandleUpdateMember spells out at
+	// length: one write became two, and only this order fails convergently. Store
+	// the value FIRST and a failure here leaves the new value on the row with no
+	// wind-down — and the retry cannot heal it, because launchIntentChanged
+	// compares the request against the STORED value, which now already matches, so
+	// the second attempt opens no session either. The worker would run the old
+	// model until something unrelated respawned it. This way round a failure
+	// leaves the OLD value with a wind-down already open: one wasted recycle onto
+	// the value it was already running, and the retry still sees a change.
+	//
+	// The whole sequence holds outsourceMu, so the collection that would act on
+	// that wind-down cannot land between the two writes.
+	if body.Model != nil {
+		if err := s.dal.SetMemberModel(id, wantModel); err != nil {
+			s.outsourceMu.Unlock()
+			internalError(w, err)
+			return
 		}
+	}
+	if body.Runtime != nil {
+		// NORMALISED, matching memberFromWorker: the worker projection has
+		// always stored NormalizeRuntime(w.Runtime), and the sole writer must
+		// not quietly start storing a second form on the same column. (Today
+		// ValidRuntime already narrows this to claude|codex, so the call is
+		// identity — it is here so the property survives the next runtime.)
+		if err := s.dal.SetMemberRuntime(id, wantRuntime); err != nil {
+			s.outsourceMu.Unlock()
+			internalError(w, err)
+			return
+		}
+	}
+	if body.Effort != nil {
+		if err := s.dal.SetMemberEffort(id, wantEffort); err != nil {
+			s.outsourceMu.Unlock()
+			internalError(w, err)
+			return
+		}
+	}
+	// Re-read AFTER both writes so the projection the owner gets back is the row
+	// as it now stands — the respawn stamps its own fields, and the setters land
+	// after it.
+	if fresh, ferr := s.dal.GetOutsourceWorker(id); ferr == nil && fresh != nil {
+		worker = fresh
 	}
 	s.publishOutsourceWorker(*worker, requestTrigger(r))
 	s.outsourceMu.Unlock()

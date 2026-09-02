@@ -309,10 +309,12 @@ func TestReconcile_WakeStampPreservesConcurrentRelocate(t *testing.T) {
 	putTestMember(t, s, m)
 	stale := m // the snapshot the cadence tick loaded
 
-	// The relocate face repins the member while the tick is in flight.
-	moved, _ := s.dal.GetMember("m-move")
-	moved.DesiredMachineID = "mach-b"
-	putTestMember(t, s, *moved)
+	// The relocate face repins the member while the tick is in flight — through
+	// desired_machine_id's sole writer, which is what that face uses since
+	// T-55 (a whole-row write no longer carries the column).
+	if err := s.dal.SetMemberDesiredMachineID("m-move", "mach-b"); err != nil {
+		t.Fatalf("relocate: %v", err)
+	}
 
 	now := nowSecs()
 	s.reconcileMu.Lock()
