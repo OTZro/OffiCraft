@@ -23,6 +23,27 @@
 -- session_boot_ts and handover_noticed_ts: it is consumed by the reconcile tick
 -- at the converged-offline edge, and what the cockpit shows is the receipt the
 -- verb already stamps in last_op_reason.
+-- ⚠️ NUMBER COLLISION, KNOWN AND UNRESOLVED AT AUTHORING TIME. 00066 was free on
+-- main (last is 00065), but main is not the denominator: a sweep of the remote
+-- branches found 00066_lore.sql on six t-33/* branches, plus 00067/00068 taken
+-- twice over on t-48/spec-chat-api and t-33/lore-tab-ui. Whoever lands second
+-- renumbers. It CANNOT ship silently — goose panics on a duplicate version
+-- (pressly/goose migrate.go: "goose: duplicate version %v detected") and this
+-- tree reaches it through goose.Up in migrate.go, so every test and every boot
+-- fails loudly the moment two 00066 files sit in the same tree.
+--
+-- Renumbering this file touches exactly two places, and there is no third today:
+--   1. this filename;
+--   2. server/ocserverd/dal.go — the Member.RestartAfterStop doc comment cites
+--      "migrations/00066".
+-- No test pins this version or its PRIOR version: nothing in *_test.go calls
+-- DownTo/UpTo near 65/66, and the named-constant pattern that carries that trap
+-- (migration00065Version / migration00065PriorVersion in
+-- api_replycards_multiselect_t40_test.go, migration00061* in
+-- migration_00061_drop_non_general_lessons_test.go) is NOT used here. If a
+-- rollback test is added later it MUST take both numbers from named constants —
+-- changing only the migration's own number and leaving the prior one behind
+-- leaves the test green while it stops testing this migration's rollback.
 ALTER TABLE member ADD COLUMN restart_after_stop INTEGER NOT NULL DEFAULT 0;
 
 -- +goose Down

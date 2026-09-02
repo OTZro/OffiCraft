@@ -512,23 +512,35 @@ func (s *apiServer) armMemberOwnerOpHandover(m *Member, op string) bool {
 // 活化 remains the ONE thing that cancels a stop outright rather than queueing
 // a start behind it — that exception is deliberate and predates this split.
 
-// aStopIsInFlight is the SCOPE of this whole change, and it is narrow on
-// purpose: the owner's ruling is about a 重啟 verb meeting a 下線 RULE THAT IS
-// RUNNING — 「如果我已經到強硬下線的狀態下按下 refocus 我只需要在下線後把人帶
-// 起來」 — not about a member that has simply been at rest for a week.
+// aStopWasEverAskedFor is the ONE thing this gate actually establishes, and the
+// name says it because the previous name did not.
 //
-// 🔴 WITHOUT THIS GATE THE CHANGE SWALLOWS A DIFFERENT RULING. T-ed79 #4/#14 is
-// that an owner verb on a member he has stopped SAVES and starts nothing
-// (memberHeldDownReceipt: 「活化 it when you want it to run」), and
-// TestRelocateMember_PlacementOnly pins 改機器 as placement-only against exactly
-// that. A member at rest has no stop in flight, so it never reaches the queue
-// and both rulings stand: a 重啟 during a wind-down brings the member back, a
-// 重啟 on a resting member re-pins and waits for 活化.
+// 🔴 IT WAS CALLED aStopIsInFlight AND THAT WAS FALSE. It claimed to separate a
+// member 收工中 from one 靜止, and to preserve T-ed79 #4/#14 (a 重啟 verb on a
+// member the owner has stopped SAVES and starts nothing) for the second. It does
+// not: decideDown's converged branch resets only the in-memory reconcileState —
+// the DB anchor is cleared by 活化 and by consumeRestartAfterStop and by nothing
+// else — so `stopping_since > 0` stays true forever on a member stopped last
+// week. Measured: after five converged ticks the row still reads
+// stopping_since=1.7883547e+09. TestRelocateMember_PlacementOnly kept passing
+// only because its fixture (testAgent) never set the anchor at all.
 //
-// stopping_since is the anchor every 下線 rung sets (下線 through
-// stopEpochAnchor, 強制停止 directly, 加速停止 by re-stamping), so ONE term
-// covers the whole ladder.
-func aStopIsInFlight(m Member) bool {
+// WHAT IT REALLY SEPARATES is a member that has been ASKED TO STOP at least once
+// from one that never has — in practice, a freshly hired member that has never
+// been 活化'd. That distinction is still worth drawing, and on its own terms:
+// the owner's ruling adds 上線 to a 下線 rule, and a member nobody has ever asked
+// to stop has no 下線 for it to be added to. Editing a new hire's machine or
+// model before its first 活化 must not boot it.
+//
+// 🔴 WHAT IS NO LONGER TRUE, stated rather than hidden: 改機器 / 換 model / 重新
+// 聚焦 on a member that was stopped and has long since converged DOES now bring
+// it back up. T-ed79's staff held_down receipt (「活化 it when you want it to
+// run」) survives only for the never-activated case. That is the owner's
+// 2026-08-30 ruling applied where it actually lands — 「最後一個動作是重啟 ⇒ 最終
+// 在線上」 says nothing about how long ago the 下線 was — and it is pinned by
+// TestRelocateAfterAConvergedStopWakesTheMember below, whose fixture carries the
+// REAL row shape a converged stop leaves behind.
+func aStopWasEverAskedFor(m Member) bool {
 	return m.StoppingSince > 0.0
 }
 

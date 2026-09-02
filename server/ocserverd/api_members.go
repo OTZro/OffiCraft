@@ -921,8 +921,9 @@ func (s *apiServer) HandleUpdateMemberApiMembersMemberIdPatch(w http.ResponseWri
 			m.DesiredState == DesiredStateOffline
 		if heldDown {
 			// 下線 → 重啟 (T-14 項目 7), the 換 model face of the same ruling —
-			// but only while a stop is actually in flight (aStopIsInFlight).
-			if aStopIsInFlight(*m) {
+			// but only for a member that has ever been asked to stop
+			// (aStopWasEverAskedFor — a never-活化'd new hire is not one).
+			if aStopWasEverAskedFor(*m) {
 				stampRestartIntent(m)
 				stampMemberOpReceipt(m, memberRestartQueuedReceipt(memberOpModel), nowSecs())
 			} else {
@@ -1131,10 +1132,17 @@ func (s *apiServer) HandleActivateMemberApiMembersMemberIdActivatePost(w http.Re
 // recycleGraceFor answers "no clock" and the recycle arm never times it out.
 // This line used to name that ceiling — a window an owner would wait out and
 // that never closes. It used to be an immediate robust STOP with no
-// warning at all (fbc5280). An offline member just re-pins so the next wake
-// lands there — no epoch, nothing to wind down. PLACEMENT ONLY — unlike activate it NEVER
-// touches desired_state (or the stopping/waking anchors): a relocate is not a
-// wake. 404 for an unknown / removed member; any non-"" machine_id that names no
+// warning at all (fbc5280). An offline member opens no epoch — there is nothing to
+// wind down — and since T-14 項目 7 it splits two ways: one that has been STOPPED
+// at some point queues the owner's 「起來」 (restart_after_stop) and comes back up
+// on the new pin, while one that has never been asked to stop (a new hire before
+// its first 活化) just re-pins and waits, held_down. 🔴 THE OLD SENTENCE HERE —
+// "PLACEMENT ONLY — unlike activate it NEVER touches desired_state" — is now true
+// only of THIS handler's own write: it still never sets desired_state itself, but
+// the queued intent it records makes the reconcile flip it at the converged-
+// offline edge, so the member does end up woken. The activate contrast that
+// remains is CANCELLATION vs QUEUEING: 活化 tears the stop down on the spot,
+// 改機器 gets in line behind it. 404 for an unknown / removed member; any non-"" machine_id that names no
 // real machine is a 404, so a stale/typo'd id never pins the member to a
 // placement that can never boot (the worker-relocate reasoning). machine_id is
 // REQUIRED since owner 2026-07-27 (relocateNeedsMachineMsg): an absent key is a
@@ -1207,9 +1215,11 @@ func (s *apiServer) HandleRelocateMemberApiMembersMemberIdRelocatePost(w http.Re
 	if heldDown {
 		// 下線 → 重啟 (T-14 項目 7). Owner 2026-08-30: 「change model / machine
 		// 只是帶起來的方式不一樣而已」 — 改機器 is a 重啟 intent, so the pin is
-		// no longer stored and forgotten; the member comes back up on it once
-		// the stop in flight has landed.
-		if aStopIsInFlight(*m) {
+		// no longer stored and forgotten; the member comes back up on it, whether
+		// the stop is still landing or landed a week ago. ⚠️ That second half is
+		// a REAL change to the placement-only contract this handler's header
+		// still describes for the stopped case; see aStopWasEverAskedFor.
+		if aStopWasEverAskedFor(*m) {
 			stampRestartIntent(m)
 			stampMemberOpReceipt(m, memberRestartQueuedReceipt(memberOpRelocate), nowSecs())
 		} else {
@@ -1593,7 +1603,7 @@ func (s *apiServer) HandleRefocusMemberApiMembersMemberIdRefocusPost(w http.Resp
 	// epoch. Owner 2026-08-30: 「如果我已經到強硬下線的狀態下按下 refocus 我只
 	// 需要在下線後把人帶起來」. The stop in flight keeps its stage and its
 	// anchors; the only thing recorded here is 「起來」.
-	if !aRefocusStampWouldReachTheAgent(*m) && aStopIsInFlight(*m) {
+	if !aRefocusStampWouldReachTheAgent(*m) && aStopWasEverAskedFor(*m) {
 		stampRestartIntent(m)
 		stampMemberOpReceipt(m, memberRestartQueuedReceipt(refocusOpRefocus), nowSecs())
 		if err := s.putMember(*m, requestTrigger(r)); err != nil {

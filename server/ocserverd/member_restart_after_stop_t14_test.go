@@ -12,6 +12,35 @@ package main
 //	「要不要起來」聽最後一個動作的（後蓋前）
 //	「下線用多強」只會往上加（棘輪），不聽順序
 //	最後一個動作是重啟或上線 ⇒ 最終在線上；只有最後一個動作是下線 ⇒ 最終離線
+//
+// MUTANT RECORD (each `go test . -count=1`, restored from a scratchpad copy —
+// never `git checkout --`, this tree carried uncommitted work). The four are
+// what an independent review demanded after the first round's assertions turned
+// out to be vacuous:
+//
+//	A  gut clearRestartIntent (member_ownerop_winddown.go)
+//	   → RED: TestForceStopAfterAQueuedRestartStillLeavesTheMemberDown,
+//	     TestActivateStillCancelsTheStopOutright. Both were GREEN under this
+//	     mutant before the middle 重新聚焦 step was added — that is why the step
+//	     is there.
+//	B  aStopWasEverAskedFor → true (drop the never-活化 protection)
+//	   → RED: TestRelocateMember_PlacementOnly,
+//	     TestRelocateMember_OfflineRelocateIsNotPending,
+//	     TestMemberOwnerOp_StoppedMemberIsNotRevived,
+//	     TestUpdateMemberOnAHeldDownMemberLeavesAReceipt,
+//	     TestRelocateAHeldDownMemberLeavesAReceipt. The last three were GREEN
+//	     under this mutant until their fixtures were made to say which row shape
+//	     they build.
+//	C  aStopWasEverAskedFor → false (revert the ruling)
+//	   → RED: the whole T-14 set, AND the matrix's bucket accounting
+//	     ("fell into no bucket"), which is how that accounting is known not to
+//	     be a comment that merely restates the loop.
+//	D  swap memberRestartQueuedReceipt → memberHeldDownReceipt in both gates
+//	   → RED: TestUpdateMemberOnAHeldDownMemberLeavesAReceipt only. The relocate
+//	     face stayed GREEN and that is a real finding, recorded there: relocate
+//	     runs the event-driven reconcile before returning, so on an already-
+//	     converged member consumeRestartAfterStop overwrites the queued receipt
+//	     in the same request.
 
 import (
 	"fmt"
@@ -29,19 +58,30 @@ type lifecycleAction struct {
 
 var modelCounter int
 
-// lifecycleActions is the closed set the sequence matrix is built from. Adding a
-// seventh verb here is the whole point of the matrix: every length-2 and
-// length-3 combination it takes part in is asserted the next time the suite runs.
+// lifecycleActions is the SIX verbs the matrix below drives. It is NOT the closed
+// set of lifecycle verbs and this file no longer claims it is.
 //
-// ⚠️ 加速停止 IS DELIBERATELY ABSENT, and its absence is not an oversight. On its
-// 換手 arm (HandleAcceleratedStopMember…, `case m.RefocusSince > 0`) it re-stamps
-// the handover and leaves desired_state ONLINE — it hurries a handover along
-// rather than turning it into a stop — so 重新聚焦 → 加速停止 ends with the member
-// running. Under the ⇔ oracle below that reads as a violation, and closing it
-// means converting that arm into a stop: a behaviour change outside the [0]
-// ruling this ticket implements. It is a 下線 rung for the purposes of
-// 「要不要起來」 (it calls clearRestartIntent) and its RATCHET behaviour is pinned
-// by TestRestartIntentDoesNotSoftenTheWinddownLadder below.
+// 🔴 THE SEVENTH VERB IS 加速停止, AND IT IS THE ONE COUNTEREXAMPLE. On its 換手
+// arm (HandleAcceleratedStopMember…, `case m.RefocusSince > 0`) it re-stamps the
+// handover and leaves desired_state ONLINE — it hurries a handover along rather
+// than turning it into a stop — so 重新聚焦 → 加速停止 ends with the member
+// RUNNING even though the last action was a 下線 rung. Measured, not assumed.
+// That is a literal violation of the ⇔ oracle below, so including the verb would
+// make the matrix red.
+//
+// IT IS EXCLUDED, AND HERE IS THE HOLE THAT LEAVES: every sequence ending in
+// 加速停止 on the 換手 arm is unchecked by the matrix, and the one real question
+// underneath it — whether 加速停止 pressed on a member mid-換手 should end with
+// that member down — is UNANSWERED, not answered "no". Closing it means
+// converting that arm into a stop, a behaviour change outside the owner's
+// 2026-08-30 [0] ruling, so it is left for the owner rather than decided here.
+// What IS pinned about 加速停止: it clears the queued 「起來」 like the other 下線
+// rungs (clearRestartIntent), and it keeps its rung on the ladder against every
+// 重啟 verb — TestRestartIntentDoesNotSoftenTheWinddownLadder.
+//
+// Adding a SEVENTH verb here is still the cheap way to get it combined with
+// everything else — that property is real; "exhaustive over the lifecycle" is
+// what was not.
 var lifecycleActions = []lifecycleAction{
 	{name: "下線", down: true, do: func(t *testing.T, s *apiServer, id string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
@@ -209,35 +249,69 @@ func TestRelocateAndModelChangeAfterAStopBringTheMemberBackUp(t *testing.T) {
 }
 
 // 🔴 NEGATIVE CONTROL. The fix must not become "everything comes back up".
-// 重新聚焦 → 強制停止 is the owner's own contrast case and it must still end DOWN.
-func TestForceStopAfterRefocusStillLeavesTheMemberDown(t *testing.T) {
+//
+// 🔴 THE SEQUENCE HAS THREE STEPS ON PURPOSE, and the two-step version this
+// replaced was worth nothing. It ran 重新聚焦 → 強制停止 on a member that was
+// online and desired-online, so the 重新聚焦 took the OLD path (it armed a refocus
+// epoch) and never set restart_after_stop at all; the 強制停止 then "cleared" a
+// flag that was already false, and its assertion held for a reason that had
+// nothing to do with the code under test. Proof: gutting clearRestartIntent left
+// this test green. The first 強制停止 below is what puts the member on the arm
+// where 重新聚焦 records an intent, so the second one has something to cancel.
+func TestForceStopAfterAQueuedRestartStillLeavesTheMemberDown(t *testing.T) {
 	s := newReconcileTestServer(t)
 	putWarden(t, s, "mach-a")
 	l := liveMember(t, s, "m-force-after-refocus")
 
-	lifecycleActions[2].do(t, s, "m-force-after-refocus") // 重新聚焦
 	lifecycleActions[1].do(t, s, "m-force-after-refocus") // 強制停止
+	lifecycleActions[2].do(t, s, "m-force-after-refocus") // 重新聚焦 — queues 「起來」
 
-	after := settle(t, s, "m-force-after-refocus", l)
-	if after.DesiredState != DesiredStateOnline && after.RestartAfterStop {
-		t.Fatal("強制停止 left a queued start behind it")
+	queued, _ := s.dal.GetMember("m-force-after-refocus")
+	if !queued.RestartAfterStop {
+		t.Fatal("fixture: 重新聚焦 queued no restart intent, so the 強制停止 below would " +
+			"have nothing to cancel and this test would pin nothing")
 	}
+
+	lifecycleActions[1].do(t, s, "m-force-after-refocus") // 強制停止 again — 後蓋前
+
+	cancelled, _ := s.dal.GetMember("m-force-after-refocus")
+	if cancelled.RestartAfterStop {
+		t.Error("強制停止 left the queued start behind it — 「要不要起來」聽最後一個動作的")
+	}
+	after := settle(t, s, "m-force-after-refocus", l)
 	if after.DesiredState != DesiredStateOffline {
-		t.Fatalf("重新聚焦 → 強制停止 ended desired=%q. 「refocus -> force stop 跟 force "+
+		t.Fatalf("…→重新聚焦→強制停止 ended desired=%q. 「refocus -> force stop 跟 force "+
 			"stop -> refocus 是不一樣的」 — the last action was a 下線, so the member stays down",
 			after.DesiredState)
 	}
 }
 
-// ── the exhaustive matrix ────────────────────────────────────────────────────
+// ── the sequence matrix (six verbs, not the whole lifecycle) ─────────────────
 
-// Every length-2 and length-3 sequence over lifecycleActions, each asserting the
-// ONE invariant: 最後一個動作是下線 ⇔ 最終離線.
+// Every length-2 and length-3 sequence over the SIX verbs in lifecycleActions
+// (252 of them), each asserting the one invariant: 最後一個動作是下線 ⇔ 最終離線.
 //
-// 🔴 EXHAUSTIVE ON PURPOSE, not a table of the cells that were interesting in
-// 2026-09. The defect this ticket fixes was one cell of a 3×3 grid that nobody
-// had a reason to look at; the next verb added to this lifecycle gets all of its
-// combinations checked by appending ONE entry to lifecycleActions.
+// 🔴 HOW MANY OF THOSE ACTUALLY EXERCISE ANYTHING. Counted, because "252
+// sequences" is a number that flatters and 252 was doing exactly that. The four
+// buckets below are DISJOINT and sum to 252:
+//
+//	80  contain no 下線 verb at all — the oracle's right-hand side is trivially
+//	    true for them; they pin the 上線 side only.
+//	22  contain a 下線 verb and end in 活化, which flips desired_state online
+//	    unconditionally; they pin that 活化 still wins, not that the queue works.
+//	66  put a 重啟 verb behind a 下線 and reach the new code — the queue being
+//	    set, carried, and spent. THIS is the matrix's real yield.
+//	84  end on a 下線 rung; they pin 後蓋前 in the cancelling direction.
+//
+// (Counted the overlapping way instead, 42 sequences end in 活化 — 20 of them are
+// already inside the first bucket. Both framings are in the assertion below.)
+//
+// The counts are ASSERTED below rather than written here and left to rot: a
+// change that quietly stops the queue from being exercised turns this red
+// instead of leaving a comment claiming coverage that has evaporated.
+//
+// Not exhaustive over the lifecycle — see lifecycleActions for the seventh verb
+// and the hole its exclusion leaves.
 func TestActionSequencesEndOnlineExactlyWhenTheLastActionIsNotADown(t *testing.T) {
 	s := newReconcileTestServer(t)
 	putWarden(t, s, "mach-a")
@@ -252,6 +326,7 @@ func TestActionSequencesEndOnlineExactlyWhenTheLastActionIsNotADown(t *testing.T
 			}
 		}
 	}
+	noDown, endsActivate, reachesQueue, endsDown, activateTail := 0, 0, 0, 0, 0
 	for i, seq := range seqs {
 		name := ""
 		for _, k := range seq {
@@ -266,6 +341,28 @@ func TestActionSequencesEndOnlineExactlyWhenTheLastActionIsNotADown(t *testing.T
 		for _, k := range seq {
 			codes = append(codes, lifecycleActions[k].do(t, s, id).Code)
 		}
+		// Which bucket this sequence is in, decided by what the ROW did, not by
+		// reading the verb names: queued is true only if the new column was
+		// actually set at some point during the sequence.
+		beforeSettle, _ := s.dal.GetMember(id)
+		queued := beforeSettle.RestartAfterStop || beforeSettle.DesiredState == DesiredStateOnline &&
+			hasDownVerb(seq) && !lifecycleActions[seq[len(seq)-1]].down
+		last := lifecycleActions[seq[len(seq)-1]]
+		if last.name == "活化" {
+			activateTail++
+		}
+		switch {
+		case !hasDownVerb(seq):
+			noDown++
+		case last.name == "活化":
+			endsActivate++
+		case last.down:
+			endsDown++
+		case queued:
+			reachesQueue++
+		default:
+			t.Errorf("%s fell into no bucket — the coverage accounting has a hole", name)
+		}
 		after := settle(t, s, id, l)
 		lastIsDown := lifecycleActions[seq[len(seq)-1]].down
 		wantOffline := lastIsDown
@@ -278,6 +375,30 @@ func TestActionSequencesEndOnlineExactlyWhenTheLastActionIsNotADown(t *testing.T
 				map[bool]string{true: "OFFLINE", false: "ONLINE"}[wantOffline])
 		}
 	}
+	t.Logf("coverage: %d sequences = %d no-下線 + %d 活化-tail-with-下線 + %d reach-the-queue "+
+		"+ %d end-on-a-下線 (%d end in 活化 counted the overlapping way)",
+		len(seqs), noDown, endsActivate, reachesQueue, endsDown, activateTail)
+	if noDown != 80 || endsActivate != 22 || reachesQueue != 66 || endsDown != 84 ||
+		activateTail != 42 || noDown+endsActivate+reachesQueue+endsDown != len(seqs) {
+		t.Errorf("the matrix's coverage shape changed: no-下線=%d (want 80), 活化-tail-with-"+
+			"下線=%d (want 22), reaches-the-queue=%d (want 66), ends-on-a-下線=%d (want 84), "+
+			"活化-tail overall=%d (want 42). Either a verb was added (update these numbers "+
+			"AND the comment above) or the queue stopped being exercised by sequences that "+
+			"used to reach it — which would leave the ⇔ oracle passing on trivia",
+			noDown, endsActivate, reachesQueue, endsDown, activateTail)
+	}
+}
+
+// hasDownVerb reports whether a sequence contains any 下線 rung at all. A
+// sequence without one can never make the oracle's right-hand side true, which
+// is why those are counted separately rather than presented as coverage.
+func hasDownVerb(seq []int) bool {
+	for _, k := range seq {
+		if lifecycleActions[k].down {
+			return true
+		}
+	}
+	return false
 }
 
 // ── the ratchet, which this change must NOT touch ───────────────────────────
@@ -336,6 +457,11 @@ func TestRestartIntentDoesNotSoftenTheWinddownLadder(t *testing.T) {
 
 // 活化 is the ONE exception to the ratchet — it cancels the stop outright rather
 // than queueing a start behind it — and this change must not tidy it away.
+//
+// 🔴 THE MIDDLE STEP IS LOAD-BEARING for the same reason as above: without a
+// 重新聚焦 to queue an intent first, 活化's clearRestartIntent has nothing to
+// clear and the flag assertion is vacuous (gutting clearRestartIntent left the
+// two-step version green).
 func TestActivateStillCancelsTheStopOutright(t *testing.T) {
 	s := newReconcileTestServer(t)
 	putWarden(t, s, "mach-a")
@@ -343,6 +469,12 @@ func TestActivateStillCancelsTheStopOutright(t *testing.T) {
 	defer s.hub.Disconnect(l)
 
 	lifecycleActions[1].do(t, s, "m-activate") // 強制停止
+	lifecycleActions[2].do(t, s, "m-activate") // 重新聚焦 — queues 「起來」
+	queued, _ := s.dal.GetMember("m-activate")
+	if !queued.RestartAfterStop {
+		t.Fatal("fixture: nothing was queued, so the assertion below would be vacuous")
+	}
+
 	lifecycleActions[5].do(t, s, "m-activate") // 活化
 
 	after, _ := s.dal.GetMember("m-activate")
@@ -351,6 +483,7 @@ func TestActivateStillCancelsTheStopOutright(t *testing.T) {
 			after.DesiredState, after.StoppingSince)
 	}
 	if after.RestartAfterStop {
-		t.Error("活化 left a queued start behind — it would fire again after the next 下線")
+		t.Error("活化 SPENT nothing — it left the queued start on the row, where it " +
+			"would fire a second time after the owner's next 下線")
 	}
 }
