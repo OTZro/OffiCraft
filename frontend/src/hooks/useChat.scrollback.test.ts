@@ -925,6 +925,49 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     expect(result.current.messages, "B 的房間還在等它自己的視窗").toEqual([]);
   });
 
+  it("上一條對話晚到的「回到最新」不准燒掉一張世代票,把新對話比它早起跑的載入丟掉", async () => {
+    // 🔴 第五輪 R5-1 的附帶。`resetToLatest` 的 peer 守衛原本只掛在 `setThread`
+    // 上,`committedSeqRef.current = seq` 卻是**無條件**寫的。
+    // `loadSeqRef` / `committedSeqRef` 是刻意全域、刻意不重置的單調時鐘,所以一次
+    // 晚到的跨對話 `resetToLatest`(ChatArea 的錨點失敗回呼在訊息列空的時候正好
+    // 會發一次)會把水位推高,然後把自己那一頁丟掉 —— 而新對話**比它早起跑**、
+    // 票號比較低的那次載入,接著被靜靜判成 superseded。沒有 spinner、沒有錯誤,
+    // 那間房就停在那裡,等下一個 SSE burst 自癒。
+    const bPage = deferred<ChatMessage[]>();
+    h.listChat.mockImplementation(async (withId: string) =>
+      withId === "a" ? page("a", 100, 5) : bPage.promise,
+    );
+
+    const { result, rerender } = renderHook(
+      ({ id }: { id: string }) => useChat(id),
+      { initialProps: { id: "a" } },
+    );
+    await waitFor(() => expect(result.current.messages).toHaveLength(5));
+    // A 的收尾在切走之前就抓在手上了(ChatArea 的 then 回呼)。
+    const staleResetToLatest = result.current.resetToLatest;
+
+    await act(async () => {
+      rerender({ id: "b" });
+      await settle();
+    });
+    expect(result.current.messages, "前提:B 的第一次載入還在空中").toEqual([]);
+
+    // A 的失敗回呼這時才落地,並且發出它那次「回到最新」。
+    await act(async () => {
+      await staleResetToLatest();
+      await settle();
+    });
+    await act(async () => {
+      bPage.resolve(page("z", 9000, 5));
+      await settle();
+    });
+
+    expect(
+      result.current.messages.map((m) => m.id),
+      "B 自己的第一頁不准被上一條對話燒掉的世代票丟掉",
+    ).toEqual(["z0", "z1", "z2", "z3", "z4"]);
+  });
+
   it("錨點被超車、caller 不再重排之後,這間房仍然刷新得起來", async () => {
     // 🔴 R3-3。superseded 那條路原本**刻意**保留「錨點還沒到」的閂,把清除交給
     // caller;而 caller 只在「訊息列是空的」時才清 —— 但 superseded 的定義就是

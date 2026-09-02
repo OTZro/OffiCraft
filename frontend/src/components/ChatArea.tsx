@@ -25,6 +25,7 @@ import {
 import { useWindowActive } from "../hooks/useWindowActive";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { useKeyedRecord } from "../hooks/useKeyedRecord";
+import { useKeyedState } from "../hooks/useKeyedState";
 import { enterShouldSend } from "../lib/composerKeys";
 import { chatBottomAffordance } from "../lib/chatBottomAffordance";
 import { scrollToLatest } from "../lib/scrollToLatest";
@@ -633,14 +634,17 @@ export function ChatArea({
   // Set once per conversation when entry positioning ran: the id of the first
   // unread message. Drives the "以下是未讀訊息" divider (kept for the whole
   // session, like LINE) and the initial scroll target.
-  const [firstUnreadId, setFirstUnreadId] = useState<string | null>(null);
+  const [firstUnreadId, setFirstUnreadId] = useKeyedState<string | null>(
+    member.id,
+    null,
+  );
   // ① IS THE NEWEST MESSAGE IN THE VIEWPORT? The round 回到最新訊息 arrow's
   // ONLY condition (owner card rc-72054864ff88) — not "scrolled more than a
   // screen", not "a new message arrived". Measured from the scroll viewport's
   // own geometry in `onMessagesScroll` and wherever this component moves the
   // viewport itself. Starts true: every entry path lands at the bottom or
   // measures honestly before this can be read.
-  const [latestInView, setLatestInView] = useState(true);
+  const [latestInView, setLatestInView] = useKeyedState(member.id, true);
   // ② THE NEW-MESSAGE PREVIEW STRIP's content — the LATEST unseen inbound
   // message (sender + body), or null when there is nothing waiting.
   //
@@ -650,20 +654,20 @@ export function ChatArea({
   // and there must only ever be one of it (owner screenshot). The FIRST unseen
   // message keeps its own job — anchoring the 「以下是未讀訊息」 divider below —
   // which is why the two are tracked separately.
-  const [newMsgPreview, setNewMsgPreview] = useState<{
+  const [newMsgPreview, setNewMsgPreview] = useKeyedState<{
     id: string;
     from: string;
     body: string;
-  } | null>(null);
+  } | null>(member.id, null);
   // 🔴 T-48: the jump target the server has NO RECORD OF ("missing"), and — a
   // DIFFERENT fact that used to be collapsed into it — an anchor fetch that was
   // repeatedly OVERTAKEN by newer loads ("interrupted"). The fallback (open at
   // the bottom) is indistinguishable from a jump that worked, which is the very
   // silence this ticket exists to remove — so the outcome is state, and state is
   // rendered. A `console.warn` is not a user-visible thing.
-  const [jumpNotice, setJumpNotice] = useState<
+  const [jumpNotice, setJumpNotice] = useKeyedState<
     null | "missing" | "unreachable" | "interrupted"
-  >(null);
+  >(member.id, null);
   // How many times a jump may be re-scheduled after being overtaken. `load()`
   // is held off for the duration of the anchor fetch, so losing the race even
   // once takes a deliberate 回到最新 or a send; three is a ceiling on a loop,
@@ -675,9 +679,12 @@ export function ChatArea({
   // there until some unrelated render happened to carry it. BOUNDED: without a
   // ceiling a load that keeps winning the race turns "retry" into an unbounded
   // fetch loop, which is a worse failure than the one being fixed.
-  const [jumpRetry, setJumpRetry] = useState(0);
+  const [jumpRetry, setJumpRetry] = useKeyedState(member.id, 0);
   // The transient highlight on the row a jump located (cleared after the flash).
-  const [highlightMsgId, setHighlightMsgId] = useState<string | null>(null);
+  const [highlightMsgId, setHighlightMsgId] = useKeyedState<string | null>(
+    member.id,
+    null,
+  );
 
   // 🔴 THE PER-CONVERSATION MUTABLE STATE, REBUILT BY MACHINE (T-48). ChatArea
   // is NOT remounted when the selected member changes (OfficePage renders one
@@ -690,22 +697,28 @@ export function ChatArea({
     freshChatSession(member.unreadCount),
   );
 
-  // What is left here is what a record cannot do: REACT STATE has to be set
-  // through its setter, and the composer has to be swapped to the new peer's
-  // saved draft. Render-time state adjustment (guarded) per the React docs
-  // pattern, so no stale-effect ordering. `peerIdRef` is the key mirror for
-  // this block and is therefore the one thing that cannot live in the record
-  // it keys; it is also why the block does not run on first mount (the draft
-  // restore below would double-apply on top of the mount-time one).
+  // 🔴 AND THE REACT-STATE HALF IS MACHINE-MAINTAINED TOO (T-48, R5-1). This
+  // block used to carry six hand-written `setX(null)` lines beside the draft
+  // swap — the same hand-written list `useKeyedRecord` had just removed from
+  // the ref half, with the same two holes: a seventh per-conversation state
+  // added without a seventh reset line compiles and goes green, and a setter
+  // captured by an in-flight job belonging to the PREVIOUS conversation still
+  // wrote into the CURRENT one (R5-1: an anchor fetch that ended `unreachable`
+  // after the owner had moved on pasted the old room's failure banner, retry
+  // button and all, onto the new one). Those six now declare themselves with
+  // `useKeyedState(member.id, …)`: the reset IS the initial value, and the
+  // setter is bound to the key it was taken for.
+  //
+  // What is genuinely left here is what no per-key primitive can do on its
+  // own: the composer is not RESET on a switch, it is swapped to the new
+  // peer's SAVED draft, which has to be read from storage and pushed through
+  // the staging API. `peerIdRef` is the key mirror for this block and is
+  // therefore the one thing that cannot live in the record it keys; it is also
+  // why the block does not run on first mount (the draft restore below would
+  // double-apply on top of the mount-time one).
   const peerIdRef = useRef(member.id);
   if (peerIdRef.current !== member.id) {
     peerIdRef.current = member.id;
-    setJumpNotice(null);
-    setJumpRetry(0);
-    setFirstUnreadId(null);
-    setNewMsgPreview(null);
-    setLatestInView(true);
-    setHighlightMsgId(null);
     // T-8aaa: swap the composer to the NEW peer's saved draft. Render-phase
     // state adjustment (same pattern as the resets above) so the committed
     // render already carries the new peer's text+attachments — no stale frame
@@ -1055,7 +1068,25 @@ export function ChatArea({
         session.initialPositioned = true;
         session.prevIds = new Set(messages.map((m) => m.id));
         session.nearBottom = false;
+        const firedFor = member.id;
         void loadAround(jumpToMsgId).then((outcome) => {
+          // 🔴 THE OWNER MAY HAVE LEFT WHILE THE PAIR WAS IN THE AIR (T-48,
+          // R5-1). Two of the three endings below reach the OUTSIDE world —
+          // `setJumpNotice` paints a banner and `endRef.scrollIntoView()` moves
+          // a viewport — and neither is addressed to a conversation, they are
+          // addressed to whatever room is on screen. Without this line a 502 on
+          // A's anchor pair, answered after the owner clicked B in the roster,
+          // hung A's 「讀不到那則訊息」 banner in B's room (with a retry button
+          // that does nothing, because B has no jump target) and scrolled B to
+          // the bottom — which, if B was itself entered AT AN ANCHOR, is the
+          // exact intermediate frame this ticket exists to delete, arriving
+          // from the previous conversation.
+          //
+          // The record writes below need no guard for the same reason the
+          // latches do not: `session` is the one this render captured, so a
+          // late write lands in an orphan nobody reads. The guard is here for
+          // what a captured record cannot cover — the DOM and the screen.
+          if (peerIdRef.current !== firedFor) return;
           if (outcome === "found") return;
           if (
             outcome === "superseded" &&
@@ -1284,13 +1315,18 @@ export function ChatArea({
   // The landing is CORRECTED after the layout settles (lib/scrollToLatest):
   // images above the target decode to their real height after this frame and
   // shove the row straight back out of view.
-  // ⚠️ NOT in the session record, and this one is the interesting exception:
-  // it is the CANCEL HANDLE of an animation that is already running. Dropping
-  // it on a switch does not stop the animation — it loses the only way to stop
-  // it, and the settling correction would then keep scrolling the NEW
-  // conversation's viewport. It must outlive the conversation precisely so the
-  // unmount effect below still has something to cancel — and the two places
-  // that start a new correction cancel the previous one first.
+  // ⚠️ NOT in the session record, and the reason is narrower than it looks
+  // (R5-5 corrected a wrong one that used to stand here). Nothing cancels this
+  // on a conversation switch — the peer block above has never called it — so
+  // "keeping the handle buys us a cancel on switch" was simply false. The real
+  // reason is the UNMOUNT cleanup below: in the record, that cleanup would read
+  // the NEW conversation's `null` and leave the previous one's ResizeObserver
+  // and 2.6s timer alive past unmount. The lifetime that matters here is the
+  // COMPONENT's, not the conversation's.
+  // (What a switch leaves running is harmless: `scrollToLatest` captured a row
+  // that is detached by then, so `scrollIntoView` is a no-op and the observed
+  // children are gone. The two places that start a new correction cancel the
+  // previous one first, which is what actually keeps them from stacking.)
   const jumpSettleRef = useRef<(() => void) | null>(null);
   function jumpToLatest() {
     const el = messagesRef.current;

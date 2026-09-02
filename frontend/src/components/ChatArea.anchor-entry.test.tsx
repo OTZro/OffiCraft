@@ -17,7 +17,7 @@
 
 import { StrictMode } from "react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, act, waitFor } from "@testing-library/react";
+import { render, act, waitFor, fireEvent } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { ChatArea } from "./ChatArea";
 import type { Member } from "../types";
@@ -38,6 +38,16 @@ const log: ChatMessage[] = [];
 /** Holds the anchor-window pair in flight, so a conversation switch can happen
  * while A's jump is still in the air — the whole of R3-1. */
 let holdWindows: null | (() => void) = null;
+/** Makes the held pair end in a REJECTION rather than a page, i.e. the
+ * `"unreachable"` ending of `loadAround` (a 502, a dropped connection). */
+let windowsFail = false;
+/** Same, for the plain newest page — so 回到最新's own fetch can be left in the
+ * air across a conversation switch. */
+let holdPlain: null | (() => void) = null;
+/** Every `scrollIntoView` this room performs, tagged by WHAT was scrolled and
+ * with which option — `block: "end"` is `scrollToLatest`'s signature and
+ * nothing else in ChatArea uses it. */
+let scrolls: { on: string; block: unknown }[] = [];
 
 function threadOf(peer: string): ChatMessage[] {
   return log.filter((m) => m.from === peer || m.to === peer);
@@ -51,6 +61,15 @@ vi.mock("../api", () => ({
       cursor?: { beforeTs: number; beforeId: string },
     ) => {
       if (!cursor) plainCalls.push(withId);
+      if (!cursor && holdPlain) {
+        await new Promise<void>((r) => {
+          const prev = holdPlain;
+          holdPlain = () => {
+            prev?.();
+            r();
+          };
+        });
+      }
       const all = threadOf(withId);
       const size = limit ?? 30;
       if (cursor) {
@@ -79,6 +98,7 @@ vi.mock("../api", () => ({
           };
         });
       }
+      if (windowsFail) throw new Error("listChatWindow: 502");
       const all = threadOf(withId);
       const at = all.findIndex(
         (m) => m.id === (anchor.endId ?? anchor.startId),
@@ -166,8 +186,21 @@ beforeEach(() => {
   plainCalls = [];
   windowCalls = [];
   holdWindows = null;
+  holdPlain = null;
+  windowsFail = false;
+  scrolls = [];
   localStorage.clear();
-  Element.prototype.scrollIntoView = vi.fn();
+  Element.prototype.scrollIntoView = vi.fn(function (
+    this: Element,
+    opt?: boolean | ScrollIntoViewOptions,
+  ) {
+    scrolls.push({
+      on:
+        this.getAttribute("data-msg-id") ??
+        (typeof this.className === "string" ? this.className : ""),
+      block: typeof opt === "object" ? opt?.block : undefined,
+    });
+  });
   document.hasFocus = () => true;
 });
 
@@ -244,6 +277,98 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
       await new Promise((r) => setTimeout(r, 30));
     });
     expect(bubbles(container)).toEqual(["b0", "b1", "b2", "b3", "b4"]);
+  });
+
+  it("上一條對話的錨點抓失敗,不准把它的橫幅貼到切過去的那一間,也不准把那一間捲到底", async () => {
+    // 🔴 第五輪 R5-1。這一族的第五個實例,而且住在上一輪治不到的那一半:
+    // `setJumpNotice` / `setJumpRetry` 是 React state,`useKeyedRecord` 管不到,
+    // 而 `endRef` 是 DOM ref —— 永遠指著**現行**那一間房。
+    // `unreachable`(5xx / 連線斷)與 `missing`(404)兩條結局都在 superseded 檢查
+    // 之前就 return,所以切對話之後照樣走得到:A 的失敗回呼會在 B 的房間裡掛一條
+    // 不屬於 B 的「讀不到那則訊息」橫幅(附一顆按了沒反應的重試鈕,因為 B 沒有
+    // 跳轉目標),然後把 B 捲到底。
+    // 真人版:從連結進 A 的一則舊訊息 → 那一對 window 請求吃到 502 → 在它回來
+    // 之前點 roster 切到 B。
+    seed(A, "a", 80, 100);
+    seed(B, "b", 5, 9000);
+
+    holdWindows = () => {};
+    windowsFail = true;
+    const { container, rerender } = render(view(alice, "a3"));
+    await waitFor(() => expect(windowCalls).toHaveLength(2));
+
+    await act(async () => {
+      rerender(view(bruno));
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    await waitFor(() =>
+      expect(bubbles(container)).toEqual(["b0", "b1", "b2", "b3", "b4"]),
+    );
+
+    scrolls = [];
+    await act(async () => {
+      const release = holdWindows;
+      holdWindows = null;
+      release?.();
+      await new Promise((r) => setTimeout(r, 30));
+    });
+
+    expect(
+      container.querySelector(".chat__jump-miss"),
+      "B 的房間不該出現 A 的跳轉失敗通知",
+    ).toBeNull();
+    expect(
+      scrolls.map((s) => s.on),
+      "A 的失敗回呼不准去捲 B 的 viewport",
+    ).not.toContain("chat__scroll-anchor");
+    // …而 B 的內容本身沒有被動到。
+    expect(bubbles(container)).toEqual(["b0", "b1", "b2", "b3", "b4"]);
+  });
+
+  it("上一條對話按下「回到最新」留下的待辦,不准把帶著錨點進來的新對話捲到活尾巴", async () => {
+    // 🔴 第五輪 R5-3 的護欄。`pendingLatestScroll` 這一輪從跨 peer 的 ref 改判
+    // 進紀錄,但當時**一條會紅的測試都沒有** —— 把它改回跨 peer,src/components/
+    // 1472 支全綠。這條把它釘住。
+    // 形狀:A 按下「回到最新」而且必須先抓活尾巴(錨點窗 ⇒ hasNewer) → 那一頁還
+    // 在空中就切到 B,而 B 正是**帶著錨點**進來的 → B 的錨點窗落地時,A 留下的
+    // 待辦會把 B 捲到活尾巴,也就是這張票要拿掉的那格中間畫面。
+    seed(A, "a", 80, 100);
+    seed(B, "b", 80, 9000);
+
+    const { container, rerender } = render(view(alice, "a3"));
+    await waitFor(() =>
+      expect(container.querySelector('[data-msg-id="a3"]')).not.toBeNull(),
+    );
+
+    // A 的房間是一個歷史窗 ⇒ 圓形箭頭在,而且按下去必須先抓活尾巴。
+    holdPlain = () => {};
+    const arrow = container.querySelector<HTMLButtonElement>(
+      '[data-testid="chat-jump-latest"]',
+    );
+    expect(arrow, "前提:錨點窗底下該有「回到最新」的箭頭").not.toBeNull();
+    await act(async () => {
+      fireEvent.click(arrow!);
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    expect(plainCalls, "前提:回到最新真的去抓了活尾巴").toEqual([A]);
+
+    scrolls = [];
+    await act(async () => {
+      rerender(view(bruno, "b3"));
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    await waitFor(() =>
+      expect(container.querySelector('[data-msg-id="b3"]')).not.toBeNull(),
+    );
+
+    expect(
+      scrolls.filter((s) => s.block === "end"),
+      "B 是帶著錨點進來的 —— 不准被上一條對話的待辦捲到活尾巴",
+    ).toEqual([]);
+    // 落點仍然是 B 自己的錨點。
+    expect(scrolls.some((s) => s.on === "b3" && s.block === "center")).toBe(
+      true,
+    );
   });
 
   it("StrictMode 的 setup→cleanup→setup 之後,錨點進的那間房照樣刷新得起來", async () => {

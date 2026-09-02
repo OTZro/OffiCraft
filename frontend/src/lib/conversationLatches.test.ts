@@ -55,14 +55,24 @@ describe("openLatches", () => {
     expect(l.isHeld("a", "entryAnchor")).toBe(false);
   });
 
-  it("anchor leases nest, and only the last one out ends the window", () => {
+  it("anchor leases nest — the COUNT clears on the last one out, the entry window on the FIRST", () => {
+    // ⚠️ The name used to say "only the last one out ends the window", which is
+    // the opposite of what this record does and of what the test asserted
+    // (R5-4: it never mentioned `entryAnchor` at all). "The window" in this
+    // codebase's vocabulary is the ENTRY-ANCHOR window, and that one ends with
+    // the FIRST lease dropped — deliberately, because `load()`'s gate is
+    // `entryAnchor OR anchorFetch > 0`, so a still-held count keeps the door
+    // shut anyway and nothing observes the difference. Both halves are pinned
+    // here so the next reader does not "fix" the implementation to match a name.
     const l = openLatches("a", true);
     const first = l.acquire("a", "anchorFetch")!;
     const second = l.acquire("a", "anchorFetch")!;
     first();
     expect(l.isHeld("a", "anchorFetch")).toBe(true);
+    expect(l.isHeld("a", "entryAnchor")).toBe(false);
     second();
     expect(l.isHeld("a", "anchorFetch")).toBe(false);
+    expect(l.isHeld("a", "entryAnchor")).toBe(false);
   });
 
   it("a handle is spent once — a double release cannot take the count below zero", () => {

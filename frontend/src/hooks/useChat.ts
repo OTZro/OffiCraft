@@ -595,9 +595,12 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   // a lost read-receipt pull is still silent (tracked separately, not widened
   // here).
   //
-  // ⚠️ StrictMode: the record is rebuilt in the effect's SETUP body, never only
-  // in cleanup — a cleanup-only write gets stuck off forever under
-  // setup→cleanup→setup.
+  // ⚠️ StrictMode: the record is NOT rebuilt by this effect at all any more —
+  // `useKeyedRecord` rebuilds it during render, and only when `withId` really
+  // changes. That is what makes setup→cleanup→setup harmless: the second setup
+  // sees the same key and therefore the same record, where the old
+  // rebuild-in-the-setup-body re-armed a latch behind a job that had already
+  // run (R4-2).
 
   // The PEER's watermark for this conversation: the receipt whose READER is the
   // peer and whose PEER is the owner — i.e. how far the peer has read the
@@ -656,6 +659,18 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     try {
       const next = await api.listChat(withId);
       if (seq < committedSeqRef.current) return;
+      // 🔴 A LATE CROSS-CONVERSATION RESET MUST NOT BURN A GENERATION TICKET
+      // (T-48, R5-1). The peer guard used to live only on `setThread` below,
+      // so this line ran unconditionally: a `resetToLatest` belonging to the
+      // conversation the owner has LEFT (ChatArea fires one from the anchor
+      // fetch's miss branch when the thread is empty) would raise the global
+      // watermark and then drop its own page — and every load the NEW
+      // conversation had already started, ticketed lower, was silently judged
+      // superseded and thrown away. No spinner, no error; the room just sits
+      // there until the next SSE burst happens to heal it. `loadSeqRef` /
+      // `committedSeqRef` are deliberately global and never reset (see their
+      // note), which is exactly why writing to them has to be earned.
+      if (threadRef.current.peer !== withId) return;
       committedSeqRef.current = seq;
       setThread((prev) =>
         prev.peer !== withId
