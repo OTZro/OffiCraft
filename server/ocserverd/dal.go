@@ -576,6 +576,46 @@ func (d *DAL) AddMemberBankedCost(id string, delta float64) error {
 	return err
 }
 
+// ZeroMemberBankedCost sets ONE actor's member.banked_cost to 0 and answers with
+// what it held — the receipt, and the last moment that figure exists anywhere
+// (T-53, owner rulings rc-7dea0deefa63 / rc-1344cc76a24a: the reset is
+// deliberately irreversible and no per-charge ledger backs the column). It
+// serves a staff member and an outsource worker alike, because P7d made both a
+// row of this table — the same reason AddMemberBankedCost above is one writer
+// rather than two.
+//
+// 🔴 IT MUST BE A SINGLE-COLUMN WRITE, and that is not a style preference. The
+// obvious shape — read the row, set BankedCost to 0, hand the whole row to
+// PutMember — silently does NOTHING now: banked_cost is deliberately absent
+// from PutMember's DO UPDATE SET (T-14 項目 6), so the durable half of the reset
+// would never land while the API still answered 200 with a receipt naming money
+// it had not destroyed. The live half would go, the column would not, and the
+// cockpit would grow the number back on its next read.
+//
+// Read and write in ONE transaction, like ZeroAccountSpend: the figure reported
+// as destroyed is then exactly the figure that was destroyed, not one a
+// concurrent banking edge had already moved. A missing row answers 0 — an actor
+// that never banked anything and one already at zero are the same state, and
+// neither is an error.
+func (d *DAL) ZeroMemberBankedCost(id string) (float64, error) {
+	var had float64
+	err := d.inTx(func(tx *sql.Tx) error {
+		switch err := tx.QueryRow(`SELECT banked_cost FROM member WHERE id = ?`, id).Scan(&had); {
+		case err == sql.ErrNoRows:
+			had = 0
+			return nil
+		case err != nil:
+			return err
+		}
+		_, err := tx.Exec(`UPDATE member SET banked_cost = 0 WHERE id = ?`, id)
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	return had, nil
+}
+
 // SetMemberHandoverNoticedTS writes ONLY member.handover_noticed_ts (T-6ebc):
 // the session anchor whose one advance handover notice has been sent, or 0 to
 // release the claim at a session boundary. It is the SOLE writer that moves the

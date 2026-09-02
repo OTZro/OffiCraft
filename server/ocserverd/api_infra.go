@@ -966,8 +966,6 @@ func (s *apiServer) HandleResetCostApiMembersMemberIdCostResetPost(w http.Respon
 	// resets) through the WORKER branch, never as a member patch.
 	if m, err := s.dal.GetMember(memberId); err == nil && m != nil &&
 		m.RosterStatus != RosterStatusRemoved && m.Kind != KindOutsource {
-		clearedBanked := nonZeroCost(m.BankedCost)
-		m.BankedCost = 0
 		// 🔴 DURABLE FIRST, LIVE SECOND, and the order is the whole safety
 		// property (found by independent review, T-54). The live figure lives
 		// only in memory and this call is its executioner: drop it before the
@@ -976,10 +974,22 @@ func (s *apiServer) HandleResetCostApiMembersMemberIdCostResetPost(w http.Respon
 		// destroyed — never reaching the caller. Nothing anywhere could
 		// reconstruct it. This way round, a failed write leaves BOTH halves
 		// exactly as they were, and the owner simply presses again.
-		if err := s.putMember(*m, requestTrigger(r)); err != nil {
+		//
+		// 🔴 AND IT IS A SINGLE-COLUMN WRITE, mirroring bankLiveCost: handing
+		// the whole row to putMember would write NOTHING, because banked_cost
+		// is deliberately absent from PutMember's DO UPDATE SET (T-14 項目 6).
+		// The receipt comes back from the same transaction that destroys the
+		// figure, so it names what was actually destroyed.
+		clearedBankedFig, err := s.dal.ZeroMemberBankedCost(memberId)
+		if err != nil {
 			internalError(w, err)
 			return
 		}
+		clearedBanked := nonZeroCost(clearedBankedFig)
+		// The member delta putMember used to fan for free — the same half
+		// bankLiveCost publishes by hand for the same reason.
+		m.BankedCost = 0
+		s.publishMemberPatch(*m, requestTrigger(r))
 		cleared := s.dropLiveCost(memberId)
 		s.publishMonitoringSignal(memberId, requestTrigger(r))
 		writeJSON(w, http.StatusOK, costResetDTO{
@@ -1000,14 +1010,17 @@ func (s *apiServer) HandleResetCostApiMembersMemberIdCostResetPost(w http.Respon
 		writeError(w, http.StatusNotFound, "member '"+memberId+"' not found")
 		return
 	}
-	clearedBanked := nonZeroCost(wk.BankedCost)
-	wk.BankedCost = 0
 	// Durable first, live second — the same ordering the member arm above
-	// explains, for the same reason. Both arms must fail the same way.
-	if err := s.dal.PutOutsourceWorker(*wk); err != nil {
+	// explains, for the same reason. Both arms must fail the same way. And the
+	// same single-column seam: a worker's banked_cost IS member.banked_cost
+	// (P7d), so the whole-row writers cannot move it either.
+	clearedBankedFig, err := s.dal.ZeroMemberBankedCost(memberId)
+	if err != nil {
 		internalError(w, err)
 		return
 	}
+	clearedBanked := nonZeroCost(clearedBankedFig)
+	wk.BankedCost = 0
 	cleared := s.dropLiveCost(memberId)
 	s.publishOutsourceWorker(*wk, requestTrigger(r))
 	s.publishMonitoringSignal(memberId, requestTrigger(r))
