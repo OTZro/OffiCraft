@@ -1244,6 +1244,15 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
         // goes blank, the miss notice does not light, and nothing is logged.
         // Refusing turns it into the ordinary miss, which is what it is.
         if (!window.some((m) => m.id === msgId)) return "missing";
+        // 🔴 A WINDOW LEFT OVER FROM AN EARLIER VISIT IS NOT THIS ROOM'S (T-48, R7-1).
+        // The generation ticket above is drawn when this call STARTS, so it is
+        // older than every load of the visit now on screen — in a room that has
+        // committed nothing yet (exactly the state of a room entered with an
+        // anchor) it lets the stale pair through. `prev.peer !== withId` below
+        // answers "whose rows are these", not "does this callback still count":
+        // coming back to the same person, both sides read the same string. Only
+        // the record identity separates the two visits.
+        if (convRef.current !== conv) return "superseded";
         committedSeqRef.current = seq;
         setThread((prev) =>
           prev.peer !== withId
@@ -1262,7 +1271,7 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
         );
         return "found";
       }),
-    [withId, withAnchorFetch],
+    [withId, withAnchorFetch, conv],
   );
 
   const markRead = useCallback(

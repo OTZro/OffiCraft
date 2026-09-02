@@ -1142,6 +1142,77 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     ).toBeGreaterThan(0);
   });
 
+  it("切走再切回同一個人,上一趟慢回的錨點視窗不准貼進這一趟的空房間", async () => {
+    // 🔴 第七輪 R7-1,同一族的第五個 commit 點。`loadAround` 自己的成功分支只剩
+    // 兩道:開跑時抽的世代票,和 `prev.peer !== withId` 這句**字串**比對 ——
+    // 正是第六輪判定不足的那一對。世代票一定比這一趟任何載入都早;字串在回到
+    // 同一個人時兩邊都是 "a"。所以上一趟慢回(200,不是失敗)的那一對視窗會
+    // 整批貼進這一趟正在等自己視窗的空房間,把進房定位一次性消耗掉。
+    const staleAbove = deferred<ChatMessage[]>();
+    const staleBelow = deferred<ChatMessage[]>();
+    h.listChatWindow
+      .mockReturnValueOnce(staleAbove.promise)
+      .mockReturnValueOnce(staleBelow.promise);
+
+    const { result, rerender } = renderHook(
+      ({ id, anchor }: { id: string; anchor?: string }) => useChat(id, anchor),
+      { initialProps: { id: "a", anchor: "old0" as string | undefined } },
+    );
+    let stale!: Promise<JumpOutcome>;
+    act(() => {
+      stale = result.current.loadAround("old0");
+    });
+
+    // 中間那一間也是帶錨點進來的 —— 這段路上沒有人 commit,世代票的水位一步
+    // 都沒有動,這正是世代票攔不住晚到造訪的那條路。
+    await act(async () => {
+      rerender({ id: "b", anchor: "b0" });
+      await settle();
+    });
+    // 回到 A 的第二趟,一樣帶錨點,房間空的在等自己的視窗。
+    const above = deferred<ChatMessage[]>();
+    const below = deferred<ChatMessage[]>();
+    h.listChatWindow
+      .mockReturnValueOnce(above.promise)
+      .mockReturnValueOnce(below.promise);
+    await act(async () => {
+      rerender({ id: "a", anchor: "new0" });
+      await settle();
+    });
+    let pending!: Promise<JumpOutcome>;
+    act(() => {
+      pending = result.current.loadAround("new0");
+    });
+    expect(result.current.messages, "前提:這一趟在等它自己的視窗").toEqual([]);
+
+    // 上一趟的那一對 200 這時才落地。
+    let staleOutcome: JumpOutcome | undefined;
+    await act(async () => {
+      staleAbove.resolve(page("old", 100, 30));
+      staleBelow.resolve(page("old", 129, 30));
+      staleOutcome = await stale;
+      await settle();
+    });
+    expect(
+      result.current.messages,
+      "上一趟的錨點視窗不准貼進這一趟的空房間",
+    ).toEqual([]);
+    // 回 superseded 而不是 missing:caller 的重排邏輯接得住,說「不見了」是說謊。
+    expect(staleOutcome).toBe("superseded");
+
+    // …而這一趟自己的視窗照樣 commit 得了。
+    above.resolve(page("new", 200, 30));
+    below.resolve(page("new", 229, 30));
+    await act(async () => {
+      await pending;
+      await settle();
+    });
+    expect(
+      result.current.messages.length,
+      "這一趟的視窗不准被上一趟燒掉的世代票判成 superseded",
+    ).toBeGreaterThan(0);
+  });
+
   it("切走再切回同一個人,上一趟送出的那則訊息的 post-send refetch 不准蓋掉這一趟的錨點窗", async () => {
     // 🔴 第六輪 R6-1,同一個根的第三處。`refetch` 的唯一呼叫者是 `send`,而一次
     // 送出撐得過切換:POST 還在空中,人切到 B 再切回 A,這個 refresh 才落地 ——
