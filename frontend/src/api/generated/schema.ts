@@ -2004,9 +2004,9 @@ export interface paths {
          *
          *     The actor is resolved the way the banking fold (`bankLiveCost`) resolves it, so ONE route serves both kinds: a staff member, or an outsource worker.
          *
-         *     🔴 A RELEASED worker IS accepted, and this is the one outsource write door that takes a removed roster row (owner ruling rc-1344cc76a24a, 2026-09-02, overriding this route's earlier 404). The reason it must differ from its neighbours: released is the STEADY STATE for a worker — it happens on every task close — and a released worker's spend deliberately stays in the account total, so refusing it here would mean an account's total could never reach absent however many actors were reset. The other outsource doors refuse a released row because they drive a LIVE session; this one only edits a number that is still being displayed.
+         *     🔴 A RELEASED worker IS accepted, and this is the one outsource write door that takes a removed roster row (owner ruling rc-1344cc76a24a, 2026-09-02, overriding this route's earlier 404). The reason it must differ from its neighbours: released is the STEADY STATE for a worker — it happens on every task close — and a released worker's own 估計$ is still rendered in the cockpit, so refusing it here would leave a figure on screen that the button beside it cannot clear. The other outsource doors refuse a released row because they drive a LIVE session; this one only edits a number that is still being displayed.
          *
-         *     Staff are not symmetric here and do not need to be: removing a member hard-deletes the row AND its telemetry entry, so a removed member contributes nothing to any total and there is nothing left to clear.
+         *     Staff are not symmetric here and do not need to be: removing a member hard-deletes the row AND its telemetry entry, so a removed member has no figure of its own anywhere and there is nothing here to clear.
          *
          *     An id that resolves to neither kind is a 404, and nothing is written — the same deny-first ordering the rest of the member routes use.
          *
@@ -2016,7 +2016,7 @@ export interface paths {
          *
          *     AFTER the reset the cockpit's 估計$ cell falls back to `—` (未量到) rather than showing `$0` (花了 0 元), with no display-side special case needed: `foldActorRuntime` does not put a banked figure of 0 on the wire, and the live key is gone, so both halves read as absent. The next telemetry sample starts the count again from zero.
          *
-         *     🔴 THIS DOES NOT TOUCH THE ACCOUNT FIGURE, and that separation is a LATER ruling (rc-5c5d7c7c6dcd, 2026-09-02, option 0「分開：帳號卡自己一份數字，清它不動成員」) which SUPERSEDES the aggregate reading of rc-1344cc76a24a. Since migration 00069 the account card is an ACCUMULATOR OF ITS OWN, fed by the increase each telemetry report brings, rather than a fold over whichever actors are on the account: clearing one actor here leaves that card exactly where it was, and clearing EVERY actor on an account still leaves it exactly where it was. Pinned by `TestResetCost_ClearingActorsLeavesTheAccountCardAlone` — the earlier test INVERTED rather than deleted, because two buttons reaching into each other is precisely what the ruling forbids and nothing else would notice. The account's own figure is cleared by `POST /api/accounts/cost/reset`, and by nothing else.
+         *     🔴 THIS DOES NOT TOUCH THE ACCOUNT FIGURE (owner ruling rc-5c5d7c7c6dcd, 2026-09-02, option 0「分開：帳號卡自己一份數字，清它不動成員」). The account card is an ACCUMULATOR OF ITS OWN, fed by the increase each telemetry report brings rather than folded from whichever actors are on the account, so clearing one actor here leaves it exactly where it was — and so does clearing EVERY actor on that account. Pinned by `TestResetCost_ClearingActorsLeavesTheAccountCardAlone`. The account's own figure is cleared by `POST /api/accounts/cost/reset`, and by nothing else.
          *
          *     A `monitoring` signal fans out so the cockpit refetches; when the actor is an outsource worker an `outsource_worker` delta fans as well, matching the banking path.
          *
