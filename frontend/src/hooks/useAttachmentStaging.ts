@@ -95,10 +95,10 @@ export const STAGING_TARGET_PER_MOUNT = "remounts-per-conversation";
 
 /** Where a file that landed for a room OTHER than the one on screen is handed
  * for safe-keeping. The composer already cannot show it; this is about not
- * LOSING it — the staged list is wiped on the next conversation switch, so a
- * file with nowhere durable to live would be destroyed by the switch after
- * next. `ChatArea` writes it into that room's own draft, which is what the
- * composer restores from on the next entry.
+ * LOSING it — `staged` is state, so a file with nowhere durable to live lasts
+ * exactly as long as this component and then goes silently (which is R10-4's
+ * whole shape). `ChatArea` writes it into that room's own draft, which is what
+ * the composer restores from on the next entry.
  *
  * ⚠️ §3 rule 4's counter-example, second instance: the COMMIT must be blocked,
  * the SAVE must not. Omitting this callback is legal for a per-mount caller,
@@ -321,11 +321,19 @@ export function useAttachmentStaging(
   function clearAttachments() {
     setStaged((prev) => prev.filter((a) => a.target !== targetRef.current));
     // 🔴 THIS ROOM'S NOTICE, THE SAME WAY IT CLEARS THIS ROOM'S FILES (T-48,
-    // R11-4). This used to be an unconditional `setAttachError(null)`, and the
-    // conversation-switch block in `ChatArea` calls it on every switch — so a
-    // notice stamped for the room the owner had LEFT was wiped before that
-    // room could ever show it. Stamping the message with its room only means
-    // something if the message survives long enough to reach it.
+    // R11-4 / R12-1). Every remaining caller is a SEND that succeeded, and a
+    // send in B is not a reason to destroy a 「圖片太大」 that A raised and has
+    // not been shown yet — the message carries its room for the same reason
+    // the file does.
+    //
+    // ⚠️ THIS CONDITION IS NOT WHAT FIXED R11-4, and the first version of this
+    // comment claimed it was. The `ChatArea` conversation-switch block used to
+    // call `clearAttachments()` too, DURING RENDER — by which point
+    // `targetRef.current` is already the room being ENTERED, so the condition
+    // held the notice through the switch AWAY from A and then deleted it on the
+    // switch BACK INTO A, one render before A could paint it. Same invisible
+    // notice, later. What fixed it was deleting that call (see the switch block
+    // in `ChatArea`); this condition only earns its keep on the send path.
     setAttachError((prev) =>
       prev && prev.target !== targetRef.current ? prev : null,
     );

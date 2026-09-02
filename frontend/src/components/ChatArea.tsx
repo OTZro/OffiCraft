@@ -526,6 +526,18 @@ export function ChatArea({
   // shown anyway. The guard is a render-time derivation rather than a rule at
   // each of the dozen places that read a message, so a new reader of `messages`
   // cannot forget it.
+  //
+  // 🔴 IT IS ALSO WHAT KEEPS `messagesRef`'s UNGUARDED READERS HONEST, and that
+  // was an ACCIDENT until it was written here (T-48, R12-4). The scroll
+  // container is rendered only inside the `shownMessages.length > 0` branch, so
+  // on a mismatched frame the element does not exist, `messagesRef.current` is
+  // null, and every reader — including the three that do NOT gate on
+  // `messagesPeer` (`onMessagesScroll`, which would otherwise `markRead` the
+  // PREVIOUS room's newest ts; the entry-scroll effect, which gates on
+  // `session.entryScrollPending`; and `jumpToLatest`, which is only reachable
+  // from a button drawn in that same branch) — returns at its own `if (!el)`.
+  // Anyone moving the container out of this branch, or giving it a placeholder
+  // that keeps the ref alive across the switch frame, is re-opening all three.
   const shownMessages = messagesPeer === member.id ? messages : NO_MESSAGES;
 
   // Released-worker codenames: an ow- participant that is NOT in the live
@@ -897,9 +909,25 @@ export function ChatArea({
     // T-8aaa: swap the composer to the NEW peer's saved draft. Render-phase
     // state adjustment (same pattern as the resets above) so the committed
     // render already carries the new peer's text+attachments — no stale frame
-    // and no cross-peer mis-persist by the save effect below. Attachments go
-    // through the staging API: clear first, then restore the saved list (its
-    // functional set sees the just-cleared empty list and takes the snapshot).
+    // and no cross-peer mis-persist by the save effect below. Attachments come
+    // back through `restoreAttachments`, whose functional set applies the
+    // snapshot unless rows for the room being ENTERED are already staged.
+    //
+    // 🔴 THERE IS DELIBERATELY NO `clearAttachments()` HERE (T-48, R12-1). It
+    // used to lead this block, back when the staged list was not stamped with
+    // its room and a switch really did have to wipe it. Now every row and every
+    // notice says whose it is, so the only thing the call still did was destroy
+    // this room's `attachError` — DURING RENDER, before the room it belonged to
+    // could paint it. That is R11-4's bug, and R11-4's own fix (holding a notice
+    // whose target is not the current one) could not reach it: on the switch
+    // BACK INTO A the current target IS A, so the notice A raised died on entry
+    // instead of on exit — invisible either way. Removing the call is what lets
+    // 「圖片太大」 raised in A survive to be read in A.
+    //
+    // Nothing else needed it: the OLD room's rows are drained to their own draft
+    // by the staging hook's foreign-landing effect, and the room being entered
+    // has no staged rows of its own to dedupe against (that same effect emptied
+    // them when it was left).
     const restored = getChatDraft(member.id);
     setDraft(restored?.text ?? "");
     // 🔴 THE TARGET MUST SWAP WITH THE PEER, and since 2026-08-21 the reason is
@@ -913,7 +941,6 @@ export function ChatArea({
     // recipient. The guard got MORE load-bearing when the refusal went away, not
     // less: do not remove it on the belief that the server still catches this.
     setReplyToId(restored?.replyTo ?? null);
-    clearAttachments();
     if (restored && restored.attachments.length > 0) {
       restoreAttachments(restored.attachments);
     }

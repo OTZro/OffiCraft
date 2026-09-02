@@ -85,9 +85,12 @@ class HeldFileReader {
     this.file = file;
     HeldFileReader.held.push(this);
   }
-  /** Land this read now, carrying a data URI the size guard will accept. */
-  land() {
-    this.result = `data:${this.file?.type ?? ""};base64,AAAA`;
+  /** Land this read now, carrying a data URI the size guard will accept —
+   * or, given a byte count over the cap, one it will refuse. */
+  land(bytes?: number) {
+    const b64 =
+      bytes === undefined ? "AAAA" : "A".repeat(Math.ceil((bytes * 4) / 3));
+    this.result = `data:${this.file?.type ?? ""};base64,${b64}`;
     this.onload?.();
   }
 }
@@ -102,6 +105,8 @@ const pick = (c: HTMLElement, file: File) =>
   fireEvent.change(c.querySelector(".chat__file-input") as HTMLInputElement, {
     target: { files: [file] },
   });
+const attachErrorText = (c: HTMLElement) =>
+  c.querySelector(".chat__preview-error")?.textContent ?? null;
 const draftNames = (peerId: string) =>
   (getChatDraft(peerId)?.attachments ?? []).map((a) => a.filename);
 
@@ -240,6 +245,46 @@ describe("ChatArea draft survival", () => {
       fireEvent.change(input(back.container), { target: { value: "一" } });
       await waitFor(() => expect(draftNames("m1")).toEqual(["late.png"]));
       expect(previewCount(back.container)).toBe(1);
+    });
+
+    it("raises the too-large notice in the room that picked the file, and only once that room is back on screen", async () => {
+      // 🔴 R11-4 / R12-1. A rejected read produces a NOTICE where a good one
+      // produces a file, and it needs the same journey: invisible in the room
+      // the owner walked into, readable in the room it is about. The first fix
+      // stamped the notice with its room but left the switch block clearing it
+      // during render — which only moved the deletion from the exit to the
+      // entrance, so 「圖片太大」 was still never seen.
+      const view = renderChat(m1);
+      pick(view.container, pngFile("huge.png"));
+
+      view.rerender(
+        <I18nProvider>
+          <ChatArea member={m2} />
+        </I18nProvider>,
+      );
+      act(() => HeldFileReader.held[0].land(21 * 1024 * 1024));
+
+      // Kye picked nothing; a rejection is a sentence about somebody else's
+      // action here.
+      expect(attachErrorText(view.container)).toBeNull();
+      expect(previewCount(view.container)).toBe(0);
+
+      // Nor may Kye's own send destroy it: `clearAttachments` clears THIS
+      // room's staged files and THIS room's notice, and Mira's is neither.
+      fireEvent.change(input(view.container), { target: { value: "給 Kye" } });
+      fireEvent.click(view.container.querySelector(".chat__send") as HTMLElement);
+      await waitFor(() => expect(input(view.container).value).toBe(""));
+
+      view.rerender(
+        <I18nProvider>
+          <ChatArea member={m1} />
+        </I18nProvider>,
+      );
+      await waitFor(() =>
+        expect(attachErrorText(view.container)).toBe("圖片太大（上限 20 MB）"),
+      );
+      // Refused, not staged: nothing was written into the room's draft either.
+      expect(draftNames("m1")).toEqual([]);
     });
 
     it("still stages into the composer when the later visit is the same peer", async () => {
