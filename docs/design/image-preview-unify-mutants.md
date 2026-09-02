@@ -77,9 +77,12 @@ CI 一律綠 —— T-f014 修掉的「同一次點擊有兩個 overlay、其中
   visual guard 在真瀏覽器裡跑過（**不要在這裡寫數量** —— 原本這行寫「162 條」，
   T-51 的獨立審查實查是四百多條，那個數字從寫下的那天起就在過期；要知道現在幾條就
   `npx playwright test -c playwright-ct.config.ts --list`）
-  （含 `md-preview.ct.spec`、`t-c645-attachment-preview`（縮放 transform、
-  `md-preview__action-label` 在窄寬度的 media query — **該 label 與那條 media
-  query 已於 T-51 ④ 移除**：owner 2026-09-02 要三顆頂列按鈕一律只留圖示，所以那條
-  斷言改成釘「頂列沒有可見文字、每顆仍有可觸及名稱」）、`chat-md-preview`、
-  `reply-card-md-preview`、`artifacts-badge`），不是靠 jsdom。
+  ⚠️ **這裡原本列著一份「有哪些 guard」的清單，已經拿掉** —— T-51 期間它一口氣落後
+  兩支（`t51-gallery-sender-filter`、`t51-preview-pager`），而清單過期不會讓任何東西
+  變紅。要知道現在有哪些，跑
+  `ls frontend/visual-guards/*.ct.spec.tsx`。
+  唯一值得留在這裡的是一則**歷史更正**：`t-c645-attachment-preview` 原本斷言
+  `md-preview__action-label` 在窄寬度 hidden，**該 label 與那條 media query 已於
+  T-51 ④ 移除**（owner 2026-09-02 要三顆頂列按鈕一律只留圖示），所以那條斷言改成釘
+  「頂列沒有可見文字、每顆仍有可觸及名稱」。
 - **staged 圖片在真瀏覽器裡長什麼樣**：沒有對應的 CT 故事，只有 jsdom 測試。

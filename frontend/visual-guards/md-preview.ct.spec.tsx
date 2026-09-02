@@ -273,9 +273,12 @@ test("narrow 390: a document longer than the screen scrolls to its last line", a
 //
 // MUTANTS (measured, 5 tests in this file). TWO of them, and the pair is the
 // point — they fail this test for unrelated reasons:
-//   · `width: min(1400px, 100%)` → `min(700px, 100%)` ⇒ fails on the width line
-//     (measured at both viewports: 1280 reads 700 instead of 1216, 1600 reads 700
-//     instead of 1400).
+//   · `width: min(1400px, 100%)` → `min(700px, 100%)` ⇒ fails on the width line,
+//     at 1280 (reads 700, not 1216). The 1600 half of that run is NOT observable:
+//     the 1280 assertion fails first and the test stops there. What does isolate
+//     the WIDE_CAP block is a mutant the 1280 numbers survive — raising the cap
+//     (1400 → 2000) reddens `wide.width` and nothing else in the repo (measured
+//     by the independent review).
 //   · `--md-preview-inset: 32px` → `0px` ON THE BASE RULE ONLY ⇒ 1 failed /
 //     4 passed, on `panel.top` (received 16).
 //
@@ -368,8 +371,15 @@ test("desktop 1280: the panel geometry is unchanged by the narrow-width fix", as
   expect(seen.bottom).toBe(768);
 
   // WIDE_CAP — the half the 1280 reading above can no longer carry: a viewport
-  // roomy enough for `min(1400px, 100%)` to land on the 1400 side. Here the cap
-  // IS the width, and left/right are a real reading of the centring.
+  // roomy enough for `min(1400px, 100%)` to land on the 1400 side.
+  //   · width 1400 — the cap itself. Raising it to 2000 reddens HERE and nowhere
+  //     else in the repo.
+  //   · left 100   — the centring, and a real reading of it: `justify-content:
+  //     center` → `flex-start` reddens this (100 → 32) while every 1280 number
+  //     above stays green.
+  //   · right 1500 — ARITHMETIC (`left + width`, both pinned above). It cannot
+  //     redden on its own; it is here so the box is stated whole, not as a third
+  //     claim.
   await page.setViewportSize({ width: 1600, height: 800 });
   await settleLayout(page);
   const wide = await page.evaluate(() => {

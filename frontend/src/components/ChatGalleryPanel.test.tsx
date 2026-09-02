@@ -431,11 +431,17 @@ describe("ChatGalleryPanel", () => {
         />
       </I18nProvider>,
     );
-    await waitFor(() => expect(itemsIn(container).length).toBe(2));
-    expect(
-      filterToggle().textContent,
-      "the new member's gallery opens unfiltered",
-    ).toContain("全部");
+    // The filter text goes INSIDE the wait: as a bare assertion after a
+    // `waitFor` on the row count, a regression prints "expected 1 to be 2" from
+    // the count and the named assertions never run — the CI line would not say
+    // what broke.
+    await waitFor(() => {
+      expect(
+        filterToggle().textContent,
+        "the new member's gallery opens unfiltered",
+      ).toContain("全部");
+      expect(itemsIn(container).length).toBe(2);
+    });
     expect(
       itemsIn(container)
         .map((el) => el.textContent)
