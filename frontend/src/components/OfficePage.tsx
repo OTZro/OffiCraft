@@ -225,7 +225,9 @@ export function OfficePage() {
         lifecycle: "online",
         model: workerPeer.model,
         avatarUrl: workerPeer.avatarUrl,
-        // ChatArea snapshots this before listChat marks the room read.  The
+        // ChatArea snapshots this before its own mark-read clears the room
+        // (T-48: the LISTING stopped writing a watermark; the clearer is
+        // ChatArea's explicit POST /api/chat/mark-read).  The
         // live worker's server-computed badge is therefore part of the same
         // entry contract as a regular member's unreadCount.
         unreadCount: workerPeer.unreadCount ?? 0,

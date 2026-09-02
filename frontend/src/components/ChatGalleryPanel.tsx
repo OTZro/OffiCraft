@@ -12,8 +12,9 @@
 // (`GET /api/chat/attachments?with=`) — the server flattens the rows and
 // resolves each sender's display name from the roster (any status, so a
 // dismissed sender still reads by name), so this component does no roster
-// lookup and no client-side aggregation. READ-ONLY: unlike the thread's
-// listChat, opening the gallery never advances a read watermark.
+// lookup and no client-side aggregation. READ-ONLY: opening the gallery never
+// advances a read watermark — which since T-48 is true of every read door on
+// this API, so this is no longer a contrast with the thread's own listing.
 //
 // OPEN BEHAVIOR (preview/download split, mirroring the server's disposition
 // table on the server): a previewable mime

@@ -10,8 +10,10 @@
 // composer / 重新決定 flow as RepliesPage — one implementation, zero drift).
 // No extra banner: the card IS the message bubble (spec: 直接出現在訊息串中).
 // Answering never touches the chat unread red dot — that clears only by being
-// IN the conversation (the existing listChat watermark), which is exactly
-// where this card lives.
+// IN the conversation (ChatArea's explicit mark-read, which fires while the
+// owner is actually looking at the thread), which is exactly where this card
+// lives. Until T-48 the clearer was a side effect of the listing itself; the
+// dot's rule did not change when the mechanism did.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n";

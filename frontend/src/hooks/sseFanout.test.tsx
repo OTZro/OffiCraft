@@ -286,7 +286,8 @@ describe("one delta re-pulls only what it named (T-8115)", () => {
     expect(h.counts.getMember).toBe(1);
     expect(h.counts.listMembers ?? 0).toBe(0);
     // The open thread belongs to someone else — no reload, and above all no
-    // marking read (that read is what fans the echo round).
+    // mark-read (that WRITE is what fans the echo round; since T-48 it is
+    // ChatArea's explicit POST, never the listing).
     expect(h.counts.listChat ?? 0).toBe(0);
     expect(h.counts.listChatReads ?? 0).toBe(0);
     // A chat line cannot assign or release an 外包, so the rail has nothing to do.
@@ -795,7 +796,7 @@ describe("the read echo does not drive another round (T-8115)", () => {
     expect(view.result.current.members[0].unreadCount).toBe(0);
     expect(view.result.current.unread).toBe(1);
 
-    // COST: the echo must not re-enter the marking read (that is the loop), and
+    // COST: the echo must not re-enter the read path (that is the loop), and
     // must not re-pull the receipts either — `peerLastReadTs` is the PEER's
     // watermark and this delta says we are the reader, so it cannot move.
     expect(h.counts.listChat ?? 0).toBe(0);
@@ -820,8 +821,10 @@ describe("the read echo does not drive another round (T-8115)", () => {
   });
 
   it("ONE inbound message costs one round, not two — the whole echo path end to end", async () => {
-    // The server's real sequence, with the read side effect wired up: the
-    // marking listChat advances the watermark, so a chat_read comes back.
+    // The server's real sequence: the owner looking at the open thread makes
+    // ChatArea POST /api/chat/mark-read, that write advances the watermark, and
+    // the server fans the `chat_read` back at us. (Until T-48 the same echo was
+    // produced by the LISTING itself — the sequence survived the mechanism.)
     let watermarkBehind = true;
     const echo = () => {
       for (const cb of [...h.handlers])
@@ -852,7 +855,8 @@ describe("the read echo does not drive another round (T-8115)", () => {
     await settle();
 
     // The thread reloaded exactly ONCE (the message) and the echo did not make
-    // it reload again — a second marking read would fan a second echo.
+    // it reload again — a reload that re-entered the read path would fan a
+    // second echo.
     expect(h.counts.listChat).toBe(1);
     // The roster never re-pulls the company for either delta: the message and the
     // echo each name ONE member, so each costs one member read.

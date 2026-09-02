@@ -90,9 +90,10 @@ const elsewhere: SseDelta = {
 };
 
 // A read receipt naming a THIRD party as its reader, in a burst that carries NO
-// `chat` topic at all. This is what the owner opening any OTHER conversation
-// fans at this client (GET /api/chat?with= advances a watermark and echoes a
-// `chat_read`), so it is an ordinary — and common — recovery channel.
+// `chat` topic at all. This is what the owner LOOKING at any OTHER conversation
+// fans at this client (that window's ChatArea posts /api/chat/mark-read, which
+// advances a watermark and echoes a `chat_read` — since T-48 merely OPENING the
+// conversation no longer does it), so it is an ordinary recovery channel.
 const foreignRead: SseDelta = {
   topic: "chat_read",
   names: { reader: "x", peer: "y" },
