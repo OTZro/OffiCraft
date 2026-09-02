@@ -1240,7 +1240,7 @@
           },
           "caller_only": {
             "default": false,
-            "description": "A real BOOLEAN - the schema declares it type boolean, default false - not a string. A value the parameter binder cannot read as a boolean is refused with 422 rather than ignored; do not copy the sibling peek, which really is a string compared literally against 'true'. Omitted or false leaves the listing exactly as it was. True narrows it to messages the caller itself sent or received. Because the ordinary listing filters on a PARTICIPANT rather than on you, this is how you exclude conversations you were not part of - but applied to a conversation you were never in, it filters everything away and answers 200 with an EMPTY list, which reads exactly like a conversation with no messages. If you set this and got nothing, check whether you were a participant before concluding the thread is empty.",
+            "description": "A real BOOLEAN - the schema declares it type boolean, default false - not a string. A value the parameter binder cannot read as a boolean is refused with 422 rather than ignored. Omitted or false leaves the listing exactly as it was. True narrows it to messages the caller itself sent or received. Because the ordinary listing filters on a PARTICIPANT rather than on you, this is how you exclude conversations you were not part of - but applied to a conversation you were never in, it filters everything away and answers 200 with an EMPTY list, which reads exactly like a conversation with no messages. If you set this and got nothing, check whether you were a participant before concluding the thread is empty.",
             "type": "boolean"
           },
           "end_id": {
