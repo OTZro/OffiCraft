@@ -351,6 +351,46 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     expect(h.listChat.mock.calls.length).toBe(before + 1);
   });
 
+  it("overlapping loadNewer calls are concurrency-locked to ONE forward page", async () => {
+    // The mirror of the loadOlder lock above, and it had no pin at all until
+    // the latch inventory went looking: the forward walk is driven by the SAME
+    // scroll handler, so two events one frame apart is the ordinary case, not
+    // an exotic one. Without the mutex both fire `?start_id=` from the same
+    // newest row and the second page appends the first page's rows a second
+    // time.
+    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
+    const { result } = renderHook(() => useChat("b"));
+    await waitFor(() => expect(result.current.messages).toHaveLength(30));
+
+    h.listChatWindow
+      .mockResolvedValueOnce(page("a", 100, 30))
+      .mockResolvedValueOnce(page("a", 129, 30));
+    await act(async () => {
+      await result.current.loadAround("a0");
+    });
+    const windowCalls = h.listChatWindow.mock.calls.length;
+    const newestLoaded =
+      result.current.messages[result.current.messages.length - 1].id;
+
+    let release!: (v: ChatMessage[]) => void;
+    h.listChatWindow.mockImplementationOnce(
+      () => new Promise((res) => (release = res)),
+    );
+    await act(async () => {
+      const first = result.current.loadNewer();
+      const second = result.current.loadNewer(); // in-flight → no-op
+      await second;
+      release([
+        mkMsg(newestLoaded, "b", "owner", 158),
+        mkMsg("t1", "b", "owner", 159),
+      ]);
+      await first;
+    });
+
+    expect(h.listChatWindow.mock.calls.length).toBe(windowCalls + 1);
+    expect(result.current.messages.map((m) => m.id).slice(-1)).toEqual(["t1"]);
+  });
+
   it("a FAILED READ is not a missing message —— 404/422 是不見了,其他是現在讀不到", async () => {
     // 🔴 兩個方向一起釘,而且必須一起:只釘一邊的話,「把兩種壓成同一句」照樣會過,
     // 而那正是這條要修的病。owner 開這張票的理由是「不要對使用者說不成立的話」;
@@ -766,5 +806,162 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
       "a stale forward page must not re-arm the anchor gate",
     ).toBe(false);
     expect(result.current.gapSuspected).toBe(false);
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // 閂的生命週期 —— 「卡住不清」這個形狀在這個 hook 裡出現過三次(F2 的
+  // `hasNewer`、R3-1 的 `anchorFetching`、R3-3 的 `anchorPending`),而三次的
+  // 後果都一樣:那條對話從此不刷新、也不標已讀,畫面上一個字都沒有。以下三條
+  // 守的是**閂本身**,不是它擋住的那件事。
+
+  it("上一條對話的錨點還在飛,不准把切過去的那一間鎖成永遠空白", async () => {
+    // 🔴 R3-1。`anchorFetching` 原本不隨訂閱重置,也不分 peer,所以 A 的錨點兩個
+    // GET 還在空中時切到 B,B 的第一個 load() 被 A 留下的計數擋掉 —— 而且擋掉之後
+    // 沒有人會再叫一次(load() 只由訂閱/SSE/focus 觸發)。實測 B 的房間 22 秒都是
+    // 0 列,A 落地也不會自己好。
+    const above = deferred<ChatMessage[]>();
+    const below = deferred<ChatMessage[]>();
+    h.listChatWindow
+      .mockReturnValueOnce(above.promise)
+      .mockReturnValueOnce(below.promise);
+
+    const { result, rerender } = renderHook(
+      ({ id, anchor }: { id: string; anchor?: string }) => useChat(id, anchor),
+      { initialProps: { id: "a", anchor: "a0" as string | undefined } },
+    );
+    await waitFor(() => expect(h.listChatReads).toHaveBeenCalled());
+    let pending!: Promise<JumpOutcome>;
+    act(() => {
+      pending = result.current.loadAround("a0");
+    });
+    expect(h.listChat).not.toHaveBeenCalled();
+
+    const bPage = page("z", 9000, 5);
+    h.listChat.mockResolvedValue(bPage);
+    await act(async () => {
+      rerender({ id: "b", anchor: undefined });
+      await settle();
+    });
+
+    expect(
+      h.listChat.mock.calls.map((c) => c[0]),
+      "切過去的那一間必須自己撈自己的最新頁",
+    ).toEqual(["b"]);
+    expect(result.current.messages.map((m) => m.id)).toEqual(
+      bPage.map((m) => m.id),
+    );
+
+    // …而且 A 的錨點落地之後,B 既不會被換掉,也還活著。
+    above.resolve(page("a", 100, 30));
+    below.resolve(page("a", 129, 30));
+    await act(async () => {
+      await pending;
+      await settle();
+    });
+    expect(result.current.messages.map((m) => m.id)).toEqual(
+      bPage.map((m) => m.id),
+    );
+    const before = h.listChat.mock.calls.length;
+    await act(async () => {
+      h.sseHandler?.("chat");
+      await settle();
+    });
+    expect(h.listChat.mock.calls.length).toBe(before + 1);
+  });
+
+  it("上一條對話留下的收尾動作,不准替新的那一條把它自己的錨點閂解開", async () => {
+    // 同一個形狀的另一半,而且只有 peer 戳記擋得住它 —— 因為踩到它的不是「還在
+    // 飛的那次載入」,而是**上一條對話留在閉包裡的收尾函式**:ChatArea 的
+    // `loadAround(...).then(… void resetToLatest())` 這個回呼在切走之前就建好了,
+    // 裡面那個 `resetToLatest` 綁的是 A。錨點落地時人已經在 B,回呼照樣跑。
+    //
+    // `resetToLatest` 的第一件事就是「把錨點閂放掉」。它認 peer 的話,A 的那次
+    // 收尾找不到自己的紀錄、什麼都不做(對一條已經離開的對話,這正是對的);
+    // 不認 peer 的話,它會把 **B** 的錨點閂解開 —— 而 B 的視窗還在路上,於是下一
+    // 個 SSE burst 會先把一頁最新的蓋上去(這張票拿掉的那格中間畫面),B 自己的
+    // 視窗接著被判成 superseded。
+    const aAbove = deferred<ChatMessage[]>();
+    const aBelow = deferred<ChatMessage[]>();
+    h.listChatWindow
+      .mockReturnValueOnce(aAbove.promise)
+      .mockReturnValueOnce(aBelow.promise);
+
+    const { result, rerender } = renderHook(
+      ({ id, anchor }: { id: string; anchor?: string }) => useChat(id, anchor),
+      { initialProps: { id: "a", anchor: "a0" as string | undefined } },
+    );
+    await waitFor(() => expect(h.listChatReads).toHaveBeenCalled());
+    let pendingA!: Promise<JumpOutcome>;
+    act(() => {
+      pendingA = result.current.loadAround("a0");
+    });
+    // A 的回呼在切走之前就抓在手上了。
+    const staleResetToLatest = result.current.resetToLatest;
+
+    // B 也是跳轉進來的,它的錨點還沒有人去撈(ChatArea 的 reactor 要下一拍)。
+    await act(async () => {
+      rerender({ id: "b", anchor: "b0" });
+      await settle();
+    });
+
+    h.listChat.mockResolvedValue(page("z", 9000, 30));
+    aAbove.resolve(page("a", 100, 30));
+    aBelow.resolve(page("a", 129, 30));
+    await act(async () => {
+      await pendingA;
+      // A 的 then 回呼跑了 —— 綁著 A 的那個 resetToLatest。
+      await staleResetToLatest();
+      await settle();
+    });
+    await act(async () => {
+      h.sseHandler?.("chat");
+      await settle();
+    });
+
+    expect(
+      h.listChat.mock.calls.map((c) => c[0]),
+      "B 的錨點還沒到,不准有人先把一頁最新的蓋上去",
+    ).not.toContain("b");
+    expect(result.current.messages, "B 的房間還在等它自己的視窗").toEqual([]);
+  });
+
+  it("錨點被超車、caller 不再重排之後,這間房仍然刷新得起來", async () => {
+    // 🔴 R3-3。superseded 那條路原本**刻意**保留「錨點還沒到」的閂,把清除交給
+    // caller;而 caller 只在「訊息列是空的」時才清 —— 但 superseded 的定義就是
+    // 有別的載入 commit 上來了,也就是列表非空。重試次數用完之後那個閂就永遠是
+    // true,那條對話從此不刷新、也不標已讀。
+    const above = deferred<ChatMessage[]>();
+    const below = deferred<ChatMessage[]>();
+    h.listChatWindow
+      .mockReturnValueOnce(above.promise)
+      .mockReturnValueOnce(below.promise);
+    const { result } = renderHook(() => useChat("b", "a0"));
+    await waitFor(() => expect(h.listChatReads).toHaveBeenCalled());
+    let pending!: Promise<JumpOutcome>;
+    act(() => {
+      pending = result.current.loadAround("a0");
+    });
+
+    // 超車的是**送出一則訊息**的 post-send refetch:它不受錨點的 hold-off 擋著,
+    // 拿到更高的世代票並先 commit。這是最短的一條自然路徑。
+    h.listChat.mockResolvedValue(page("z", 9000, 30));
+    await act(async () => {
+      await result.current.send("hi");
+    });
+    above.resolve(page("a", 100, 30));
+    below.resolve(page("a", 129, 30));
+    await act(async () => {
+      expect(await pending).toBe("superseded");
+    });
+
+    const before = h.listChat.mock.calls.length;
+    await act(async () => {
+      h.sseHandler?.("chat");
+      await settle();
+    });
+    expect(
+      h.listChat.mock.calls.length,
+      "被超車的錨點不准把這間房留在「永遠不刷新」",
+    ).toBe(before + 1);
   });
 });

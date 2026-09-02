@@ -759,9 +759,12 @@ export const en: Dict = {
     // 🔴 T-48 F3: a DIFFERENT fact, and it must not borrow the sentence above.
     // The anchor fetch was overtaken by a newer load often enough to give up
     // retrying; the message is still there and claiming it was cleared would be
-    // a lie with a dead end behind it. Say what happened and what to do.
+    // a lie with a dead end behind it. Say what happened — and let the RETRY
+    // BUTTON beside it be the next step. It used to say "open the link again",
+    // which cannot work: the jump latch is spent and the hash has not changed,
+    // so the same link fires no hashchange and no re-render (T-48, R3-5).
     jumpTargetInterrupted:
-      "The jump was interrupted by newer messages — open the link again to retry.",
+      "The jump was interrupted by newer messages — the message is still there.",
     // 🔴 T-48: the read FAILED — a 5xx, a dropped connection, a timeout. The
     // message is almost certainly still there, so this may not borrow either
     // sentence above: "cleared already" ends the matter and nobody retries a

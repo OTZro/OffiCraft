@@ -397,3 +397,91 @@ test.describe('T-48 · 錨點視窗中有新訊息進來,點預覽列跳下去',
       .toBe(0);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T-48 · 第三輪獨立審查 R3-1 —— 「跳到一半切去別條對話」。
+//
+// 🔴 這是活過的 bug,不是理論風險:`load()` 的錨點閘原本靠一個**不分 peer、也不隨
+// 訂閱重置**的計數擋著。A 的錨點兩個平行 GET 還在空中時點另一個人的 roster row,
+// B 的第一次載入就被 A 留下的計數擋掉 —— 而且擋掉之後沒有人會再叫一次
+// (load() 只由訂閱/SSE/focus 觸發)。原始量測:B 的房間 22 秒都還是 0 列,A 的錨點
+// 第 8 秒就落地了也不會自己好。
+//
+// 只有真瀏覽器算數:切換對話是使用者手勢(點 roster row),而它同時牽動 ChatArea 的
+// member prop 與 useChat 的訂閱重建 —— jsdom 那一層(ChatArea.anchor-entry.test.tsx)
+// 量得到同一件事,但量不到「真的點下去」。
+test.describe('T-48 · 錨點還在飛的時候切去別條對話', () => {
+  test('切過去的那一間照樣載得起來,而且上一條的錨點落地也不會把它換掉', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const request = page.request;
+    const token = await ownerToken(request);
+    const NAME_A = uniqueName('SwitchAnchor A');
+    const NAME_B = uniqueName('SwitchAnchor B');
+    const A = await hireMember(request, token, NAME_A);
+    const B = await hireMember(request, token, NAME_B);
+
+    const idsA = [];
+    for (let i = 1; i <= TOTAL; i++) {
+      const msg = await postChatAs(request, token, A.id, `A line ${i} ${PAD}`);
+      idsA.push(msg.id);
+    }
+    const B_COUNT = 5;
+    for (let i = 1; i <= B_COUNT; i++) {
+      await postChatAs(request, token, B.id, `B line ${i} ${PAD}`);
+    }
+
+    // 把開窗那兩個請求押在空中 —— 伺服器一忙就是這個形狀,只是這裡把它拉長到
+    // 肉眼與斷言都追得上。
+    const HOLD_MS = 8000;
+    const isAnchorWindow = (url) =>
+      url.pathname === '/api/chat' &&
+      (url.searchParams.has('start_id') || url.searchParams.has('end_id'));
+    await page.route(isAnchorWindow, async (route) => {
+      await new Promise((r) => setTimeout(r, HOLD_MS));
+      await route.continue();
+    });
+
+    const anchorReqs = [];
+    page.on('request', (r) => {
+      const u = new URL(r.url());
+      if (isAnchorWindow(u)) anchorReqs.push(u.href);
+    });
+
+    await bootAuthedSpa(page, token);
+    await page.goto(`/#office/chat/${A.id}/msg/${idsA[TARGET_INDEX - 1]}`);
+    await page.reload();
+
+    const thread = page.locator('.chat__messages');
+    // 前提:A 的錨點真的在空中,而且 A 的房間還是空的(錨點優先 ⇒ 不先載最新頁)。
+    await expect
+      .poll(() => anchorReqs.length, { message: 'A 的錨點必須先發出去' })
+      .toBeGreaterThanOrEqual(2);
+    await expect(
+      thread.locator('.chat__msg'),
+      '前提:錨點還沒落地,A 的房間是空的',
+    ).toHaveCount(0);
+
+    // 使用者手勢:點 B 的 roster row。
+    await page.locator('.member-card', { hasText: NAME_B }).click();
+
+    // 🔑 B 的房間必須在 A 的錨點落地**之前**就填滿 —— 那正是舊碼永遠到不了的
+    // 那一格(舊碼量到的是 22 秒 0 列)。
+    await expect(
+      thread.locator('.chat__msg'),
+      'B 的房間被上一條對話的錨點鎖住了 —— 這正是 R3-1',
+    ).toHaveCount(B_COUNT, { timeout: HOLD_MS - 2000 });
+    await expect(thread.locator('.chat__msg').last()).toContainText(
+      `B line ${B_COUNT} `,
+    );
+
+    // …而且 A 的錨點落地之後,不准把 B 的房間換掉。
+    await page.waitForTimeout(HOLD_MS);
+    await expect(thread.locator('.chat__msg')).toHaveCount(B_COUNT);
+    await expect(
+      thread.locator(`[data-msg-id="${idsA[TARGET_INDEX - 1]}"]`),
+      'A 的錨點視窗不准落在 B 的房間裡',
+    ).toHaveCount(0);
+  });
+});

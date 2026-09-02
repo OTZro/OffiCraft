@@ -439,6 +439,30 @@ function mergeLatestPage(
 // miss-notice are its business). Passing `undefined` — every entry that is not
 // a jump — is byte-for-byte the old path, and `useChat.scrollback.test.ts` pins
 // exactly that.
+/** Every per-conversation latch in this hook, stamped with the conversation it
+ * belongs to. See `latchesRef` for why they live in one record and not in five
+ * refs. Adding a field here forces `freshLatches` to give it a reset value —
+ * that is the point of the type. */
+type ConversationLatches = {
+  readonly peer: string;
+  anchorPending: boolean;
+  anchorFetching: number;
+  loadStale: boolean;
+  loadingOlder: boolean;
+  loadingNewer: boolean;
+};
+
+function freshLatches(peer: string, anchored: boolean): ConversationLatches {
+  return {
+    peer,
+    anchorPending: anchored,
+    anchorFetching: 0,
+    loadStale: false,
+    loadingOlder: false,
+    loadingNewer: false,
+  };
+}
+
 export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   const [thread, setThread] = useState<Thread>(() => ({
     peer: withId,
@@ -454,8 +478,6 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   // duplicate cursor requests.
   const threadRef = useRef(thread);
   threadRef.current = thread;
-  const loadingOlderRef = useRef(false);
-  const loadingNewerRef = useRef(false);
   // 🔴 LOAD GENERATIONS (T-b0bb, review B2). Before the backfill, a load was
   // "fetch → setThread" with ZERO awaits in between, so two overlapping loads
   // could only interleave if the network answered out of order. The backfill
@@ -482,25 +504,65 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   // msgId in the hash (it does) would re-subscribe the whole SSE sink.
   const entryAnchorRef = useRef(entryAnchorMsgId);
   entryAnchorRef.current = entryAnchorMsgId;
-  // 🔴 TWO REASONS THE NEWEST-PAGE LOAD MUST HOLD OFF, AND THEY ARE NOT THE
-  // SAME REASON (T-48).
+  // 🔴 EVERY LATCH IN THIS HOOK BELONGS TO ONE CONVERSATION, AND THAT IS NOW
+  // SAID IN CODE RATHER THAN IN A COMMENT (T-48, third-review audit).
   //
-  //  • `entryAnchorPendingRef` — this subscription started at an anchor, so the
+  // The same defect had by then been found three times in three different
+  // refs: a boolean/counter that gates the newest-page load was left set by
+  // the conversation the owner has ALREADY LEFT, and the new conversation
+  // never loaded at all — a permanently blank room that also never marks
+  // itself read, with nothing on screen to say so. `hasNewer` grew a peer
+  // guard (F2), `entryAnchorPendingRef` grew a setup-body reset, and
+  // `anchorFetchingRef` shipped with NEITHER — because each of those is a
+  // separate line somebody has to remember to write.
+  //
+  // So the latches stop being independent refs. They are ONE RECORD STAMPED
+  // WITH THE PEER IT BELONGS TO, reachable only through `latchesOf(peer)`,
+  // which hands back `null` when the record belongs to somebody else. Two
+  // properties follow mechanically rather than by discipline:
+  //   · a latch can never gate another conversation's load — the reader does
+  //     not get the record at all;
+  //   · a switch resets ALL of them at once (the subscription setup body
+  //     builds a fresh record), and `freshLatches` is an object literal of
+  //     the full type, so adding a latch that has no reset value does not
+  //     compile.
+  // An in-flight loader that comes back to a record that is no longer its
+  // own writes into an orphan nobody reads — which is exactly right: its
+  // debts died with its conversation.
+  //
+  // What each latch holds off:
+  //  • `anchorPending` — this subscription started at an anchor, so the
   //    thread is deliberately EMPTY until ChatArea's `loadAround` lands. A
   //    `load()` in that window (SSE burst, focus, visibilitychange) would put
   //    the live tail on screen — reinstating the very intermediate screen the
   //    anchor-first entry exists to remove — and would then be replaced again.
-  //    Cleared by the anchor settling (found OR missing) and by `resetToLatest`;
-  //    see each of those for why. IT MUST NEVER BE LEFT SET: while it is, this
+  //    Released by `loadAround`'s finally (EVERY ending, see there) and by
+  //    `resetToLatest`. IT MUST NEVER BE LEFT SET: while it is, this
   //    conversation does not refresh at all.
-  //  • `anchorFetchingRef` — a `loadAround` pair is in the air right now. A
+  //  • `anchorFetching` — a `loadAround` pair is in the air right now. A
   //    `load()` starting after it takes a HIGHER generation ticket and can
   //    commit first, which makes the anchor's own commit "superseded" — measured
   //    as: the jump silently does not happen and the reader is told the message
   //    was probably cleared (F3). Holding the ordinary refresh for the two round
   //    trips is cheaper than every way of apologising for it afterwards.
-  const entryAnchorPendingRef = useRef(entryAnchorMsgId !== undefined);
-  const anchorFetchingRef = useRef(0);
+  //  • `loadStale` — a load was lost and the next relevant burst must be let
+  //    through even when the per-conversation filter would skip it (T-929f,
+  //    see below).
+  //  • `loadingOlder` / `loadingNewer` — same-direction mutexes, so a scroll
+  //    handler firing repeatedly cannot stack duplicate cursor requests.
+  //
+  // ⚠️ NOT in here, deliberately: `loadSeqRef` / `committedSeqRef`. Those are
+  // a MONOTONIC global clock, not a latch — a ticket taken later must outrank
+  // one taken earlier even across a peer switch, and resetting them per
+  // conversation would let a stale in-flight load out-rank a fresh one.
+  const latchesRef = useRef<ConversationLatches>(
+    freshLatches(withId, entryAnchorMsgId !== undefined),
+  );
+  const latchesOf = useCallback(
+    (peer: string): ConversationLatches | null =>
+      latchesRef.current.peer === peer ? latchesRef.current : null,
+    [],
+  );
   // 🔴 "THE LAST LOAD NEVER LANDED" (T-929f). `load()` below used to end a
   // rejection at `console.warn` and nothing else. Two failure worlds, and only
   // one of them was already covered:
@@ -536,9 +598,9 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   // a lost read-receipt pull is still silent (tracked separately, not widened
   // here).
   //
-  // ⚠️ StrictMode: written in the effect's SETUP body, never only in cleanup —
-  // a cleanup-only ref write gets stuck off forever under setup→cleanup→setup.
-  const loadStaleRef = useRef(false);
+  // ⚠️ StrictMode: the record is rebuilt in the effect's SETUP body, never only
+  // in cleanup — a cleanup-only write gets stuck off forever under
+  // setup→cleanup→setup.
 
   // The PEER's watermark for this conversation: the receipt whose READER is the
   // peer and whose PEER is the owner — i.e. how far the peer has read the
@@ -587,7 +649,8 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     // conversation with no periodic/SSE refresh for the rest of the session:
     // a room that quietly stops receiving, which is the failure shape this
     // ticket exists to stop shipping.
-    entryAnchorPendingRef.current = false;
+    const latches = latchesOf(withId);
+    if (latches) latches.anchorPending = false;
     const seq = ++loadSeqRef.current;
     try {
       const next = await api.listChat(withId);
@@ -607,7 +670,7 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     } catch (e) {
       console.warn("useChat: resetToLatest failed", e);
     }
-  }, [withId]);
+  }, [withId, latchesOf]);
 
   const refetch = useCallback(async () => {
     // Post-send refetch. MERGE the newest page (id-dedupe, history kept in
@@ -680,16 +743,18 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
 
   useEffect(() => {
     let alive = true;
-    // Setup-body write (see loadStaleRef's StrictMode note): a fresh
-    // subscription — including a peer switch — starts by loading
-    // unconditionally, so it owes nothing yet, and any debt the PREVIOUS peer
-    // left behind is not this conversation's to pay.
-    loadStaleRef.current = false;
-    // Same for the anchor: this subscription is entered at the anchor named
-    // NOW, not at whatever the previous conversation was doing. (Written in
-    // the setup body, never only in cleanup — see loadStaleRef's StrictMode
-    // note; a cleanup-only write is stuck off forever under setup→cleanup→setup.)
-    entryAnchorPendingRef.current = entryAnchorRef.current !== undefined;
+    // 🔴 THE ONE PLACE EVERY LATCH IS RESET, AND IT RESETS ALL OF THEM (see
+    // `latchesRef`). A fresh subscription — including a peer switch — starts
+    // by loading unconditionally: it owes nothing yet, it is entered at the
+    // anchor named NOW, and any debt the PREVIOUS peer left behind is not
+    // this conversation's to pay. Because the record is rebuilt whole, a
+    // latch that somebody adds later cannot be forgotten here.
+    // (Setup body, never only cleanup — a cleanup-only write is stuck off
+    // forever under StrictMode's setup→cleanup→setup.)
+    latchesRef.current = freshLatches(
+      withId,
+      entryAnchorRef.current !== undefined,
+    );
 
     // Switching conversations: drop the PREVIOUS peer's thread/receipt state
     // immediately instead of letting it linger under the new peer's header
@@ -726,8 +791,15 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       // 🔴 …AND NEITHER WHILE THE ANCHOR IS STILL COMING (T-48). `hasNewer`
       // only says "the thread I am holding is a historical window"; it cannot
       // say "the window is on its way", which is precisely the interval that
-      // needs covering on an anchor-first entry. See the two refs.
-      if (entryAnchorPendingRef.current || anchorFetchingRef.current > 0) {
+      // needs covering on an anchor-first entry. See the two latches.
+      //
+      // The peer stamp is the whole of R3-1: an anchor still in the air for
+      // the conversation the owner has just LEFT used to silence this one's
+      // first load, permanently (measured: the new room stayed at 0 rows for
+      // 22s and never fetched again). `latchesOf` cannot hand back a record
+      // that is not ours, so that gate is unreachable now.
+      const l = latchesOf(withId);
+      if (l && (l.anchorPending || l.anchorFetching > 0)) {
         return;
       }
       // The generation ticket is taken at FIRE time, so a load that started
@@ -739,7 +811,8 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
         .then(async (next) => {
           if (!alive) return;
           // Landed ⇒ whatever we owed is paid off.
-          loadStaleRef.current = false;
+          const landed = latchesOf(withId);
+          if (landed) landed.loadStale = false;
           // A newer load already committed while this one was in flight.
           if (seq < committedSeqRef.current) return;
           // 🔴 T-b0bb: this page is the newest WINDOW, not a continuation. If
@@ -780,16 +853,17 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
           );
         })
         .catch((e) => {
-          // Same guard as the .then arm, and for a sharper reason: this ref
-          // OUTLIVES the effect instance. A load belonging to a torn-down
-          // instance can reject AFTER the next setup body has already cleared
-          // the mark, and without this line it would write its debt onto its
-          // SUCCESSOR — making the setup-body comment above ("any debt the
-          // PREVIOUS peer left behind is not this conversation's to pay") false.
+          // Same guard as the .then arm, and for a sharper reason: a load
+          // belonging to a torn-down instance can reject AFTER the next setup
+          // body ran. `latchesOf` is the second half of that guard — writing
+          // the debt onto a record that is no longer ours would make the setup
+          // body's promise ("any debt the PREVIOUS peer left behind is not
+          // this conversation's to pay") false.
           if (!alive) return;
           // Do NOT retry here (T-929f). Record the debt only; the SSE sink
           // below pays it on the next relevant burst.
-          loadStaleRef.current = true;
+          const failed = latchesOf(withId);
+          if (failed) failed.loadStale = true;
           console.warn("useChat: load failed", e);
         });
     };
@@ -847,7 +921,7 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
         // exactly when we owe one. It re-fetches the SAME newest page the lost
         // load wanted; it is not a history re-pull.
         const ourChat =
-          loadStaleRef.current ||
+          latchesOf(withId)?.loadStale === true ||
           (batch.topics.has("chat") &&
             (chats.length === 0 ||
               chats.some((d) => touchesThisThread(d.names))));
@@ -882,7 +956,7 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       window.removeEventListener("focus", onMaybeActive);
       document.removeEventListener("visibilitychange", onMaybeActive);
     };
-  }, [withId, refetchReads]);
+  }, [withId, refetchReads, latchesOf]);
 
   const send = useCallback(
     async (
@@ -924,8 +998,9 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     // behind), non-empty (no cursor yet), still paged (hasMore), and no other
     // older-page fetch may be in flight (the concurrency lock).
     if (cur.peer !== withId || cur.messages.length === 0 || !cur.hasMore) return;
-    if (loadingOlderRef.current) return;
-    loadingOlderRef.current = true;
+    const latches = latchesOf(withId);
+    if (!latches || latches.loadingOlder) return;
+    latches.loadingOlder = true;
     try {
       const oldest = cur.messages[0];
       const page = await api.listChat(withId, CHAT_PAGE_SIZE, {
@@ -950,9 +1025,9 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     } catch (e) {
       console.warn("useChat: loadOlder failed", e);
     } finally {
-      loadingOlderRef.current = false;
+      latches.loadingOlder = false;
     }
-  }, [withId]);
+  }, [withId, latchesOf]);
 
   // The MIRROR IMAGE of loadOlder, and the direction the old API could not
   // express at all: page FORWARDS from the newest loaded row with `?start_id=`.
@@ -963,9 +1038,10 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     const cur = threadRef.current;
     if (cur.peer !== withId || cur.messages.length === 0 || !cur.hasNewer)
       return;
-    if (loadingNewerRef.current) return;
-    loadingNewerRef.current = true;
-    // 🔴 THE GENERATION TICKET THIS WALK WENT WITHOUT (T-48, F2). `loadingNewerRef`
+    const latches = latchesOf(withId);
+    if (!latches || latches.loadingNewer) return;
+    latches.loadingNewer = true;
+    // 🔴 THE GENERATION TICKET THIS WALK WENT WITHOUT (T-48, F2). `loadingNewer`
     // is a SAME-DIRECTION mutex and nothing more: it stops two forward pages
     // stacking, and says nothing about a load in the OTHER direction landing
     // in between. Measured on the unguarded code — forward page in flight, owner
@@ -1007,9 +1083,9 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     } catch (e) {
       console.warn("useChat: loadNewer failed", e);
     } finally {
-      loadingNewerRef.current = false;
+      latches.loadingNewer = false;
     }
-  }, [withId]);
+  }, [withId, latchesOf]);
 
   // 🔴 THE JUMP THAT CANNOT MISS SILENTLY (T-48 ③). Two windows around one
   // message id — `end_id` for the context ABOVE it, `start_id` for the context
@@ -1030,74 +1106,98 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   const loadAround = useCallback(
     async (msgId: string): Promise<JumpOutcome> => {
       const seq = ++loadSeqRef.current;
-      anchorFetchingRef.current += 1;
-      let older: ChatMessage[];
-      let newer: ChatMessage[];
+      // 🔴 THE ANCHOR LATCH IS RELEASED ON EVERY ENDING, AND THAT IS WHY THIS
+      // IS A `finally` (T-48, R3-3). The superseded branch used to keep
+      // `anchorPending` SET on purpose — "the caller re-schedules" — and hand
+      // the clearing to ChatArea, whose only clearing path fires when the
+      // thread is EMPTY. But `superseded` means another load committed, i.e.
+      // the thread is NOT empty: with the retries spent, nobody cleared it and
+      // the conversation stopped refreshing for the rest of the session. A
+      // latch whose release depends on a caller reaching one particular branch
+      // is the same defect this hook has now shipped three times, so the
+      // release moved to the one place that runs on all of them.
+      //
+      // What that costs: between a superseded attempt and its retry a
+      // newest-page `load()` can slip through. It is one wasted request and a
+      // bounded re-race (MAX_JUMP_RETRIES), and the retry's own
+      // `anchorFetching` closes the window again — against a room that never
+      // refreshes again, silently.
+      const latches = latchesOf(withId);
+      if (latches) latches.anchorFetching += 1;
       try {
-        [older, newer] = await Promise.all([
-          api.listChatWindow(withId, { endId: msgId }, CHAT_PAGE_SIZE),
-          api.listChatWindow(withId, { startId: msgId }, CHAT_PAGE_SIZE),
-        ]);
-      } catch (e) {
-        // An unknown id is a 404 here, NOT an empty page — the server refuses
-        // to make "no such message" look like "a window that happens to be
-        // empty".
-        //
-        // 🔴 BUT A FAILED READ IS NOT A MISSING MESSAGE (T-48). Both used to
-        // come back as one word, and the screen then said 「可能已經被清掉了」 to
-        // somebody whose message was sitting right there behind a 502. The two
-        // answers point the reader at opposite next moves — one ends the matter,
-        // the other is worth retrying — so the split is by what the server
-        // actually said:
-        //   • 404 — this conversation carries no such row.
-        //   • 422 — the id is not a usable id; sending it again cannot help.
-        //   ⇒ both are "missing": retrying changes nothing.
-        //   • anything else (5xx, 429, a rejected fetch with no status at all)
-        //     ⇒ "unreachable": the read failed, and a retry is exactly the
-        //     right thing to offer.
-        console.warn("useChat: loadAround failed", e);
-        anchorFetchingRef.current -= 1;
-        entryAnchorPendingRef.current = false;
-        const status = e instanceof ApiError ? e.status : 0;
-        return status === 404 || status === 422 ? "missing" : "unreachable";
+        let older: ChatMessage[];
+        let newer: ChatMessage[];
+        try {
+          [older, newer] = await Promise.all([
+            api.listChatWindow(withId, { endId: msgId }, CHAT_PAGE_SIZE),
+            api.listChatWindow(withId, { startId: msgId }, CHAT_PAGE_SIZE),
+          ]);
+        } catch (e) {
+          // An unknown id is a 404 here, NOT an empty page — the server refuses
+          // to make "no such message" look like "a window that happens to be
+          // empty".
+          //
+          // 🔴 BUT A FAILED READ IS NOT A MISSING MESSAGE (T-48). Both used to
+          // come back as one word, and the screen then said 「可能已經被清掉了」 to
+          // somebody whose message was sitting right there behind a 502. The two
+          // answers point the reader at opposite next moves — one ends the matter,
+          // the other is worth retrying — so the split is by what the server
+          // actually said:
+          //   • 404 — this conversation carries no such row.
+          //   • 422 — the id is not a usable id; sending it again cannot help.
+          //   ⇒ both are "missing": retrying changes nothing.
+          //   • anything else (5xx, 429, a rejected fetch with no status at all)
+          //     ⇒ "unreachable": the read failed, and a retry is exactly the
+          //     right thing to offer.
+          console.warn("useChat: loadAround failed", e);
+          const status = e instanceof ApiError ? e.status : 0;
+          return status === 404 || status === 422 ? "missing" : "unreachable";
+        }
+        // Overtaken, NOT missing — and the difference is the whole of F3. The
+        // caller re-schedules; the latch is NOT what carries that decision
+        // across the gap (see the finally below).
+        if (seq < committedSeqRef.current) return "superseded";
+        const byId = new Map<string, ChatMessage>();
+        for (const m of [...older, ...newer]) byId.set(m.id, m);
+        const window = [...byId.values()].sort(cmpStreamOrder);
+        // 🔴 NOT MERELY DEFENSIVE — THIS IS A REACHABLE 200 (T-48, F1). The server
+        // resolves the anchor WITHOUT the participant filter on purpose
+        // (api_chat.go: "a window anchored outside it simply comes back empty,
+        // which is the honest answer"), so a msgId that EXISTS but belongs to a
+        // DIFFERENT conversation answers both calls with 200 + an empty array.
+        // Adopting that window writes `messages: []` into the thread: the room
+        // goes blank, the miss notice does not light, and nothing is logged.
+        // Refusing turns it into the ordinary miss, which is what it is.
+        if (!window.some((m) => m.id === msgId)) return "missing";
+        committedSeqRef.current = seq;
+        setThread((prev) =>
+          prev.peer !== withId
+            ? prev
+            : {
+                peer: withId,
+                messages: window,
+                // A full older page means history may continue above it; a full
+                // newer page means the live tail is below it (see Thread.hasNewer).
+                // Both are self-correcting: the next page each way says otherwise
+                // by coming back short.
+                hasMore: older.length >= CHAT_PAGE_SIZE,
+                gapSuspected: prev.gapSuspected,
+                hasNewer: newer.length >= CHAT_PAGE_SIZE,
+              },
+        );
+        return "found";
+      } finally {
+        // EVERY ending, including the ones a future branch adds. A record that
+        // is no longer ours is an orphan nobody reads — releasing it is a
+        // no-op, which is the correct answer for a conversation the owner has
+        // left.
+        if (latches) {
+          latches.anchorFetching -= 1;
+          latches.anchorPending = false;
+        }
       }
-      anchorFetchingRef.current -= 1;
-      // Overtaken, NOT missing — and the difference is the whole of F3. The
-      // pending flag stays SET: the caller re-schedules, and a newest-page load
-      // sneaking in between the two attempts is exactly what it is holding off.
-      if (seq < committedSeqRef.current) return "superseded";
-      entryAnchorPendingRef.current = false;
-      const byId = new Map<string, ChatMessage>();
-      for (const m of [...older, ...newer]) byId.set(m.id, m);
-      const window = [...byId.values()].sort(cmpStreamOrder);
-      // 🔴 NOT MERELY DEFENSIVE — THIS IS A REACHABLE 200 (T-48, F1). The server
-      // resolves the anchor WITHOUT the participant filter on purpose
-      // (api_chat.go: "a window anchored outside it simply comes back empty,
-      // which is the honest answer"), so a msgId that EXISTS but belongs to a
-      // DIFFERENT conversation answers both calls with 200 + an empty array.
-      // Adopting that window writes `messages: []` into the thread: the room
-      // goes blank, the miss notice does not light, and nothing is logged.
-      // Refusing turns it into the ordinary miss, which is what it is.
-      if (!window.some((m) => m.id === msgId)) return "missing";
-      committedSeqRef.current = seq;
-      setThread((prev) =>
-        prev.peer !== withId
-          ? prev
-          : {
-              peer: withId,
-              messages: window,
-              // A full older page means history may continue above it; a full
-              // newer page means the live tail is below it (see Thread.hasNewer).
-              // Both are self-correcting: the next page each way says otherwise
-              // by coming back short.
-              hasMore: older.length >= CHAT_PAGE_SIZE,
-              gapSuspected: prev.gapSuspected,
-              hasNewer: newer.length >= CHAT_PAGE_SIZE,
-            },
-      );
-      return "found";
     },
-    [withId],
+    [withId, latchesOf],
   );
 
   const markRead = useCallback(

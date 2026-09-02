@@ -850,12 +850,28 @@ describe("③ jump-to-origin (跳到原訊息, B3)", () => {
     // the room would sit blank forever. An empty thread has nothing in the DOM,
     // so the fetch branch is exactly where it belongs.
     messages = [];
-    renderChat(0, "c-ancient");
+    const { container } = renderChat(0, "c-ancient");
 
     expect(loadAround).toHaveBeenCalledWith("c-ancient");
-    // Nothing is claimed about a message nobody has fetched yet: no landing, no
-    // highlight, no miss notice, and no watermark.
-    expect(markRead).not.toHaveBeenCalled();
+    // Nothing is claimed about a message nobody has fetched yet.
+    //
+    // ⚠️ THIS USED TO BE `expect(markRead).not.toHaveBeenCalled()`, WHICH
+    // MEASURED NOTHING: with `messages = []` there is no ts to stamp, so the
+    // line stayed green with the gate mutated to `mayMarkRead = true`. (The
+    // gate IS measured — by the case above, whose thread has a row in it.)
+    // What is genuinely at stake on THIS path is that an empty room does not
+    // pretend: no fallback to the bottom and no verdict on screen while the
+    // window is still in the air. (「不准先落到底」 cannot be asserted from
+    // here: an empty thread renders no bottom sentinel at all, so a scroll
+    // assertion on it would be green whatever the code did.)
+    expect(
+      resetToLatest,
+      "錨點還在飛就先撈一頁最新的,正是這張票拿掉的那格中間畫面",
+    ).not.toHaveBeenCalled();
+    expect(
+      container.querySelector(".chat__jump-miss"),
+      "還沒撈完就不准先下任何結論",
+    ).toBeNull();
   });
 
   it("被別的載入超車不是「找不到」—— 重排一次就落在那一則,一句話都不用說", async () => {
@@ -905,7 +921,14 @@ describe("③ jump-to-origin (跳到原訊息, B3)", () => {
     // The retry is BOUNDED — an unbounded one is a fetch loop — so there has to
     // be an ending, and the ending may not borrow the miss sentence. Two facts,
     // two sentences: this one is true and it tells the reader what to do.
-    loadAroundResult = "superseded";
+    let calls = 0;
+    loadAround.mockImplementation(async () => {
+      calls += 1;
+      // Every automatic attempt loses the race; so does the FIRST attempt the
+      // button asks for. Only the one after that lands — which is only
+      // reachable if pressing the button restores the re-schedule budget.
+      return calls <= 5 ? "superseded" : "found";
+    });
     messages = [mkMsg("c1", "b", "owner", 1000)];
     const { container } = renderChat(0, "c-ancient");
     await act(async () => {
@@ -916,6 +939,30 @@ describe("③ jump-to-origin (跳到原訊息, B3)", () => {
     expect(notice).not.toBeNull();
     expect(notice!.textContent).toContain(zh.chat.jumpTargetInterrupted);
     expect(notice!.textContent).not.toContain(zh.chat.jumpTargetMissing);
+
+    // 🔴 …AND THE NEXT STEP IT NAMES HAS TO EXIST (R3-5). The sentence used to
+    // read 「再點一次連結可以重試」 and the same link could not re-fire: the jump
+    // latch is spent and the hash has not changed, so there is no `hashchange`,
+    // no re-render, and the reactor's first guard returns immediately. Asserting
+    // the SENTENCE alone would have stayed green through all of that — the thing
+    // worth pinning is that the reader has a way through.
+    const before = loadAround.mock.calls.length;
+    const retry = notice!.querySelector('[data-testid="jump-miss-retry"]');
+    expect(retry, "被打斷也要給得出一條真的按得下去的路").not.toBeNull();
+    await act(async () => {
+      fireEvent.click(retry!);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    // TWO more attempts: the button's own, and the re-schedule after it was
+    // overtaken again. A button that hands back a SPENT budget would stop after
+    // the first — 鈕在、按得下去、什麼都沒發生, which is the same defect wearing
+    // a different hat.
+    expect(
+      loadAround.mock.calls.length,
+      "按下重試要真的再撈一次,而且拿回完整的重排額度",
+    ).toBe(before + 2);
+    expect(container.querySelector(".chat__jump-miss")).toBeNull();
   });
 
   it("按下回到最新就結束了那次跳轉 —— 不重排、也不冒出提示", async () => {

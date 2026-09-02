@@ -611,6 +611,14 @@ export function ChatArea({
   // ceiling a load that keeps winning the race turns "retry" into an unbounded
   // fetch loop, which is a worse failure than the one being fixed.
   const [jumpRetry, setJumpRetry] = useState(0);
+  // 🔴 THE BUDGET IS NOT THE TRIGGER (T-48, R3-5). `jumpRetry` exists only to
+  // re-run the reactor, so it can never go back down — `setJumpRetry(0)` from
+  // an already-0 state re-renders nothing and the retry button would do
+  // NOTHING AT ALL, which is the exact failure this ticket keeps removing. The
+  // budget therefore lives in its own ref, which the button resets: a person
+  // who asks for another try gets a full one, not the remains of the automatic
+  // ones.
+  const autoJumpRetriesRef = useRef(0);
   const [highlightMsgId, setHighlightMsgId] = useState<string | null>(null);
   // T-e987 compose seed: the seed value already applied (one-shot per distinct
   // value, reset on a peer switch so the same taskNo can seed another peer).
@@ -631,6 +639,7 @@ export function ChatArea({
     entryScrollPendingRef.current = false;
     jumpConsumedRef.current = null;
     jumpFetchedRef.current = null;
+    autoJumpRetriesRef.current = 0;
     setJumpNotice(null);
     setJumpRetry(0);
     seedConsumedRef.current = null;
@@ -849,22 +858,32 @@ export function ChatArea({
   // try again is just a politer dead end — the same shape as F3, where the
   // fetch latch was spent and nothing could ask for a second attempt.
   //
-  // Why a BUTTON here and not the silent re-schedule the superseded path uses:
+  // Why a BUTTON and not the silent re-schedule the superseded path uses first:
   // that path retries because something else demonstrably moved (a newer load
   // committed), so the next attempt has a reason to go differently. A dropped
   // connection has no such signal — an automatic retry would fire straight back
   // into the same failure, and a loop of them is exactly what the retry cap
-  // elsewhere exists to prevent. The person watching knows when the office is
-  // back; the button hands them that decision.
+  // exists to prevent. The person watching knows when the office is back; the
+  // button hands them that decision.
   //
-  // ⚠️ BOTH latches are released, and that is the whole of it: `jumpFetchedRef`
+  // 🔴 AND IT IS THE ONLY WAY BACK FROM *interrupted* TOO (R3-5). That notice
+  // used to read 「再點一次連結可以重試」 while the jump latch was already spent
+  // and the hash had not changed — no `hashchange`, no re-render, the reactor's
+  // top guard returning immediately. The sentence asked the reader to do
+  // something that could not work, which is precisely the class of silent lie
+  // this ticket exists to delete. Both endings that a retry can change now get
+  // the same button.
+  //
+  // ⚠️ THREE latches are released, and that is the whole of it: `jumpFetchedRef`
   // alone would leave the jump CONSUMED (the reactor's top guard returns early
-  // and nothing happens), and `jumpConsumedRef` alone would leave the fetch
-  // marked as already spent.
+  // and nothing happens), `jumpConsumedRef` alone would leave the fetch marked
+  // as already spent, and leaving the auto-retry budget spent would make the
+  // button a one-shot on a path whose whole failure mode is losing races.
   function retryJump() {
     if (jumpToMsgId === undefined) return;
     jumpFetchedRef.current = null;
     jumpConsumedRef.current = null;
+    autoJumpRetriesRef.current = 0;
     setJumpNotice(null);
     setJumpRetry((n) => n + 1);
   }
@@ -976,7 +995,10 @@ export function ChatArea({
         nearBottomRef.current = false;
         void loadAround(jumpToMsgId).then((outcome) => {
           if (outcome === "found") return;
-          if (outcome === "superseded" && jumpRetry < MAX_JUMP_RETRIES) {
+          if (
+            outcome === "superseded" &&
+            autoJumpRetriesRef.current < MAX_JUMP_RETRIES
+          ) {
             // 🔴 NOT A MISS (T-48, F3). Another load committed on top of ours,
             // so our window was dropped to keep the thread in order — the
             // message is still there. Saying 「找不到那則訊息」 here accused the
@@ -985,6 +1007,7 @@ export function ChatArea({
             // ask for one. Re-arm and go round again; if the owner has mean-
             // while asked for the live tail (回到最新 spends the jump latch),
             // the guard at the top of this effect ends it instead.
+            autoJumpRetriesRef.current += 1;
             jumpFetchedRef.current = null;
             setJumpRetry((n) => n + 1);
             return;
@@ -2075,9 +2098,11 @@ export function ChatArea({
                   ? t.chat.jumpTargetUnreachable
                   : t.chat.jumpTargetMissing}
             </span>
-            {/* Only the failed-read ending gets a retry: it is the only one
-             * where trying again can end differently. */}
-            {jumpNotice === "unreachable" && (
+            {/* The two endings a retry can change get the button; 「找不到」
+             * does not, because the server has answered and the answer will
+             * not differ. See retryJump for why *interrupted* is one of them
+             * (its old copy pointed at a link that could not re-fire). */}
+            {jumpNotice !== "missing" && (
               <button
                 type="button"
                 className="chat__jump-miss__retry"

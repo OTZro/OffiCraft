@@ -74,12 +74,15 @@ function flatten(layers: string[]): string {
 const WIDTHS = [390, 1280];
 // 四種真的會出現在螢幕上的字：兩句話 × 兩個語系。英文那兩句明顯更長，而窄版
 // (390) 是它們唯一會現形的地方 —— 只量預設語系等於挑了一句一定塞得下的。
+// ⚠️ 第三欄 = 那句話旁邊有沒有重試鈕，而它必須跟 `ChatArea` 的算式對齊：
+// 「找不到」沒有(server 已經答了,再問一次不會不一樣)，另外兩句都有(T-48 R3-5：
+// interrupted 原本叫使用者「再點一次連結」,而同一條連結再點不會觸發任何事)。
 const COPY = [
   ["zh · missing", zh.chat.jumpTargetMissing, false],
-  ["zh · interrupted", zh.chat.jumpTargetInterrupted, false],
+  ["zh · interrupted", zh.chat.jumpTargetInterrupted, true],
   ["zh · unreachable", zh.chat.jumpTargetUnreachable, true],
   ["en · missing", en.chat.jumpTargetMissing, false],
-  ["en · interrupted", en.chat.jumpTargetInterrupted, false],
+  ["en · interrupted", en.chat.jumpTargetInterrupted, true],
   ["en · unreachable", en.chat.jumpTargetUnreachable, true],
 ] as const;
 

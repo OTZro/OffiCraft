@@ -833,7 +833,7 @@ export const zh = {
     // 這張票剛拿掉的那個安靜的謊:跟跳成功長得一模一樣。所以要在畫面上說
     // 出來。
     jumpTargetMissing: "找不到那則訊息,可能已經被清掉了",
-    jumpTargetInterrupted: "定位被較新的訊息打斷了,再點一次連結可以重試",
+    jumpTargetInterrupted: "定位被較新的訊息打斷了,那則訊息還在",
     jumpTargetUnreachable: "現在讀不到那則訊息,連線好像卡了一下",
     jumpTargetRetry: "再試一次",
     jumpTargetMissingDismiss: "關閉這則提示",
