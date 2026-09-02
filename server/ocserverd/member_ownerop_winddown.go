@@ -540,6 +540,22 @@ func (s *apiServer) armMemberOwnerOpHandover(m *Member, op string) bool {
 // 在線上」 says nothing about how long ago the 下線 was — and it is pinned by
 // TestRelocateAfterAConvergedStopWakesTheMember below, whose fixture carries the
 // REAL row shape a converged stop leaves behind.
+// 🔴 IT COVERS THE STAFF MEMBER FACE ONLY, AND NOBODY HAS RULED ON THE OTHER
+// ONE. Measured, not assumed: this gate has exactly three call sites and all
+// three are in api_members.go (換 model, 改機器, 重新聚焦). api_outsource.go and
+// worker_spawn.go mention RestartAfterStop / stampRestartIntent /
+// clearRestartIntent / consumeRestartAfterStop ZERO times — the outsource worker
+// face keeps its own StoppingSince ladder and has no queued-「起來」 at all, so
+// 改機器 on a stopped WORKER still just saves the pin and waits for 活化
+// (TestRelocateStoppedWorker_SavesPinWithoutReviving pins exactly that, and its
+// fixture has the same never-anchored shape this gate's own tests had to be
+// corrected for).
+//
+// THAT ASYMMETRY IS NOT A DECISION. The owner's 2026-08-30 [0] ruling was asked
+// and answered about members; whether the worker face should follow was never
+// put to him, so it is neither deliberately different nor an oversight to fix
+// here — it is an open question, and it is written down rather than left silent
+// so the next reader does not mistake the silence for an answer.
 func aStopWasEverAskedFor(m Member) bool {
 	return m.StoppingSince > 0.0
 }

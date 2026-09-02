@@ -286,7 +286,7 @@ func TestForceStopAfterAQueuedRestartStillLeavesTheMemberDown(t *testing.T) {
 	}
 }
 
-// ── the sequence matrix (six verbs, not the whole lifecycle) ─────────────────
+// ── the sequence matrix: six of the seven verbs, 加速停止 excluded ───────────
 
 // Every length-2 and length-3 sequence over the SIX verbs in lifecycleActions
 // (252 of them), each asserting the one invariant: 最後一個動作是下線 ⇔ 最終離線.
