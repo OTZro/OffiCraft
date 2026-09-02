@@ -15,7 +15,7 @@ const h = vi.hoisted(() => {
   return {
     listChat: vi.fn<(withId: string, limit?: number) => Promise<unknown[]>>(),
     peekChat: vi.fn<(withId: string, limit?: number) => Promise<unknown[]>>(),
-    listChatReads: vi.fn(async () => [] as unknown[]),
+    listChatReads: vi.fn(async (_peer: string) => [] as unknown[]),
     markChatRead: vi.fn(async () => ({
       readerId: "owner",
       peerId: "b",
@@ -42,6 +42,7 @@ vi.mock("../api", () => ({
   },
 }));
 
+import { OWNER_ID } from "../lib/ownerUnread";
 import { useChat } from "./useChat";
 
 function mkMsg(id: string, from: string, to: string, ts: number): ChatMessage {
@@ -53,7 +54,7 @@ let hasFocusSpy: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   h.listChat.mockReset().mockResolvedValue([]);
   h.peekChat.mockReset().mockResolvedValue([]);
-  h.listChatReads.mockClear();
+  h.listChatReads.mockReset().mockResolvedValue([]);
   h.markChatRead.mockClear();
   h.sseHandler = null;
   // jsdom is "visible" by default; drive activity through hasFocus.
@@ -206,6 +207,50 @@ describe("useChat load routing (active vs background)", () => {
   // above and all 2248 tests stayed green — a message that never left would
   // then vanish with no restore, no draft and not even a console.warn. This is
   // the assertion that makes that a red.
+  // T-48 ④ 已讀勾. `peerLastReadTs` is the ONLY input to the outgoing rows'
+  // 已讀 tick, and until now nothing in the repo exercised how it is derived —
+  // every ChatArea test hard-codes it to 0. So the hook could read the wrong
+  // ROW of the right table and stay green forever, which is exactly what it
+  // did: `?with=<peer>` is `WHERE peer_id = <peer>`, and the receipt this hook
+  // needs has `peer_id = owner`.
+  it("reads the peer's watermark off the receipts about the OWNER, not about the peer", async () => {
+    h.listChat.mockResolvedValue([mkMsg("c1", "owner", "b", 1000)]);
+    h.listChatReads.mockImplementation(async (peer: string) => {
+      if (peer === OWNER_ID) {
+        return [
+          // The row that matters: the PEER read the owner's messages to 4242.
+          { readerId: "b", peerId: OWNER_ID, lastReadTs: 4242 },
+          // Another member's watermark against the owner — same query, wrong
+          // reader. Picking the first row instead of matching readerId is a
+          // mutant this fixture reddens.
+          { readerId: "z", peerId: OWNER_ID, lastReadTs: 9999 },
+        ];
+      }
+      // What `?with=<peer>` really answers: the OWNER's own watermark for this
+      // conversation, plus the (X,X) self row polling used to mint. Neither is
+      // "how far the peer has read me"; reading either is the bug.
+      return [
+        { readerId: OWNER_ID, peerId: "b", lastReadTs: 1000 },
+        { readerId: "b", peerId: "b", lastReadTs: 7777 },
+      ];
+    });
+
+    const { result } = renderHook(() => useChat("b"));
+    await waitFor(() => expect(result.current.peerLastReadTs).toBe(4242));
+    expect(h.listChatReads).toHaveBeenCalledWith(OWNER_ID);
+    expect(h.listChatReads).not.toHaveBeenCalledWith("b");
+  });
+
+  it("a peer with no receipt against the owner has read nothing", async () => {
+    h.listChat.mockResolvedValue([mkMsg("c1", "owner", "b", 1000)]);
+    h.listChatReads.mockResolvedValue([
+      { readerId: "z", peerId: OWNER_ID, lastReadTs: 9999 },
+    ]);
+    const { result } = renderHook(() => useChat("b"));
+    await waitFor(() => expect(h.listChat).toHaveBeenCalledTimes(1));
+    expect(result.current.peerLastReadTs).toBe(0);
+  });
+
   it("a send whose POST FAILED still rejects — the caller must be able to tell", async () => {
     h.listChat.mockResolvedValueOnce([]); // the initial load
     h.postChat.mockRejectedValueOnce(new Error("server said no"));

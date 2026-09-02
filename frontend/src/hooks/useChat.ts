@@ -39,6 +39,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatMessage, ChatAttachmentInput } from "../api/adapter";
 import { api } from "../api";
 import { createDeltaSink } from "../lib/deltaSink";
+import { OWNER_ID } from "../lib/ownerUnread";
 import { isWindowActive } from "./useWindowActive";
 
 // 🔴 THE HOLE IN THE MIDDLE (T-b0bb). Everything from here down to
@@ -427,12 +428,28 @@ export function useChat(withId: string): UseChat {
   // a cleanup-only ref write gets stuck off forever under setup→cleanup→setup.
   const loadStaleRef = useRef(false);
 
-  // The PEER's watermark for this conversation: their receipt is the one whose
-  // reader is the peer (readerId === withId). That is how far the peer has read
-  // the owner's messages → the "read ✓" cutoff.
+  // The PEER's watermark for this conversation: the receipt whose READER is the
+  // peer and whose PEER is the owner — i.e. how far the peer has read the
+  // OWNER's messages. That is the "已讀" cutoff the outgoing rows draw.
+  //
+  // 🔴 THE QUERY ARGUMENT IS THE OWNER, NOT THE PEER, AND THAT IS THE WHOLE
+  // FIX (T-48). `GET /api/chat/reads?with=X` is `WHERE peer_id = X` with NO
+  // reader filter (server/ocserverd/dal.go ListChatReads, called with reader=""
+  // from api_chat.go). So `?with=<peer>` returns every receipt ABOUT the peer's
+  // conversation — the owner's own watermark among them — and never the row
+  // this hook wants, whose peer_id is the OWNER.
+  //
+  // It used to appear to work because of a row that should never have existed:
+  // `GET /api/chat?with=` wrote an auto read-receipt as a side effect, so an
+  // agent merely polling its own conversation grew a SELF row (reader=X,
+  // peer=X). That row satisfied `?with=X` + `readerId === X` and was read as
+  // "the peer has read up to here" — a watermark minted by a poll, not by a
+  // reader. Commit 8cd4fff9 deleted that side effect on this branch, which
+  // means the old lookup now matches NOTHING, forever, with no error anywhere:
+  // every 已讀 tick would silently stop lighting up.
   const refetchReads = useCallback(async () => {
     try {
-      const reads = await api.listChatReads(withId);
+      const reads = await api.listChatReads(OWNER_ID);
       const peerReceipt = reads.find((r) => r.readerId === withId);
       setPeerLastReadTs(peerReceipt ? peerReceipt.lastReadTs : 0);
     } catch (e) {
