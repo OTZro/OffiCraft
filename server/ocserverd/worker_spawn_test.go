@@ -872,8 +872,7 @@ func TestNotifyWorkerSpawn_StampsNoMachineSelectedReason(t *testing.T) {
 
 	// SENTINEL: name an online machine and the very same worker dispatches, so
 	// the refusals above are the missing placement, not a broken fixture.
-	blocked.DesiredMachineID = "m-other"
-	if err := s.dal.PutOutsourceWorker(blocked); err != nil {
+	if err := s.dal.SetMemberDesiredMachineID("ow-nm", "m-other"); err != nil {
 		t.Fatalf("pin worker: %v", err)
 	}
 	s.outsourceMu.Lock()
@@ -1064,10 +1063,12 @@ func TestStampWorkerPlacementBlocked_ReReadsTheRowBeforeWriting(t *testing.T) {
 	putWardenFixture(t, s, "m-gone")
 	stale := blockedSpawnFixture(t, s, "t-0000000000e2", "ow-stale", "m-gone")
 
-	// A relocate lands after the tick took its snapshot.
-	moved := readWorker(t, s, "ow-stale")
-	moved.DesiredMachineID = "m-moved"
-	putWorkerFixture(t, s, moved)
+	// A relocate lands after the tick took its snapshot — through the pin's sole
+	// writer, which is what relocateWorkerByID uses since T-55 (a whole-row
+	// worker write no longer carries desired_machine_id).
+	if err := s.dal.SetMemberDesiredMachineID("ow-stale", "m-moved"); err != nil {
+		t.Fatalf("relocate: %v", err)
+	}
 
 	now := 4_000_000.0
 	s.outsourceMu.Lock()

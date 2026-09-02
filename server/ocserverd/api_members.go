@@ -835,6 +835,30 @@ func (s *apiServer) HandleUpdateMemberApiMembersMemberIdPatch(w http.ResponseWri
 			stampMemberOpReceipt(m, memberHeldDownReceipt(memberOpModel), nowSecs())
 		}
 	}
+	// The three launch intents left PutMember's DO UPDATE SET in T-55, so the
+	// whole-row write below no longer carries them — their sole writers do, and
+	// ONLY for a field this request actually carried. That asymmetry is the
+	// point: a save that touches effort alone must not restate the model beside
+	// it, because the model it would restate is the one this handler read before
+	// the owner-op wind-down (or another face) touched the row.
+	if body.Model != nil {
+		if err := s.dal.SetMemberModel(m.ID, m.Model); err != nil {
+			internalError(w, err)
+			return
+		}
+	}
+	if body.Runtime != nil {
+		if err := s.dal.SetMemberRuntime(m.ID, m.Runtime); err != nil {
+			internalError(w, err)
+			return
+		}
+	}
+	if body.Effort != nil {
+		if err := s.dal.SetMemberEffort(m.ID, m.Effort); err != nil {
+			internalError(w, err)
+			return
+		}
+	}
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
 		return
@@ -871,6 +895,15 @@ func (s *apiServer) HandleActivateMemberApiMembersMemberIdActivatePost(w http.Re
 	m.DesiredState = DesiredStateOnline
 	if body.MachineId != nil {
 		m.DesiredMachineID = *body.MachineId
+		// desired_machine_id left PutMember's SET list in T-55: the pin moves
+		// through its sole writer, and an activate that carries NO machine_id
+		// now genuinely leaves it alone instead of writing back the value this
+		// handler read — which is what used to undo a relocate that landed in
+		// between.
+		if err := s.dal.SetMemberDesiredMachineID(m.ID, m.DesiredMachineID); err != nil {
+			internalError(w, err)
+			return
+		}
 	}
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
@@ -986,6 +1019,13 @@ func (s *apiServer) HandleRelocateMemberApiMembersMemberIdRelocatePost(w http.Re
 	// The placement pin is the only INTENT mutation — desired_state is
 	// deliberately left untouched (the activate contrast).
 	m.DesiredMachineID = machineID
+	// The pin itself lands through its sole writer (T-55); PutMember no longer
+	// carries the column, so the whole-row write below moves only the wind-down
+	// anchors and the receipt.
+	if err := s.dal.SetMemberDesiredMachineID(m.ID, machineID); err != nil {
+		internalError(w, err)
+		return
+	}
 	// T-b6d9: a LIVE member used to be robust-STOPped on the spot by the
 	// reconcile below — no 預告, no grace, not even a stopping_since, so it just
 	// vanished from the cockpit with whatever it was mid-way through. It now

@@ -32,10 +32,14 @@ var singleColumnOwnedFields = []struct {
 	writer string
 	// stamp moves the column off its zero through that sole writer.
 	stamp func(*DAL, string) error
-	// want is the value stamp must have left behind.
-	want float64
+	// want is the value stamp must have left behind. `any` rather than a
+	// number because the registry outgrew the numeric anchors it started on —
+	// the owner-intent columns (T-55) are strings, and a string column is
+	// clobbered by a stale snapshot exactly the same way. Compared with !=, so
+	// every entry must carry a COMPARABLE dynamic type.
+	want any
 	// read pulls the column out of a round-tripped row.
-	read func(Member) float64
+	read func(Member) any
 	// stale zeroes the column on a snapshot, imitating every whole-row writer
 	// that read the row before the stamp landed.
 	stale func(*Member)
@@ -45,24 +49,60 @@ var singleColumnOwnedFields = []struct {
 		writer: "AddMemberBankedCost",
 		stamp:  func(d *DAL, id string) error { return d.AddMemberBankedCost(id, 42.5) },
 		want:   42.5,
-		read:   func(m Member) float64 { return m.BankedCost },
+		read:   func(m Member) any { return m.BankedCost },
 		stale:  func(m *Member) { m.BankedCost = 0 },
 	},
 	{
 		column: "handover_noticed_ts",
 		writer: "SetMemberHandoverNoticedTS",
 		stamp:  func(d *DAL, id string) error { return d.SetMemberHandoverNoticedTS(id, 4242) },
-		want:   4242,
-		read:   func(m Member) float64 { return m.HandoverNoticedTS },
+		want:   float64(4242),
+		read:   func(m Member) any { return m.HandoverNoticedTS },
 		stale:  func(m *Member) { m.HandoverNoticedTS = 0 },
 	},
 	{
 		column: "agent_iat_floor",
 		writer: "SetMemberAgentIatFloor",
 		stamp:  func(d *DAL, id string) error { return d.SetMemberAgentIatFloor(id, 1700) },
-		want:   1700,
-		read:   func(m Member) float64 { return m.AgentIatFloor },
+		want:   float64(1700),
+		read:   func(m Member) any { return m.AgentIatFloor },
 		stale:  func(m *Member) { m.AgentIatFloor = 0 },
+	},
+	{
+		column: "desired_machine_id",
+		writer: "SetMemberDesiredMachineID",
+		stamp: func(d *DAL, id string) error {
+			return d.SetMemberDesiredMachineID(id, "m-relocated-here")
+		},
+		want:  "m-relocated-here",
+		read:  func(m Member) any { return m.DesiredMachineID },
+		stale: func(m *Member) { m.DesiredMachineID = "" },
+	},
+	{
+		column: "model",
+		writer: "SetMemberModel",
+		stamp:  func(d *DAL, id string) error { return d.SetMemberModel(id, "opus") },
+		want:   "opus",
+		read:   func(m Member) any { return m.Model },
+		stale:  func(m *Member) { m.Model = "" },
+	},
+	{
+		column: "runtime",
+		writer: "SetMemberRuntime",
+		stamp:  func(d *DAL, id string) error { return d.SetMemberRuntime(id, RuntimeCodex) },
+		want:   RuntimeCodex,
+		read:   func(m Member) any { return m.Runtime },
+		// "" is the durable "nobody has picked yet", which is exactly the value
+		// a snapshot taken before the owner's save carries.
+		stale: func(m *Member) { m.Runtime = "" },
+	},
+	{
+		column: "effort",
+		writer: "SetMemberEffort",
+		stamp:  func(d *DAL, id string) error { return d.SetMemberEffort(id, "max") },
+		want:   "max",
+		read:   func(m Member) any { return m.Effort },
+		stale:  func(m *Member) { m.Effort = "" },
 	},
 }
 
@@ -74,8 +114,8 @@ func TestPutMemberNeverOverwritesSingleColumnOwnedFields(t *testing.T) {
 	// A deleted row is the one mutation the loop below cannot see: the guard
 	// would pass by iterating less. Bump this deliberately when the registry
 	// grows.
-	if len(singleColumnOwnedFields) != 3 {
-		t.Fatalf("singleColumnOwnedFields has %d entries, expected 3. Adding a "+
+	if len(singleColumnOwnedFields) != 7 {
+		t.Fatalf("singleColumnOwnedFields has %d entries, expected 7. Adding a "+
 			"column? Bump this number. REMOVING one? That means a column went "+
 			"BACK into PutMember's DO UPDATE SET — say why in the commit",
 			len(singleColumnOwnedFields))
@@ -108,7 +148,7 @@ func TestPutMemberNeverOverwritesSingleColumnOwnedFields(t *testing.T) {
 				t.Fatalf("read back: %v %v", after, err)
 			}
 			if got := f.read(*after); got != f.want {
-				t.Fatalf("member.%s was clobbered by a whole-row upsert: %v → %v.\n"+
+				t.Fatalf("member.%s was clobbered by a whole-row upsert: %#v → %#v.\n"+
 					"%s is the SOLE writer of this column; it must stay OUT of "+
 					"PutMember's ON CONFLICT DO UPDATE SET list (dal.go). If you "+
 					"just added `%s = excluded.%s` back, that is the line to remove.",

@@ -330,6 +330,16 @@ func (s *apiServer) relocateWorkerByID(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 	worker.DesiredMachineID = machineID
+	// The ow- row IS a member row (00025 folded the table), so the worker pin
+	// goes through the SAME sole writer as the staff pin (T-55) — PutMember's
+	// SET list no longer carries desired_machine_id, and PutOutsourceWorker is
+	// PutMember. Without this line the relocate would answer 200 and move
+	// nothing.
+	if err := s.dal.SetMemberDesiredMachineID(worker.ID, machineID); err != nil {
+		s.outsourceMu.Unlock()
+		internalError(w, err)
+		return
+	}
 	if err := s.dal.PutOutsourceWorker(*worker); err != nil {
 		s.outsourceMu.Unlock()
 		internalError(w, err)
@@ -927,6 +937,35 @@ func (s *apiServer) HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost(
 		}
 		launchIntentChanged = launchIntentChanged || effort != worker.Effort
 		worker.Effort = effort
+	}
+	// Same seam as the staff face (T-55): the three intents left PutMember's
+	// SET list, so PutOutsourceWorker no longer carries them and each one lands
+	// through its sole writer — only for a field this request actually carried.
+	if body.Model != nil {
+		if err := s.dal.SetMemberModel(worker.ID, worker.Model); err != nil {
+			s.outsourceMu.Unlock()
+			internalError(w, err)
+			return
+		}
+	}
+	if body.Runtime != nil {
+		// NORMALISED, matching memberFromWorker: the worker projection has
+		// always stored NormalizeRuntime(w.Runtime), and the sole writer must
+		// not quietly start storing a second form on the same column. (Today
+		// ValidRuntime already narrows this to claude|codex, so the call is
+		// identity — it is here so the property survives the next runtime.)
+		if err := s.dal.SetMemberRuntime(worker.ID, NormalizeRuntime(worker.Runtime)); err != nil {
+			s.outsourceMu.Unlock()
+			internalError(w, err)
+			return
+		}
+	}
+	if body.Effort != nil {
+		if err := s.dal.SetMemberEffort(worker.ID, worker.Effort); err != nil {
+			s.outsourceMu.Unlock()
+			internalError(w, err)
+			return
+		}
 	}
 	if err := s.dal.PutOutsourceWorker(*worker); err != nil {
 		s.outsourceMu.Unlock()

@@ -241,8 +241,11 @@ func TestSticky_ConnectStampsTheLandingFromTheTokenClaim(t *testing.T) {
 	if err != nil || staff == nil {
 		t.Fatalf("read staff: %+v %v", staff, err)
 	}
-	staff.DesiredMachineID = "m-other" // corroborates the claim below
-	if err := s.dal.PutMember(*staff); err != nil {
+	// corroborates the claim below — written through the pin's sole writer,
+	// since T-55 removed desired_machine_id from PutMember's DO UPDATE SET and
+	// this row already exists.
+	staff.DesiredMachineID = "m-other"
+	if err := s.dal.SetMemberDesiredMachineID("g-staff", "m-other"); err != nil {
 		t.Fatalf("pin staff: %v", err)
 	}
 	connect("g-staff", "m-other")
@@ -299,10 +302,10 @@ func TestSticky_OwnerRelocateStillMoves(t *testing.T) {
 	connectWarden(t, s, "m-third")
 	landOn(t, s, w.ID, "m-other")
 
-	// The owner pins m-third by hand.
-	moved := readWorker(t, s, w.ID)
-	moved.DesiredMachineID = "m-third"
-	if err := s.dal.PutOutsourceWorker(moved); err != nil {
+	// The owner pins m-third by hand. The worker relocate face writes the pin
+	// through its sole writer since T-55 — PutOutsourceWorker is PutMember, and
+	// desired_machine_id is no longer in that statement's DO UPDATE SET.
+	if err := s.dal.SetMemberDesiredMachineID(w.ID, "m-third"); err != nil {
 		t.Fatalf("pin: %v", err)
 	}
 	if got := spawnTarget(t, s, readWorker(t, s, w.ID), ServerSelfHost, "m-other", "m-third"); got != "m-third" {
@@ -441,9 +444,7 @@ func TestSticky_GhostConnectionNeverRewritesTheLanding(t *testing.T) {
 	s.outsourceMu.Lock()
 	delete(s.workerSpawnTarget, w.ID)
 	s.outsourceMu.Unlock()
-	pinned := readWorker(t, s, w.ID)
-	pinned.DesiredMachineID = "m-third"
-	if err := s.dal.PutOutsourceWorker(pinned); err != nil {
+	if err := s.dal.SetMemberDesiredMachineID(w.ID, "m-third"); err != nil {
 		t.Fatalf("pin: %v", err)
 	}
 	connect(w.ID, "m-third")
