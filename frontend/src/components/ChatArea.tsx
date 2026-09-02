@@ -24,6 +24,7 @@ import {
 } from "../hooks/useAttachmentStaging";
 import { useWindowActive } from "../hooks/useWindowActive";
 import { useIsMobile } from "../hooks/useIsMobile";
+import { useKeyedRecord } from "../hooks/useKeyedRecord";
 import { enterShouldSend } from "../lib/composerKeys";
 import { chatBottomAffordance } from "../lib/chatBottomAffordance";
 import { scrollToLatest } from "../lib/scrollToLatest";
@@ -128,6 +129,121 @@ function formatTime(ts: number): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+/** 🔴 EVERYTHING THIS COMPONENT TRACKS PER CONVERSATION, IN ONE RECORD (T-48,
+ * fourth-review rebuild).
+ *
+ * ChatArea is NOT remounted when the selected member changes (OfficePage
+ * renders one instance), so every one of these used to be its own `useRef`
+ * plus a line in a hand-written "did the peer change? zero these out" block.
+ * That list is exactly the thing four reviews kept finding a hole in — and it
+ * really did have three at the time of writing (`loadingOlder`,
+ * `pendingLatestScroll`, plus the ones judged harmless). The list is now
+ * machine-maintained: `useKeyedRecord` rebuilds this whole record when the
+ * peer changes, and because `freshChatSession` is an object literal of the
+ * full type, a field added without a reset value does not compile.
+ *
+ * ⚠️ WHAT DOES NOT BELONG IN HERE: DOM refs (`inputRef`, `messagesRef`, …),
+ * anything whose lifetime is the COMPONENT rather than the conversation
+ * (`didMountAttachRestoreRef`, `jumpSettleRef`), and anything mirroring live
+ * browser state (`isComposingRef`). Each of those is annotated where it is
+ * declared. */
+type ChatSession = {
+  /** ② ENTRY POSITIONING: entering a conversation with unread messages must
+   * land on the FIRST unread message, not the bottom. The anchor is derived
+   * from `member.unreadCount` (the roster badge count) SNAPSHOT at
+   * conversation entry — the race-free source. Since T-48 the LISTING no
+   * longer writes a watermark, but the window that opens on it does: the
+   * read-receipt effect fires the moment the first page lands and the roster's
+   * unreadCount refetches to 0 right after. The clearer moved from the
+   * server's side effect to this component's own explicit write; the race did
+   * not go away, so neither does the snapshot. unreadCount counts exactly the
+   * peer→owner messages above the watermark, so the first unread = the
+   * earliest of the LAST `unreadCount` peer→owner messages in the thread. */
+  initialUnread: number;
+  /** Is the scroll viewport near its bottom? A new incoming message may only
+   * pull the view down when it is — if the owner scrolled UP to read history,
+   * an arrival must NOT yank them back. */
+  nearBottom: boolean;
+  /** Ids seen on the previous messages render — the diff basis for "which
+   * messages are NEW" (a refetch replaces the whole array, so append detection
+   * must go through ids, not length). */
+  prevIds: Set<string>;
+  /** T-bf82 scrollback: the pre-fetch scroll-geometry snapshot an older-page
+   * prepend restores from (null = no older page in flight/pending). */
+  prependAnchor: { firstId: string; height: number; top: number } | null;
+  /** The UI-side in-flight lock over `useChat`'s own, so repeated scroll
+   * events near the top cannot re-snapshot `prependAnchor` mid-flight.
+   *
+   * 🔴 IT IS IN THIS RECORD BECAUSE IT USED TO BE THE ONE THAT WAS NOT
+   * (fourth-review R4-3). As a plain ref it was CROSS-PEER, and the argument
+   * for leaving it that way was "the try/finally releases it after one request
+   * either way". That is only true of a promise that SETTLES: `api.listChat`
+   * has neither a timeout nor an AbortController (http.ts gives a deadline to
+   * the SSE probe and to nothing else), so one hung GET froze scrollback in
+   * EVERY conversation for the rest of the session, with no spinner and no
+   * error. Per conversation, a hung request now strands only the record it was
+   * started on — and that record dies with its conversation. */
+  loadingOlder: boolean;
+  /** One-shot: entry positioning (bottom OR first-unread) ran here. */
+  initialPositioned: boolean;
+  /** Is the CURRENT unread run (the block below the divider) still OPEN — i.e.
+   * the owner has not reached the bottom since the divider anchored? While
+   * open, further arrivals belong to the SAME run (the divider stays put).
+   * Once closed (bottom reached = everything seen), the next unseen inbound
+   * starts a NEW run and RE-ANCHORS the divider — the chip and the divider
+   * share ONE "start of the new messages" anchor. */
+  unreadRunOpen: boolean;
+  /** Entry positioning wants the divider scrolled into view ONCE. A
+   * chip-driven divider re-anchor must NOT scroll — the owner is reading
+   * history and must never be yanked. */
+  entryScrollPending: boolean;
+  /** B3 跳到原訊息: the jump target already consumed (one-shot per id — an SSE
+   * refetch must never re-scroll). */
+  jumpConsumed: string | null;
+  /** The target this component has ALREADY spent an anchor-window fetch on
+   * (T-48 ③). Separate from `jumpConsumed` on purpose: the fetch is what makes
+   * the jump possible, so it happens BEFORE the jump is consumed, and this is
+   * what stops the effect firing a second pair of requests on every re-render
+   * while the first pair is still in flight. */
+  jumpFetched: string | null;
+  /** 🔴 THE BUDGET IS NOT THE TRIGGER (T-48, R3-5). `jumpRetry` state exists
+   * only to re-run the reactor, so it can never go back down —
+   * `setJumpRetry(0)` from an already-0 state re-renders nothing and the retry
+   * button would do NOTHING AT ALL. The budget therefore lives here, and the
+   * button resets it: a person who asks for another try gets a full one, not
+   * the remains of the automatic ones. */
+  autoJumpRetries: number;
+  /** T-e987 compose seed: the seed value already applied (one-shot per
+   * distinct value, so the same taskNo can seed another peer). */
+  seedConsumed: string | null;
+  /** Set when 回到最新 had to FETCH the live tail first (T-48 ③) — consumed by
+   * the settle effect once the replacement thread has rendered.
+   *
+   * 🔴 IN THIS RECORD, not cross-peer: inherited by the next conversation it
+   * would scroll a room the owner just entered AT AN ANCHOR straight to the
+   * live tail — this ticket's own failure shape, arriving from the previous
+   * conversation's button press. */
+  pendingLatestScroll: boolean;
+};
+
+function freshChatSession(unreadCount: number): ChatSession {
+  return {
+    initialUnread: unreadCount,
+    nearBottom: true,
+    prevIds: new Set(),
+    prependAnchor: null,
+    loadingOlder: false,
+    initialPositioned: false,
+    unreadRunOpen: false,
+    entryScrollPending: false,
+    jumpConsumed: null,
+    jumpFetched: null,
+    autoJumpRetries: 0,
+    seedConsumed: null,
+    pendingLatestScroll: false,
+  };
 }
 
 export function ChatArea({
@@ -479,6 +595,10 @@ export function ChatArea({
   // stale-closure lag. onCompositionEnd may fire slightly AFTER the confirming
   // keydown in some browsers, so keydown also checks nativeEvent.isComposing /
   // keyCode 229 as belt-and-braces.
+  // ⚠️ NOT in the session record: it mirrors a LIVE DOM event pair
+  // (compositionstart/compositionend) rather than anything about the
+  // conversation, and clearing it from outside would desync it from the
+  // browser's own composition state.
   const isComposingRef = useRef(false);
   // Phone viewport → Enter inserts a newline instead of sending (no physical
   // keyboard, so Shift+Enter is impossible); sending is via the send button.
@@ -504,25 +624,12 @@ export function ChatArea({
   // UP to read history, a new incoming message must NOT yank them back down.
   const messagesRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
-  const nearBottomRef = useRef(true);
 
   // ===== LINE/FB-style unread jump (M2 batch 19) =====
   //
-  // ② ENTRY POSITIONING: entering a conversation with unread messages must land
-  // on the FIRST unread message, not the bottom. The "first unread" anchor is
-  // derived from `member.unreadCount` (the roster badge count) SNAPSHOT at
-  // conversation entry — this is the race-free source. Since T-48 the LISTING
-  // no longer writes a watermark, but the window that opens on it does: the
-  // read-receipt effect below (`windowActive` + `messagesPeer === member.id` →
-  // `markRead(newestTs)`, POST /api/chat/mark-read) fires the moment the first
-  // page lands, and the roster's unreadCount refetches to 0 right after. The
-  // clearer moved from the server's side effect to this component's own
-  // explicit write; the race did not go away, so neither does the snapshot. It
-  // happens synchronously at first render, strictly before any effect runs.
-  // unreadCount counts exactly the peer→owner messages above the watermark, so
-  // the first unread = the earliest of the LAST `unreadCount` peer→owner
-  // messages in the loaded thread.
-  const initialUnreadRef = useRef(member.unreadCount);
+  // The per-conversation session record (see ChatSession above) — the entry
+  // unread snapshot lives in it, taken synchronously at the first render for
+  // this peer, strictly before any effect runs.
   // Set once per conversation when entry positioning ran: the id of the first
   // unread message. Drives the "以下是未讀訊息" divider (kept for the whole
   // session, like LINE) and the initial scroll target.
@@ -548,48 +655,6 @@ export function ChatArea({
     from: string;
     body: string;
   } | null>(null);
-  // Ids seen on the previous messages render — the diff basis for "which
-  // messages are NEW" (refetch replaces the whole array, so append detection
-  // must go through ids, not length).
-  const prevIdsRef = useRef<Set<string>>(new Set());
-  // T-bf82 scrollback: the pre-fetch scroll-geometry snapshot an older-page
-  // prepend restores from (null = no older page in flight/pending), and the
-  // UI-side in-flight lock (belt-and-braces over useChat's own) so repeated
-  // scroll events near the top can't re-snapshot the anchor mid-flight.
-  const prependAnchorRef = useRef<{
-    firstId: string;
-    height: number;
-    top: number;
-  } | null>(null);
-  const loadingOlderRef = useRef(false);
-  // One-shot latch: entry positioning (bottom OR first-unread) ran for this
-  // conversation.
-  const initialPositionedRef = useRef(false);
-  // Is the CURRENT unread run (the block below the divider) still OPEN — i.e.
-  // the owner has not reached the bottom since the divider anchored? While
-  // open, further arrivals belong to the SAME run (the divider stays put).
-  // Once closed (bottom reached = everything seen), the next unseen inbound
-  // starts a NEW run and RE-ANCHORS the divider — the chip and the divider
-  // share ONE "start of the new messages" anchor (owner bug report: staying
-  // in the conversation, two messages land, the chip appears, but clicking it
-  // showed NO divider — the divider only ever anchored at conversation entry
-  // and had no path for in-conversation arrivals).
-  const unreadRunOpenRef = useRef(false);
-  // Entry positioning wants the divider scrolled into view ONCE. A chip-driven
-  // divider re-anchor must NOT scroll — the owner is reading history and must
-  // never be yanked; they jump via the chip when they choose to. This ref
-  // marks a pending ENTRY scroll for the firstUnreadId effect below.
-  const entryScrollPendingRef = useRef(false);
-  // B3 跳到原訊息: the jump target already consumed (one-shot per id — an SSE
-  // refetch must never re-scroll) and the transient highlight on the located
-  // row (cleared after the flash).
-  const jumpConsumedRef = useRef<string | null>(null);
-  // The target this component has ALREADY spent an anchor-window fetch on
-  // (T-48 ③). Separate from `jumpConsumedRef` on purpose: the fetch is what
-  // makes the jump possible, so it happens BEFORE the jump is consumed, and
-  // this ref is what stops the effect firing a second pair of requests on every
-  // re-render while the first pair is still in flight.
-  const jumpFetchedRef = useRef<string | null>(null);
   // 🔴 T-48: the jump target the server has NO RECORD OF ("missing"), and — a
   // DIFFERENT fact that used to be collapsed into it — an anchor fetch that was
   // repeatedly OVERTAKEN by newer loads ("interrupted"). The fallback (open at
@@ -611,39 +676,32 @@ export function ChatArea({
   // ceiling a load that keeps winning the race turns "retry" into an unbounded
   // fetch loop, which is a worse failure than the one being fixed.
   const [jumpRetry, setJumpRetry] = useState(0);
-  // 🔴 THE BUDGET IS NOT THE TRIGGER (T-48, R3-5). `jumpRetry` exists only to
-  // re-run the reactor, so it can never go back down — `setJumpRetry(0)` from
-  // an already-0 state re-renders nothing and the retry button would do
-  // NOTHING AT ALL, which is the exact failure this ticket keeps removing. The
-  // budget therefore lives in its own ref, which the button resets: a person
-  // who asks for another try gets a full one, not the remains of the automatic
-  // ones.
-  const autoJumpRetriesRef = useRef(0);
+  // The transient highlight on the row a jump located (cleared after the flash).
   const [highlightMsgId, setHighlightMsgId] = useState<string | null>(null);
-  // T-e987 compose seed: the seed value already applied (one-shot per distinct
-  // value, reset on a peer switch so the same taskNo can seed another peer).
-  const seedConsumedRef = useRef<string | null>(null);
 
-  // ChatArea is NOT remounted when the selected member changes (OfficePage
-  // renders one instance) — reset the per-conversation session trackers on a
-  // peer switch. Render-time state adjustment (guarded) per the React docs
-  // pattern, so no stale-effect ordering.
+  // 🔴 THE PER-CONVERSATION MUTABLE STATE, REBUILT BY MACHINE (T-48). ChatArea
+  // is NOT remounted when the selected member changes (OfficePage renders one
+  // instance), so this used to be a hand-written list of ~13 assignments that
+  // four reviews kept finding holes in. `useKeyedRecord` owns the list now: a
+  // switch replaces the whole record, and an async job that captured the old
+  // one settles into an orphan instead of clearing the NEW conversation's
+  // latch. Adding a field without a reset value does not compile.
+  const session = useKeyedRecord(member.id, () =>
+    freshChatSession(member.unreadCount),
+  );
+
+  // What is left here is what a record cannot do: REACT STATE has to be set
+  // through its setter, and the composer has to be swapped to the new peer's
+  // saved draft. Render-time state adjustment (guarded) per the React docs
+  // pattern, so no stale-effect ordering. `peerIdRef` is the key mirror for
+  // this block and is therefore the one thing that cannot live in the record
+  // it keys; it is also why the block does not run on first mount (the draft
+  // restore below would double-apply on top of the mount-time one).
   const peerIdRef = useRef(member.id);
   if (peerIdRef.current !== member.id) {
     peerIdRef.current = member.id;
-    initialUnreadRef.current = member.unreadCount;
-    initialPositionedRef.current = false;
-    prevIdsRef.current = new Set();
-    nearBottomRef.current = true;
-    unreadRunOpenRef.current = false;
-    entryScrollPendingRef.current = false;
-    jumpConsumedRef.current = null;
-    jumpFetchedRef.current = null;
-    autoJumpRetriesRef.current = 0;
     setJumpNotice(null);
     setJumpRetry(0);
-    seedConsumedRef.current = null;
-    prependAnchorRef.current = null;
     setFirstUnreadId(null);
     setNewMsgPreview(null);
     setLatestInView(true);
@@ -678,6 +736,10 @@ export function ChatArea({
   // no external lazy init — replay the saved list once, before paint, so a
   // remount shows the images immediately. A peer SWITCH is handled in the block
   // above; this one-shot covers only the initial peer.
+  // ⚠️ NOT in the session record: its lifetime is the COMPONENT, not the
+  // conversation. In the record it would reset on every switch and replay the
+  // mount restore on top of the switch block's own restore, staging the
+  // attachments twice.
   const didMountAttachRestoreRef = useRef(false);
   useLayoutEffect(() => {
     if (didMountAttachRestoreRef.current) return;
@@ -708,8 +770,8 @@ export function ChatArea({
   // what the owner is mid-typing). One-shot per distinct seed value.
   useEffect(() => {
     if (!draftSeed) return;
-    if (seedConsumedRef.current === draftSeed) return;
-    seedConsumedRef.current = draftSeed;
+    if (session.seedConsumed === draftSeed) return;
+    session.seedConsumed = draftSeed;
     setDraft((cur) => (cur ? cur : draftSeed));
   }, [draftSeed]);
 
@@ -724,11 +786,11 @@ export function ChatArea({
   const NEAR_TOP_PX = 120;
 
   async function loadOlderAnchored() {
-    if (loadingOlderRef.current || !hasMore) return;
+    if (session.loadingOlder || !hasMore) return;
     const el = messagesRef.current;
     if (!el || messages.length === 0 || messagesPeer !== member.id) return;
-    loadingOlderRef.current = true;
-    prependAnchorRef.current = {
+    session.loadingOlder = true;
+    session.prependAnchor = {
       firstId: messages[0].id,
       height: el.scrollHeight,
       top: el.scrollTop,
@@ -736,7 +798,7 @@ export function ChatArea({
     try {
       await loadOlder();
     } finally {
-      loadingOlderRef.current = false;
+      session.loadingOlder = false;
     }
   }
 
@@ -744,11 +806,11 @@ export function ChatArea({
   // (not useEffect) so the scrollTop fix lands BEFORE paint — no visible jump.
   // Runs before the scroll-position reactor below (layout effects precede
   // passive effects in a commit), so registering the prepended ids into
-  // prevIdsRef here keeps the reactor's "fresh message" diff honest: loaded
+  // session.prevIds here keeps the reactor's "fresh message" diff honest: loaded
   // HISTORY is not fresh — it must never arm the new-message chip nor
   // re-anchor the unread divider.
   useLayoutEffect(() => {
-    const anchor = prependAnchorRef.current;
+    const anchor = session.prependAnchor;
     if (!anchor) return;
     if (messagesPeer !== member.id || messages.length === 0) return;
     const idx = messages.findIndex((m) => m.id === anchor.firstId);
@@ -756,14 +818,14 @@ export function ChatArea({
       // idx === 0: nothing prepended (yet) — an unrelated append committed
       // while the older page is in flight; keep waiting on the anchor.
       // idx === -1: the anchor row vanished (peer data reset) — drop it.
-      if (idx === -1) prependAnchorRef.current = null;
+      if (idx === -1) session.prependAnchor = null;
       return;
     }
-    prependAnchorRef.current = null;
-    for (let i = 0; i < idx; i++) prevIdsRef.current.add(messages[i].id);
+    session.prependAnchor = null;
+    for (let i = 0; i < idx; i++) session.prevIds.add(messages[i].id);
     const el = messagesRef.current;
     if (el) el.scrollTop = anchor.top + (el.scrollHeight - anchor.height);
-    // The one-shot entry positioning (initialPositionedRef) already ran for
+    // The one-shot entry positioning (session.initialPositioned) already ran for
     // this conversation — a prepend must never re-run it, and it doesn't:
     // the latch stays untouched here.
   }, [messages, messagesPeer, member.id]);
@@ -813,7 +875,7 @@ export function ChatArea({
     // the bottom of the THREAD — see where it is derived. The forward walk
     // above (`loadNewer`) is what eventually reaches the live tail, and this
     // resumes there.
-    if (nowNearBottom && !nearBottomRef.current && newestTs > 0 && mayMarkRead) {
+    if (nowNearBottom && !session.nearBottom && newestTs > 0 && mayMarkRead) {
       void markRead(newestTs);
     }
     // Reaching the bottom means the preview strip's message has been seen →
@@ -821,9 +883,9 @@ export function ChatArea({
     // the next unseen inbound starts a new run (divider re-anchors).
     if (nowNearBottom) {
       setNewMsgPreview(null);
-      unreadRunOpenRef.current = false;
+      session.unreadRunOpen = false;
     }
-    nearBottomRef.current = nowNearBottom;
+    session.nearBottom = nowNearBottom;
   }
 
   // The newest message ts in the thread — the watermark the owner marks read up
@@ -850,7 +912,7 @@ export function ChatArea({
   // the latch) each end the block, which is exactly when the owner really is
   // looking at the latest.
   const jumpPending =
-    jumpToMsgId !== undefined && jumpConsumedRef.current !== jumpToMsgId;
+    jumpToMsgId !== undefined && session.jumpConsumed !== jumpToMsgId;
   const mayMarkRead = !hasNewer && !jumpPending;
 
   // 🔴 THE RETRY THE READER CAN ACTUALLY PRESS (T-48). A failed read is the one
@@ -874,16 +936,16 @@ export function ChatArea({
   // this ticket exists to delete. Both endings that a retry can change now get
   // the same button.
   //
-  // ⚠️ THREE latches are released, and that is the whole of it: `jumpFetchedRef`
+  // ⚠️ THREE latches are released, and that is the whole of it: `session.jumpFetched`
   // alone would leave the jump CONSUMED (the reactor's top guard returns early
-  // and nothing happens), `jumpConsumedRef` alone would leave the fetch marked
+  // and nothing happens), `session.jumpConsumed` alone would leave the fetch marked
   // as already spent, and leaving the auto-retry budget spent would make the
   // button a one-shot on a path whose whole failure mode is losing races.
   function retryJump() {
     if (jumpToMsgId === undefined) return;
-    jumpFetchedRef.current = null;
-    jumpConsumedRef.current = null;
-    autoJumpRetriesRef.current = 0;
+    session.jumpFetched = null;
+    session.jumpConsumed = null;
+    session.autoJumpRetries = 0;
     setJumpNotice(null);
     setJumpRetry((n) => n + 1);
   }
@@ -965,7 +1027,7 @@ export function ChatArea({
     // sends this straight down the fetch branch below — which is the point:
     // the FIRST request the room makes is the window around the target.
     if (messagesPeer !== member.id) return;
-    if (jumpConsumedRef.current === jumpToMsgId) return;
+    if (session.jumpConsumed === jumpToMsgId) return;
     // Raw interpolation matches the chip-jump selector above — message ids
     // are server-minted (`c-<hex>`), never arbitrary strings.
     const el = messagesRef.current?.querySelector(
@@ -981,8 +1043,8 @@ export function ChatArea({
     // DOM. The one-shot latch is NOT consumed yet — consuming it here would
     // eat the jump the fetch is about to make possible.
     if (!el) {
-      if (jumpFetchedRef.current !== jumpToMsgId) {
-        jumpFetchedRef.current = jumpToMsgId;
+      if (session.jumpFetched !== jumpToMsgId) {
+        session.jumpFetched = jumpToMsgId;
         // The jump owns the viewport FROM THE MOMENT IT STARTS FETCHING, not
         // from the moment it lands. Without these three the thread spends the
         // in-flight window doing its ordinary entry positioning — landing at
@@ -990,14 +1052,14 @@ export function ChatArea({
         // when the anchor window arrives. Registering the current ids as
         // already-seen also keeps that in-flight commit from mistaking the
         // thread it is replacing for a burst of new arrivals.
-        initialPositionedRef.current = true;
-        prevIdsRef.current = new Set(messages.map((m) => m.id));
-        nearBottomRef.current = false;
+        session.initialPositioned = true;
+        session.prevIds = new Set(messages.map((m) => m.id));
+        session.nearBottom = false;
         void loadAround(jumpToMsgId).then((outcome) => {
           if (outcome === "found") return;
           if (
             outcome === "superseded" &&
-            autoJumpRetriesRef.current < MAX_JUMP_RETRIES
+            session.autoJumpRetries < MAX_JUMP_RETRIES
           ) {
             // 🔴 NOT A MISS (T-48, F3). Another load committed on top of ours,
             // so our window was dropped to keep the thread in order — the
@@ -1007,8 +1069,8 @@ export function ChatArea({
             // ask for one. Re-arm and go round again; if the owner has mean-
             // while asked for the live tail (回到最新 spends the jump latch),
             // the guard at the top of this effect ends it instead.
-            autoJumpRetriesRef.current += 1;
-            jumpFetchedRef.current = null;
+            session.autoJumpRetries += 1;
+            session.jumpFetched = null;
             setJumpRetry((n) => n + 1);
             return;
           }
@@ -1032,8 +1094,8 @@ export function ChatArea({
                 ? "unreachable"
                 : "missing",
           );
-          jumpConsumedRef.current = jumpToMsgId;
-          nearBottomRef.current = true;
+          session.jumpConsumed = jumpToMsgId;
+          session.nearBottom = true;
           // ⚠️ ANCHOR-FIRST ENTRY LEAVES THE ROOM EMPTY UNTIL SOMEBODY FILLS IT
           // (T-48). On this path nobody has: useChat skipped its entry load
           // because an anchor was named, and the anchor is not there. "Fall
@@ -1047,15 +1109,15 @@ export function ChatArea({
       }
       return;
     }
-    jumpConsumedRef.current = jumpToMsgId;
+    session.jumpConsumed = jumpToMsgId;
     setJumpNotice(null);
     // The jump owns the initial viewport — mark entry positioning done.
-    initialPositionedRef.current = true;
-    prevIdsRef.current = new Set(messages.map((m) => m.id));
+    session.initialPositioned = true;
+    session.prevIds = new Set(messages.map((m) => m.id));
     {
       el.scrollIntoView({ block: "center" });
       // Located mid-thread → not at the bottom; a later arrival must not yank.
-      nearBottomRef.current = false;
+      session.nearBottom = false;
       // …and the newest message is somewhere below, so the arrow belongs here.
       setLatestInView(false);
       setHighlightMsgId(jumpToMsgId);
@@ -1106,17 +1168,17 @@ export function ChatArea({
     // for the render where `member.id` is already the NEW peer but `messages`
     // is still the PREVIOUS peer's thread — useChat clears the thread in its
     // own effect, ONE COMMIT LATER. Latching entry positioning on that stale
-    // commit consumed the one-shot (initialPositionedRef) against the wrong
+    // commit consumed the one-shot (session.initialPositioned) against the wrong
     // thread, so the "以下是未讀訊息" divider never rendered when entering an
     // unread room FROM a non-empty thread. `messagesPeer` is set TOGETHER with
     // `messages` (single state in useChat), so it is the honest owner of the
     // array — do nothing until the thread really belongs to this peer.
     if (messagesPeer !== member.id) return;
     if (messages.length === 0) return;
-    if (!initialPositionedRef.current) {
-      initialPositionedRef.current = true;
-      prevIdsRef.current = new Set(messages.map((m) => m.id));
-      const count = initialUnreadRef.current;
+    if (!session.initialPositioned) {
+      session.initialPositioned = true;
+      session.prevIds = new Set(messages.map((m) => m.id));
+      const count = session.initialUnread;
       // Unread = peer→owner only (matches the server's unread_counts rule:
       // recipient == reader; inter-agent traffic never counts).
       const inbound =
@@ -1128,19 +1190,19 @@ export function ChatArea({
         // Positioning happens in the firstUnreadId effect below, AFTER the
         // divider renders (it is the scroll target). Until the measurement
         // there says otherwise, we are NOT at the bottom.
-        nearBottomRef.current = false;
-        unreadRunOpenRef.current = true;
-        entryScrollPendingRef.current = true;
+        session.nearBottom = false;
+        session.unreadRunOpen = true;
+        session.entryScrollPending = true;
         setFirstUnreadId(first.id);
       } else {
         endRef.current?.scrollIntoView();
       }
       return;
     }
-    const prev = prevIdsRef.current;
+    const prev = session.prevIds;
     const fresh = messages.filter((m) => !prev.has(m.id));
-    prevIdsRef.current = new Set(messages.map((m) => m.id));
-    if (nearBottomRef.current) {
+    session.prevIds = new Set(messages.map((m) => m.id));
+    if (session.nearBottom) {
       endRef.current?.scrollIntoView();
       // Following the bottom = everything is being seen; any strip up is stale
       // (e.g. the owner just sent a reply, which force-follows), the newest
@@ -1148,7 +1210,7 @@ export function ChatArea({
       // read right now.
       setNewMsgPreview(null);
       setLatestInView(true);
-      unreadRunOpenRef.current = false;
+      session.unreadRunOpen = false;
       return;
     }
     // Scrolled up + new messages addressed to the owner. Two different anchors
@@ -1174,8 +1236,8 @@ export function ChatArea({
       // one → anchor the divider here. If a run is already open (e.g. the entry
       // divider's tail was never read down to), the arrival extends the SAME
       // run — the divider stays put.
-      if (!unreadRunOpenRef.current) {
-        unreadRunOpenRef.current = true;
+      if (!session.unreadRunOpen) {
+        session.unreadRunOpen = true;
         setFirstUnreadId(inboundNew[0].id);
       }
     }
@@ -1189,8 +1251,8 @@ export function ChatArea({
     // ONLY the entry positioning scrolls here. A chip-driven divider re-anchor
     // (in-conversation arrival while scrolled up) must not move the viewport —
     // the owner is reading history; the chip is their opt-in jump.
-    if (!entryScrollPendingRef.current) return;
-    entryScrollPendingRef.current = false;
+    if (!session.entryScrollPending) return;
+    session.entryScrollPending = false;
     const box = messagesRef.current;
     if (!box) return;
     const divider =
@@ -1200,7 +1262,7 @@ export function ChatArea({
     // it can push the first unread row outside a compact chat viewport.
     divider?.scrollIntoView({ block: "start" });
     const distance = box.scrollHeight - box.scrollTop - box.clientHeight;
-    nearBottomRef.current = distance <= NEAR_BOTTOM_PX;
+    session.nearBottom = distance <= NEAR_BOTTOM_PX;
     // Landing on the divider usually leaves the newest message below the fold —
     // that is the whole point of landing there — so the arrow must be able to
     // come up immediately, without waiting for the owner to scroll first.
@@ -1222,18 +1284,22 @@ export function ChatArea({
   // The landing is CORRECTED after the layout settles (lib/scrollToLatest):
   // images above the target decode to their real height after this frame and
   // shove the row straight back out of view.
+  // ⚠️ NOT in the session record, and this one is the interesting exception:
+  // it is the CANCEL HANDLE of an animation that is already running. Dropping
+  // it on a switch does not stop the animation — it loses the only way to stop
+  // it, and the settling correction would then keep scrolling the NEW
+  // conversation's viewport. It must outlive the conversation precisely so the
+  // unmount effect below still has something to cancel — and the two places
+  // that start a new correction cancel the previous one first.
   const jumpSettleRef = useRef<(() => void) | null>(null);
-  // Set when the jump had to FETCH the live tail first (T-48 ③) — consumed by
-  // the effect below once the replacement thread has rendered.
-  const pendingLatestScrollRef = useRef(false);
   function jumpToLatest() {
     const el = messagesRef.current;
     if (!el) return;
     // The strip's message is exactly what we are going to look at.
     setNewMsgPreview(null);
     setLatestInView(true);
-    nearBottomRef.current = true;
-    unreadRunOpenRef.current = false;
+    session.nearBottom = true;
+    session.unreadRunOpen = false;
     // 🔴 THE ARROW / THE PREVIEW STRIP ENDS AN IN-FLIGHT JUMP (T-48). Both mean
     // "take me to the newest message", said by the owner, and they are the one
     // thing allowed to overtake the anchor fetch. Spending the jump latch here
@@ -1241,7 +1307,7 @@ export function ChatArea({
     // comes back "superseded", the reactor's own top guard ends it without a
     // retry and without a notice, and `mayMarkRead` opens because the owner
     // really is on their way to the live tail.
-    if (jumpToMsgId !== undefined) jumpConsumedRef.current = jumpToMsgId;
+    if (jumpToMsgId !== undefined) session.jumpConsumed = jumpToMsgId;
     // 🔴 SCROLLING IS NOT ENOUGH WHEN THE THREAD IS AN ANCHOR WINDOW (T-48 ③).
     // `scrollToLatest` lands on the last row IN THE DOM; after a jump to an old
     // message that row is nowhere near the newest one, so the arrow would move
@@ -1249,7 +1315,7 @@ export function ChatArea({
     // exactly the lie this ticket exists to remove. Fetch the live window first
     // and scroll when it lands.
     if (hasNewer) {
-      pendingLatestScrollRef.current = true;
+      session.pendingLatestScroll = true;
       void resetToLatest();
       return;
     }
@@ -1260,15 +1326,15 @@ export function ChatArea({
   // commit: the reactor's own at-bottom auto-follow does a plain
   // `scrollIntoView`, and this replaces it with the settling landing.
   useEffect(() => {
-    if (!pendingLatestScrollRef.current) return;
+    if (!session.pendingLatestScroll) return;
     if (messagesPeer !== member.id || messages.length === 0) return;
-    pendingLatestScrollRef.current = false;
+    session.pendingLatestScroll = false;
     const el = messagesRef.current;
     if (!el) return;
     jumpSettleRef.current?.();
     jumpSettleRef.current = scrollToLatest(el);
     setLatestInView(true);
-    nearBottomRef.current = true;
+    session.nearBottom = true;
   }, [messages, messagesPeer, member.id]);
   // A pending correction must not outlive the conversation it was aiming at.
   useEffect(() => () => jumpSettleRef.current?.(), []);
@@ -1328,7 +1394,7 @@ export function ChatArea({
     if (!canSend) return;
     // Sending my own message always scrolls to the bottom, even if I had scrolled
     // up to read history — my just-sent message should be visible.
-    nearBottomRef.current = true;
+    session.nearBottom = true;
     // Snapshot the composer, then OPTIMISTICALLY clear it BEFORE the server
     // round-trip. `send()` awaits the POST + a refetch (seconds); if we only
     // cleared after that await, the draft stays populated meanwhile and a second
