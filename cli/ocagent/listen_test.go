@@ -332,6 +332,11 @@ func chatServer(t *testing.T, list string) (*httptest.Server, *string) {
 	t.Helper()
 	var gotWith string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == markReadPath {
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`{}`))
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/api/chat") {
 			gotWith = r.URL.Query().Get("with")
 			w.WriteHeader(200)

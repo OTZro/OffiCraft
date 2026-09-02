@@ -845,6 +845,11 @@ type chatSeen struct {
 	m      map[string]bool // message id → already surfaced
 	primed bool            // a baseline exists (loaded from disk or persisted once)
 	warned bool            // a write failure was already announced this process
+	// markWarned: a mark-read report failure was already announced this process.
+	// Separate from `warned` so a broken receipt endpoint cannot mute the
+	// state-file warning (or the other way round) — they fail independently and
+	// mean different things.
+	markWarned bool
 }
 
 // chatSeenPath is the state file, sibling of cursorPath.
@@ -1029,6 +1034,11 @@ func drainChat(client httpClient, cfg Config, seen *chatSeen, out io.Writer, sil
 		for _, m := range show {
 			printChatLine(out, m, now)
 		}
+		// AFTER the lines are out, never before: a read receipt claims a HUMAN-
+		// or agent-visible event, so it must trail the print it is claiming. A
+		// crash between the fetch and the loop above therefore leaves no receipt
+		// and the next drain re-prints — the safe direction.
+		reportChatRead(client, cfg, show, seen, out)
 	}
 	// REBUILD from the refetched authority rather than only adding: an id absent
 	// from the list has aged out of the server's window and can never drain
@@ -1045,6 +1055,77 @@ func drainChat(client httpClient, cfg Config, seen *chatSeen, out io.Writer, sil
 	seen.m = next
 	seen.persist(out)
 	return len(unread)
+}
+
+// reportChatRead files the read receipts for the lines drainChat JUST printed,
+// one POST /api/chat/mark-read per SENDER.
+//
+// WHY THE LISTENER HAS TO DO THIS AT ALL: GET /api/chat used to advance the
+// watermark as a side effect of being read, which made the ✓ mean "something
+// fetched this conversation" rather than "someone read it" — a listener merely
+// being alive lit it. That side effect is gone (8cd4fff9), so the receipt now
+// has to be filed by whoever actually surfaced the message, which is here.
+//
+// PER SENDER, NOT PER BATCH: the watermark is scoped to a conversation
+// (reader, peer). One drain can carry messages from several senders, and a
+// single "newest ts in the batch" reported against each of them would mark A's
+// conversation read up to a message B sent — a receipt for something nobody
+// showed. So each sender gets its own high-water mark, computed from that
+// sender's own lines only.
+//
+// WHAT IT DELIBERATELY DOES NOT COVER: lines dropped by chatBacklogPrintCap.
+// They were counted and announced but their bodies never reached the session,
+// so no receipt is filed for them; the sender's next message carries the
+// watermark past them. A message the wire sent without a usable ts is skipped
+// for the same reason — there is no watermark to report.
+// markReadPath is the read-receipt endpoint (POST): body {peer, last_read_ts},
+// reader = the verified JWT sub, watermark monotonic (a stale report is a
+// no-op 200).
+const markReadPath = "/api/chat/mark-read"
+
+func reportChatRead(client httpClient, cfg Config, printed []map[string]any, seen *chatSeen, out io.Writer) {
+	high := map[string]float64{}
+	for _, m := range printed {
+		peer := strings.TrimSpace(strOrEmpty(m["from"]))
+		if peer == "" {
+			continue
+		}
+		ts, ok := m["ts"].(float64)
+		if !ok || ts <= 0 {
+			continue
+		}
+		if ts > high[peer] {
+			high[peer] = ts
+		}
+	}
+	peers := make([]string, 0, len(high))
+	for peer := range high {
+		peers = append(peers, peer)
+	}
+	sort.Strings(peers) // deterministic order, so one drain reports the same way every run
+	for _, peer := range peers {
+		status, _ := postJSON(client, cfg, markReadPath, map[string]any{
+			"peer":         peer,
+			"last_read_ts": high[peer],
+		})
+		if status != 200 {
+			warnMarkReadFailed(seen, out, peer, status)
+		}
+	}
+}
+
+// warnMarkReadFailed says ONCE per process that the read receipt did not land.
+// It is one line because the loss is cosmetic — the message itself was
+// delivered and printed; only the sender's ✓ stays dark — but it is not
+// nothing: a silently un-filed receipt is exactly the class of "no error, wrong
+// picture" bug this whole change exists to remove.
+func warnMarkReadFailed(seen *chatSeen, out io.Writer, peer string, status int) {
+	if out == nil || seen == nil || seen.markWarned {
+		return
+	}
+	seen.markWarned = true
+	fmt.Fprintf(out, "[ocagent] mark-read 沒送成功（peer=%s，HTTP %d）— 訊息已經印出來了，"+
+		"只是對方看到的已讀勾不會亮。這個行程不會再提醒第二次。\n", peer, status)
 }
 
 // printChatLine emits the one-line-per-message form documented on drainChat.
