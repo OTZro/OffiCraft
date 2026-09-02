@@ -1966,15 +1966,13 @@ export interface paths {
          *
          *     BOTH halves of the figure are cleared, and clearing only one would not be a smaller version of this endpoint — it would be a broken one. The durable accumulator (`member.banked_cost` / `outsource_worker.banked_cost`) is written to 0, AND the live in-memory telemetry `cost` key is dropped from the actor's entry. Clearing the durable half alone leaves the live figure to reappear on the very next cockpit read, which is indistinguishable to the owner from the button doing nothing.
          *
-         *     The actor is resolved the way the banking fold (`bankLiveCost`) resolves it, so ONE route serves both kinds: a staff member, or a LIVE outsource worker.
+         *     The actor is resolved the way the banking fold (`bankLiveCost`) resolves it, so ONE route serves both kinds: a staff member, or an outsource worker.
          *
-         *     🔴 A RELEASED worker is a 404, and that is a deliberate boundary rather than an oversight: releasing a worker removes its roster row, and every other outsource write door refuses a removed row, so this one does too instead of being the single owner-only destructive route that reaches further than its neighbours. The consequence is worth stating because a caller can see it: a released worker's spend still counts on the account card (`GET /api/monitoring` deliberately keeps it there) and this route cannot clear it — so resetting every actor an account still lists does NOT drive that account's total to absent. A residue remains.
+         *     🔴 A RELEASED worker IS accepted, and this is the one outsource write door that takes a removed roster row (owner ruling rc-1344cc76a24a, 2026-09-02, overriding this route's earlier 404). The reason it must differ from its neighbours: released is the STEADY STATE for a worker — it happens on every task close — and a released worker's spend deliberately stays in the account total, so refusing it here would mean an account's total could never reach absent however many actors were reset. The other outsource doors refuse a released row because they drive a LIVE session; this one only edits a number that is still being displayed.
          *
-         *     HOW BIG A RESIDUE IS NOT SOMETHING THIS API CAN TELL YOU, and that is a property of the system rather than a gap in this description. It depends entirely on the deployment — on how many workers have been released and what they spent — and no endpoint reports it, because there is no per-charge ledger to total up. That absence is the same one that makes this endpoint a reset rather than a recount. The closest a caller can get is to subtract the actors an account still lists from that account's total, which is an INFERENCE, not a per-row census: it attributes the whole difference to released workers and cannot show its working.
+         *     Staff are not symmetric here and do not need to be: removing a member hard-deletes the row AND its telemetry entry, so a removed member contributes nothing to any total and there is nothing left to clear.
          *
-         *     Widening this route to reach released workers is a separate decision, not a bug report.
-         *
-         *     An id that resolves to neither kind is likewise a 404, and nothing is written — the same deny-first ordering the rest of the member routes use.
+         *     An id that resolves to neither kind is a 404, and nothing is written — the same deny-first ordering the rest of the member routes use.
          *
          *     IDEMPOTENT: resetting an actor that already has nothing measured writes 0 over 0, drops a key that is not there, and answers 200 with both figures null.
          *
@@ -1982,7 +1980,7 @@ export interface paths {
          *
          *     AFTER the reset the cockpit's 估計$ cell falls back to `—` (未量到) rather than showing `$0` (花了 0 元), with no display-side special case needed: `foldActorRuntime` does not put a banked figure of 0 on the wire, and the live key is gone, so both halves read as absent. The next telemetry sample starts the count again from zero.
          *
-         *     This does NOT touch the account-level aggregation logic, which keeps summing whatever the per-actor figures now say — a shared account's total simply drops by the amount that was cleared.
+         *     This does NOT touch the account-level aggregation logic, which keeps summing whatever the per-actor figures now say — a shared account's total simply drops by the amount that was cleared. Because every actor an account can carry is reachable through this route (staff, live workers and released workers alike), resetting all of them drives that account's total to ABSENT rather than to a residue — which is the outcome ruling rc-1344cc76a24a asked for.
          *
          *     A `monitoring` signal fans out so the cockpit refetches; when the actor is an outsource worker an `outsource_worker` delta fans as well, matching the banking path.
          *
@@ -5224,7 +5222,7 @@ export interface components {
             cleared_cost?: number | null;
             /**
              * Member Id
-             * @description The actor whose spend was reset — a staff member or a LIVE outsource worker, resolved the same way the banking fold resolves it. A released worker never reaches this receipt: it is refused with a 404.
+             * @description The actor whose spend was reset — a staff member or an outsource worker, released ones included, resolved the same way the banking fold resolves it.
              */
             member_id: string;
         };

@@ -194,25 +194,89 @@ func TestResetCost_UnknownActorIs404(t *testing.T) {
 	}
 }
 
-// A released worker's spend deliberately STAYS on the account card
-// (TestGetMonitoring_ReleasedWorkerSpendStaysInTheAccount pins that), and this
-// button deliberately does not reach it — a removed roster row is refused by
-// every other outsource write door too. Pinned so that widening it later is a
-// decision somebody makes on purpose rather than a side effect.
-func TestResetCost_ReleasedWorkerIsRefused(t *testing.T) {
+// A released worker CAN be reset, and this test exists because the endpoint
+// used to refuse it. Owner ruling rc-1344cc76a24a (2026-09-02) 「連已經退場的也
+// 要能清（帳號卡才會真的歸零）」 overrode that: released is the steady state for
+// a worker (ReleaseWorkersForTask fires on every task close) and its spend
+// deliberately stays in the account total, so refusing it here left a residue
+// the owner could never clear however many buttons he pressed.
+//
+// 🔴 MUTANT: restore `|| wk.Status == WorkerStatusReleased` to the worker
+// branch's 404 guard → RED. That guard is what this ruling removed, and it is
+// the one place a well-meaning "make it consistent with the other outsource
+// doors" edit would put it back.
+func TestResetCost_ReleasedWorkerCanBeReset(t *testing.T) {
 	s := costResetServer(t)
 	seedWorker(t, s, "ow-gone", "S9", 3.0, WorkerStatusReleased)
+	if rec := doIngestTelemetry(s, "ow-gone", "m-seth-m5",
+		`{"runtime":"claude","account":"seth-m5-claude","cost":0.75}`); rec.Code != 200 {
+		t.Fatalf("worker ingest: %d %s", rec.Code, rec.Body.String())
+	}
 
-	if rec := doResetCost(t, s, "ow-gone"); rec.Code != http.StatusNotFound {
-		t.Errorf("released worker: %d %s, want 404", rec.Code, rec.Body.String())
+	got := costResetBody(t, doResetCost(t, s, "ow-gone"))
+
+	if got["cleared_banked_cost"] != 3.0 {
+		t.Errorf("cleared_banked_cost = %v, want 3.0", got["cleared_banked_cost"])
+	}
+	if got["cleared_cost"] != 0.75 {
+		t.Errorf("cleared_cost = %v, want 0.75", got["cleared_cost"])
 	}
 	after, err := s.dal.GetOutsourceWorker("ow-gone")
 	if err != nil || after == nil {
 		t.Fatalf("re-read worker: %v", err)
 	}
-	if after.BankedCost != 3.0 {
-		t.Errorf("banked_cost = %v, want 3.0 untouched — a refused call writes nothing",
-			after.BankedCost)
+	if after.BankedCost != 0 {
+		t.Errorf("banked_cost = %v, want 0", after.BankedCost)
+	}
+	if v, present := liveCostOf(s, "ow-gone"); present {
+		t.Errorf("live cost still %v — both halves must go for a released worker too", v)
+	}
+}
+
+// The outcome the ruling actually asked for, asserted where the owner sees it:
+// the ACCOUNT CARD, not the individual rows. Resetting every actor an account
+// carries — a live staff member, a live worker AND a released one — must drive
+// that account's total to ABSENT, not to a small residue.
+//
+// This is the test that would have caught the shipped-and-wrong version: every
+// per-actor assertion above passed while the account card still showed a figure,
+// because the released worker was refused and its spend deliberately stays in
+// the fold (TestGetMonitoring_ReleasedWorkerSpendStaysInTheAccount).
+func TestResetCost_ClearingEveryActorEmptiesTheAccountCard(t *testing.T) {
+	s := costResetServer(t)
+	seedRegisteredMachine(t, s, "m-seth-m5")
+	m := fullMember("seth")
+	m.BankedCost = 4.0
+	if err := s.dal.PutMember(m); err != nil {
+		t.Fatalf("seed member: %v", err)
+	}
+	seedWorker(t, s, "ow-live", "S7", 0.25, WorkerStatusActive)
+	seedWorker(t, s, "ow-gone", "S9", 3.0, WorkerStatusReleased)
+	for _, id := range []string{"seth", "ow-live", "ow-gone"} {
+		if rec := doIngestTelemetry(s, id, "m-seth-m5",
+			`{"runtime":"claude","account":"seth-m5-claude","cost":1.5}`); rec.Code != 200 {
+			t.Fatalf("ingest %s: %d %s", id, rec.Code, rec.Body.String())
+		}
+	}
+
+	// Premise: the card really does carry a figure first, so "absent" below
+	// cannot pass because the fixture was empty all along.
+	before := accountRow(t, monitoringOf(t, doGetMonitoring(s,
+		map[string]any{"sub": "owner", "scope": "owner"})), "seth-m5-claude")
+	if before["cost"] == nil {
+		t.Fatal("fixture is not discriminating — the account card shows nothing to clear")
+	}
+
+	for _, id := range []string{"seth", "ow-live", "ow-gone"} {
+		costResetBody(t, doResetCost(t, s, id))
+	}
+
+	after := accountRow(t, monitoringOf(t, doGetMonitoring(s,
+		map[string]any{"sub": "owner", "scope": "owner"})), "seth-m5-claude")
+	if after["cost"] != nil {
+		t.Errorf("account cost = %v, want absent — 「帳號卡才會真的歸零」 is the "+
+			"outcome the ruling asked for, and a residue here means some actor's "+
+			"spend is still unreachable", after["cost"])
 	}
 }
 

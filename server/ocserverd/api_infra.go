@@ -943,10 +943,24 @@ func (s *apiServer) dropLiveCost(actorID string) *float64 {
 // It is not an undo and must never grow into one without a fresh owner ruling.
 //
 // The actor is resolved the way bankLiveCost resolves it, so ONE route serves
-// both kinds: a staff member, or a live outsource worker. A released worker is
-// refused (404) like every other outsource write door — its spend still counts
-// on the account card, but a removed roster row is not a thing this button
-// reaches; widening that is a separate decision.
+// both kinds: a staff member, or an outsource worker.
+//
+// 🔴 A RELEASED WORKER IS ACCEPTED, and it is the one outsource write door that
+// takes a removed roster row (owner ruling rc-1344cc76a24a, 2026-09-02:「連已經
+// 退場的也要能清（帳號卡才會真的歸零）」, overriding this route's earlier 404).
+// The reason it must differ from its neighbours: released is the STEADY STATE
+// for a worker — ReleaseWorkersForTask fires on every task close — and a
+// released worker's spend deliberately stays in the account total
+// (TestGetMonitoring_ReleasedWorkerSpendStaysInTheAccount pins that). Refusing
+// it here would mean the account card could never reach zero however many
+// buttons the owner pressed, which is the whole outcome he asked for. The other
+// outsource doors refuse released rows because they drive a LIVE session; this
+// one only edits a number that is still being displayed.
+//
+// Staff are different and stay filtered: removing a member HARD-DELETES the row
+// AND its telemetry entry (api_roles.go, the repo's only telemetry.Delete), so
+// a removed member contributes nothing to any total and there is nothing here
+// to clear — the residue this ruling is about does not exist on that side.
 func (s *apiServer) HandleResetCostApiMembersMemberIdCostResetPost(w http.ResponseWriter, r *http.Request, memberId string) {
 	// Staff first, mirroring bankLiveCost: an outsource member banks (and so
 	// resets) through the WORKER branch, never as a member patch.
@@ -980,7 +994,9 @@ func (s *apiServer) HandleResetCostApiMembersMemberIdCostResetPost(w http.Respon
 		internalError(w, err)
 		return
 	}
-	if wk == nil || wk.Status == WorkerStatusReleased {
+	// NO status filter: a released worker is reset like any other (see the
+	// ruling in this handler's doc). Only a genuinely unknown id is a 404.
+	if wk == nil {
 		writeError(w, http.StatusNotFound, "member '"+memberId+"' not found")
 		return
 	}
