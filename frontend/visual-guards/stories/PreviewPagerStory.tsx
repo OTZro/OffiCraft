@@ -14,11 +14,23 @@ import { MarkdownPreviewOverlay } from "../../src/components/MarkdownPreviewOver
 const PNG =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
-export function PreviewPagerStory({ start = 0 }: { start?: number }) {
+export function PreviewPagerStory({
+  start = 0,
+  withBackgroundInput = false,
+}: {
+  start?: number;
+  /** A text field BEHIND the overlay. The overlay is deliberately not a focus
+   * trap, so this is reachable — and the paging keys listen on `document`,
+   * which hears a key being typed into it. */
+  withBackgroundInput?: boolean;
+}) {
   const items = ["one.png", "two.png", "three.png"];
   const [index, setIndex] = useState(start);
   return (
     <I18nProvider>
+      {withBackgroundInput && (
+        <input aria-label="background field" defaultValue="abcdef" />
+      )}
       <MarkdownPreviewOverlay
         title={items[index]}
         imageSrc={PNG}

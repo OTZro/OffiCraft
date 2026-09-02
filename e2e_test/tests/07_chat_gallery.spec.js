@@ -9,8 +9,8 @@
 //     MUST be taken BEFORE anything lists A's thread — order is the assertion.
 //   • browser: gallery panel opens from the chat header, 圖片/檔案 tabs split
 //     by is_image, the uploader filter (全部 / a checkbox per sender, T-51 ②)
-//     stacks with the tabs, and
-//     an over-filtered view shows the honest empty state.
+//     stacks with the tabs. (The over-filtered empty state is NOT exercised
+//     here — see the note further down and the unit test it points at.)
 const { test, expect } = require('@playwright/test');
 const {
   BASE,
@@ -138,14 +138,20 @@ test.describe('B8 · chat gallery — scope, sender labels, tabs + uploader filt
 
     // ⚠️ WHERE ONE ASSERTION WENT (T-51 ②). This block used to end by ticking B
     // on the 檔案 tab and asserting the honest empty state, because B had sent
-    // no files. That combination is now UNREACHABLE by construction: the
-    // options are cut from the current tab, so every uploader you can tick has
-    // at least one row there. The empty state itself still exists — for a tab
-    // with no rows at all — a DIFFERENT case, asserted at unit level in
-    // `frontend/src/components/ChatGalleryPanel.test.tsx` ("shows per-tab
-    // honest empty states once loaded"). Say it plainly: the OVER-FILTERED
-    // empty view now has no test anywhere, and that is correct — there is no
-    // longer any sequence of clicks that reaches it.
+    // no files. That exact combination is gone: the options are cut from the
+    // current tab, so an uploader you can tick right now has at least one row
+    // there.
+    //
+    // 🔴 THAT IS NOT THE SAME AS "unreachable", and an earlier version of this
+    // note said so — wrongly, for three days. A tick outlives the rows it was
+    // made on: a refetch can take away a ticked uploader's images while their
+    // files remain, and the prune only drops uploaders absent from EVERY row.
+    // So the over-filtered view IS reachable, the panel carries a third
+    // sentence for it (`galleryEmptyFiltered`), and both cases are asserted at
+    // unit level in `frontend/src/components/ChatGalleryPanel.test.tsx` — "shows
+    // per-tab honest empty states once loaded" for the empty gallery, and "says
+    // the FILTER is empty, not the gallery" for this one. Neither is exercised
+    // here; that is a coverage choice, not a claim about what can happen.
     //
     // Uploader filter (T-51 ②): ONE line when closed, whatever the number of
     // uploaders. The wrapping chip row it replaced grew a line per uploader.

@@ -63,7 +63,10 @@ async function settleLayout(page: Page) {
   }
 }
 
-test("desktop 1024: overlay panel lays out with a rendered markdown body", async ({ mount, page }) => {
+test("desktop 1024: overlay panel lays out with a rendered markdown body", async ({
+  mount,
+  page,
+}) => {
   await page.setViewportSize({ width: 1024, height: 800 });
   // The overlay portals to `document.body`, so it is NOT under the mount root:
   // every reach for it goes through `page` (T-76cd).
@@ -74,13 +77,15 @@ test("desktop 1024: overlay panel lays out with a rendered markdown body", async
   const box = await panel.boundingBox();
   expect(box).not.toBeNull();
   expect(box!.height).toBeGreaterThan(80);
-  // Panel stays within the viewport (max-width min(760, 100%)).
+  // Panel stays within the viewport (max-width min(1400, 100%)).
   expect(box!.x).toBeGreaterThanOrEqual(0);
   expect(box!.x + box!.width).toBeLessThanOrEqual(1024 + 1);
 
   // The markdown BODY rendered as real elements (heading present) — the whole
   // point of the in-cockpit preview vs the browser's raw-source tab.
-  await expect(page.getByRole("heading", { name: "產物顯示架構設計" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "產物顯示架構設計" }),
+  ).toBeVisible();
 
   // Preview and download are two actions: the header keeps a 下載 link.
   const dl = page.locator("a.md-preview__download");
@@ -140,10 +145,22 @@ test("narrow 390: the whole preview panel, close button included, is inside the 
     return {
       vh: window.innerHeight,
       vw: window.innerWidth,
-      panel: { top: panel.top, bottom: panel.bottom, left: panel.left, right: panel.right },
+      panel: {
+        top: panel.top,
+        bottom: panel.bottom,
+        left: panel.left,
+        right: panel.right,
+      },
       header: { top: header.top, bottom: header.bottom },
-      close: { top: close.top, bottom: close.bottom, left: close.left, right: close.right },
-      panelMaxHeight: getComputedStyle(document.querySelector(".md-preview__panel")!).maxHeight,
+      close: {
+        top: close.top,
+        bottom: close.bottom,
+        left: close.left,
+        right: close.right,
+      },
+      panelMaxHeight: getComputedStyle(
+        document.querySelector(".md-preview__panel")!,
+      ).maxHeight,
     };
   });
 
@@ -198,7 +215,9 @@ test("narrow 390: a document longer than the screen scrolls to its last line", a
 
   // PREMISE: the fixture really is longer than the box, otherwise "it scrolls"
   // is satisfied by a document that never needed to.
-  const overflow = await body.evaluate((el) => el.scrollHeight - el.clientHeight);
+  const overflow = await body.evaluate(
+    (el) => el.scrollHeight - el.clientHeight,
+  );
   expect(overflow).toBeGreaterThan(400);
 
   // Ask the end question ("is the last line on screen yet"), with a bounded
@@ -211,7 +230,8 @@ test("narrow 390: a document longer than the screen scrolls to its last line", a
       const b = document.querySelector(".md-preview__body")!;
       const br = b.getBoundingClientRect();
       const el = [...b.querySelectorAll("*")].find(
-        (e) => e.children.length === 0 && e.textContent?.includes("LAST_LINE_T76CD"),
+        (e) =>
+          e.children.length === 0 && e.textContent?.includes("LAST_LINE_T76CD"),
       )!;
       const r = el.getBoundingClientRect();
       return r.top >= br.top - 1 && r.bottom <= br.bottom + 1;
@@ -224,7 +244,8 @@ test("narrow 390: a document longer than the screen scrolls to its last line", a
     const b = document.querySelector(".md-preview__body")!;
     const br = b.getBoundingClientRect();
     const el = [...b.querySelectorAll("*")].find(
-      (e) => e.children.length === 0 && e.textContent?.includes("LAST_LINE_T76CD"),
+      (e) =>
+        e.children.length === 0 && e.textContent?.includes("LAST_LINE_T76CD"),
     )!;
     const r = el.getBoundingClientRect();
     return {
@@ -243,13 +264,18 @@ test("narrow 390: a document longer than the screen scrolls to its last line", a
 // `safe center` equals `center` for a panel that fits), so the claim "only the
 // narrow width moved" has to be measured rather than asserted by construction.
 // These numbers are the desktop geometry read off the UNCHANGED stylesheet at
-// 1280x800: panel width min(760, 100%) = 760, height = 800 - 2*32 = 736,
-// horizontally centred at 260..1020.
+// 1280x800: panel width min(1400, 100%), height = 800 - 2*32 = 736.
+// ⚠️ T-51 MOVED THE WIDTH CAP (owner: 「整片放寬」), 760 → 1400, so at 1280 the cap
+// no longer binds and the panel fills the inset viewport: 1216 wide at 32..1248.
+// That costs this test its CENTRING claim at 1280 — a panel that fills the space
+// is centred by construction — so the test now measures a SECOND viewport (1600),
+// where 1400 does bind and 100..1500 is a real reading of `justify-content`.
 //
 // MUTANTS (measured, 5 tests in this file). TWO of them, and the pair is the
 // point — they fail this test for unrelated reasons:
-//   · `width: min(760px, 100%)` → `min(700px, 100%)` ⇒ 1 failed / 4 passed, on
-//     the width line.
+//   · `width: min(1400px, 100%)` → `min(700px, 100%)` ⇒ fails on the width line
+//     (measured at both viewports: 1280 reads 700 instead of 1216, 1600 reads 700
+//     instead of 1400).
 //   · `--md-preview-inset: 32px` → `0px` ON THE BASE RULE ONLY ⇒ 1 failed /
 //     4 passed, on `panel.top` (received 16).
 //
@@ -311,25 +337,50 @@ test("desktop 1280: the panel geometry is unchanged by the narrow-width fix", as
   const seen = await page.evaluate(() => {
     const el = document.querySelector(".md-preview__panel")!;
     const r = el.getBoundingClientRect();
-    return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, width: r.width };
+    return {
+      top: r.top,
+      bottom: r.bottom,
+      left: r.left,
+      right: r.right,
+      width: r.width,
+    };
   });
   // T-6c26 — which of these five are INVARIANTS and which are arithmetic, since
   // "five exact numbers" reads as five independent claims and it is not:
-  //   · width 760      — an invariant: `width: min(760px, 100%)`, the panel's own cap.
-  //   · left 260 / right 1020 — DERIVED from width + `justify-content: center` at
-  //     1280 (260 = (1280-760)/2). They are not extra claims about the panel; what
-  //     they still catch is the CENTRING, so they stay.
+  //   · width 1216     — NOT the panel's cap any more. Since T-51 raised the cap
+  //     to 1400 (owner: 「整片放寬」), 1280 falls on the `100%` side of the min():
+  //     1216 = 1280 - 2*32, the inset viewport. What it catches is that the inset
+  //     still applies and the cap did not fall BELOW it.
+  //   · left 32 / right 1248 — DERIVED from that width. At 1280 they no longer say
+  //     anything about centring (a panel that fills the space is centred by
+  //     construction); the WIDE_CAP block below is where the centring claim lives
+  //     now, at a viewport where the 1400 cap actually binds.
   //   · top 32 / bottom 768  — an invariant with a PRECONDITION: the 32 px desktop
   //     inset, true only once the panel has grown to its max-height. Until then
   //     `align-items: safe center` centres a shorter panel and top reads ~302.
   //     settleLayout above is what makes that precondition hold; do not delete it
   //     and do not paper over it with a tolerance (mutant: inset 32→33 must stay
   //     red at ONE pixel — measured).
-  expect(seen.width).toBe(760);
-  expect(seen.left).toBe(260);
-  expect(seen.right).toBe(1020);
+  expect(seen.width).toBe(1216);
+  expect(seen.left).toBe(32);
+  expect(seen.right).toBe(1248);
   expect(seen.top).toBe(32);
   expect(seen.bottom).toBe(768);
+
+  // WIDE_CAP — the half the 1280 reading above can no longer carry: a viewport
+  // roomy enough for `min(1400px, 100%)` to land on the 1400 side. Here the cap
+  // IS the width, and left/right are a real reading of the centring.
+  await page.setViewportSize({ width: 1600, height: 800 });
+  await settleLayout(page);
+  const wide = await page.evaluate(() => {
+    const r = document
+      .querySelector(".md-preview__panel")!
+      .getBoundingClientRect();
+    return { left: r.left, right: r.right, width: r.width };
+  });
+  expect(wide.width).toBe(1400);
+  expect(wide.left).toBe(100);
+  expect(wide.right).toBe(1500);
 
   // The desktop overlay still scrolls its long body — the control is a control,
   // not a licence for the wide case to break quietly.
@@ -376,9 +427,18 @@ test("landscape 844x390: the short-viewport rule gives the panel the screen, min
     return {
       vh: window.innerHeight,
       vw: window.innerWidth,
-      panel: { top: +p.top.toFixed(1), bottom: +p.bottom.toFixed(1), height: +p.height.toFixed(1) },
-      close: { top: +c.top.toFixed(1), bottom: +c.bottom.toFixed(1), right: +c.right.toFixed(1) },
-      overlayPadTop: getComputedStyle(document.querySelector(".md-preview")!).paddingTop,
+      panel: {
+        top: +p.top.toFixed(1),
+        bottom: +p.bottom.toFixed(1),
+        height: +p.height.toFixed(1),
+      },
+      close: {
+        top: +c.top.toFixed(1),
+        bottom: +c.bottom.toFixed(1),
+        right: +c.right.toFixed(1),
+      },
+      overlayPadTop: getComputedStyle(document.querySelector(".md-preview")!)
+        .paddingTop,
     };
   });
 

@@ -9,7 +9,13 @@
 // closing.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent, waitFor, screen } from "@testing-library/react";
+import {
+  render,
+  fireEvent,
+  waitFor,
+  screen,
+  act,
+} from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { ChatGalleryPanel, isPreviewableMime } from "./ChatGalleryPanel";
 import type { Member } from "../types";
@@ -20,16 +26,36 @@ const listChatAttachments = vi.fn(
   async (_withId: string): Promise<GalleryAttachment[]> => galleryRows,
 );
 const getChatAttachmentShareLink = vi.fn(
-  async (id: string): Promise<string> => `/api/chat/attachment/${id}?sig=test-sig`,
+  async (id: string): Promise<string> =>
+    `/api/chat/attachment/${id}?sig=test-sig`,
 );
+
+let handlers: ((topic: string, delta?: unknown) => void)[] = [];
 
 vi.mock("../api", () => ({
   api: {
     listChatAttachments: (withId: string) => listChatAttachments(withId),
     getChatAttachmentShareLink: (id: string) => getChatAttachmentShareLink(id),
-    subscribeEvents: () => () => {},
+    subscribeEvents: (cb: (topic: string, delta?: unknown) => void) => {
+      handlers.push(cb);
+      return () => {
+        handlers = handlers.filter((x) => x !== cb);
+      };
+    },
   },
 }));
+
+/** Drive the panel's own refetch the way the wire does: a chat delta naming
+ * this member. A bare topic (no delta) is the honest "you may have missed
+ * anything" branch and re-pulls unconditionally, which is all this needs. */
+async function refetchBurst() {
+  await act(async () => {
+    for (const cb of [...handlers]) cb("chat");
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
 
 function mkMember(): Member {
   return {
@@ -149,9 +175,12 @@ describe("ChatGalleryPanel", () => {
     const { container } = renderPanel();
     fireEvent.click(screen.getByRole("tab", { name: "檔案" }));
     await waitFor(() => expect(itemsIn(container).length).toBe(3));
-    const byName = (name: string) => itemsIn(container).find((item) => item.textContent?.includes(name))!;
+    const byName = (name: string) =>
+      itemsIn(container).find((item) => item.textContent?.includes(name))!;
     fireEvent.click(byName("notes.md"));
-    expect(await screen.findByRole("dialog", { name: "notes.md" })).toBeTruthy();
+    expect(
+      await screen.findByRole("dialog", { name: "notes.md" }),
+    ).toBeTruthy();
     fireEvent.click(screen.getByLabelText("關閉預覽"));
     fireEvent.click(byName("doc.pdf"));
     expect(await screen.findByRole("dialog", { name: "doc.pdf" })).toBeTruthy();
@@ -159,11 +188,15 @@ describe("ChatGalleryPanel", () => {
     // now carries 「在新頁面顯示」 for it, so the body line points at that button
     // instead of back at 下載 once the share link has been minted.
     expect(
-      await screen.findByText("此檔案無法在這裡預覽，請用上方的「在新頁面顯示」開啟。"),
+      await screen.findByText(
+        "此檔案無法在這裡預覽，請用上方的「在新頁面顯示」開啟。",
+      ),
     ).toBeTruthy();
     fireEvent.click(screen.getByLabelText("關閉預覽"));
     fireEvent.click(byName("bundle.zip"));
-    expect(await screen.findByRole("dialog", { name: "bundle.zip" })).toBeTruthy();
+    expect(
+      await screen.findByRole("dialog", { name: "bundle.zip" }),
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "圖片" }));
     await waitFor(() => expect(itemsIn(container).length).toBe(1));
     fireEvent.click(itemsIn(container)[0]);
@@ -178,14 +211,20 @@ describe("ChatGalleryPanel", () => {
     const { container } = renderPanel();
     fireEvent.click(screen.getByRole("tab", { name: "檔案" }));
     await waitFor(() => expect(itemsIn(container).length).toBe(2));
-    const pdf = itemsIn(container).find((item) => item.textContent?.includes("doc.pdf"))!;
-    const zip = itemsIn(container).find((item) => item.textContent?.includes("bundle.zip"))!;
+    const pdf = itemsIn(container).find((item) =>
+      item.textContent?.includes("doc.pdf"),
+    )!;
+    const zip = itemsIn(container).find((item) =>
+      item.textContent?.includes("bundle.zip"),
+    )!;
     expect(container.querySelector(".chat__gallery-share")).toBeNull();
     fireEvent.click(pdf);
     expect(await screen.findByRole("dialog", { name: "doc.pdf" })).toBeTruthy();
     fireEvent.click(screen.getByLabelText("關閉預覽"));
     fireEvent.click(zip);
-    expect(await screen.findByRole("dialog", { name: "bundle.zip" })).toBeTruthy();
+    expect(
+      await screen.findByRole("dialog", { name: "bundle.zip" }),
+    ).toBeTruthy();
   });
 
   it("opens a previewable row from Enter and Space without letting the nested share button open it", async () => {
@@ -196,10 +235,14 @@ describe("ChatGalleryPanel", () => {
     expect(galleryRow.getAttribute("role")).toBe("button");
     expect(galleryRow.getAttribute("tabindex")).toBe("0");
     fireEvent.keyDown(galleryRow, { key: "Enter" });
-    expect(await screen.findByRole("dialog", { name: "shot.png" })).toBeTruthy();
+    expect(
+      await screen.findByRole("dialog", { name: "shot.png" }),
+    ).toBeTruthy();
     fireEvent.click(screen.getByLabelText("關閉預覽"));
     fireEvent.keyDown(galleryRow, { key: " " });
-    expect(await screen.findByRole("dialog", { name: "shot.png" })).toBeTruthy();
+    expect(
+      await screen.findByRole("dialog", { name: "shot.png" }),
+    ).toBeTruthy();
   });
 
   it("shows per-tab honest empty states once loaded", async () => {
@@ -208,9 +251,7 @@ describe("ChatGalleryPanel", () => {
     // 圖片 tab (default) is empty even though a FILE exists.
     expect(await screen.findByText("還沒有圖片")).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "檔案" }));
-    await waitFor(() =>
-      expect(screen.queryByText("還沒有圖片")).toBeNull(),
-    );
+    await waitFor(() => expect(screen.queryByText("還沒有圖片")).toBeNull());
     expect(screen.getByText("only.pdf")).toBeTruthy();
     first.unmount();
     // And the 檔案 tab's own empty state when nothing at all exists.
@@ -231,10 +272,15 @@ describe("ChatGalleryPanel", () => {
   // every row in both tabs while the list applied the tab, so 圖片 offered
   // uploaders who had only ever sent non-images and ticking one answered with
   // an empty gallery — 66 of the owner's 114 uploaders were dead options that
-  // way (Kyle, 2026-09-02). The old test that asserted the empty state for
-  // exactly that combination is gone BECAUSE the combination is now
-  // unreachable, not because the empty state was dropped: it is still asserted
-  // above, in "shows per-tab honest empty states once loaded".
+  // way (Kyle, 2026-09-02).
+  //
+  // 🔴 That kills the DEAD OPTION, not the over-filtered empty view. A tick
+  // outlives the rows it was made on (a refetch can take a ticked uploader's
+  // images away while their files stay, and the prune only drops uploaders
+  // absent from EVERY row), so the panel still needs its third sentence — see
+  // "says the FILTER is empty, not the gallery" below. An earlier version of
+  // this note claimed the view was unreachable and that nothing tested it; both
+  // halves were wrong.
 
   const filterToggle = () =>
     screen.getByRole("button", { name: "依上傳者篩選" });
@@ -347,7 +393,9 @@ describe("ChatGalleryPanel", () => {
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "圖片" }));
     fireEvent.click(screen.getByRole("tab", { name: "圖片" }));
-    await waitFor(() => expect(filterToggle().textContent).toContain("已選 1 位"));
+    await waitFor(() =>
+      expect(filterToggle().textContent).toContain("已選 1 位"),
+    );
     expect(itemsIn(container).length).toBe(1);
     expect(itemsIn(container)[0].textContent).toContain("bob.png");
   });
@@ -365,19 +413,68 @@ describe("ChatGalleryPanel", () => {
     tickOption("我");
     expect(filterToggle().textContent).toContain("已選 1 位");
 
-    galleryRows = [row("b1", "image/png", "m9", "Bea", 100, "bea.png")];
+    // 🔴 B'S ROWS MUST INCLUDE THE TICKED UPLOADER. With B's gallery holding
+    // nothing from 「我」, the refetch prune above (it drops ids absent from
+    // EVERY fresh row) already lands on 「全部」 — and this test passes with the
+    // member-switch reset deleted, which is the one thing it exists to pin.
+    // 「我」 is in plenty of a real member's rows; that is the whole premise of
+    // the comment above.
+    galleryRows = [
+      row("b1", "image/png", "m9", "Bea", 100, "bea.png"),
+      row("b2", "image/png", "owner", "", 90, "mine-on-b.png"),
+    ];
     rerender(
       <I18nProvider>
-        <ChatGalleryPanel member={{ ...mkMember(), id: "m-other" }} onClose={() => {}} />
+        <ChatGalleryPanel
+          member={{ ...mkMember(), id: "m-other" }}
+          onClose={() => {}}
+        />
       </I18nProvider>,
     );
-    await waitFor(() =>
-      expect(itemsIn(container)[0]?.textContent).toContain("bea.png"),
-    );
+    await waitFor(() => expect(itemsIn(container).length).toBe(2));
     expect(
       filterToggle().textContent,
       "the new member's gallery opens unfiltered",
     ).toContain("全部");
+    expect(
+      itemsIn(container)
+        .map((el) => el.textContent)
+        .join(" "),
+      "B's own rows, not the ones A's filter would have kept",
+    ).toContain("bea.png");
+  });
+
+  it("says the FILTER is empty, not the gallery, when a refetch empties the tab under a live tick", async () => {
+    // The reachable shape of the two-sentence empty state, and the reason the
+    // panel carries a third string at all. The prune only drops uploaders that
+    // vanished from EVERY row — so an uploader whose images go away while their
+    // files remain keeps their tick, with nothing left to show on 圖片. Saying
+    // 「還沒有圖片」 there tells the reader their files are gone; they are not,
+    // their filter is on.
+    galleryRows = [
+      row("a1", "image/png", "m9", "Bea", 100, "bea.png"),
+      row("a2", "image/png", "owner", "", 90, "mine.png"),
+    ];
+    const { container } = renderPanel();
+    await waitFor(() => expect(itemsIn(container).length).toBe(2));
+    openFilter();
+    tickOption("Bea");
+    await waitFor(() => expect(itemsIn(container).length).toBe(1));
+
+    // Bea's image is gone; her FILE is not, so the prune keeps her tick alive.
+    galleryRows = [
+      row("a3", "application/zip", "m9", "Bea", 80, "bea.zip"),
+      row("a2", "image/png", "owner", "", 90, "mine.png"),
+    ];
+    await refetchBurst();
+
+    expect(
+      await screen.findByText("選取的上傳者在這個分頁沒有檔案"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText("還沒有圖片"),
+      "the gallery is not empty — 「我」 still has an image here",
+    ).toBeNull();
   });
 
   it("keeps a departed member in the list so their old files stay reachable", async () => {
@@ -458,7 +555,9 @@ describe("ChatGalleryPanel", () => {
       "the 60 uploaders are behind the toggle until it is opened",
     ).toBe(0);
     openFilter();
-    expect(document.querySelectorAll(".chat__gallery-sender-option").length).toBe(60);
+    expect(
+      document.querySelectorAll(".chat__gallery-sender-option").length,
+    ).toBe(60);
   });
 
   it("pages the preview across the list the reader is looking at, not every attachment", async () => {
@@ -516,7 +615,9 @@ describe("ChatGalleryPanel", () => {
     const { container } = renderPanel(onClose);
     await waitFor(() => expect(itemsIn(container).length).toBe(1));
     fireEvent.click(itemsIn(container)[0]);
-    expect(await screen.findByRole("dialog", { name: "shot.png" })).toBeTruthy();
+    expect(
+      await screen.findByRole("dialog", { name: "shot.png" }),
+    ).toBeTruthy();
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "shot.png" })).toBeNull();
     expect(container.querySelector(".chat__gallery")).toBeTruthy();

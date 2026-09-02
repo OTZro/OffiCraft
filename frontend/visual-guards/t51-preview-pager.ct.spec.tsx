@@ -73,3 +73,34 @@ test("the arrows page a zoomed image too — the owner's ruling", async ({
   await page.keyboard.press("ArrowRight");
   await expect(counter).toHaveText("3 / 3");
 });
+
+test("an arrow typed into a field behind the overlay moves the caret, not the page", async ({
+  mount,
+  page,
+}) => {
+  // Found in real Chromium by the independent review (I2): the document-level
+  // listener hears EVERY key. The overlay is deliberately not a focus trap, so
+  // a field behind it is reachable — and before the guard, an arrow pressed in
+  // it left the caret where it was and stepped the pager instead.
+  // jsdom cannot see this: `document.activeElement` and `selectionStart` are
+  // simulated there, and the pager fires regardless.
+  await page.setViewportSize({ width: 1100, height: 760 });
+  await mount(<PreviewPagerStory withBackgroundInput />);
+
+  const counter = page.locator(".md-preview__pager-count");
+  await expect(counter).toHaveText("1 / 3");
+
+  const field = page.getByLabel("background field");
+  await field.focus();
+  await field.evaluate((el: HTMLInputElement) => el.setSelectionRange(0, 0));
+  await page.keyboard.press("ArrowRight");
+
+  await expect(
+    counter,
+    "the page must not step while a field has the key",
+  ).toHaveText("1 / 3");
+  expect(
+    await field.evaluate((el: HTMLInputElement) => el.selectionStart),
+    "the caret is what should have moved",
+  ).toBe(1);
+});
