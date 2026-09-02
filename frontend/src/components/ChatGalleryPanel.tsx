@@ -118,9 +118,8 @@ function formatDateTime(ts: number): string {
  * ⚠️ NO SEARCH BOX. An earlier version put one inside the popover as a
  * shortcut; the owner removed it outright (2026-09-02, `c-8fa2806cb0e3`:
  * 「不需要有搜尋這功能」). That is consistent with the objection that shaped this
- * whole control — 「我怎麼會知道有誰，沒辦法打字」 — and with the ordering below:
- * sorted by how much each person sent, the people worth finding are at the top,
- * which is what a search box would have been for. Do not add one back. */
+ * whole control — 「我怎麼會知道有誰，沒辦法打字」: you cannot type a name you have
+ * not seen, so the list itself has to be scannable. Do not add one back. */
 export function GallerySenderFilter({
   senders,
   selected,
@@ -364,7 +363,9 @@ export function ChatGalleryPanel({
   // owner's own line (Kyle, 2026-09-02): 114 uploaders in the row, but only 48
   // have an image — 66 of them were dead options. A filter whose options do not
   // come from the same population as its results is not a filter.
-  const inTab = entries.filter((e) => (tab === "images" ? e.isImage : !e.isImage));
+  const inTab = entries.filter((e) =>
+    tab === "images" ? e.isImage : !e.isImage,
+  );
 
   // Uploader options — derived from the ACTUAL rows' senders (never hardcoded),
   // deduped in row order (rows are newest→oldest), labelled with the same
@@ -375,21 +376,27 @@ export function ChatGalleryPanel({
   // linear `find` inside the loop is rows x uploaders — on the corpus this
   // ticket was measured against (2,200 rows, 114 uploaders) that is six figures
   // of comparisons for a list that has not changed.
-  const senderById = new Map<string, { id: string; label: string; count: number }>();
+  const senderById = new Map<
+    string,
+    { id: string; label: string; count: number }
+  >();
   for (const e of inTab) {
     const seen = senderById.get(e.from);
     if (seen) seen.count += 1;
-    else senderById.set(e.from, { id: e.from, label: senderLabel(e), count: 1 });
+    else
+      senderById.set(e.from, { id: e.from, label: senderLabel(e), count: 1 });
   }
   const senders = [...senderById.values()];
   // 🔴 ORDER DECIDES WHETHER A LIST OF A HUNDRED PEOPLE IS USABLE. Row order
   // (newest first) reads as no order at all once you are scrolling past twenty
-  // names. Sorted by how many files each person actually sent, the handful the
-  // reader is looking for is almost always in the first few rows, and the long
-  // tail — 59 of the owner's 114 uploaders sent 1–3 files, 31 sent exactly one —
-  // sinks to the bottom WITHOUT anyone being hidden. Ties keep row order, so
-  // among equals the most recent uploader stays first.
-  senders.sort((a, b) => b.count - a.count);
+  // names. BY NAME — the owner's ruling (2026-09-02, `c-6143bd5a861d`:
+  // 「依照名字排序就好」), which overturned the first version's by-volume order.
+  // What it buys: a reader who knows WHO they want can jump straight to the
+  // letter, which is the half a removed search box was doing. What it costs,
+  // named so nobody "fixes" it back: the busiest uploaders (「我」 included) no
+  // longer float to the top — the per-row count is what still tells you who
+  // sent a lot. Ties keep row order, so equal names stay in newest-first order.
+  senders.sort((a, b) => a.label.localeCompare(b.label, "zh-Hant"));
 
   // The two dimensions STACK: the 圖片/檔案 tab split (same server-derived
   // isImage flag the thread bubbles use) AND the uploader filter. No ticks = no
@@ -450,13 +457,13 @@ export function ChatGalleryPanel({
         </button>
       </div>
       {/* Uploader filter (T-51 ②) — ONE LINE when closed, whatever the number of
-        * uploaders. The chip row this replaces had no cap and no scroll
-        * container, so it grew a line per uploader: measured on a 2,200-file
-        * corpus it stood 1,168px tall inside a 696px panel and pushed the file
-        * list clean off the screen. The owner rejected the two cheaper shapes
-        * himself — collapse-and-expand (「然後呢？」: the expanded thing is the
-        * same wall) and search-only (「我怎麼會知道有誰，沒辦法打字」: you cannot
-        * type a name you have not seen) — and named this one. */}
+       * uploaders. The chip row this replaces had no cap and no scroll
+       * container, so it grew a line per uploader: measured on a 2,200-file
+       * corpus it stood 1,168px tall inside a 696px panel and pushed the file
+       * list clean off the screen. The owner rejected the two cheaper shapes
+       * himself — collapse-and-expand (「然後呢？」: the expanded thing is the
+       * same wall) and search-only (「我怎麼會知道有誰，沒辦法打字」: you cannot
+       * type a name you have not seen) — and named this one. */}
       {loaded && senders.length > 0 && (
         <GallerySenderFilter
           senders={senders}
@@ -467,12 +474,12 @@ export function ChatGalleryPanel({
       {!loaded ? null : shown.length === 0 ? (
         <div className="chat__gallery-empty">
           {/* TWO EMPTIES, AND THEY ARE NOT THE SAME SENTENCE. 「還沒有圖片」 is a
-            * statement about the gallery; with a filter on it is a statement
-            * about the filter, and saying the first while the second is true
-            * tells the reader their files are gone. Reachable without a member
-            * switch: a refetch can remove a ticked uploader's images while
-            * their files remain, so the tick survives the prune with nothing
-            * left to show on this tab. */}
+           * statement about the gallery; with a filter on it is a statement
+           * about the filter, and saying the first while the second is true
+           * tells the reader their files are gone. Reachable without a member
+           * switch: a refetch can remove a ticked uploader's images while
+           * their files remain, so the tick survives the prune with nothing
+           * left to show on this tab. */}
           {senderSel.size > 0
             ? t.chat.galleryEmptyFiltered
             : tab === "images"

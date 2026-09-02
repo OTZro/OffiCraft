@@ -316,7 +316,14 @@ describe("ChatGalleryPanel", () => {
     openFilter();
     // The three uploaders WITH AN IMAGE — owner reads 「我」, others by their
     // server-resolved names; no raw internal ids leak.
-    expect(optionLabels()).toEqual(["Bob", "我", "Mira"]);
+    // ORDER IS DELIBERATELY NOT ASSERTED HERE. Sorting is by name
+    // (`localeCompare(…, "zh-Hant")`), and where Han sits relative to Latin is
+    // the platform's collation, not this component's decision — pinning it here
+    // would make an unrelated test fail on an engine with a different ICU. The
+    // order that IS ours is pinned in "orders uploaders by name", on an
+    // all-ASCII fixture where every collation agrees.
+    expect(optionLabels()).toHaveLength(3);
+    expect(new Set(optionLabels())).toEqual(new Set(["Bob", "我", "Mira"]));
     // Tick Bob → only Bob's image remains on the 圖片 tab.
     tickOption("Bob");
     await waitFor(() => expect(itemsIn(container).length).toBe(1));
@@ -325,22 +332,24 @@ describe("ChatGalleryPanel", () => {
     expect(container.textContent).not.toContain("mira.png");
   });
 
-  it("orders uploaders by how many files they sent, so the long tail sinks", async () => {
+  it("orders uploaders by name, not by how much they sent", async () => {
     // 🔴 Order is what makes a list of a hundred people usable: unordered, the
-    // dropdown is the chip row's problem in a smaller box. Ties keep row order
-    // (newest first), so among equals the most recent uploader stays on top.
+    // dropdown is the chip row's problem in a smaller box. BY NAME is the
+    // owner's ruling (`c-6143bd5a861d`), overturning this PR's first version,
+    // which sorted by volume. The fixture is built so the two orders DISAGREE:
+    // by volume it would read Charlie(3), Bravo(2), Alpha(1).
     galleryRows = [
-      row("a5", "image/png", "m1", "One", 500, "one.png"),
-      row("a4", "image/png", "m2", "Three", 400, "three-a.png"),
-      row("a3", "image/png", "m2", "Three", 300, "three-b.png"),
-      row("a2", "image/png", "m2", "Three", 200, "three-c.png"),
-      row("a1", "image/png", "m3", "Two", 100, "two-a.png"),
-      row("a0", "image/png", "m3", "Two", 50, "two-b.png"),
+      row("a5", "image/png", "m1", "Alpha", 500, "one.png"),
+      row("a4", "image/png", "m2", "Charlie", 400, "three-a.png"),
+      row("a3", "image/png", "m2", "Charlie", 300, "three-b.png"),
+      row("a2", "image/png", "m2", "Charlie", 200, "three-c.png"),
+      row("a1", "image/png", "m3", "Bravo", 100, "two-a.png"),
+      row("a0", "image/png", "m3", "Bravo", 50, "two-b.png"),
     ];
     const { container } = renderPanel();
     await waitFor(() => expect(itemsIn(container).length).toBe(6));
     openFilter();
-    expect(optionLabels()).toEqual(["Three", "Two", "One"]);
+    expect(optionLabels()).toEqual(["Alpha", "Bravo", "Charlie"]);
   });
 
   it("offers no uploader whose only files are on the other tab", async () => {
