@@ -3296,8 +3296,15 @@ def test_upload_ref_rejections(hctx: HCtx) -> None:
 def test_chat_scrollback_cursor_page_never_marks_read(hctx: HCtx) -> None:
     """T-bf82 scrollback: ``GET /api/chat?with=&before_ts=&before_id=`` serves
     the strictly-older history page (oldest→newest) and NEVER advances the
-    caller's read watermark; the cursorless list still auto-marks (unchanged);
-    a partial cursor is a 422."""
+    caller's read watermark; a partial cursor is a 422.
+
+    T-48 flipped the last clause of this pin. The cursorless list used to
+    auto-mark, and this test asserted it did. It does not any more, on ANY path:
+    owner ruled that reading a list must not be able to claim a conversation was
+    read (「get_chat 不應該可以標示已讀未讀，這應該要另一隻 API 明確表示有這個
+    意圖」), because a member that had only attached its listener — never woken,
+    never shown a line — grew a watermark for messages nobody had looked at.
+    Marking read is POST /api/chat/mark-read and nothing else."""
     peer = hctx.agent.member_id
     sent = []
     for i in range(3):
@@ -3360,15 +3367,19 @@ def test_chat_scrollback_cursor_page_never_marks_read(hctx: HCtx) -> None:
         )
         assert r.status_code == 422, f"partial cursor: {r.status_code} {r.text}"
 
-    # The cursorless list is untouched: it still auto-marks to the newest ts.
+    # The cursorless list does not mark either (T-48). This is the arm that
+    # changed, so it is asserted against the watermark captured BEFORE any read
+    # in this test — "unchanged", not merely "below the newest ts", which would
+    # also pass if the write happened and landed low.
     r = hctx.client.get(
         "/api/chat",
         params={"with": "owner"},
         headers=_auth(hctx.agent.token),
     )
     assert r.status_code == 200, r.text
-    assert agent_watermark() >= newest["ts"], (
-        "the cursorless list must keep the auto read-receipt behavior"
+    assert agent_watermark() == marked_before, (
+        "a cursorless list must not advance the watermark either — marking a "
+        "conversation read is POST /api/chat/mark-read and nothing else"
     )
 
 
