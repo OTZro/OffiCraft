@@ -638,12 +638,22 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   const refetchReads = useCallback(async () => {
     try {
       const reads = await api.listChatReads(OWNER_ID);
+      // 🔴 THIS IS NOT "THE SAME PERSON'S DATA, ONE STEP STALE" (T-48, R8-2).
+      // The inventory used to exempt this commit on that reasoning, and the
+      // reasoning was wrong: the subscription effect fires `void refetchReads()`
+      // on ENTRY, `peerLastReadTs` is one `useState` on a hook that is never
+      // remounted, and the `withId` this call captured is the peer it was fired
+      // for. So entering B, leaving before its receipts land, and coming back to
+      // A writes *B's* watermark into A's room — read ticks lit on A's outgoing
+      // rows off somebody else's reading, and nothing corrects it until the next
+      // `chat_read` delta or the next entry. One mis-click reaches it.
+      if (convRef.current !== conv) return;
       const peerReceipt = reads.find((r) => r.readerId === withId);
       setPeerLastReadTs(peerReceipt ? peerReceipt.lastReadTs : 0);
     } catch (e) {
       console.warn("useChat: reads refetch failed", e);
     }
-  }, [withId]);
+  }, [withId, conv]);
 
   // Leave an anchor window and REPLACE the thread with the live newest window.
   //
@@ -759,6 +769,19 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       await refetchReads();
       return;
     }
+    // 🔴 THE GUARD AT THE TOP OF THIS FUNCTION CANNOT STAND HERE (T-48, R8-1).
+    // It ran BEFORE `await api.listChat` — two awaits ago — so it answers "was
+    // this visit current when the refresh STARTED", and the question at a
+    // commit point is "is it current NOW". Between the two, the owner can click
+    // away and click back: the generation ticket does not see it (nothing in
+    // between committed, so the watermark never moved) and `prev.peer !==
+    // withId` does not see it either (the peer is the same person). That pair
+    // is exactly the pair every earlier instance of this family was found
+    // holding. Landing here would replace THIS visit's anchor window — or the
+    // empty room still waiting for it — with the previous visit's live tail.
+    // Keep the guard at the top as well: it stops a stale visit from even
+    // entering the `resetToLatest` branch, which is a different job.
+    if (convRef.current !== conv) return;
     committedSeqRef.current = seq;
     setThread((prev) => {
       // A peer switch mid-flight: this page belongs to the peer the owner has

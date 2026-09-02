@@ -424,6 +424,78 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
     );
   });
 
+  it("帶錨點進房、視窗還沒落地的時候,不准出現新訊息預覽列,也不准把未讀分隔線錨在任何一列上", async () => {
+    // 🔴 第八輪 R8-7 —— 這一族到今天為止 `ChatArea` 這一層的第一張網。
+    //
+    // 前七輪的護欄全都釘在**某一句守衛**上(hook 層:上一趟的資料有沒有進到
+    // `messages`)。那個策略八輪找出九個源頭,每一個都是「又一條沒人守的 async
+    // 路徑」;而只要任何一個源頭漏掉,同一串下游後果就整套復活,卻沒有任何一條
+    // 測試會紅。這一條反過來斷言**結果**:這一趟是帶著錨點進來的,在它自己的視窗
+    // 落地之前,房間必須是空的、沒有新訊息預覽列、沒有未讀分隔線 —— 不管污染是
+    // 從哪一條路徑來的。
+    //
+    // 走的路是 R8-1(第九個實例):A 的 post-send refetch 自己那通最新頁掛在空中,
+    // 人切到 B(帶錨點,一頁都沒 commit)再帶著錨點切回 A。那一頁落地時,跳轉
+    // 反應器已經把 `initialPositioned` 消耗掉、`prevIds` 設成空集合,所以整批
+    // stale 列都算「剛到的」⇒ 預覽列與分隔線一起錨在**上一趟的活尾巴**上,
+    // 在一間本該只顯示錨點視窗的房間裡。
+    seed(A, "a", 80, 100);
+    seed(B, "b", 5, 9000);
+
+    const { container, rerender } = render(view(alice));
+    await waitFor(() => expect(bubbles(container)).toContain("a79"));
+
+    // A 的 post-send refetch 那通最新頁留在空中。
+    holdPlain = () => {};
+    const box = container.querySelector(".chat__input") as HTMLTextAreaElement;
+    await act(async () => {
+      fireEvent.change(box, { target: { value: "在 A 打的字" } });
+      fireEvent.click(container.querySelector(".chat__send") as HTMLElement);
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    // 中間那一間也是帶錨點進來的:一頁都沒有 commit,世代票的水位一步都沒動。
+    holdWindows = () => {};
+    await act(async () => {
+      rerender(view(bruno, "b3"));
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    // 回到 A 的第二趟,一樣帶錨點,房間空的在等自己的視窗。
+    await act(async () => {
+      rerender(view(alice, "a1"));
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(bubbles(container), "前提:這一趟在等它自己的錨點視窗").toEqual([]);
+
+    await act(async () => {
+      const release = holdPlain;
+      holdPlain = null;
+      release?.();
+      await new Promise((r) => setTimeout(r, 30));
+    });
+
+    expect(
+      container.querySelector('[data-testid="chat-new-msg-preview"]'),
+      "錨點視窗還沒落地,不准冒出一條指著上一趟活尾巴的新訊息預覽列",
+    ).toBeNull();
+    expect(
+      container.querySelector(".chat__unread-divider"),
+      "未讀分隔線不准錨在上一趟的列上",
+    ).toBeNull();
+    expect(bubbles(container), "這一趟的房間仍然只等它自己的視窗").toEqual([]);
+
+    // …而這一趟自己的視窗照樣落得下來。
+    await act(async () => {
+      const release = holdWindows;
+      holdWindows = null;
+      release?.();
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    await waitFor(() =>
+      expect(container.querySelector('[data-msg-id="a1"]')).not.toBeNull(),
+    );
+  });
+
   it("StrictMode 的 setup→cleanup→setup 之後,錨點進的那間房照樣刷新得起來", async () => {
     // 🔴 第四輪 R4-2。閂的紀錄本來是**每次 effect 跑**就整份重建一次,而
     // `main.tsx` 用的就是 `<StrictMode>` —— 掛載時是 setup → cleanup → setup。

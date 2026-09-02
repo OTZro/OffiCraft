@@ -243,6 +243,57 @@ describe("useChat load routing (active vs background)", () => {
     expect(result.current.peerLastReadTs).toBe(0);
   });
 
+  it("切走再切回,上一間房晚到的已讀水位不准畫成這一間的已讀勾", async () => {
+    // 🔴 T-48 R8-2。這一格以前被文件豁免掉,理由是「同一個人的資料只是舊一格」——
+    // 那個前提不成立:訂閱 effect 一進房就打 `void refetchReads()`,而
+    // `peerLastReadTs` 是同一支 useState(ChatArea 換人不會 remount),閉包捕獲的
+    // `withId` 是**那一間**的人。所以進 B、reads 還在路上、馬上切回 A,B 那通落地
+    // 就把 B 的水位寫進 A 的房間 —— 不是退一格,是憑別人的水位在 A 的訊息上點亮
+    // 已讀勾,而且要等下一則 chat_read delta 或下一次進房才會蓋回來。
+    // 一次手滑就到得了,是這一族裡最好觸發的一條。
+    h.listChat.mockResolvedValue([mkMsg("c1", "owner", "a", 1000)]);
+    let landB!: (rows: unknown[]) => void;
+    h.listChatReads
+      .mockImplementationOnce(async () => [
+        { readerId: "a", peerId: OWNER_ID, lastReadTs: 100 },
+      ])
+      .mockImplementationOnce(
+        () =>
+          new Promise<unknown[]>((r) => {
+            landB = r;
+          }),
+      )
+      .mockImplementation(async () => [
+        { readerId: "a", peerId: OWNER_ID, lastReadTs: 100 },
+      ]);
+
+    const { result, rerender } = renderHook(({ id }) => useChat(id), {
+      initialProps: { id: "a" },
+    });
+    await waitFor(() => expect(result.current.peerLastReadTs).toBe(100));
+
+    await act(async () => {
+      rerender({ id: "b" });
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    await act(async () => {
+      rerender({ id: "a" });
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    expect(result.current.peerLastReadTs, "前提:回到 A 的這一趟拿到的是 A 的水位").toBe(100);
+
+    await act(async () => {
+      landB([
+        { readerId: "b", peerId: OWNER_ID, lastReadTs: 999999 },
+        { readerId: "a", peerId: OWNER_ID, lastReadTs: 100 },
+      ]);
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    expect(result.current.peerLastReadTs, "A 的房間不准顯示 B 的已讀水位").toBe(
+      100,
+    );
+  });
+
   it("a send whose POST FAILED still rejects — the caller must be able to tell", async () => {
     h.listChat.mockResolvedValueOnce([]); // the initial load
     h.postChat.mockRejectedValueOnce(new Error("server said no"));

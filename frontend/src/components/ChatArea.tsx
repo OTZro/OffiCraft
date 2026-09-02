@@ -516,7 +516,10 @@ export function ChatArea({
   // The shared 看原訊息 exit. Declared here rather than at the top of the
   // component because it is handed `nameOf`, and `nameOf` needs the roster
   // hooks above it. It is still an unconditional top-level hook call.
-  const quotedMessage = useQuotedMessageOverlay(nameOf);
+  // `session` is this component's visit token (see its declaration): the read
+  // behind 看原訊息 belongs to the visit that clicked it, not to whoever is on
+  // screen when it lands (T-48, R8-3).
+  const quotedMessage = useQuotedMessageOverlay(session, nameOf);
   // Is the owner ACTUALLY looking (window focused + tab visible)? Read side
   // effects (mark-read below) are gated on this: a backgrounded window must
   // never consume unread state (the roster badge has to survive until the

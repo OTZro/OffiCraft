@@ -42,17 +42,24 @@ function mkMsg(over: Partial<ChatMessage> & { id: string }): ChatMessage {
   };
 }
 
+const FIRST_VISIT = {};
+const SECOND_VISIT = {};
+
 /** A surface that has a LOADED WINDOW of messages on screen and a control that
  * asks for one message by id. `window` is what the deleted design searched;
  * `targetId` is deliberately not in it. */
 function Harness({
   windowMsgs,
   targetId,
+  visit = FIRST_VISIT,
 }: {
   windowMsgs: ChatMessage[];
   targetId: string;
+  /** The caller's visit token. A new object stands for a new entry to a
+   * conversation — what `useKeyedRecord` hands ChatArea on every switch. */
+  visit?: object;
 }) {
-  const quoted = useQuotedMessageOverlay();
+  const quoted = useQuotedMessageOverlay(visit, undefined);
   return (
     <div>
       {windowMsgs.map((m) => (
@@ -170,6 +177,57 @@ describe("useQuotedMessageOverlay", () => {
     });
 
     expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it("切走再切回,上一趟點開的引用原文不准蓋在這一趟的房間上", async () => {
+    // 🔴 T-48 R8-3,這一族的第十個 commit 點。這支 hook 的 state 活在 hook 裡,
+    // 而 ChatArea 換人不會 remount —— 所以在 A 按下「看原訊息」、讀取慢、切到 B,
+    // 讀取落地時會把 A 的那則訊息以全螢幕 overlay 蓋在 B 的房間上,還會把焦點
+    // 交給一顆已經隨 A 的列消失的按鈕。§2.4 對其他 overlay 的豁免(「它蓋住整頁,
+    // 切對話的手勢被擋著」)在這裡不成立:讀取期間 overlay 根本還沒開。
+    let land!: (m: ChatMessage) => void;
+    vi.spyOn(api, "getChatMessage").mockReturnValue(
+      new Promise<ChatMessage>((r) => {
+        land = r;
+      }),
+    );
+
+    const { getByText, rerender } = render(
+      <I18nProvider>
+        <Harness windowMsgs={[]} targetId="c-1" visit={FIRST_VISIT} />
+      </I18nProvider>,
+    );
+    act(() => {
+      fireEvent.click(getByText("看原訊息"));
+    });
+    expect(
+      document.querySelector(".md-preview"),
+      "前提:讀取還在路上,overlay 還沒開,切換手勢是暢通的",
+    ).toBeNull();
+
+    rerender(
+      <I18nProvider>
+        <Harness windowMsgs={[]} targetId="c-1" visit={SECOND_VISIT} />
+      </I18nProvider>,
+    );
+    await act(async () => {
+      land(mkMsg({ id: "c-1", body: "上一趟點開的原文" }));
+      await Promise.resolve();
+    });
+
+    expect(
+      document.querySelector(".md-preview"),
+      "上一趟的引用原文不准蓋在這一趟的房間上",
+    ).toBeNull();
+
+    // …而這一趟自己按的那一次照樣開得起來(守衛沒有把這條路整個關掉)。
+    vi.spyOn(api, "getChatMessage").mockResolvedValue(
+      mkMsg({ id: "c-1", body: "這一趟自己按的原文" }),
+    );
+    await act(async () => {
+      fireEvent.click(getByText("看原訊息"));
+    });
+    expect(document.querySelector(".md-preview")).not.toBeNull();
   });
 
   // 🔴 THE ANTI-SECOND-COPY CLAUSE. Behaviour tests cannot see a duplicate:

@@ -63,6 +63,16 @@ export type QuotedMessageOverlay = {
 };
 
 /**
+ * @param visit the caller's VISIT TOKEN — the `useKeyedRecord` record whose
+ * identity changes on every entry to a conversation, including A→B→A (T-48,
+ * R8-3). It is REQUIRED and it is first, because this hook's state outlives a
+ * conversation switch: `ChatArea` is not remounted, so `shown` set by a read
+ * that started in A lands as a full-screen overlay of A's message on top of B's
+ * room. §2.4's exemption for the other overlays ("the overlay covers the page,
+ * so the switch gesture is blocked") does NOT apply here — during the read the
+ * overlay is not open yet and the roster is fully clickable. Optional would
+ * have meant a future surface silently opting out of the guard; the type asks
+ * for it instead.
  * @param resolveName how to title the overlay for a message's sender. ChatArea
  * passes its roster-aware `nameOf` (the owner's own nickname, outsource
  * codenames, 系統). Surfaces without a roster omit it and get the server's
@@ -70,6 +80,7 @@ export type QuotedMessageOverlay = {
  * name.
  */
 export function useQuotedMessageOverlay(
+  visit: object,
   resolveName?: (id: string) => string,
 ): QuotedMessageOverlay {
   const { t } = useI18n();
@@ -81,13 +92,25 @@ export function useQuotedMessageOverlay(
   // landing in the same tick both read the PRE-UPDATE state and both would
   // fire. A ref is written synchronously inside the handler.
   const busyRef = useRef(false);
+  // The visit mirror. Same shape as `ChatArea`'s `visitRef`: written during
+  // render, read by the async tail to ask "is the visit that clicked still the
+  // one on screen?".
+  const visitRef = useRef(visit);
+  visitRef.current = visit;
 
   async function open(id: string): Promise<void> {
     if (busyRef.current) return;
     busyRef.current = true;
+    const firedFor = visitRef.current;
     setFailedId(null);
     try {
       const original = await api.getChatMessage(id);
+      // The commit guard (T-48, R8-3, §3 rule 4): this read belongs to the
+      // visit that clicked. Landing it anywhere else shows one room's message
+      // over another room, and `MarkdownPreviewOverlay` takes focus on mount
+      // and hands it back on unmount to a button that has since been unmounted
+      // with the row that carried it.
+      if (visitRef.current !== firedFor) return;
       setShown({
         title: resolveName
           ? resolveName(original.from)
@@ -97,6 +120,10 @@ export function useQuotedMessageOverlay(
     } catch {
       // Deliberately swallowed rather than logged-and-retried: the person who
       // clicked is told on screen, and there is nothing else to do about it.
+      // Guarded for the same reason, even though `failedId` is compared against
+      // a globally unique message id and would match no row in the new room:
+      // "harmless today" is how this family keeps coming back.
+      if (visitRef.current !== firedFor) return;
       setFailedId(id);
     } finally {
       busyRef.current = false;

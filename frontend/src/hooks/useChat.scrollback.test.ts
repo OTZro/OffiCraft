@@ -1276,6 +1276,74 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     ).toBeGreaterThan(0);
   });
 
+  it("切走再切回同一個人,上一趟 post-send refetch 自己那通最新頁不准貼進這一趟的空房間", async () => {
+    // 🔴 第八輪 R8-1,同一族的第九個實例 —— 而且它跟上一條測試(POST 掛在空中)
+    // 走的**不是**同一條路。`refetch` 的造訪守衛站在**函式開頭**,擋得住 POST
+    // 掛在空中的那條;擋不住的是 POST 立刻回、`refetch` 自己那通 `listChat`
+    // 掛在空中的這條 —— 開頭那句守衛早在兩個 `await` 之前就放行了,commit 之前
+    // 只剩世代票(中間那一趟一頁都沒 commit,水位一步沒動)＋ `prev.peer !== withId`
+    // (人根本沒換)。正是第六輪判定不足的那一對。
+    const hang = deferred<ChatMessage[]>();
+    h.listChat
+      .mockResolvedValueOnce(page("z", 9000, 5)) // 第一趟 A 的一般進房
+      .mockReturnValueOnce(hang.promise); // post-send refetch 自己那通
+
+    const { result, rerender } = renderHook(
+      ({ id, anchor }: { id: string; anchor?: string }) => useChat(id, anchor),
+      { initialProps: { id: "a", anchor: undefined as string | undefined } },
+    );
+    await waitFor(() => expect(result.current.messages).toHaveLength(5));
+    let sending!: Promise<void>;
+    act(() => {
+      sending = result.current.send("在 A 打的字");
+    });
+    await act(async () => {
+      await settle();
+    });
+
+    // 中間那一間也是帶錨點進來的:一頁都沒有 commit,所以世代票攔不到後面那一步。
+    await act(async () => {
+      rerender({ id: "b", anchor: "b0" });
+      await settle();
+    });
+    const above = deferred<ChatMessage[]>();
+    const below = deferred<ChatMessage[]>();
+    h.listChatWindow
+      .mockReturnValueOnce(above.promise)
+      .mockReturnValueOnce(below.promise);
+    await act(async () => {
+      rerender({ id: "a", anchor: "a0" });
+      await settle();
+    });
+    let pending!: Promise<JumpOutcome>;
+    act(() => {
+      pending = result.current.loadAround("a0");
+    });
+    expect(result.current.messages, "前提:這一趟在等它自己的視窗").toEqual([]);
+
+    await act(async () => {
+      hang.resolve(page("z", 9000, 6));
+      await sending;
+      await settle();
+    });
+    expect(
+      result.current.messages,
+      "上一趟 post-send 的最新頁不准貼進這一趟的空錨點房間",
+    ).toEqual([]);
+
+    // …而這一趟自己的視窗照樣 commit 得了(守衛沒有連著把這條路關掉)。
+    above.resolve(page("a", 100, 30));
+    below.resolve(page("a", 129, 30));
+    await act(async () => {
+      await pending;
+      await settle();
+    });
+    expect(
+      result.current.messages.length,
+      "這一趟的視窗不准被上一趟燒掉的世代票判成 superseded",
+    ).toBeGreaterThan(0);
+  });
+
   it("錨點被超車、caller 不再重排之後,這間房仍然刷新得起來", async () => {
     // 🔴 R3-3。superseded 那條路原本**刻意**保留「錨點還沒到」的閂,把清除交給
     // caller;而 caller 只在「訊息列是空的」時才清 —— 但 superseded 的定義就是
