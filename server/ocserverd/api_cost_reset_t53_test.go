@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -391,6 +392,69 @@ func TestResetCost_AFailedDurableWriteDestroysNothing(t *testing.T) {
 		}
 		if v != 0.5 {
 			t.Errorf("live cost = %v, want 0.5 untouched", v)
+		}
+	})
+}
+
+// THE WIRE HALF, which the durable half quietly took with it. banked_cost is
+// no longer written through PutMember (T-14 項目 6), so the reset writes ONE
+// column — and the member delta putMember used to fan for free had to be
+// published by hand instead. Losing it costs nothing at write time and nothing
+// in any other test here: the column is 0, the receipt is right, and the
+// cockpit simply never hears about it.
+//
+// The two arms differ ON PURPOSE, and this pins BOTH sides of that asymmetry —
+// the same split bankLiveCost's own parity test makes (worker_lifecycle_test):
+// a staff member gets a member patch, and an outsource worker gets NONE, because
+// a worker's changes ride the outsource_worker projection and a member patch
+// naming an ow- id is the thing that split exists to prevent.
+//
+// 🔴 MUTANTS: drop the publishMemberPatch call → the staff arm goes red; fan a
+// member patch from the worker arm "for symmetry" → the worker arm goes red.
+func TestResetCost_FansAMemberDeltaForStaffAndNoneForAWorker(t *testing.T) {
+	memberFrames := func(t *testing.T, actorID string, seed func(*apiServer)) []string {
+		t.Helper()
+		s := costResetServer(t)
+		seed(s)
+		l, err := s.hub.Connect(actorID, "")
+		if err != nil {
+			t.Fatalf("connect SSE: %v", err)
+		}
+		t.Cleanup(func() { s.hub.Disconnect(l) })
+		if rec := doResetCost(t, s, actorID); rec.Code != http.StatusOK {
+			t.Fatalf("reset: %d %s", rec.Code, rec.Body.String())
+		}
+		var out []string
+		for frame := l.pop(); frame != nil; frame = l.pop() {
+			if strings.Contains(string(frame), `"topic":"member"`) {
+				out = append(out, string(frame))
+			}
+		}
+		return out
+	}
+
+	t.Run("staff member", func(t *testing.T) {
+		frames := memberFrames(t, "seth", func(s *apiServer) {
+			m := fullMember("seth")
+			m.BankedCost = 4.0
+			if err := s.dal.PutMember(m); err != nil {
+				t.Fatalf("seed member: %v", err)
+			}
+		})
+		if len(frames) == 0 {
+			t.Error("no member delta went out — the cockpit is told nothing, so the " +
+				"panel keeps showing the figure that was just destroyed until " +
+				"something unrelated happens to refresh it")
+		}
+	})
+
+	t.Run("outsource worker", func(t *testing.T) {
+		frames := memberFrames(t, "ow-7", func(s *apiServer) {
+			seedWorker(t, s, "ow-7", "S7", 0.25, WorkerStatusActive)
+		})
+		if len(frames) > 0 {
+			t.Errorf("a worker reset must never fan a member patch naming an ow- id "+
+				"(its changes ride the outsource_worker projection): %s", frames[0])
 		}
 	})
 }
