@@ -438,6 +438,46 @@ func (s *apiServer) callerMayDriveTask(r *http.Request, t Task) bool {
 	return currentActor(r) == t.ExecutorID
 }
 
+// callerMayEditTaskText is callerMayDriveTask widened by exactly one structural
+// fact: while a task has NO executor at all (executor_id == ""), its CREATOR
+// counts as the executor — but only at the text-only doors (T-52).
+//
+// 🔴 WHY. create_task opens a 發包票 with executor_id empty and leaves it empty
+// until the scheduler binds a worker to it. Every task-driving write is gated on
+// "be the executor, or be admin/owner", and the creator earns no standing from
+// having created the task — so for the whole of that window NOBODY who is
+// awake can correct the ticket, and the wording the contractor reads on arrival
+// is whatever was typed the first time. The window has no upper bound: the
+// assign loop runs without a transaction and only logs when PutTask fails, so a
+// task can sit unbound forever.
+//
+// 🔴 WHY IT CLOSES ON executor_id AND NOT ON ANYTHING ELSE. The moment a worker
+// is bound, the creator is back to a flat 403 — including when the creator is
+// the person who opened the ticket. Anything narrower that happens to be true
+// right now ("this is an outsource ticket", "no worker exists yet") would leave
+// the door open while somebody is already working to the text, which is the
+// failure this predicate exists to avoid: an unbound task has no work in flight
+// to be moved out from under.
+//
+// 🔴 WHY IT IS NOT callerMayDriveTask ITSELF. That predicate guards plan, step
+// status, deps, priority/freeze, reassign, claim, terminate, mark_duplicate,
+// closeout and reply-card linkage as well. Owner ruled (2026-09-02, card
+// rc-1bb6e01c4bf7) 「只開『改文字類』那幾道（改描述／標題／產物增刪／步驟筆記），
+// 不含凍結、撤票、改派」, so the widening is a SECOND predicate applied at the
+// named doors only. Calling this from any other handler reverses that ruling.
+//
+// A row with no CreatorID (pre-column rows) admits nobody: the empty string is
+// not an actor.
+func (s *apiServer) callerMayEditTaskText(r *http.Request, t Task) bool {
+	if s.callerMayDriveTask(r, t) {
+		return true
+	}
+	if t.ExecutorID != "" || t.CreatorID == "" {
+		return false
+	}
+	return currentActor(r) == t.CreatorID
+}
+
 // callerMayWriteHandover is callerMayDriveTask PLUS one narrow, time-boxed
 // exception (T-91): while a task sits under the `reassigning` lock, the
 // PREDECESSOR stamped on it may still write the handover record.
@@ -2804,7 +2844,7 @@ func (s *apiServer) HandleAddTaskArtifactApiTasksTaskIdArtifactPost(w http.Respo
 		writeResolveError(w, err, "task", taskId)
 		return
 	}
-	if !s.callerMayDriveTask(r, *t) {
+	if !s.callerMayEditTaskText(r, *t) {
 		writeError(w, http.StatusForbidden, "caller is not the task's executor")
 		return
 	}
@@ -2885,7 +2925,7 @@ func (s *apiServer) HandleRemoveTaskArtifactApiTasksTaskIdArtifactArtifactIdDele
 		writeResolveError(w, err, "task", taskId)
 		return
 	}
-	if !s.callerMayDriveTask(r, *t) {
+	if !s.callerMayEditTaskText(r, *t) {
 		writeError(w, http.StatusForbidden, "caller is not the task's executor")
 		return
 	}

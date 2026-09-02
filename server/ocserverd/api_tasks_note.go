@@ -210,7 +210,16 @@ func (s *apiServer) resolveStepForNoteWrite(w http.ResponseWriter, r *http.Reque
 	// taken its executor rights away. Every OTHER task-driving write keeps
 	// callerMayDriveTask verbatim (owner ruled the narrow version, not the wide
 	// one) — see callerMayWriteHandover.
-	if !s.callerMayWriteHandover(r, *t) {
+	// T-52 rides alongside: while a task has NO executor at all its creator
+	// counts as one for the text-only doors, and the step note is one of them.
+	// ⚠️ THE TWO EXCEPTIONS CAN BE OPEN AT ONCE and that is not a mistake: a
+	// reassign TO OUTSOURCE lands the task executor-less AND under the
+	// `reassigning` lock, so during that window the stamped predecessor (writing
+	// its handover) and the creator (fixing the brief) may both write this note.
+	// Neither is an 執行者 driving the work — the predecessor lost its executor
+	// rights in the same transaction and the creator never had any — so 全域脈絡
+	// §3.4 is untouched; what they share is one text field, last write wins.
+	if !s.callerMayWriteHandover(r, *t) && !s.callerMayEditTaskText(r, *t) {
 		writeError(w, http.StatusForbidden, "caller is not the task's executor")
 		return nil, nil, false
 	}

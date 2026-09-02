@@ -272,7 +272,7 @@ func (s *apiServer) updateTaskText(w http.ResponseWriter, r *http.Request, taskI
 		writeResolveError(w, err, "task", taskID)
 		return
 	}
-	if !s.callerMayDriveTask(r, *t) {
+	if !s.callerMayEditTaskText(r, *t) {
 		writeError(w, http.StatusForbidden, "caller is not the task's executor")
 		return
 	}
