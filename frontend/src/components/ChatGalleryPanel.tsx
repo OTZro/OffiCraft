@@ -114,7 +114,7 @@ function formatDateTime(ts: number): string {
  *
  * The search box is INSIDE the popover and is a shortcut, never the entrance:
  * the whole list is visible above it without typing a character. */
-function GallerySenderFilter({
+export function GallerySenderFilter({
   senders,
   selected,
   onChange,

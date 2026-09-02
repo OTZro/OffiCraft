@@ -122,7 +122,11 @@ test("390px: popup header keeps filename space while the actions are icons with 
   // text, and each control is still square.
   const actions = page.locator(".md-preview__actions");
   await expect(actions).toHaveText("");
-  for (const sel of [".md-preview__share", ".md-preview__new-tab", ".md-preview__download"]) {
+  // ⚠️ `a.md-preview__download`, not the bare class: the share BUTTON wears
+  // `md-preview__download md-preview__share` for the shared look, so the bare
+  // selector matches two elements and trips strict mode. The file's own note
+  // above records the same trap biting four earlier tests.
+  for (const sel of [".md-preview__share", ".md-preview__new-tab", "a.md-preview__download"]) {
     const box = await page.locator(sel).boundingBox();
     expect(box, `${sel} must be on screen`).not.toBeNull();
     expect(box!.width, `${sel} is an icon square, not a labelled pill`).toBeLessThanOrEqual(40);

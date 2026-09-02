@@ -88,6 +88,102 @@ describe("MarkdownPreviewOverlay", () => {
     expect(screen.getByText("100%")).toBeTruthy();
   });
 
+  // ── Paging across a caller-owned list (T-51 ①) ────────────────────────────
+  //
+  // 🔴 THE ARROW KEYS WERE ALREADY SPOKEN FOR, and that is the whole risk in
+  // this feature. Once an image is zoomed the wrap is a real scroll container
+  // (T-7e68 made the zoom real layout precisely so the edges the zoom pushes
+  // out of the frame stay reachable), and the arrows are the KEYBOARD's only
+  // way to get to them. A pager that grabs ArrowLeft/Right unconditionally
+  // re-opens the exact owner report that change exists to answer:
+  // 「可以放大，但無法左右或上下移動」. Same for a text file, which scrolls with
+  // the arrows and has no second way to reach its bottom.
+  //
+  // These three cases are the difference between "paging works" and "paging did
+  // not cost anything"; the first alone is green with the bug present.
+
+  function renderPaged(
+    onGo: (i: number) => void,
+    extra: { mime?: string; index?: number } = {},
+  ) {
+    render(
+      <I18nProvider>
+        <MarkdownPreviewOverlay
+          title="shot.png"
+          url="/api/chat/attachment/att-image"
+          attachmentId="att-image"
+          mime={extra.mime ?? "image/png"}
+          pager={{ index: extra.index ?? 1, total: 5, onGo }}
+          onClose={() => {}}
+        />
+      </I18nProvider>,
+    );
+    return document.body.querySelector<HTMLElement>(".md-preview")!;
+  }
+
+  it("steps through the caller's list from the arrow keys while the image is at 100%", () => {
+    const onGo = vi.fn();
+    const root = renderPaged(onGo);
+    fireEvent.keyDown(root, { key: "ArrowRight" });
+    expect(onGo).toHaveBeenCalledWith(2);
+    fireEvent.keyDown(root, { key: "ArrowLeft" });
+    expect(onGo).toHaveBeenLastCalledWith(0);
+  });
+
+  it("leaves the arrow keys to the image once it is zoomed past 100%", () => {
+    const onGo = vi.fn();
+    const root = renderPaged(onGo);
+    fireEvent.click(screen.getByRole("button", { name: "放大" }));
+    expect(screen.getByText("125%")).toBeTruthy();
+    fireEvent.keyDown(root, { key: "ArrowRight" });
+    fireEvent.keyDown(root, { key: "ArrowLeft" });
+    expect(
+      onGo,
+      "a zoomed image keeps the arrows for panning — paging must not take them",
+    ).not.toHaveBeenCalled();
+    // …and the buttons are still there, because that is what makes the refusal
+    // above affordable.
+    fireEvent.click(screen.getByRole("button", { name: "下一個" }));
+    expect(onGo).toHaveBeenCalledWith(2);
+  });
+
+  it("leaves the arrow keys to a text body, which has no other way to scroll", async () => {
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      text: async () => "# Long\n\nbody",
+    })) as unknown as typeof fetch;
+    const onGo = vi.fn();
+    const root = renderPaged(onGo, { mime: "text/markdown" });
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Long" })).toBeTruthy());
+    fireEvent.keyDown(root, { key: "ArrowRight" });
+    expect(onGo).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "下一個" }));
+    expect(onGo).toHaveBeenCalledWith(2);
+  });
+
+  it("stops at the ends instead of wrapping around", () => {
+    const onGo = vi.fn();
+    const root = renderPaged(onGo, { index: 0 });
+    fireEvent.keyDown(root, { key: "ArrowLeft" });
+    expect(
+      onGo,
+      "there is nothing before the first item — silently landing on the last one loses the reader's place",
+    ).not.toHaveBeenCalled();
+    expect(
+      (screen.getByRole("button", { name: "上一個" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it("carries no paging control when the caller has no list behind the item", () => {
+    render(
+      <I18nProvider>
+        <MarkdownPreviewOverlay title="shot.png" url="/api/chat/attachment/att-image" attachmentId="att-image" mime="image/png" onClose={() => {}} />
+      </I18nProvider>,
+    );
+    expect(screen.queryByRole("button", { name: "下一個" })).toBeNull();
+    expect(document.body.querySelector(".md-preview__pager-count")).toBeNull();
+  });
+
   // T-f014: staged composer attachments used to open a SECOND overlay
   // (the retired Lightbox) with nothing but an ×. They now land in
   // this shell — but the bytes have not been uploaded, so there is no blob id
