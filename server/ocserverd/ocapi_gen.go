@@ -3412,11 +3412,20 @@ type WorkerBootContextDTO struct {
 
 // HandleListChatApiChatGetParams defines parameters for HandleListChatApiChatGet.
 type HandleListChatApiChatGetParams struct {
-	With     *string  `form:"with,omitempty" json:"with,omitempty"`
-	Limit    *int     `form:"limit,omitempty" json:"limit,omitempty"`
+	With  *string `form:"with,omitempty" json:"with,omitempty"`
+	Limit *int    `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// BeforeTs DEPRECATED (T-48) — superseded by ``start_id``/``end_id``, which take a message id instead of a composite keyset cursor and can walk FORWARDS as well as back. Still honoured, still a matched pair (one without the other is 422), still never combined with the new parameters (422). Kept because the agent-side ``get_chat`` and the cockpit scrollback both still send it.
 	BeforeTs *float64 `form:"before_ts,omitempty" json:"before_ts,omitempty"`
-	BeforeId *string  `form:"before_id,omitempty" json:"before_id,omitempty"`
-	Peek     *string  `form:"peek,omitempty" json:"peek,omitempty"`
+
+	// BeforeId DEPRECATED (T-48) — superseded by ``start_id``/``end_id``, which take a message id instead of a composite keyset cursor and can walk FORWARDS as well as back. Still honoured, still a matched pair (one without the other is 422), still never combined with the new parameters (422). Kept because the agent-side ``get_chat`` and the cockpit scrollback both still send it.
+	BeforeId *string `form:"before_id,omitempty" json:"before_id,omitempty"`
+
+	// StartId Window anchor, INCLUSIVE, walking TOWARDS THE NEWEST: return this message and the ``limit``-1 that follow it, oldest→newest. This is the direction ``before_ts``/``before_id`` cannot express — those only ever walk back, so a caller that jumped to one specific message could not load what came after it. An id no message carries is 404, not an empty page: an empty page is what a real window at the end of the stream returns, and the two must not be indistinguishable. Sending it alongside ``before_ts``/``before_id`` is 422. Sending it with an ``end_id`` that is strictly OLDER than it is 422. On this path ``limit`` must be 1..200 or the call is 422 — the legacy paths keep their own semantics.
+	StartId *string `form:"start_id,omitempty" json:"start_id,omitempty"`
+
+	// EndId Window anchor, INCLUSIVE, walking TOWARDS THE OLDEST: return this message and the ``limit``-1 that precede it, still answered oldest→newest. Same guardrails as ``start_id`` (404 on an unknown id, 422 when combined with ``before_ts``/``before_id``, 422 when the pair contradicts, ``limit`` bounded to 1..200 on this path). Given TOGETHER with ``start_id`` the two bound one window and ``limit`` still caps it, so a window wider than 200 rows is truncated from the ``start_id`` end rather than silently returning everything.
+	EndId *string `form:"end_id,omitempty" json:"end_id,omitempty"`
 
 	// CallerOnly When true, return only messages involving both the verified caller and the optional `with` participant. Omitted or false preserves the existing participant-wide result.
 	CallerOnly *bool `form:"caller_only,omitempty" json:"caller_only,omitempty"`
@@ -3425,7 +3434,7 @@ type HandleListChatApiChatGetParams struct {
 	//
 	// This is what makes the wake snapshot's fold marker honest (T-a828). ``ChatMessageDTO.body_omitted_chars`` > 0 says THIS message is here with part of its text folded away and tells the reader to re-read it with get_chat — but until this parameter existed get_chat took only a peer plus a paging cursor, so there was NO WAY TO NAME THE FOLDED MESSAGE. The promise beside the fold was not keepable, which made folding a silent drop.
 	//
-	// ANSWERED ON ITS OWN: when ``ids`` is present, ``with``, ``limit``, ``before_ts``/``before_id`` and ``peek`` are NOT consulted, and a by-ids read NEVER advances a read watermark — re-reading a message you were already shown is not reading the conversation. Blank entries are dropped and duplicates collapse; an all-blank or empty set behaves exactly as if the parameter had not been sent.
+	// ANSWERED ON ITS OWN: when ``ids`` is present, ``with``, ``limit``, ``before_ts``/``before_id`` and ``start_id``/``end_id`` are NOT consulted, and a by-ids read returns them untouched — as of T-48 NO read on this route advances a watermark at all. Blank entries are dropped and duplicates collapse; an all-blank or empty set behaves exactly as if the parameter had not been sent.
 	//
 	// SAME REACH AS THE ORDINARY LISTING (T-4e95, owner ruling). A by-ids read is NOT narrowed to the caller's own conversations. It used to refuse with 403 any id whose ``sender`` and ``recipient`` were both someone else — and that bound guarded nothing, because the ordinary listing filters on ``with`` — a PARTICIPANT — not on the caller, so the very same message was already readable by asking for that peer's line (designed behaviour; ``caller_only`` is what narrows a listing to the caller). What the stricter rule actually produced was two doors onto the same rows disagreeing about who may open them, which cost an honest caller the ability to follow a ``reply_to`` while costing a dishonest one nothing. This door now states the listing's rule rather than a stricter one of its own; ``caller_only`` remains the way to narrow a read to yourself.
 	//
@@ -3821,7 +3830,7 @@ type ServerInterface interface {
 	// Assemble an agent boot context + mint the member JWT (spawn seam).
 	// (POST /api/bootstrap)
 	HandleBootstrapApiBootstrapPost(w http.ResponseWriter, r *http.Request)
-	// List the chat stream (?with=<id>&limit=<n>; oldest→newest). History paging: before_ts + before_id (both together) return the limit messages strictly OLDER than that keyset cursor — a history page NEVER advances the read watermark. Re-read specific messages by id: ids=<id>&ids=<id> returns those messages in full without a peer and without a cursor; the ids schema states who may read what, the per-call limit, and what an unknown id does.
+	// List the chat stream (?with=<id>&limit=<n>; oldest→newest). Window by message id: start_id walks TOWARDS THE NEWEST from that message, end_id TOWARDS THE OLDEST, both endpoints inclusive. The older before_ts + before_id keyset cursor still works but is deprecated. Re-read specific messages by id: ids=<id>&ids=<id> returns those messages in full. THIS ROUTE NEVER MARKS ANYTHING READ (T-48) — to mark a conversation read, call mark_read explicitly.
 	// (GET /api/chat)
 	HandleListChatApiChatGet(w http.ResponseWriter, r *http.Request, params HandleListChatApiChatGetParams)
 	// Post a chat message (sender = verified JWT sub; auto SSE fan-out). “to“ must name the owner or an active AI member; unknown, removed, and machine ids are rejected. Presence is not a gate: an offline member keeps its durable mailbox.
@@ -4736,15 +4745,28 @@ func (siw *ServerInterfaceWrapper) HandleListChatApiChatGet(w http.ResponseWrite
 		return
 	}
 
-	// ------------- Optional query parameter "peek" -------------
+	// ------------- Optional query parameter "start_id" -------------
 
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "peek", r.URL.Query(), &params.Peek, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "start_id", r.URL.Query(), &params.StartId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
 	if err != nil {
 		var requiredError *runtime.RequiredParameterError
 		if errors.As(err, &requiredError) {
-			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "peek"})
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "start_id"})
 		} else {
-			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "peek", Err: err})
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "start_id", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "end_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "end_id", r.URL.Query(), &params.EndId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "end_id"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "end_id", Err: err})
 		}
 		return
 	}

@@ -145,7 +145,7 @@ const (
 	// messages and nothing older raises it too (see resumeChatBlock for why that
 	// one-sidedness is the right side to err on). Wording it as a fact would
 	// make this text false in exactly that case.
-	resumeChatCutHint = "這條線上**可能**還有更早的訊息沒被帶進來。它在讀取或字數上限被切斷，而沒有人往切口後面看過——所以就算其實沒有更舊的，這一句也會出現；只有真的去抓才知道。（這跟 `body_omitted_chars` 是**兩回事**：那個是「這一則就在這裡，只是被摺短了」，確定的事實；這一句講的是「整則整則可能不在」，是個可能。）要確認並讀回來：呼叫 `get_chat`，`with` 填對方的 id，再把這份資料裡「對方那條線最舊的那一則」的 `before_ts` 與 `before_id` 一起帶上。這兩個游標欄位**必須成對送**，只送一個會被退回（422）。如果某個人的**整條線一則都不在**這份資料裡（他最後一則太舊，整條被擠出去了），那就沒有游標可抄——這時只填 `with`、不帶游標，直接從最新的往回讀，並**一起帶上 `peek`**（值要填字串 `true`，填別的會被當成沒填、而且不會報錯）：不帶 `peek` 的那條路會順手把那條線標成已讀（連你還沒看過的新訊息一起），而帶游標的補抓不會這樣。"
+	resumeChatCutHint = "這條線上**可能**還有更早的訊息沒被帶進來。它在讀取或字數上限被切斷，而沒有人往切口後面看過——所以就算其實沒有更舊的，這一句也會出現；只有真的去抓才知道。（這跟 `body_omitted_chars` 是**兩回事**：那個是「這一則就在這裡，只是被摺短了」，確定的事實；這一句講的是「整則整則可能不在」，是個可能。）要確認並讀回來：呼叫 `get_chat`，`with` 填對方的 id，再把這份資料裡「對方那條線最舊的那一則」的 `before_ts` 與 `before_id` 一起帶上。這兩個游標欄位**必須成對送**，只送一個會被退回（422）。如果某個人的**整條線一則都不在**這份資料裡（他最後一則太舊，整條被擠出去了），那就沒有游標可抄——這時只填 `with`、不帶游標，直接從最新的往回讀就好。`get_chat` **不會把任何東西標成已讀**（不管有沒有帶游標）：要標已讀是另一隻 API，`POST /api/chat/mark-read`，明確送出才會寫。"
 	// resumeDutyPreview caps a roster row's duty and resumeTaskTitlePreview
 	// caps a contractor's task title (T-1b09). Both exist because this
 	// payload is read by EVERY member on EVERY wake, so an unbounded field
@@ -952,29 +952,27 @@ func (s *apiServer) serveChatByIDs(w http.ResponseWriter, r *http.Request, ids [
 
 // GET /api/chat — the stream oldest→newest, capped to the most recent limit
 // (default 30; negative = uncapped; 0 = empty). ?with= filters to a
-// participant, and listing a specific conversation ADVANCES the caller's read
-// watermark to the newest returned ts (auto read-receipt).
+// participant.
+//
+// THIS ROUTE NEVER WRITES A READ WATERMARK (T-48, owner ruling 2026-09-02:
+// 「get_chat不應該可以標示已讀未讀，這應該要另一隻API明確表示有這個意圖」). A
+// cursorless ?with= list used to advance the caller's watermark for that
+// conversation (an "auto read-receipt", on the theory that listing a
+// conversation IS reading it) — it is not: a member whose only action was
+// holding the SSE downlink open had its watermark written for messages nobody
+// had looked at. Marking a conversation read is now ONLY
+// POST /api/chat/mark-read, which states that intent explicitly. ?peek=true
+// (T-cf91) existed solely to OPT OUT of that receipt and is REMOVED from the
+// wire rather than kept and ignored: a parameter with no effect reads to the
+// next caller like a protection that is there.
 //
 // SCROLLBACK (T-bf82): ?before_ts=&before_id= (both together, else 422) is a
 // composite keyset cursor — the page is the `limit` messages strictly OLDER
 // than (before_ts, before_id) in the stream's total (ts, id) order, still
-// oldest→newest. A HISTORY PAGE NEVER ADVANCES THE READ WATERMARK: reading
-// old context is not reading the conversation's newest messages — sliding the
-// watermark from a history page would falsely clear unread that lives above
-// the loaded window. The cursorless path below is byte-compatible unchanged.
-//
-// ?peek=true (T-cf91) is the READ-ONLY conversation view: with ?with= it
-// filters + caps EXACTLY like the marking path but SKIPS the read-watermark
-// advance — a background window (or any refresh that must not consume unread)
-// gets the same recent conversation window without a read-receipt side effect.
-// This replaces the old client-side workaround of pulling the WHOLE company
-// stream (limit=-1) just to dodge the ?with= auto-mark and filtering in the
-// browser: the payload was the entire chat history, growing without bound.
-// Omitting peek (or any value other than "true") is byte-for-byte the old
-// behaviour — the marking auto-receipt still fires on a plain ?with= list.
+// oldest→newest.
 //
 // ?ids= (T-a828) is answered FIRST and ON ITS OWN — see serveChatByIDs. It is
-// not a filter layered on the listing below: with/limit/before_*/peek are not
+// not a filter layered on the listing below: with/limit/before_* are not
 // consulted at all, so nothing about the paths above changes for a caller that
 // does not send it. A request whose ids are all blank is not a by-id read and
 // falls through here unchanged.
@@ -984,7 +982,6 @@ func (s *apiServer) HandleListChatApiChatGet(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	with := strOrEmpty(params.With)
-	peek := trimmedOrEmpty(params.Peek) == "true"
 	callerOnly := params.CallerOnly != nil && *params.CallerOnly
 	actor := currentActor(r)
 	limit := chatListDefaultLimit
@@ -998,7 +995,8 @@ func (s *apiServer) HandleListChatApiChatGet(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		// History page: cursor-bounded SQL read (LIMIT in the query — never a
-		// full-table pull) and NO PutChatRead — see the handler note above.
+		// full-table pull). No PutChatRead here, and none on the cursorless
+		// path either — see the handler note above.
 		caller := ""
 		if callerOnly {
 			caller = actor
@@ -1048,24 +1046,6 @@ func (s *apiServer) HandleListChatApiChatGet(w http.ResponseWriter, r *http.Requ
 			msgs = nil
 		} else if len(msgs) > limit {
 			msgs = msgs[len(msgs)-limit:]
-		}
-	}
-	if with != "" && !peek && len(msgs) > 0 {
-		newest := msgs[0].TS
-		for _, m := range msgs {
-			if m.TS > newest {
-				newest = m.TS
-			}
-		}
-		effective, advanced, err := s.dal.PutChatRead(ChatRead{
-			ReaderID: currentActor(r), PeerID: with, LastReadTS: newest,
-		})
-		if err != nil {
-			internalError(w, err)
-			return
-		}
-		if advanced {
-			s.publishChatRead(effective, requestTrigger(r))
 		}
 	}
 	out := []chatMessageDTO{}

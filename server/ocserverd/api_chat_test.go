@@ -212,8 +212,11 @@ func TestListChatScrollbackCursor(t *testing.T) {
 		t.Fatalf("rejected cursor requests must not touch the watermark: %v", wm)
 	}
 
-	// The cursorless list is unchanged: latest window + the auto read-receipt
-	// advances the owner's watermark to the newest returned ts.
+	// The cursorless list still serves the latest window — and, since T-48, it
+	// does not mark either (owner ruling 2026-09-02: marking read is
+	// POST /api/chat/mark-read's job, stated explicitly, not a side effect of
+	// listing). The full "no path on this route writes a watermark" statement,
+	// with its positive control, is in api_chat_peek_test.go.
 	rec = listChatRec(s, "owner", HandleListChatApiChatGetParams{With: &with})
 	if rec.Code != 200 {
 		t.Fatalf("plain list: want 200, got %d %s", rec.Code, rec.Body.String())
@@ -221,8 +224,8 @@ func TestListChatScrollbackCursor(t *testing.T) {
 	if got := ids(rec); len(got) != 4 || got[len(got)-1] != "c-4" {
 		t.Fatalf("plain list: want the full thread ending c-4, got %v", got)
 	}
-	if wm := watermark(); wm != 4.0 {
-		t.Fatalf("cursorless list must auto-mark to the newest ts, got %v", wm)
+	if wm := watermark(); wm != 0 {
+		t.Fatalf("cursorless list must NOT advance the watermark (T-48), got %v", wm)
 	}
 
 	callerOnly := true

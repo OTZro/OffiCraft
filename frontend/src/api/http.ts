@@ -1340,17 +1340,17 @@ export const httpApi: Api = {
   },
 
   async peekChat(withId: string, limit = 30): Promise<ChatMessage[]> {
-    // READ-ONLY conversation view (no "list 即讀" watermark side effect): the
-    // server ?peek=true (T-cf91) filters by ?with= and caps by limit EXACTLY
-    // like the marking path, but does not advance the read watermark. Replaces
-    // the old workaround of pulling the WHOLE company stream (limit=-1) and
-    // filtering client-side just to dodge the ?with= auto-mark — that payload
-    // was the entire chat history and grew without bound. Default 30 mirrors
+    // READ-ONLY conversation view (no "list 即讀" watermark side effect). The
+    // ?peek=true opt-out (T-cf91) is GONE as of T-48: GET /api/chat no longer
+    // advances any read watermark on any path, so a plain ?with= list is now
+    // the read-only view and the parameter it needed would have no effect.
+    // Marking a conversation read is POST /api/chat/mark-read only. The name
+    // and signature stay for now so callers are untouched. Default 30 mirrors
     // the server default; the server applies the filter BEFORE the cap, so the
     // thread is never starved.
     const wire = unwrap(
       await client.GET("/api/chat", {
-        params: { query: { with: withId, limit, peek: "true" } },
+        params: { query: { with: withId, limit } },
       }),
     );
     return wire.map(toChatMessage);

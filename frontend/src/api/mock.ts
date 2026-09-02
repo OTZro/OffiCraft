@@ -3123,15 +3123,11 @@ export const mockApi: Api = {
     if (limit !== undefined && limit >= 0) {
       msgs = limit === 0 ? [] : msgs.slice(-limit);
     }
-    // AUTO READ-RECEIPT: listing a conversation IS reading it — advance the
-    // OWNER's watermark for this peer to the newest message ts (mirrors the BE
-    // handle_list_chat auto-mark; the mock caller is always the owner).
-    // A HISTORY PAGE (cursor present) NEVER advances the watermark (BE
-    // parity): reading old context is not reading the newest messages.
-    if (!before && msgs.length > 0) {
-      const newest = Math.max(...msgs.map((m) => m.ts));
-      markRead(MOCK_OWNER_ID, withId, newest);
-    }
+    // NO READ RECEIPT (T-48, BE parity): listing a conversation is NOT reading
+    // it. GET /api/chat used to advance the owner's watermark on a cursorless
+    // list; the owner ruled that marking read must be an explicit intent, so
+    // the write moved out of this door entirely. The mock mirrors that — the
+    // only thing that marks anything read here is markChatRead().
     // Read-time joins (server parity) — a copy per message so callers never
     // mutate the log.
     return msgs.map(mockServedChatMessage);
