@@ -1518,6 +1518,10 @@ func (s *apiServer) armDecidedHandover(memberID string, decision reconcileDecisi
 //     left PutMember's DO UPDATE SET, so stamping onto a struct stores nothing
 //     by itself — every stamp above now ends in one of these, and a stamp that
 //     does not is a receipt nobody will ever read;
+//   - one line that COPIES an already-stamped receipt onto a freshly re-read
+//     row — stampWakeObservability's persist below. It writes the column
+//     without deciding anything, which is why it sits in neither the refusal
+//     class nor the agent-verdict one;
 //   - three lines that clear back to nil rather than stamping —
 //     worker_spawn.go's clearWorkerPlacementBlock and
 //     clearWorkerConvergedFailureReceipt, plus this file's

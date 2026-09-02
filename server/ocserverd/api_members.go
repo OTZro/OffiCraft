@@ -44,13 +44,6 @@ func (s *apiServer) putMember(m Member, trigger string) error {
 	return nil
 }
 
-// publishMemberPatch fans the member delta and nothing else. It is putMember's
-// wire half, split out so a SINGLE-COLUMN writer (AddMemberBankedCost and the
-// setters beside it) can keep the push a caller used to get for free from the
-// whole-row write, WITHOUT dragging a stale snapshot of every other column back
-// into the database with it. Migrating a column out of PutMember's SET list and
-// forgetting this call is a silent loss: nothing goes red, the cockpit simply
-// stops converging.
 // persistMemberOpReceipt stores the five last_op* columns of an ALREADY-STAMPED
 // member row through their sole writer, then fans the member delta (T-55).
 //
@@ -77,6 +70,13 @@ func (s *apiServer) persistMemberOpReceipt(m Member, trigger string) error {
 	return nil
 }
 
+// publishMemberPatch fans the member delta and nothing else. It is putMember's
+// wire half, split out so a SINGLE-COLUMN writer (AddMemberBankedCost and the
+// setters beside it) can keep the push a caller used to get for free from the
+// whole-row write, WITHOUT dragging a stale snapshot of every other column back
+// into the database with it. Migrating a column out of PutMember's SET list and
+// forgetting this call is a silent loss: nothing goes red, the cockpit simply
+// stops converging.
 func (s *apiServer) publishMemberPatch(m Member, trigger string) {
 	op := "patch"
 	if m.RosterStatus == RosterStatusRemoved {

@@ -434,8 +434,20 @@ func (s *apiServer) memberOwnerOpHandoverArmable(m Member, op string) bool {
 
 // armMemberOwnerOpHandover stamps a FRESH refocus epoch on the member when
 // there is state to flush, and reports whether it did. It MUTATES m and
-// persists nothing: the caller folds this into its own single putMember so the
-// owner's change and the epoch are one atomic write and one delta.
+// persists nothing: the caller folds the epoch into its own putMember.
+//
+// ⚠️ THE EPOCH IS ALL THAT WRITE CARRIES. This sentence used to say the owner's
+// change and the epoch were "one atomic write and one delta"; T-55 made both
+// halves false, in two steps. The first batch moved the launch intents out of
+// PutMember's SET list, so the CHANGE stopped riding that write; the second
+// moved the five receipt columns, so the RECEIPT stopped riding it too and the
+// handler now fans two member deltas rather than one. Nothing here is atomic
+// with anything: a caller performs two or three writes and argues their order at
+// its own call site (HandleUpdateMember has the one that actually matters).
+//
+// The same correction was made to armRefocusEpoch above, to this file's header,
+// and to both stampOpReceipt shells — this function was the one that got missed,
+// and it is the one HandleUpdateMember actually calls.
 //
 // The stale wind-down anchors are cleared with the stamp — a new epoch never
 // inherits an old latch, which is also what makes the "already collected" arm

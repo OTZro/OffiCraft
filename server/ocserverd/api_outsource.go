@@ -862,9 +862,21 @@ func (s *apiServer) HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost
 		internalError(w, err)
 		return
 	}
-	// BEFORE the respawn, so the row this handler is about to re-read for its
-	// response already carries the receipt. No publish of its own: the
-	// publishOutsourceWorker below fans the projection once, for both writes.
+	// 🔴 BEFORE THE RESPAWN, AND THE REASON IS STRONGER THAN "the response should
+	// see it". respawnWorkerForOwnerOp WRITES RECEIPTS OF ITS OWN — the held-down
+	// arm through stampWorkerPlacementBlocked, the deferred arm through
+	// respawnWorkerNow. Move this write after it and the handler's snapshot,
+	// taken at the top of the request, lands on top of the receipt the respawn
+	// just wrote: the owner is shown the older sentence, on a 200, with nothing
+	// red. Placing it first also happens to give the re-read below a row that
+	// already carries the receipt, which is the weaker reason this comment used
+	// to give on its own.
+	//
+	// ⚠️ NO TEST HOLDS THIS ORDER. An independent review moved the write past the
+	// respawn and the whole suite stayed green. Named gap, not a claim of safety.
+	//
+	// No publish of its own: the publishOutsourceWorker below fans the projection
+	// once, for both writes.
 	if sessionAliveReceipt {
 		if err := s.dal.SetMemberOpReceipt(worker.ID, worker.LastOp, worker.LastOpOK,
 			worker.LastOpLog, worker.LastOpReason, worker.LastOpAt); err != nil {
