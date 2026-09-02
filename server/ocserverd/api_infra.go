@@ -950,17 +950,23 @@ func (s *apiServer) dropLiveCost(actorID string) *float64 {
 // 退場的也要能清（帳號卡才會真的歸零）」, overriding this route's earlier 404).
 // The reason it must differ from its neighbours: released is the STEADY STATE
 // for a worker — ReleaseWorkersForTask fires on every task close — and a
-// released worker's spend deliberately stays in the account total
-// (TestGetMonitoring_ReleasedWorkerSpendStaysInTheAccount pins that). Refusing
-// it here would mean the account card could never reach zero however many
-// buttons the owner pressed, which is the whole outcome he asked for. The other
+// released worker's own 估計$ is still rendered, so refusing it here would
+// leave a figure on screen that the button next to it cannot clear. The other
 // outsource doors refuse released rows because they drive a LIVE session; this
 // one only edits a number that is still being displayed.
 //
+// ⚠️ THE REASON THE OWNER GAVE FOR THAT RULING NO LONGER FOLLOWS, while the
+// ruling itself stands. He asked for it so that「帳號卡才會真的歸零」 — true
+// under the model of that day, where the account card was a fold over its
+// actors. A day later rc-5c5d7c7c6dcd made the card an accumulator of its own,
+// so clearing actors (released or not) no longer moves it at all; the account
+// has its own button now. Kept as written rather than quietly re-motivated:
+// a stale rationale attached to a live ruling is how the next reader concludes
+// the ruling itself is stale.
+//
 // Staff are different and stay filtered: removing a member HARD-DELETES the row
 // AND its telemetry entry (api_roles.go, the repo's only telemetry.Delete), so
-// a removed member contributes nothing to any total and there is nothing here
-// to clear — the residue this ruling is about does not exist on that side.
+// a removed member has no figure anywhere and there is nothing here to clear.
 func (s *apiServer) HandleResetCostApiMembersMemberIdCostResetPost(w http.ResponseWriter, r *http.Request, memberId string) {
 	// Staff first, mirroring bankLiveCost: an outsource member banks (and so
 	// resets) through the WORKER branch, never as a member patch.

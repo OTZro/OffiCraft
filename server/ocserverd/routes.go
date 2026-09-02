@@ -470,10 +470,15 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler: w.HandleResetAccountCostApiAccountsCostResetPost,
 			Auth:    authGated,
 			// Same owner-only floor, same reasoning, as the per-actor row
-			// above — and more so: this one destroys several actors' spend in
-			// a single press (owner ruling rc-efae958cef40, option 0).
+			// above: an irreversible write to a figure the owner watches.
+			//
+			// 🔴 IT TOUCHES NO ACTOR. An earlier shape of this route did clear
+			// every actor on the account (rc-efae958cef40); the owner then
+			// ruled the two clearings SEPARATE (rc-5c5d7c7c6dcd, 2026-09-02),
+			// so the account card became an accumulator of its own (migration
+			// 00069) and this route writes that one row and nothing else.
 			Requires: principalOwner,
-			Summary:  "Reset every actor on one account (owner-only, irreversible, all-or-nothing): clears each actor's durable banked figure AND live telemetry figure.",
+			Summary:  "Reset ONE account's own accumulated spend (owner-only, irreversible): writes that account's accumulator to 0 and touches no member or worker figure.",
 			// The account key rides in the BODY, not the path: a real key is a
 			// compound free string containing '/' and '@', and an encoded
 			// slash that a proxy decodes would silently retarget an

@@ -1648,9 +1648,14 @@ export interface Api {
    * 成本歸零: POST /api/members/{id}/cost/reset → clear ONE actor's estimated
    * spend, both halves at once (the durable banked figure AND the live
    * telemetry figure). Serves staff and outsource workers alike, a RELEASED
-   * worker included (owner ruling rc-1344cc76a24a: an account total only reaches
-   * absent if the spend of the people who already left can be cleared too).
-   * Only an id that resolves to nobody is a 404.
+   * worker included (owner ruling rc-1344cc76a24a) — a worker that has left
+   * still has a figure on screen, and the button beside it has to be able to
+   * clear it. Only an id that resolves to nobody is a 404.
+   *
+   * It does NOT move the account card: since rc-5c5d7c7c6dcd that figure is an
+   * accumulator of its own with its own button (resetAccountCost), which is why
+   * the ruling above reads as being about account totals — that was true of the
+   * model it was written under, one day earlier.
    *
    * 🔴 IRREVERSIBLE (owner ruling rc-7dea0deefa63). Nothing is retained and
    * there is no undo route — call it behind a confirm, never optimistically.
