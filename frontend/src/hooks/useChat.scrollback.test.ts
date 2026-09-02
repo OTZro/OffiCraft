@@ -68,6 +68,7 @@ vi.mock("../api", () => ({
 
 import { useChat } from "./useChat";
 import type { JumpOutcome } from "./useChat";
+import { ApiError } from "../api/errors";
 
 /** A promise the test resolves by hand — the only way to hold a request in
  * flight and land something else on top of it, which is what every race below
@@ -350,6 +351,46 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     expect(h.listChat.mock.calls.length).toBe(before + 1);
   });
 
+  it("a FAILED READ is not a missing message —— 404/422 是不見了,其他是現在讀不到", async () => {
+    // 🔴 兩個方向一起釘,而且必須一起:只釘一邊的話,「把兩種壓成同一句」照樣會過,
+    // 而那正是這條要修的病。owner 開這張票的理由是「不要對使用者說不成立的話」;
+    // 對一則躺在 502 後面的訊息說「可能已經被清掉了」,會讓他不再試 —— 那句話本身
+    // 就是產品。
+    h.listChat.mockResolvedValue(page("n", 9000, 30));
+    const { result } = renderHook(() => useChat("b"));
+    await waitFor(() => expect(result.current.messages).toHaveLength(30));
+
+    const outcomeFor = async (err: unknown) => {
+      h.listChatWindow.mockReset().mockRejectedValue(err);
+      let out: JumpOutcome | undefined;
+      await act(async () => {
+        out = await result.current.loadAround("c-x");
+      });
+      return out;
+    };
+
+    // 伺服器說了「這條線沒有這一列」/「這個 id 不能用」—— 再試一次不會有別的答案。
+    expect(await outcomeFor(new ApiError("http 404", 404, "", ""))).toBe(
+      "missing",
+    );
+    expect(await outcomeFor(new ApiError("http 422", 422, "", ""))).toBe(
+      "missing",
+    );
+    // 讀取失敗 —— 訊息八成就在那裡,再試一次是對的下一步。
+    expect(await outcomeFor(new ApiError("http 502", 502, "", ""))).toBe(
+      "unreachable",
+    );
+    expect(await outcomeFor(new ApiError("http 429", 429, "", ""))).toBe(
+      "unreachable",
+    );
+    // 連線根本沒回答:fetch 自己 reject,沒有 status 可言。
+    expect(await outcomeFor(new TypeError("Failed to fetch"))).toBe(
+      "unreachable",
+    );
+    // 不管哪一種,讀者原本在看的那條 thread 都不准被動到。
+    expect(result.current.messages).toHaveLength(30);
+  });
+
   it("an id no message carries is reported as NOT FOUND and leaves the thread alone", async () => {
     // The server answers 404 rather than an empty page precisely so this stays
     // distinguishable from "a real window that happens to be empty".
@@ -357,7 +398,7 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     const { result } = renderHook(() => useChat("b"));
     await waitFor(() => expect(result.current.messages).toHaveLength(30));
 
-    h.listChatWindow.mockRejectedValue(new Error("404"));
+    h.listChatWindow.mockRejectedValue(new ApiError("http 404", 404, "", ""));
     let outcome: JumpOutcome | undefined;
     await act(async () => {
       outcome = await result.current.loadAround("c-nope");

@@ -37,6 +37,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatMessage, ChatAttachmentInput } from "../api/adapter";
 import { api } from "../api";
+import { ApiError } from "../api/errors";
 import { createDeltaSink } from "../lib/deltaSink";
 import { OWNER_ID } from "../lib/ownerUnread";
 import { isWindowActive } from "./useWindowActive";
@@ -198,8 +199,14 @@ interface UseChat {
 //
 //   • "found"      — the target is in the thread now.
 //   • "missing"    — the server has no such row in this conversation (404), or
-//                    the request failed. The reader is told, truthfully, that
-//                    the message could not be located.
+//                    refused the id as unusable (422). The reader is told,
+//                    truthfully, that the message could not be located.
+//   • "unreachable"— THE READ FAILED, which is not the same fact and does not
+//                    lead the reader to the same next move. 「已經被清掉了」 ends
+//                    the matter: nobody retries a message that is gone. A 5xx, a
+//                    dropped connection or a timeout means the message is
+//                    probably right there and the honest thing to say is "can't
+//                    read it right now, try again" — with a way to try.
 //   • "superseded" — a LATER load committed while our two windows were in the
 //                    air, so this result was dropped to keep the thread in
 //                    order. THE MESSAGE IS STILL THERE. Reporting this as
@@ -207,7 +214,11 @@ interface UseChat {
 //                    about a message that exists, with no retry and no button —
 //                    a lie with a dead end behind it. The caller must retry or
 //                    re-schedule, never accuse.
-export type JumpOutcome = "found" | "missing" | "superseded";
+export type JumpOutcome =
+  | "found"
+  | "missing"
+  | "unreachable"
+  | "superseded";
 
 // Topics that mutate the chat thread → trigger a refetch. "chat_read" advances a
 // participant's last-read watermark (the peer read our messages).
@@ -1030,11 +1041,25 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       } catch (e) {
         // An unknown id is a 404 here, NOT an empty page — the server refuses
         // to make "no such message" look like "a window that happens to be
-        // empty". Either way the caller is told, and told the truth.
+        // empty".
+        //
+        // 🔴 BUT A FAILED READ IS NOT A MISSING MESSAGE (T-48). Both used to
+        // come back as one word, and the screen then said 「可能已經被清掉了」 to
+        // somebody whose message was sitting right there behind a 502. The two
+        // answers point the reader at opposite next moves — one ends the matter,
+        // the other is worth retrying — so the split is by what the server
+        // actually said:
+        //   • 404 — this conversation carries no such row.
+        //   • 422 — the id is not a usable id; sending it again cannot help.
+        //   ⇒ both are "missing": retrying changes nothing.
+        //   • anything else (5xx, 429, a rejected fetch with no status at all)
+        //     ⇒ "unreachable": the read failed, and a retry is exactly the
+        //     right thing to offer.
         console.warn("useChat: loadAround failed", e);
         anchorFetchingRef.current -= 1;
         entryAnchorPendingRef.current = false;
-        return "missing";
+        const status = e instanceof ApiError ? e.status : 0;
+        return status === 404 || status === 422 ? "missing" : "unreachable";
       }
       anchorFetchingRef.current -= 1;
       // Overtaken, NOT missing — and the difference is the whole of F3. The

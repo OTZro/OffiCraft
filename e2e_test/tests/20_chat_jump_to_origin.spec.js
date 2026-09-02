@@ -234,6 +234,65 @@ test.describe('T-48 · 剩下的靜默失敗', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 讀取失敗 ≠ 訊息不見了。這一件只有真瀏覽器算數:要真的讓那兩個開窗請求失敗
+// (route.abort(),等同斷線/5xx),再看畫面上到底講了哪一句、以及那顆重試鈕按下去
+// 有沒有真的再撈一次。
+//
+// 🔴 為什麼這是產品而不是文案潤飾:「已經被清掉了」會讓使用者**不再試**,
+// 「現在讀不到」會讓他**再試一次**。訊息躺在 502 後面時說前者,就是這張票開票的
+// 那個病 —— 對使用者說一句不成立的話 —— 換了一個地方重演。
+test.describe('T-48 · 讀取失敗要說「現在讀不到」,而且真的給得出重試', () => {
+  test('開窗請求失敗時說的是新那句、附重試鈕;按下去真的再撈一次並落在那一則', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const request = page.request;
+    const token = await ownerToken(request);
+    const M = await hireMember(request, token, uniqueName('JumpUnreach M'));
+
+    const ids = [];
+    for (let i = 1; i <= TOTAL; i++) {
+      const msg = await postChatAs(request, token, M.id, `line ${i} ${PAD}`);
+      ids.push(msg.id);
+    }
+    const targetId = ids[TARGET_INDEX - 1];
+
+    // 只打掉「開窗」那兩個請求(帶 start_id / end_id 的),一般的載入照常 ——
+    // 這樣量到的才是跳轉這條路的失敗,不是整個座艙壞掉。
+    const isAnchorWindow = (url) =>
+      url.pathname === '/api/chat' &&
+      (url.searchParams.has('start_id') || url.searchParams.has('end_id'));
+    await page.route(isAnchorWindow, (route) => route.abort('failed'));
+
+    await bootAuthedSpa(page, token);
+    await page.goto(`/#office/chat/${M.id}/msg/${targetId}`);
+    await page.reload();
+
+    const notice = page.locator('.chat__jump-miss');
+    await expect(notice).toBeVisible({ timeout: 15_000 });
+    // ① 說的是「現在讀不到」,不是「被清掉了」。兩個方向都斷言 —— 只釘一句的話,
+    //    把兩句合成一句照樣會過。
+    await expect(notice).toContainText('現在讀不到那則訊息');
+    await expect(notice).not.toContainText('可能已經被清掉了');
+    // ② 而且真的有一條再試一次的路。
+    const retry = page.getByTestId('jump-miss-retry');
+    await expect(retry).toBeVisible();
+
+    // ③ 辦公室回來了 —— 按下去要真的再撈一次,而且這次要落在那一則身上。
+    //    ⚠️ 這一格是 F3 的形狀最容易復發的地方:鈕在、按得下去、什麼都沒發生。
+    await page.unroute(isAnchorWindow);
+    await retry.click();
+
+    const thread = page.locator('.chat__messages');
+    const target = thread.locator(`[data-msg-id="${targetId}"]`);
+    await expect(target).toBeAttached({ timeout: 15_000 });
+    await expect(target).toBeInViewport();
+    await expect(target).toHaveClass(/chat__msg--located/);
+    await expect(notice, '撈到了就不該還掛著提示').toHaveCount(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // owner 交辦逐字:「也要測試如果有新訊息跳進來,點選預覽畫面跳下去時,運作會正常」。
 //
 // 這是這一票最容易壞的接縫,因為它同時要滿足兩件相反的事:**停在錨點**(不准被

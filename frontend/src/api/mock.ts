@@ -3150,14 +3150,28 @@ export const mockApi: Api = {
       .sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     const indexOf = (id: string) => {
       const i = msgs.findIndex((m) => m.id === id);
-      if (i < 0) throw new Error(`no message carries id ${id}`);
+      // A REAL 404, not a bare Error (T-48): the cockpit now tells "no such
+      // message" apart from "the read failed" by the status, and a statusless
+      // throw here would make the offline cockpit say 「現在讀不到,可以再試」 about
+      // an id that genuinely does not exist.
+      if (i < 0)
+        throw mockApiError(
+          `http 404 for GET /api/chat?with=${withId}`,
+          404,
+          `no message carries id ${id}`,
+        );
       return i;
     };
     let lo = 0;
     let hi = msgs.length - 1;
     if (anchor.startId !== undefined) lo = indexOf(anchor.startId);
     if (anchor.endId !== undefined) hi = indexOf(anchor.endId);
-    if (lo > hi) throw new Error("start_id is newer than end_id");
+    if (lo > hi)
+      throw mockApiError(
+        `http 422 for GET /api/chat?with=${withId}`,
+        422,
+        "start_id is newer than end_id",
+      );
     let window = msgs.slice(lo, hi + 1);
     // Truncate at the START (older) end when both anchors are given — the
     // window stays anchored on `end_id`. With only `start_id` the anchor is the

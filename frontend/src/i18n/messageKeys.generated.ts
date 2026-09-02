@@ -51,6 +51,8 @@ export const MESSAGE_KEYS: readonly string[] = [
   "chat.jumpTargetInterrupted",
   "chat.jumpTargetMissing",
   "chat.jumpTargetMissingDismiss",
+  "chat.jumpTargetRetry",
+  "chat.jumpTargetUnreachable",
   "chat.jumpToLatest",
   "chat.mdPreview.close",
   "chat.mdPreview.download",

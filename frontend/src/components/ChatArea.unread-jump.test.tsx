@@ -954,6 +954,91 @@ describe("③ jump-to-origin (跳到原訊息, B3)", () => {
     expect(container.querySelector(".chat__jump-miss")).toBeNull();
   });
 
+  it("讀取失敗說的是「現在讀不到」而且給得出重試,真的不見了才說「被清掉了」", async () => {
+    // 🔴 兩個方向,同一支測試,而且缺一不可:只釘「讀取失敗要說新那句」的話,把兩句
+    // 合成一句(兩種都說「現在讀不到」)照樣會過;只釘 404 那句的話,合成另一句也會過。
+    // 對使用者而言這兩句導向完全相反的下一步 —— 一句叫他別再試,一句叫他再試一次。
+    messages = [mkMsg("c1", "b", "owner", 1000)];
+
+    loadAroundResult = "unreachable";
+    const failed = renderChat(0, "c-ancient");
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const notice = failed.container.querySelector(".chat__jump-miss")!;
+    expect(notice).not.toBeNull();
+    expect(notice.textContent).toContain(zh.chat.jumpTargetUnreachable);
+    expect(
+      notice.textContent,
+      "訊息還在,不准說它被清掉了",
+    ).not.toContain(zh.chat.jumpTargetMissing);
+    // …而且讀者按得到重試。
+    expect(
+      failed.container.querySelector("[data-testid='jump-miss-retry']"),
+    ).not.toBeNull();
+    failed.unmount();
+
+    // 反方向:server 真的說沒有這一列,那句就得是「被清掉了」,而且不給重試 ——
+    // 再試一次不會有別的答案。
+    loadAround.mockClear();
+    loadAroundResult = "missing";
+    const gone = renderChat(0, "c-ancient");
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const goneNotice = gone.container.querySelector(".chat__jump-miss")!;
+    expect(goneNotice.textContent).toContain(zh.chat.jumpTargetMissing);
+    expect(goneNotice.textContent).not.toContain(zh.chat.jumpTargetUnreachable);
+    expect(
+      gone.container.querySelector("[data-testid='jump-miss-retry']"),
+    ).toBeNull();
+  });
+
+  it("按重試會真的再撈一次,而且撈到就落在那一則", async () => {
+    // ⚠️ 這一格是 F3 的形狀在別處復發的地方:落空時 `jumpFetchedRef` 已經寫掉了,
+    // 只清它而不清 `jumpConsumedRef`(或反過來),reactor 的第一道 guard 就會直接
+    // return —— 按鈕在、按得下去、什麼都不會發生,而且畫面上完全看不出來。
+    let calls = 0;
+    loadAround.mockImplementation(async () => {
+      calls += 1;
+      return calls === 1 ? "unreachable" : "found";
+    });
+    messages = [mkMsg("c1", "b", "owner", 1000)];
+    const { container, rerender } = renderChat(0, "c-ancient");
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(loadAround).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      fireEvent.click(
+        container.querySelector("[data-testid='jump-miss-retry']")!,
+      );
+      await Promise.resolve();
+    });
+    expect(loadAround, "按了重試就要真的再撈一次").toHaveBeenCalledTimes(2);
+
+    // 這一次撈到了 —— 視窗換上來,跳轉就落在那一則,提示也收掉。
+    messages = [mkMsg("c-ancient", "b", "owner", 10), mkMsg("c-after", "b", "owner", 11)];
+    await act(async () => {
+      rerender(
+        <I18nProvider>
+          <ChatArea
+            member={mkMember(0)}
+            members={[mkMember(0)]}
+            jumpToMsgId="c-ancient"
+          />
+        </I18nProvider>,
+      );
+    });
+    expect(
+      container
+        .querySelector('[data-msg-id="c-ancient"]')!
+        .classList.contains("chat__msg--located"),
+    ).toBe(true);
+    expect(container.querySelector(".chat__jump-miss")).toBeNull();
+  });
+
   it("falls back to the bottom only when the target really cannot be located", async () => {
     // The fetch is the difference between "not loaded yet" and "not there".
     // Only the second one may land at the bottom.

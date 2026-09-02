@@ -596,9 +596,9 @@ export function ChatArea({
   // the bottom) is indistinguishable from a jump that worked, which is the very
   // silence this ticket exists to remove — so the outcome is state, and state is
   // rendered. A `console.warn` is not a user-visible thing.
-  const [jumpNotice, setJumpNotice] = useState<null | "missing" | "interrupted">(
-    null,
-  );
+  const [jumpNotice, setJumpNotice] = useState<
+    null | "missing" | "unreachable" | "interrupted"
+  >(null);
   // How many times a jump may be re-scheduled after being overtaken. `load()`
   // is held off for the duration of the anchor fetch, so losing the race even
   // once takes a deliberate 回到最新 or a send; three is a ceiling on a loop,
@@ -844,6 +844,31 @@ export function ChatArea({
     jumpToMsgId !== undefined && jumpConsumedRef.current !== jumpToMsgId;
   const mayMarkRead = !hasNewer && !jumpPending;
 
+  // 🔴 THE RETRY THE READER CAN ACTUALLY PRESS (T-48). A failed read is the one
+  // ending of a jump that is worth trying again, and an ending with no way to
+  // try again is just a politer dead end — the same shape as F3, where the
+  // fetch latch was spent and nothing could ask for a second attempt.
+  //
+  // Why a BUTTON here and not the silent re-schedule the superseded path uses:
+  // that path retries because something else demonstrably moved (a newer load
+  // committed), so the next attempt has a reason to go differently. A dropped
+  // connection has no such signal — an automatic retry would fire straight back
+  // into the same failure, and a loop of them is exactly what the retry cap
+  // elsewhere exists to prevent. The person watching knows when the office is
+  // back; the button hands them that decision.
+  //
+  // ⚠️ BOTH latches are released, and that is the whole of it: `jumpFetchedRef`
+  // alone would leave the jump CONSUMED (the reactor's top guard returns early
+  // and nothing happens), and `jumpConsumedRef` alone would leave the fetch
+  // marked as already spent.
+  function retryJump() {
+    if (jumpToMsgId === undefined) return;
+    jumpFetchedRef.current = null;
+    jumpConsumedRef.current = null;
+    setJumpNotice(null);
+    setJumpRetry((n) => n + 1);
+  }
+
   // ===== T-4e95 quote resolution =====
   //
   // 🔴 THERE IS NO RESOLUTION ANY MORE, AND THAT IS THE WHOLE REDESIGN (owner
@@ -973,7 +998,17 @@ export function ChatArea({
             `ChatArea: jump target ${jumpToMsgId} could not be located`,
             outcome,
           );
-          setJumpNotice(outcome === "superseded" ? "interrupted" : "missing");
+          // Three different facts, three different sentences. Collapsing any two
+          // of them is the defect this ticket exists to remove, one layer up:
+          // 「已經被清掉了」 tells a reader whose message is behind a 502 to stop
+          // trying.
+          setJumpNotice(
+            outcome === "superseded"
+              ? "interrupted"
+              : outcome === "unreachable"
+                ? "unreachable"
+                : "missing",
+          );
           jumpConsumedRef.current = jumpToMsgId;
           nearBottomRef.current = true;
           // ⚠️ ANCHOR-FIRST ENTRY LEAVES THE ROOM EMPTY UNTIL SOMEBODY FILLS IT
@@ -2036,8 +2071,22 @@ export function ChatArea({
             <span>
               {jumpNotice === "interrupted"
                 ? t.chat.jumpTargetInterrupted
-                : t.chat.jumpTargetMissing}
+                : jumpNotice === "unreachable"
+                  ? t.chat.jumpTargetUnreachable
+                  : t.chat.jumpTargetMissing}
             </span>
+            {/* Only the failed-read ending gets a retry: it is the only one
+             * where trying again can end differently. */}
+            {jumpNotice === "unreachable" && (
+              <button
+                type="button"
+                className="chat__jump-miss__retry"
+                data-testid="jump-miss-retry"
+                onClick={retryJump}
+              >
+                {t.chat.jumpTargetRetry}
+              </button>
+            )}
             <button
               type="button"
               className="chat__jump-miss__x"

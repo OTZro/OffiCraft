@@ -834,6 +834,8 @@ export const zh = {
     // 出來。
     jumpTargetMissing: "找不到那則訊息,可能已經被清掉了",
     jumpTargetInterrupted: "定位被較新的訊息打斷了,再點一次連結可以重試",
+    jumpTargetUnreachable: "現在讀不到那則訊息,連線好像卡了一下",
+    jumpTargetRetry: "再試一次",
     jumpTargetMissingDismiss: "關閉這則提示",
     // 訊息流的 LINE 式日期分隔線(跨日處置中 pill;捲動時 sticky 浮在頂端)。
     // weekday 0=週日 … 6=週六;非今年才帶年份(LINE 慣例)。

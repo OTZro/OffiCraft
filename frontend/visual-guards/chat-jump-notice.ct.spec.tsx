@@ -75,20 +75,24 @@ const WIDTHS = [390, 1280];
 // 四種真的會出現在螢幕上的字：兩句話 × 兩個語系。英文那兩句明顯更長，而窄版
 // (390) 是它們唯一會現形的地方 —— 只量預設語系等於挑了一句一定塞得下的。
 const COPY = [
-  ["zh · missing", zh.chat.jumpTargetMissing],
-  ["zh · interrupted", zh.chat.jumpTargetInterrupted],
-  ["en · missing", en.chat.jumpTargetMissing],
-  ["en · interrupted", en.chat.jumpTargetInterrupted],
+  ["zh · missing", zh.chat.jumpTargetMissing, false],
+  ["zh · interrupted", zh.chat.jumpTargetInterrupted, false],
+  ["zh · unreachable", zh.chat.jumpTargetUnreachable, true],
+  ["en · missing", en.chat.jumpTargetMissing, false],
+  ["en · interrupted", en.chat.jumpTargetInterrupted, false],
+  ["en · unreachable", en.chat.jumpTargetUnreachable, true],
 ] as const;
 
 for (const width of WIDTHS) {
-  for (const [label, copy] of COPY) {
+  for (const [label, copy, retry] of COPY) {
     test(`width ${width} · ${label}: 提示列在輸入框上面，而且沒有把輸入框擠走`, async ({
       mount,
       page,
     }) => {
       await page.setViewportSize({ width, height: 600 });
-      const cmp = await mount(<ChatJumpNoticeStory text={copy} />);
+      const cmp = await mount(
+        <ChatJumpNoticeStory text={copy} retry={retry} />,
+      );
 
       const notice = cmp.getByTestId("jump-miss");
       await expect(notice).toBeVisible();
@@ -146,6 +150,26 @@ for (const width of WIDTHS) {
       const x = (await cmp.getByTestId("jump-miss-x").boundingBox())!;
       expect(x.width).toBeGreaterThanOrEqual(8);
       expect(x.height).toBeGreaterThanOrEqual(8);
+
+      // 讀取失敗那一種還多一顆「再試一次」：它是這條提示唯一的出路。
+      //
+      // ⚠️ 這裡量的是**它跟文字不重疊**，不是「它有沒有被擠扁」。擠扁那條我試不出
+      // 一個會紅的 mutant：文字那格是 `flex: 1; min-width: 0`，收縮永遠先發生在
+      // 文字上，鈕不會變窄（實測拿掉 `flex: none`、把 padding 歸零都殺不掉那條斷言，
+      // 所以那是一條沒有牙的斷言，刪掉而不是留著充數）。會真的發生的是另一種：
+      // 有人把它改成絕對定位或負 margin 去「靠右一點」，於是它壓在文字上。
+      if (retry) {
+        const btn = (await cmp.getByTestId("jump-miss-retry").boundingBox())!;
+        const txt = (await cmp.getByTestId("jump-miss-text").boundingBox())!;
+        expect(
+          btn.x,
+          "重試鈕不得壓在提示文字上 —— 兩個都在同一列，重疊就是兩個都讀不清",
+        ).toBeGreaterThanOrEqual(txt.x + txt.width - 1);
+        expect(
+          btn.x + btn.width,
+          "重試鈕不得被推出提示列",
+        ).toBeLessThanOrEqual(box.x + box.width + 1);
+      }
     });
   }
 }

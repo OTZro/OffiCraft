@@ -762,6 +762,13 @@ export const en: Dict = {
     // a lie with a dead end behind it. Say what happened and what to do.
     jumpTargetInterrupted:
       "The jump was interrupted by newer messages — open the link again to retry.",
+    // 🔴 T-48: the read FAILED — a 5xx, a dropped connection, a timeout. The
+    // message is almost certainly still there, so this may not borrow either
+    // sentence above: "cleared already" ends the matter and nobody retries a
+    // message that is gone. Say what happened, and offer the retry.
+    jumpTargetUnreachable:
+      "Couldn't load that message just now — the connection to the office had a hiccup.",
+    jumpTargetRetry: "Try again",
     jumpTargetMissingDismiss: "Dismiss this notice",
     // LINE-style day dividers in the message stream (centered pill at each day
     // crossing; sticky at the top while scrolling). weekday 0=Sun … 6=Sat; the

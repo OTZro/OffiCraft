@@ -161,7 +161,11 @@ export function NewMsgPreviewHeightStory() {
  */
 export function ChatJumpNoticeStory({
   text,
+  retry = false,
 }: {
+  /** 讀取失敗那一種收尾多一顆「再試一次」—— 在同一條固定高度的列裡多一個元素,
+   * 窄版才是它會現形的地方。 */
+  retry?: boolean;
   /** 真正的出貨文案，由 spec 從 locale 模組直接餵進來 —— 兩個語系的長度差很多，
    * 而**最長的那一句才是會現形的那一句**。手打的假字或只量預設語系，等於量一個
    * 一定塞得下的 fixture（LONG_BODY 那格已經踩過一次）。 */
@@ -174,7 +178,7 @@ export function ChatJumpNoticeStory({
           <div className="chat__messages" />
         </div>
         <footer className="chat__composer">
-          <JumpMissRow text={text} />
+          <JumpMissRow text={text} retry={retry} />
           <div className="chat__composer-row" data-testid="composer-row">
             <textarea className="chat__input" rows={1} defaultValue="" />
           </div>
@@ -184,11 +188,20 @@ export function ChatJumpNoticeStory({
   );
 }
 
-function JumpMissRow({ text }: { text: string }) {
+function JumpMissRow({ text, retry }: { text: string; retry: boolean }) {
   const { t } = useI18n();
   return (
     <div className="chat__jump-miss" role="status" data-testid="jump-miss">
       <span data-testid="jump-miss-text">{text}</span>
+      {retry && (
+        <button
+          type="button"
+          className="chat__jump-miss__retry"
+          data-testid="jump-miss-retry"
+        >
+          {t.chat.jumpTargetRetry}
+        </button>
+      )}
       <button
         type="button"
         className="chat__jump-miss__x"
