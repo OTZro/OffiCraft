@@ -148,11 +148,17 @@ func TestPutMemberNeverOverwritesSingleColumnOwnedFields(t *testing.T) {
 				t.Fatalf("read back: %v %v", after, err)
 			}
 			if got := f.read(*after); got != f.want {
-				t.Fatalf("member.%s was clobbered by a whole-row upsert: %#v → %#v.\n"+
+				// The TYPES are printed because `want`/`read` are `any` and a
+				// mismatched pair compares unequal on type alone: float64(0)
+				// against int64(0) prints "0 → 0" and reads as a database
+				// regression when it is really a wrong registry entry. Comparing
+				// as `any` is STRICTER than the float64 it replaced, never
+				// looser — verified by seeding both of those pairs.
+				t.Fatalf("member.%s was clobbered by a whole-row upsert: %#v (%T) → %#v (%T).\n"+
 					"%s is the SOLE writer of this column; it must stay OUT of "+
 					"PutMember's ON CONFLICT DO UPDATE SET list (dal.go). If you "+
 					"just added `%s = excluded.%s` back, that is the line to remove.",
-					f.column, f.want, got, f.writer, f.column, f.column)
+					f.column, f.want, f.want, got, got, f.writer, f.column, f.column)
 			}
 			// Positive control: the upsert really ran, so the assertion above
 			// is not passing because nothing was written at all.
