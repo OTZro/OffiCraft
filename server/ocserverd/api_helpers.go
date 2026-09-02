@@ -523,17 +523,14 @@ func (s *apiServer) observedHost(m Member) string {
 // member and zeroed the badge the delta was announcing). The outsource
 // single-item handler was already doing it the right way; this makes members
 // match. NOT a wire change: MemberDTO has always declared unread_count.
+//
+// 🔴 THE AGGREGATE IS THE DATABASE'S (T-48). This used to pull the whole chat
+// stream plus every receipt into Go and fold them with UnreadCounts. The other
+// copy of that same full-table read lives in HandleChatUnreadCountApiChatUnreadCountGet
+// — BOTH were changed together, because changing one leaves the full-table read
+// in place and every test still green.
 func (s *apiServer) unreadCountsForRequest(r *http.Request) (map[string]int, error) {
-	actor := currentActor(r)
-	messages, err := s.dal.ListChat()
-	if err != nil {
-		return nil, err
-	}
-	receipts, err := s.dal.ListChatReads(actor, "")
-	if err != nil {
-		return nil, err
-	}
-	return UnreadCounts(messages, receipts, actor), nil
+	return s.dal.UnreadCountsFor(currentActor(r))
 }
 
 func (s *apiServer) newMemberDTO(m Member, roleName, observedMachine string, unreadCount int) memberDTO {

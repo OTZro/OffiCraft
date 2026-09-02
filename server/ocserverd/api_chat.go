@@ -966,6 +966,12 @@ func (s *apiServer) serveChatByIDs(w http.ResponseWriter, r *http.Request, ids [
 // wire rather than kept and ignored: a parameter with no effect reads to the
 // next caller like a protection that is there.
 //
+// 🔑 The harm was MEASURED, not reasoned about (T-48 repro, isolated station,
+// a real `ocagent listen`): an agent that had only attached its listener —
+// never woken, never shown a line — grew a chat_read (X,X) row whose ts
+// equalled a message nobody had read, so "unread" was cleared by the act of
+// polling. Do not reintroduce a write here.
+//
 // SCROLLBACK (T-bf82): ?before_ts=&before_id= (both together, else 422) is a
 // composite keyset cursor — the page is the `limit` messages strictly OLDER
 // than (before_ts, before_id) in the stream's total (ts, id) order, still
@@ -2137,17 +2143,15 @@ func (s *apiServer) HandleGetMemberResumeSummaryApiMembersMemberIdResumeSummaryG
 // refetch on every "chat" / "chat_read" SSE delta without pulling the roster.
 func (s *apiServer) HandleChatUnreadCountApiChatUnreadCountGet(w http.ResponseWriter, r *http.Request) {
 	actor := currentActor(r)
-	messages, err := s.dal.ListChat()
+	// SQL aggregate, not a whole-table fold in Go — the twin of
+	// unreadCountsForRequest (api_helpers.go). Both call sites must stay on
+	// this one method: leaving either on ListChat() keeps the full-table read
+	// alive while every test stays green.
+	unread, err := s.dal.UnreadCountsFor(actor)
 	if err != nil {
 		internalError(w, err)
 		return
 	}
-	receipts, err := s.dal.ListChatReads(actor, "")
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	unread := UnreadCounts(messages, receipts, actor)
 	// Count only conversations the owner can still see and clear: active
 	// members + live (not-yet-released) outsource workers. Removed members and
 	// released workers are gone from the office, so their leftover unread must

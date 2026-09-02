@@ -2,8 +2,9 @@ package main
 
 // dal_chat_pushdown_t48_test.go — T-48 EQUIVALENCE HARNESS.
 //
-// The cursorless chat page moved into SQL: ListChat + filter + slice in Go →
-// ListChatLatest.
+// Two whole-table reads moved into SQL: the cursorless chat page
+// (ListChat + filter + slice in Go → ListChatLatest) and the unread fold
+// (ListChat + ListChatReads + UnreadCounts in Go → UnreadCountsFor).
 //
 // 🔴 EQUIVALENCE IS THE REQUIREMENT, not "looks right". Each test keeps the OLD
 // implementation alive as a reference function in this file and drives BOTH
@@ -146,6 +147,102 @@ func TestListChatLatestOnAnEmptyTable(t *testing.T) {
 		}
 		if len(got) != 0 {
 			t.Fatalf("limit %d: want no rows, got %v", lim, chatRowIDs(got))
+		}
+	}
+}
+
+// ── unread counts ────────────────────────────────────────────────────────────
+
+func TestUnreadCountsForMatchesTheGoFold(t *testing.T) {
+	d := newTestDAL(t)
+	seedChatPushdownFixture(t, d)
+	// A watermark per shape: none at all (m-3), one BELOW the newest message
+	// (m-1, ts 6 — a-99@7 and m11@10 stay unread), one exactly ON a message's
+	// ts (m-2, ts 3 — strict > means it counts as read), and one for a peer
+	// that never sent anything.
+	for _, r := range []ChatRead{
+		{ReaderID: "owner", PeerID: "m-1", LastReadTS: 6},
+		{ReaderID: "owner", PeerID: "m-2", LastReadTS: 3},
+		{ReaderID: "owner", PeerID: "ghost", LastReadTS: 99},
+		{ReaderID: "m-1", PeerID: "owner", LastReadTS: 2}, // ANOTHER reader's receipt
+	} {
+		if _, _, err := d.PutChatRead(r); err != nil {
+			t.Fatalf("put read: %v", err)
+		}
+	}
+
+	for _, reader := range []string{"owner", "m-1", "m-2", "m-3", "nobody"} {
+		messages, err := d.ListChat()
+		if err != nil {
+			t.Fatalf("ListChat: %v", err)
+		}
+		receipts, err := d.ListChatReads(reader, "")
+		if err != nil {
+			t.Fatalf("ListChatReads: %v", err)
+		}
+		want := UnreadCounts(messages, receipts, reader)
+		got, err := d.UnreadCountsFor(reader)
+		if err != nil {
+			t.Fatalf("UnreadCountsFor(%q): %v", reader, err)
+		}
+		if len(want) != len(got) {
+			t.Fatalf("UnreadCountsFor(%q): want %v, got %v", reader, want, got)
+		}
+		for peer, n := range want {
+			if got[peer] != n {
+				t.Fatalf("UnreadCountsFor(%q)[%q]: want %d, got %d (full: %v vs %v)",
+					reader, peer, n, got[peer], want, got)
+			}
+		}
+	}
+
+	// The oracle must be non-trivial: owner really does have unread, and the
+	// on-the-ts watermark really did clear m-2's only message.
+	own, err := d.UnreadCountsFor("owner")
+	if err != nil {
+		t.Fatalf("owner: %v", err)
+	}
+	if own["m-1"] != 2 {
+		t.Fatalf("fixture: owner should have 2 unread from m-1, got %d (%v)", own["m-1"], own)
+	}
+	if _, present := own["m-2"]; present {
+		t.Fatalf("a watermark ON a message's ts must clear it (strict >), got %v", own)
+	}
+	if own["m-3"] != 1 {
+		t.Fatalf("a peer with NO receipt must count every addressed message, got %v", own)
+	}
+}
+
+// 🔴 THE "只改一處" GUARD. The unread aggregate had TWO copies of the same
+// whole-table read (unreadCountsForRequest in api_helpers.go and
+// HandleChatUnreadCountApiChatUnreadCountGet in api_chat.go). Porting one and
+// leaving the other keeps the full-table read alive with every behavioural test
+// still green — nothing observable changes. So this reads the SOURCE and pins
+// that neither call site pulls the whole chat table any more.
+func TestBothUnreadCallSitesUseTheSQLAggregate(t *testing.T) {
+	for _, site := range []struct{ file, fn string }{
+		{"api_helpers.go", "func (s *apiServer) unreadCountsForRequest("},
+		{"api_chat.go", "func (s *apiServer) HandleChatUnreadCountApiChatUnreadCountGet("},
+	} {
+		src, err := os.ReadFile(site.file)
+		if err != nil {
+			t.Fatalf("read %s: %v", site.file, err)
+		}
+		start := strings.Index(string(src), site.fn)
+		if start < 0 {
+			t.Fatalf("%s: cannot find %s — the guard has gone stale, fix the anchor", site.file, site.fn)
+		}
+		body := string(src)[start:]
+		if end := strings.Index(body, "\n}\n"); end > 0 {
+			body = body[:end]
+		}
+		if strings.Contains(body, "s.dal.ListChat()") {
+			t.Fatalf("%s: %s still reads the WHOLE chat table (s.dal.ListChat()); "+
+				"both unread call sites must go through s.dal.UnreadCountsFor (T-48)", site.file, site.fn)
+		}
+		if !strings.Contains(body, "UnreadCountsFor(") {
+			t.Fatalf("%s: %s does not call s.dal.UnreadCountsFor — the SQL aggregate "+
+				"must be the ONE way both sites count unread (T-48)", site.file, site.fn)
 		}
 	}
 }

@@ -1421,6 +1421,46 @@ func (d *DAL) ListChatReads(reader, peer string) ([]ChatRead, error) {
 	return out, rows.Err()
 }
 
+// UnreadCountsFor is UnreadCounts (domain.go) computed BY THE DATABASE: for
+// `reader`, the number of messages addressed to them, per sender, that are
+// newer than that sender's read watermark. Senders with nothing unread are
+// absent from the map — same shape the Go fold produces.
+//
+// It exists because both call sites (unreadCountsForRequest and the
+// unread-count endpoint) used to read the WHOLE chat_message table and the
+// reader's whole chat_read set into Go just to fold them down to a handful of
+// integers: 69.098ms on the measured real table, against 22.303ms here.
+//
+// 🔴 The LEFT JOIN + COALESCE(..., 0) IS the Go zero-value default: "no receipt
+// ⇒ watermark 0 ⇒ every addressed message counts". An INNER JOIN would silently
+// drop exactly the peers a reader has never opened — the ones whose unread
+// matters most. The join is pinned to `reader` in the ON clause (not the WHERE)
+// so a missing receipt still yields the row.
+//
+// domain.UnreadCounts is NOT dead: it is the pure fold this must agree with,
+// and the equivalence test drives both over the same fixtures.
+func (d *DAL) UnreadCountsFor(reader string) (map[string]int, error) {
+	rows, err := d.rdb.Query(`
+		SELECT m.sender, COUNT(*) FROM chat_message m
+		LEFT JOIN chat_read r ON r.reader_id = ? AND r.peer_id = m.sender
+		WHERE m.recipient = ? AND m.ts > COALESCE(r.last_read_ts, 0)
+		GROUP BY m.sender`, reader, reader)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var sender string
+		var n int
+		if err := rows.Scan(&sender, &n); err != nil {
+			return nil, err
+		}
+		out[sender] = n
+	}
+	return out, rows.Err()
+}
+
 // PutChatRead upserts a read receipt on the composite (reader, peer) key.
 // MONOTONIC: the stored last_read_ts only ever ADVANCES — a stale/equal report
 // is a no-op (never rewinds, so a re-ordered report can't un-read a message).
