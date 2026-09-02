@@ -298,7 +298,7 @@ func TestDrainChat_MessageWithoutTs_FilesNoReceipt(t *testing.T) {
 // GUARDRAIL ③ — both entrances into a printing drain file receipts.
 // ---------------------------------------------------------------------------
 
-// COLD START through run(): a primed cursor means the BOOT drain — the one that
+// COLD START through run(): a primed cursor means the first connect drain — the one that
 // sits before the connect loop — BACKFILLS what arrived while nobody was
 // listening. Those lines reach the session, so that path must mark too.
 func TestListenerRun_ColdStartBackfill_FilesReadReceipts(t *testing.T) {
@@ -332,7 +332,7 @@ func TestListenerRun_ColdStartBackfill_FilesReadReceipts(t *testing.T) {
 	done := make(chan int, 1)
 	go func() { done <- l.run(ctx) }()
 	waitForCond(t, func() bool { return strings.Contains(out.String(), "chat from alice (#m2") },
-		"the boot drain backfilled m2")
+		"the cold-start drain backfilled m2")
 	cancel()
 	<-done
 
@@ -341,21 +341,21 @@ func TestListenerRun_ColdStartBackfill_FilesReadReceipts(t *testing.T) {
 	}
 	calls := srv.snapshot()
 	if len(calls) != 1 || calls[0].Peer != "alice" || calls[0].LastReadTS != now-100 {
-		t.Fatalf("the cold-start BOOT drain filed %+v, want exactly one {alice, %g} — "+
+		t.Fatalf("the cold-start drain filed %+v, want exactly one {alice, %g} — "+
 			"a backfilled line the session actually read must light the ✓", calls, now-100)
 	}
 }
 
-// RECONNECT: after the boot drain, a live `chat` delta drives another drain
+// RECONNECT: after the cold-start drain, a live `chat` delta drives another drain
 // through dispatch. That path prints too, so it must mark too — and it must
-// mark the NEW sender's own watermark, not re-file the boot drain's.
+// mark the NEW sender's own watermark, not re-file the earlier drain's.
 func TestListener_ChatDeltaAfterReconnect_FilesReadReceipt(t *testing.T) {
 	home := t.TempDir()
 	now := float64(time.Now().Unix())
 	srv := newMarkReadServer(t, "["+tsMsg("m1", "boss", "kyle", now-300)+"]")
 	cfg := markCfg(srv.URL, home)
 
-	// A previous process already baselined on m1, so the boot drain prints it…
+	// A previous process already baselined on m1, so the first connect drain prints it…
 	seedPath := chatSeenPath(cfg)
 	if err := os.MkdirAll(filepath.Dir(seedPath), 0o755); err != nil {
 		t.Fatal(err)
@@ -374,7 +374,7 @@ func TestListener_ChatDeltaAfterReconnect_FilesReadReceipt(t *testing.T) {
 	done := make(chan int, 1)
 	go func() { done <- l.run(ctx) }()
 	waitForCond(t, func() bool { return strings.Contains(out.String(), "chat from boss (#m1") },
-		"the boot drain printed m1")
+		"the cold-start drain printed m1")
 
 	// Stop the loop BEFORE staging the delta. drainChat is single-goroutine by
 	// construction (every real caller runs on the listen loop), and since the
@@ -506,7 +506,7 @@ func TestDrainChat_MarkReadBodyMatchesFrozenSchema(t *testing.T) {
 
 // The reconnect drain is a THIRD drain entrance, and the rule the other two obey
 // holds here too: it prints, so it marks — and the receipt carries the message's
-// own ts, not the boot drain's. Nothing is dispatched: a chat delta would let
+// own ts, not the earlier drain's. Nothing is dispatched: a chat delta would let
 // the pre-T-48 path take the credit, and this test would then prove nothing.
 func TestListenerRun_ReconnectBackfill_PrintsThenFilesReadReceipt(t *testing.T) {
 	home := t.TempDir()

@@ -929,10 +929,10 @@ func TestDrainReplyCards_FirstRunPrimesSilently_ThenNextProcessPrintsNewAnswer(t
 		t.Fatalf("first-run drain must baseline silently: n=%d out=%q", n, out.String())
 	}
 	// A new answer lands while the agent is DEAD; a fresh process (reload from
-	// the same file) drains it — and only it — on boot.
+	// the same file) drains it — and only it — on its next connect.
 	list = `[` + answeredCardJSON("rc-b", 200, "new?") + `,` + answeredCardJSON("rc-a", 100, "old?") + `]`
 	if n := drainReplyCards(srv.Client(), cfg, loadReplyCardSeen(path), &out); n != 1 {
-		t.Fatalf("boot drain must print exactly the offline-answered card, n=%d out=%q", n, out.String())
+		t.Fatalf("the connect drain must print exactly the offline-answered card, n=%d out=%q", n, out.String())
 	}
 	if got := out.String(); got != "[ocagent] reply-card rc-b answered: picked [0] \"ok\" | asked: new?\n" {
 		t.Fatalf("drain line = %q", got)

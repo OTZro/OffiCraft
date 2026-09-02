@@ -823,23 +823,22 @@ const chatBacklogPrintCap = 20
 // the listen loop), so no lock.
 //
 // WHY PERSISTED: /api/events has no replay, so anything fanned while no listener
-// held a stream is lost, and the boot drain is the only path that can recover it.
-// With the set living only in memory, EVERY new process started from an empty set
-// and the boot drain had to run SILENT — it marked the entire inbox read and
-// printed nothing, so a message that arrived while the agent was down was never
-// seen by anyone. Persisting the set splits that one case in two:
+// held a stream is lost, and a drain is the only path that can recover it. With
+// the set living only in memory, EVERY new process started from an empty set and
+// its first drain had to run SILENT — it marked the entire inbox read and printed
+// nothing, so a message that arrived while the agent was down was never seen by
+// anyone. Persisting the set splits that one case in two:
 //
 //   - UNPRIMED (no state file, or a corrupt one) — this machine has never
 //     surfaced chat for this member. There is no "last seen" to diff against, so
-//     the boot drain PRIMES silently, exactly as before: a brand-new session must
-//     not be washed out by however much history predates it.
-//   - PRIMED — a previous process already baselined. The boot drain PRINTS what
+//     the drain PRIMES silently, exactly as before: a brand-new session must not
+//     be washed out by however much history predates it.
+//   - PRIMED — a previous process already baselined. The drain PRINTS what
 //     arrived since (capped by chatBacklogPrintCap), which is the whole point.
 //
-// RECONNECTS are unaffected in both directions: the boot drain runs ONCE per
-// process, before the connect loop, and re-dialing never calls it — and even if
-// it did, every id it already printed is in this set, so a re-drain prints
-// nothing. Losing the file costs one silent re-baseline, never truth.
+// RECONNECTS are unaffected in both directions: every drain runs against this
+// same set, so the id a connect drain already printed is in it and the next one
+// prints nothing. Losing the file costs one silent re-baseline, never truth.
 type chatSeen struct {
 	path   string
 	m      map[string]bool // message id → already surfaced
@@ -888,7 +887,7 @@ func loadChatSeen(path string) *chatSeen {
 // shape: it primes without touching disk.
 //
 // WHY IT SPEAKS WHEN IT FAILS: a write that does not land leaves NO state file,
-// so the next process loads UNPRIMED and its boot drain baselines silently —
+// so the next process loads UNPRIMED and its first drain baselines silently —
 // which is precisely the bug this whole cursor exists to kill, resurrected in
 // full and shaped exactly like a healthy run. Nothing else in the system can
 // notice: the count is right, the drain returns normally, the agent is simply
@@ -985,7 +984,7 @@ func (s *chatSeen) warnWriteFailed(out io.Writer, err error) {
 // enough to tell the woken agent a reply target EXISTS; get_chat is where the
 // text belongs, and it now comes back with the quote already attached.
 //
-// Advances the seen-id cursor and returns the unread count. `silent` (the boot
+// Advances the seen-id cursor and returns the unread count. `silent` (the first
 // baseline) advances the cursor WITHOUT printing so connecting does not re-print
 // history — but see chatSeen: the cursor is PERSISTED, so `silent` is true when
 // the store came up UNPRIMED, which is a first listen on this machine OR a state

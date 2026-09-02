@@ -93,7 +93,7 @@ func TestChatSeenPath_IsSiblingOfCursor(t *testing.T) {
 	}
 }
 
-// FIRST RUN on this machine: no state file ⇒ the boot drain must stay SILENT and
+// FIRST RUN on this machine: no state file ⇒ the first drain must stay SILENT and
 // leave a primed baseline behind. This is hard-condition #2 (a brand-new session
 // must not be washed out by history that predates it).
 func TestListenerRun_FirstEver_SilentBaseline_ThenPersists(t *testing.T) {
@@ -461,15 +461,15 @@ func TestListenerRun_FirstEver_SilentThroughRun(t *testing.T) {
 	done := make(chan int, 1)
 	go func() { done <- l.run(ctx) }()
 	waitForCond(t, func() bool { return atomic.LoadInt32(&conns) >= 3 },
-		"the listener connected (so the boot drain has certainly run)")
+		"the listener connected (so the connect drain has certainly run)")
 	cancel()
 	<-done
 
 	if strings.Contains(out.String(), "chat from boss") {
-		t.Fatalf("first-ever boot must print NO chat history; out = %q", out.String())
+		t.Fatalf("a first-ever listener must print NO chat history; out = %q", out.String())
 	}
 	if got := readSeenFile(t, chatSeenPath(cfg)); len(got) != 3 {
-		t.Fatalf("first-ever boot must leave a primed baseline, got %v", got)
+		t.Fatalf("a first-ever listener must leave a primed baseline, got %v", got)
 	}
 }
 
@@ -521,7 +521,7 @@ func bootOnce(t *testing.T, srv *httptest.Server, cfg Config, conns *int32, seen
 	done := make(chan int, 1)
 	go func() { done <- l.run(ctx) }()
 	waitForCond(t, func() bool { return atomic.LoadInt32(conns)-before >= 3 },
-		"the listener dialled 3 times (so the boot drain has certainly run)")
+		"the listener dialled 3 times (so the connect drain has certainly run)")
 	cancel()
 	<-done
 	return out.String()
@@ -541,12 +541,12 @@ func bootOnce(t *testing.T, srv *httptest.Server, cfg Config, conns *int32, seen
 // same bounded, positively-observed moment to be judged at, so the failure that
 // reports is `0 != 1` on a named count.
 //
-// This is the guard that was missing: reverting the boot drain to the pre-fix
+// This is the guard that was missing: reverting the drain to the pre-fix
 // unconditional-silent form used to redden nothing but a 3-second timeout.
 func TestListenerRun_ColdStartBackfill_CountedOldBuildVsNew(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
-		oldBuild bool // old build ⇒ the boot drain is unconditionally silent
+		oldBuild bool // old build ⇒ the cold-start drain is unconditionally silent
 		want     int
 	}{
 		{"old-build-swallows-it", true, 0},
@@ -573,7 +573,7 @@ func TestListenerRun_ColdStartBackfill_CountedOldBuildVsNew(t *testing.T) {
 			}
 			if tc.oldBuild {
 				// The pre-fix world in one bit: the cursor never survived the
-				// process, so the boot drain had nothing to diff against and ran
+				// process, so the cold-start drain had nothing to diff against and ran
 				// silent every single time.
 				seen.primed = false
 			}
@@ -592,7 +592,7 @@ func TestListenerRun_ColdStartBackfill_CountedOldBuildVsNew(t *testing.T) {
 // while nothing is listening, boot again from what the first boot left on disk.
 // Every message is counted, so a backfill that prints twice fails here too.
 //
-// This closes the bypass that let the boot-drain wiring rot unnoticed: the
+// This closes the bypass that let the drain wiring rot unnoticed: the
 // cold-start test above it calls drainChat directly and therefore cannot see a
 // mistake in how run() decides silence.
 func TestListenerRun_ColdStart_AcrossTwoBoots_PrintsEachExactlyOnce(t *testing.T) {
@@ -841,19 +841,19 @@ func TestListenerRun_MessageArrivingDuringTheOutage_PrintsOnReconnect(t *testing
 	}
 }
 
-// THE SILENT-BASELINE INVARIANT, ON THE CONNECT PATH. The boot drain decides
-// silence from the persisted cursor; the connect drain must decide it the same
-// way, and the case where that is load-bearing is a boot drain that FAULTED —
-// it left the store unprimed, so the connect drain is the first one ever to see
-// this member's inbox. It must prime silently, exactly as the boot drain would
-// have: a brand-new session must not be washed out by history that predates it.
+// THE SILENT-BASELINE INVARIANT WHEN THE FIRST DRAIN FAULTS. Silence is decided
+// from the persisted cursor, and the case where that is load-bearing is a first
+// connect drain that could not FETCH — it left the store unprimed, so the NEXT
+// connect drain is the first one ever to see this member's inbox. It must prime
+// silently: a brand-new session must not be washed out by history that predates
+// it.
 func TestListenerRun_FirstEverWithAFaultedBootDrain_ConnectDrainStaysSilent(t *testing.T) {
 	home := t.TempDir()
 	var chatHits, conns int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/chat") {
 			if atomic.AddInt32(&chatHits, 1) == 1 {
-				w.WriteHeader(500) // the BOOT drain faults ⇒ store stays unprimed
+				w.WriteHeader(500) // the FIRST connect drain faults ⇒ store stays unprimed
 				return
 			}
 			w.WriteHeader(200)
@@ -901,9 +901,9 @@ func TestListenerRun_FirstEverWithAFaultedBootDrain_ConnectDrainStaysSilent(t *t
 
 // THE SAME INVARIANT ON THE THIRD PATH. Boot and connect both decide silence
 // from the persisted cursor; the live chat delta must too, and the case that
-// separates them is identical to the connect one: a boot drain that FAULTED
-// leaves the store unprimed, and if a delta beats the next reconnect then the
-// delta drain is the first thing ever to see this member's inbox.
+// separates them is identical to the connect one: a drain that FAULTED leaves
+// the store unprimed, and if a delta beats the next reconnect then the delta
+// drain is the first thing ever to see this member's inbox.
 //
 // A delta is a NUDGE ("something arrived"), never a licence to print whatever a
 // refetch happens to return. Deciding silence from "I am a delta, deltas print"
@@ -918,7 +918,7 @@ func TestListenerDispatch_ChatDeltaOnAnUnprimedStore_StaysSilent(t *testing.T) {
 			return
 		}
 		if atomic.AddInt32(&chatHits, 1) == 1 {
-			w.WriteHeader(500) // the BOOT drain faults ⇒ the store stays unprimed
+			w.WriteHeader(500) // the first drain faults ⇒ the store stays unprimed
 			return
 		}
 		w.WriteHeader(200)
@@ -931,7 +931,7 @@ func TestListenerDispatch_ChatDeltaOnAnUnprimedStore_StaysSilent(t *testing.T) {
 	l := newTestListener(srv, cfg, &out)
 	l.seen = loadChatSeen(chatSeenPath(cfg))
 
-	// the boot drain, faulting: it prints nothing and records nothing.
+	// the first drain, faulting: it prints nothing and records nothing.
 	l.drainChatNow()
 	if l.seen.primed {
 		t.Fatal("precondition: a drain that could not fetch must leave the store UNPRIMED")
@@ -948,5 +948,97 @@ func TestListenerDispatch_ChatDeltaOnAnUnprimedStore_StaysSilent(t *testing.T) {
 	}
 	if got := readSeenFile(t, chatSeenPath(cfg)); len(got) != 3 {
 		t.Fatalf("the delta drain must still leave a primed baseline, got %v", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// THE DRAIN HANGS OFF THE CONNECT, AND OFF NOTHING ELSE (owner, 2026-09-02:
+// 「啟動的時候好像不用做，就連上 SSE 的時候統一做就好」).
+// ---------------------------------------------------------------------------
+
+// A listener whose API answers but whose STREAM will not open must drain no chat
+// at all. That state is broken, and an inbox printed into a session that is about
+// to receive no events is not a rescue — it makes a deaf machine look like a
+// working one.
+//
+// 🔴 THIS IS THE GUARD FOR THE REMOVAL, AND IT IS OBSERVED POSITIVELY IN BOTH
+// ARMS. Nothing else in this file can see a re-added boot drain: every other
+// run()-level test lets the stream open, and a boot drain there is invisible
+// because the connect drain that follows finds the same window already covered
+// and prints nothing. Here the stream NEVER opens, so the boot drain is the only
+// thing that could act — and each arm names a fact it would leave behind rather
+// than asking for silence alone (a message printed / a baseline file created),
+// so the failure reports as a concrete difference and not as a timeout.
+func TestListenerRun_APIUpButStreamNeverOpens_DrainsNoChat(t *testing.T) {
+	for _, tc := range []struct{ name, baseline string }{
+		{"primed-inbox-is-not-printed", `["m1"]`}, // a boot drain would print m2
+		{"virgin-home-is-not-baselined", ""},      // a boot drain would create the file
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			var chatHits, dials int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasPrefix(r.URL.Path, "/api/chat") {
+					atomic.AddInt32(&chatHits, 1)
+					w.WriteHeader(200)
+					_, _ = w.Write([]byte(msgsJSON("m1", "m2")))
+					return
+				}
+				if !strings.HasPrefix(r.URL.Path, eventsPath) {
+					w.WriteHeader(404)
+					return
+				}
+				// The stream is the ONLY thing that is down: a 5xx is retried
+				// forever, so this listener dials, fails, and never connects.
+				atomic.AddInt32(&dials, 1)
+				w.WriteHeader(503)
+			}))
+			defer srv.Close()
+			cfg := Config{Base: srv.URL, Token: "tok", ID: "kyle", Home: home}
+
+			seenPath := chatSeenPath(cfg)
+			if tc.baseline != "" {
+				if err := os.MkdirAll(filepath.Dir(seenPath), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(seenPath, []byte(tc.baseline), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			out := &syncBuf{}
+			l := newTestListener(srv, cfg, out)
+			l.cursorPath = filepath.Join(home, "cursor")
+			l.seen = loadChatSeen(seenPath)
+			l.replySeen = loadReplyCardSeen(filepath.Join(home, "replycards-seen"))
+
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan int, 1)
+			go func() { done <- l.run(ctx) }()
+			waitForCond(t, func() bool { return atomic.LoadInt32(&dials) >= 3 },
+				"the listener dialled 3 times and never got a stream")
+			cancel()
+			<-done
+
+			if n := atomic.LoadInt32(&chatHits); n != 0 {
+				t.Fatalf("/api/chat was refetched %d times without a single open stream, "+
+					"want 0 — the chat drain hangs off the connect, not off process start", n)
+			}
+			if strings.Contains(out.String(), "chat from boss") {
+				t.Fatalf("a listener that never connected printed chat; out = %q", out.String())
+			}
+			if tc.baseline == "" {
+				if _, err := os.Stat(seenPath); !os.IsNotExist(err) {
+					t.Fatalf("a listener that never connected wrote a chat baseline (%v) — "+
+						"the silent baseline belongs to the first CONNECT, and writing it "+
+						"here would mark this member's whole inbox read in a session that "+
+						"never received a single event", err)
+				}
+				return
+			}
+			if got := readSeenFile(t, seenPath); len(got) != 1 || got[0] != "m1" {
+				t.Fatalf("the seeded baseline moved to %v without a single open stream", got)
+			}
+		})
 	}
 }

@@ -295,15 +295,15 @@ func (l *listener) dispatch(payload []byte) {
 		// R7 HARD CONSTRAINT: the chat delta payload is convenience — NEVER merged.
 		// The delta is a pure NUDGE ⇒ REFETCH /api/chat and print the unread-for-me.
 		//
-		// Same entrance as boot and reconnect, so the same rule: whether this
+		// Same entrance as the connect drain, so the same rule: whether this
 		// prints is the CURSOR's call, not the caller's. A delta says "something
 		// arrived", which is not a licence to print whatever the refetch returns —
 		// on an unprimed store there is no baseline to diff against, and printing
 		// then washes a brand-new session out with history that predates it. The
-		// store is normally primed long before any delta lands (the boot drain, and
-		// now every connect drain, get there first), so this changes nothing in the
-		// ordinary case; it closes the one where a faulted boot drain leaves the
-		// store unprimed and a delta beats the next reconnect.
+		// store is normally primed long before any delta lands (a delta can only
+		// arrive on a stream, and the connect drain runs before that stream is
+		// read), so this changes nothing in the ordinary case; it closes the one
+		// where the connect drain could not FETCH and left the store unprimed.
 		l.drainChatNow()
 	case replyCardTopic:
 		// R7 again: the payload ({id, from, status}) only routes — the printed
@@ -521,7 +521,7 @@ func (l *listener) connectOnce(ctx context.Context) (opened, activity, selfExit 
 	l.logf(noticeConnected+" — streaming %s%s (⇒ online while held)%s%s%s",
 		l.cfg.Base, eventsPath, verdict, station, agent)
 
-	// Boot/reconnect drain: /api/events has no replay, so any reply_card delta
+	// Connect drain: /api/events has no replay, so any reply_card delta
 	// fanned while this listener held no stream is lost — catch up from the
 	// answered-pane authority NOW, before the live stream takes over (the
 	// shared seen state collapses a drain/delta race to one printed line).
@@ -531,6 +531,12 @@ func (l *listener) connectOnce(ctx context.Context) (opened, activity, selfExit 
 	// surface it was the NEXT chat delta — so if nobody spoke again, the agent
 	// was never told anyone had called. Draining here, before the live stream
 	// takes over, is what makes "reconnected" mean "caught up".
+	//
+	// 🔴 THIS IS THE ONLY SCHEDULED CHAT DRAIN — there is none at process start
+	// (owner, 2026-09-02). Including the FIRST one of the process: a cold boot's
+	// backfill, and a virgin machine's silent baseline, both happen right here.
+	// Tying it to the connect is what keeps an inbox from being printed into a
+	// session that is about to receive no events at all.
 	//
 	// This cannot re-print history: the seen cursor was advanced by whichever
 	// drain surfaced a line, so a re-drain of the same window prints nothing.
@@ -555,10 +561,10 @@ func (l *listener) connectOnce(ctx context.Context) (opened, activity, selfExit 
 	return true, activity, false, err
 }
 
-// drainChatNow is THE way this listener drains chat. All three entrances go
-// through it: process boot (run, before the connect loop), every
-// connect/reconnect (connectOnce, before the live stream takes over), and every
-// inbound chat delta (dispatch).
+// drainChatNow is THE way this listener drains chat. Both entrances go through
+// it: every connect/reconnect (connectOnce, before the live stream takes over)
+// and every inbound chat delta (dispatch). There is deliberately no third one at
+// process start — see run().
 //
 // 🔴 SILENCE IS DECIDED BY THE CURSOR, NOT BY WHICH PATH CALLED. An UNPRIMED
 // store means this machine has never surfaced chat for this member, and there is
@@ -567,13 +573,14 @@ func (l *listener) connectOnce(ctx context.Context) (opened, activity, selfExit 
 // know whether a baseline exists, so no caller gets to pass its own answer.
 //
 // The case that separates a cursor-decided silence from a caller-decided one is
-// the same on both non-boot paths: a boot drain that could not FETCH leaves the
-// store unprimed, and then whichever comes first — the next connect drain or a
-// chat delta — is the first thing ever to see this member's inbox. A hardcoded
-// `false` on either would dump the entire history in exactly the case the silent
-// baseline exists to protect. Ordinarily neither is reached: the boot drain has
-// already primed and marked what it saw, so the later drains find nothing unread
-// and print nothing — that silence comes from the cursor, not from a flag.
+// the same on both paths: on a virgin machine the FIRST connect drain is the
+// first thing ever to see this member's inbox, and if it could not FETCH the
+// store is still unprimed when the next connect drain or a chat delta arrives. A
+// hardcoded `false` on either would dump the entire history in exactly the case
+// the silent baseline exists to protect. Ordinarily only the first drain of a
+// machine's life is unprimed: it primes and marks what it saw, so every later
+// drain finds nothing unread and prints nothing — that silence comes from the
+// cursor, not from a flag.
 //
 // This centralisation IS the guardrail. The rule held on two of three paths for
 // a while precisely because each site spelled its own answer out by hand.
@@ -590,25 +597,25 @@ func (l *listener) drainChatNow() int {
 // listen degrades gracefully; a mis-wire / self-exit / signal is a clean 0). Mirrors
 // cmd_listen.
 func (l *listener) run(ctx context.Context) int {
-	// Boot BASELINE **or** BACKFILL — which one is decided by the PERSISTED unread
-	// cursor (chatSeen), not by the fact that this is a fresh process:
+	// 🔴 NOTHING IS DRAINED HERE. Chat catch-up hangs off the CONNECT, not off
+	// process start (owner, 2026-09-02:「啟動的時候好像不用做，就連上 SSE 的
+	// 時候統一做就好，包含 codex 應該也是類似的機制」).
 	//
-	//   - no persisted cursor (first listen for this member on this machine, or a
-	//     corrupt/unreadable file) ⇒ SILENT: advance the cursor to 'now' without
-	//     printing, so a brand-new session is not washed out by history that
-	//     predates it. This is the original behaviour, now scoped to the one case
-	//     that actually needs it.
-	//   - a persisted cursor exists ⇒ PRINT the messages that arrived since it
-	//     (bounded by chatBacklogPrintCap). /api/events has no replay, so a drain
-	//     is the only path that can recover a message fanned while this agent held
-	//     no stream — a cold boot or a listener restarted mid-life.
+	// A boot drain runs in exactly one state the connect drain does not cover:
+	// the API answers but the stream will not open. That state is BROKEN, and
+	// printing an inbox into a session that is about to receive no events is not
+	// a rescue — it makes a machine that cannot hear anything look like one that
+	// is working, which is the failure this codebase keeps paying for. The one
+	// window a boot drain legitimately covered (messages fanned while this agent
+	// held no stream) is covered by the connect drain anyway, moments later and
+	// only once the session can actually act on what follows.
 	//
-	// This one covers the window BEFORE the first dial; connectOnce runs the same
-	// drain on every connect, covering the window of each outage. Both are safe to
-	// repeat: every id already surfaced is in the cursor, so a re-drain of the same
-	// window prints nothing.
-	l.drainChatNow()
-
+	// Everything the boot drain used to be responsible for now happens in
+	// connectOnce, unchanged in behaviour because silence was never the boot
+	// path's decision to make — see drainChatNow: an UNPRIMED cursor still
+	// primes silently, a primed one still backfills. The first-ever listener on
+	// a machine is therefore still built a baseline without printing a line; it
+	// just happens at the connect instead of a few milliseconds earlier.
 	backoff := l.backoffStart
 	for {
 		if ctx.Err() != nil {

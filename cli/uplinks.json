@@ -420,7 +420,7 @@
       "source": "cli/ocagent/listen_run.go",
       "callsite": "drainChat(l.api, l.cfg, l.seen, l.out, !l.seen.primed)",
       "kind": "seam",
-      "seam_reason": "hop: the ONE place chat is drained since T-48 — all three entrances (boot, every connect, and a chat delta) call l.drainChatNow(), which calls this. It is a GET (fetchChat), and since T-48 there IS a POST below it: the read receipt filed after the lines are printed. That POST is claimed by ocagent-chat-mark-read; this row stays a seam because the body is built there, not here."
+      "seam_reason": "hop: the ONE place chat is drained since T-48 — both entrances (every connect and a chat delta) call l.drainChatNow(), which calls this. It is a GET (fetchChat), and since T-48 there IS a POST below it: the read receipt filed after the lines are printed. That POST is claimed by ocagent-chat-mark-read; this row stays a seam because the body is built there, not here."
     },
     {
       "id": "ocagent-run-7",
@@ -803,21 +803,14 @@
       "source": "cli/ocagent/listen_run.go",
       "callsite": "l.drainChatNow()\n\tcase replyCardTopic:",
       "kind": "seam",
-      "seam_reason": "chat delta arrives — hop: one of the three entrances to l.drainChatNow() (T-48 centralised them). The body-bearing send below it is the read receipt, claimed by ocagent-chat-mark-read; the wire GET is claimed by ocagent-run-6. This line itself puts nothing on the wire."
+      "seam_reason": "chat delta arrives — hop: one of the two entrances to l.drainChatNow() (T-48 centralised them). The body-bearing send below it is the read receipt, claimed by ocagent-chat-mark-read; the wire GET is claimed by ocagent-run-6. This line itself puts nothing on the wire."
     },
     {
       "id": "ocagent-run-9",
       "source": "cli/ocagent/listen_run.go",
       "callsite": "l.drainChatNow()\n\n\tonAct := func() { activity = true }",
       "kind": "seam",
-      "seam_reason": "every connect/reconnect (T-48: closes the outage gap) — hop: one of the three entrances to l.drainChatNow() (T-48 centralised them). The body-bearing send below it is the read receipt, claimed by ocagent-chat-mark-read; the wire GET is claimed by ocagent-run-6. This line itself puts nothing on the wire."
-    },
-    {
-      "id": "ocagent-run-10",
-      "source": "cli/ocagent/listen_run.go",
-      "callsite": "l.drainChatNow()\n\n\tbackoff := l.backoffStart",
-      "kind": "seam",
-      "seam_reason": "process boot, once, before the connect loop — hop: one of the three entrances to l.drainChatNow() (T-48 centralised them). The body-bearing send below it is the read receipt, claimed by ocagent-chat-mark-read; the wire GET is claimed by ocagent-run-6. This line itself puts nothing on the wire."
+      "seam_reason": "every connect/reconnect (T-48: closes the outage gap) — hop: one of the two entrances to l.drainChatNow() (T-48 centralised them). The body-bearing send below it is the read receipt, claimed by ocagent-chat-mark-read; the wire GET is claimed by ocagent-run-6. This line itself puts nothing on the wire."
     }
   ]
 }
