@@ -1028,10 +1028,12 @@ func TestStampMemberPlacementBlockedReReadsTheRow(t *testing.T) {
 	stale.DesiredMachineID = "mach-ghost-a"
 	putTestMember(t, s, stale)
 
-	// A relocate lands after the tick took its snapshot.
-	moved := stale
-	moved.DesiredMachineID = "mach-ghost-b"
-	putTestMember(t, s, moved)
+	// A relocate lands after the tick took its snapshot. It moves the pin the
+	// way the relocate face does since T-55 — through the column's sole writer,
+	// not a whole-row write, which since that change would persist nothing.
+	if err := s.dal.SetMemberDesiredMachineID("m-moved", "mach-ghost-b"); err != nil {
+		t.Fatalf("relocate: %v", err)
+	}
 
 	now := 7000.0
 	s.reconcileMu.Lock()

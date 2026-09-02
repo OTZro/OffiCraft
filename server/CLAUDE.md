@@ -33,6 +33,8 @@
 - `member.agent_iat_floor`（T-14 項目 4B，migrations/00063，同樣 durable、同樣不上 wire）跟 `handover_noticed_ts` 走**同一個策略**：**不在 `PutMember` 的 `DO UPDATE SET` 裡**，只有 `SetMemberAgentIatFloor` 能移動它，而且那一支是 SQL 裡的 `max()`、**只准往前**。理由多一條：它是**撤銷底線**，`memberFromWorker` 從零重建 Member 不帶這個欄位（所以每次 `PutOutsourceWorker` 都送 0），而 `report_waking` 抬高底線的同時，旁邊還有一堆手上拿著**抬高之前**的 member snapshot 的 HTTP 面——其中任何一個落地都等於把上一輪的憑證放回去用。Go 端 read-modify-write 也不行：兩輪靠近時輸的那個最後落地，底線會倒退。
 - 蓋的值是**呼叫者自己 token 的 `iat`**，不是 `nowSecs()`；`requireAuth` 那一側是**嚴格小於**。這兩件事合起來才保證「抬高底線的那一輪不會被自己關在門外」，不受發證到開機的時間差與時鐘偏移影響。⚠️ **`iat` 只到整秒，同一秒起來的兩輪分不出來**（owner 2026-08-28 裁定先不管），這件事**沒有解決**。
 - 🔴 讀的那一側（`authz.go agentIatFloorRefusal`）**明確把 `Kind == machineKind` 排除**，寫的那一側則不分 kind。這是安全性質不是最佳化：warden 憑證是 `scope="agent"` 且**沒有 `exp`**，底線一旦蓋過它就**永遠**過不了期，整台機器只能重裝才回得來。warden 今天不呼叫 `report_waking`，但那是今天的 client 而不是契約。由 `TestAgentIatFloor_WardenPermanentTokenIsExempt` 守住，不是靠註解。
+- ⚠️ **上面兩欄不是「不在 `DO UPDATE SET` 裡」的全部，這份文件也不打算列全。** 那份清單會長，逐一寫在這裡就是一份會靜默過期的固定列舉（它已經過期過一次：`banked_cost` 搬走時沒有人回來加一行）。**權威是可執行的**：`single_column_writes_t14_test.go` 的 `singleColumnOwnedFields` 註冊表就是那份清單，`TestPutMemberNeverOverwritesSingleColumnOwnedFields` 會在任何一欄被加回 `SET` 時**當場紅並指名該欄**。要知道「今天有哪幾欄被搬走了」讀那張表，不要讀這裡。上面兩欄留在這裡是因為它們各自帶著**只有散文講得清楚的理由**（warden 憑證的永久豁免、`memberFromWorker` 從零重建會送 0），不是因為它們是清單。
+- 🔴 搬一欄出去是**三件一組，缺一件等於沒做**：一支只寫該欄的寫入、**把該欄從 `DO UPDATE SET` 刪掉**、往註冊表加一列。只做前一件是這個 repo 已經發生過的形狀——`session_boot_ts` 與 `waking_since` 今天就各有一支單欄寫入、而欄位仍在 `SET` 清單裡（上面 session anchor 那一條自承那是「已知邊界」），所以任何舊快照的整列 upsert 照樣蓋得回去。註冊表那支測試裡寫死的 `len(singleColumnOwnedFields) != N` 計數是**刻意**的：加一列就把 N 加一，**不准改成 `len(...)` 自比自**，否則「有人把整列刪掉」不會有任何東西看得見。
 
 ## 4. attachment、文件與 context
 

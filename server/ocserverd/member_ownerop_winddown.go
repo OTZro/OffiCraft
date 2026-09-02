@@ -27,9 +27,21 @@ package main
 // Both are now routed through this ONE funnel, exactly as the three outsource
 // verbs funnel through respawnWorkerForOwnerOp. The caller writes its change
 // onto the row, asks armMemberOwnerOpHandover whether there is anything to
-// wind down, and persists ONCE — so the new pin / model and the refocus epoch
-// land in the same write, and the single member delta the agent wakes on
-// already carries the new values. The 收口 is the pre-existing §4.5 machinery:
+// wind down, and persists the epoch — and the single member delta the agent
+// wakes on still carries the new values, because the caller set them on the
+// struct this write fans.
+//
+// ⚠️ THE VALUE AND THE EPOCH NO LONGER LAND IN THE SAME WRITE (T-55). The
+// columns these verbs move — desired_machine_id, model, runtime, effort — left
+// PutMember's SET list, so each one lands through its sole writer: the value in
+// one write, the epoch in another. The two faces order that pair OPPOSITELY and
+// both are deliberate. HandleUpdateMember writes the epoch FIRST, because its
+// wind-down is gated on "the value actually changed" and a value landing early
+// would shut that gate on the retry. HandleRelocateMember writes the pin FIRST,
+// because its wind-down is unconditional and the retry converges either way.
+// Each face argues its own order at the call site; this funnel does not decide
+// it, and no longer promises the pair is atomic.
+// The 收口 is the pre-existing §4.5 machinery:
 // the agent's own report_stopped (→ dispatchRobustStopNow) or decideUp's
 // recycle arm at recycleGraceFor(refocus_op). Either way the next tick's plain START re-mints
 // the boot frame off the row, which is where the new machine / model now live.
