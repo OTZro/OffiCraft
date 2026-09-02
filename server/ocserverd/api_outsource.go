@@ -951,6 +951,20 @@ func (s *apiServer) HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost(
 	// is deliberately NOT re-asked here — respawnWorkerForOwnerOp owns that single
 	// branch point for all three owner verbs, and asking twice is how the two
 	// copies drift (this one used to skip silently, leaving no receipt).
+	// 🔴 THIS RUNS BEFORE THE SETTERS, SO THE FRAME IT MAY DISPATCH READS THE
+	// VALUE, NOT THE ROW — and that is now a load-bearing invariant.
+	// respawnWorkerForOwnerOp has two arms: the wind-down arm dispatches nothing,
+	// but the immediate arm (reached when the epoch has already been collected
+	// while the session is still online) kills and re-dispatches a START right
+	// here. It takes `*worker` BY VALUE and every step below it does too
+	// (respawnWorkerForOwnerOpNow → respawnWorkerNow → notifyWorkerSpawn), so the
+	// frame carries the intent this request just set, which has not reached the
+	// row yet.
+	// ⇒ notifyWorkerSpawn and everything under it must NEVER re-read the member
+	// row for the launch spec. Doing so would dispatch the OLD model while the
+	// setter below stores the new one, and the worker would run the old value
+	// with a 200, no receipt and nothing red — T-b6d9's bug through a third door.
+	// Pinned by TestSetWorkerModel_ImmediateRespawnCarriesTheNewModel.
 	if launchIntentChanged && worker.Status == WorkerStatusActive && s.hub.IsOnline(worker.ID) {
 		s.respawnWorkerForOwnerOp(*worker, ownerOpModel)
 	}

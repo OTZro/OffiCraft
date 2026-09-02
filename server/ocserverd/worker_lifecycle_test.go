@@ -704,7 +704,10 @@ func TestSetWorkerModel_ActiveWindsDownThenRespawns(t *testing.T) {
 	}
 
 	// The worker finishes its SOP and says so — the respawn is immediate, and it
-	// carries the NEW model (the row was written before the window opened).
+	// carries the NEW model. Since T-55 the row is written AFTER the window
+	// opens (the launch-intent setters run past respawnWorkerForOwnerOp), which
+	// this arm does not care about: the collect happens on a later request, long
+	// past both writes.
 	rec = httptest.NewRecorder()
 	api.HandleReportStoppedApiSelfStoppedPost(rec,
 		taskReq(t, "POST", "/api/self/stopped", nil, workerID, "agent"))
@@ -721,6 +724,79 @@ func TestSetWorkerModel_ActiveWindsDownThenRespawns(t *testing.T) {
 	rpc, args := decodeWardenFrame(t, frames[1].Frame)
 	if rpc != reconcileCmdStart || args["model"] != "claude-opus-4-8" {
 		t.Fatalf("respawn frame = %s %v, want a start carrying the new model", rpc, args)
+	}
+}
+
+// TestSetWorkerModel_ImmediateRespawnCarriesTheNewModel covers the OTHER arm of
+// respawnWorkerForOwnerOp — the one that dispatches a START synchronously, from
+// inside the handler, INSTEAD of opening a wind-down. It is reached when the
+// epoch has already been collected (stopped_since latched) while the dying
+// session still reads as online, which is the window
+// TestOwnerOp_VerbAfterTheCollectIsNotSwallowed opens.
+//
+// 🔴 WHY IT HAS TO EXIST SINCE T-55: on that arm the frame goes out BEFORE
+// SetMemberModel stores the value, so the START can only be right because
+// respawnWorkerForOwnerOp takes the worker BY VALUE and nothing under it
+// re-reads the row for the launch spec. That was an incidental property before;
+// it is load-bearing now. Mutant: make notifyWorkerSpawn (or anything below it)
+// build the frame from a fresh GetOutsourceWorker and this test goes red with
+// the OLD model — which is exactly what the owner would get in production, on a
+// 200, with no receipt.
+//
+// The sibling above covers the wind-down arm, where the row is written long
+// before the collect dispatches. Neither one covers the other.
+func TestSetWorkerModel_ImmediateRespawnCarriesTheNewModel(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	workerID := newActiveOnlineWorker(t, api)
+
+	// 1) The first 換 model opens a wind-down and dispatches nothing.
+	setWorkerModelBody(t, api, workerID, map[string]any{"model": "claude-opus-4-8"})
+
+	// 2) The worker answers; the shared FSM collects on the next tick. The latch
+	//    lands while the old session is still online — the window this arm lives in.
+	rec := httptest.NewRecorder()
+	api.HandleReportStoppedApiSelfStoppedPost(rec,
+		taskReq(t, "POST", "/api/self/stopped", nil, workerID, "agent"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("report_stopped: %d %s", rec.Code, rec.Body.String())
+	}
+	workerTickPass(t, api, workerID, nowSecs())
+	if w, _ := api.dal.GetOutsourceWorker(workerID); w.StoppedSince <= 0 {
+		t.Fatal("fixture: the collect must have latched stopped_since, or this test " +
+			"is walking the wind-down arm the sibling already covers")
+	}
+	if !api.hub.IsOnline(workerID) {
+		t.Fatal("fixture: the dying session must still look online for the immediate arm")
+	}
+	api.hub.DrainWardenCommands(ServerSelfHost)
+
+	// 3) The owner changes the model again. This one dispatches NOW.
+	setWorkerModelBody(t, api, workerID, map[string]any{"model": "claude-opus-4-9"})
+
+	frames := api.hub.DrainWardenCommands(ServerSelfHost)
+	var starts int
+	for _, f := range frames {
+		rpc, args := decodeWardenFrame(t, f.Frame)
+		if rpc != reconcileCmdStart {
+			continue
+		}
+		starts++
+		if args["model"] != "claude-opus-4-9" {
+			t.Fatalf("the synchronous respawn dispatched model %v, want claude-opus-4-9 — "+
+				"the frame is built from the VALUE the handler holds, and the launch-intent "+
+				"setters run AFTER it (T-55). Something under notifyWorkerSpawn re-read the "+
+				"row, which still carries the previous model at that instant.", args["model"])
+		}
+	}
+	if starts != 1 {
+		t.Fatalf("a 換 model landing after the collect must dispatch exactly one START "+
+			"now, got %d (0 means it opened a second wind-down instead and this test "+
+			"is no longer covering the immediate arm)", starts)
+	}
+	// …and the row caught up too, so the two writes did not disagree.
+	if w, _ := api.dal.GetOutsourceWorker(workerID); w.Model != "claude-opus-4-9" {
+		t.Fatalf("row model = %q, want claude-opus-4-9", w.Model)
 	}
 }
 

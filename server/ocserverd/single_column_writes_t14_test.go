@@ -244,13 +244,25 @@ var notInTheSetListExceptions = map[string]string{
 	// The conflict key. It is what the upsert matches ON; a SET list carrying
 	// it would be meaningless rather than dangerous.
 	"id": "the ON CONFLICT key",
-	// IN the SET list, but as max(forced_stop_at, excluded.forced_stop_at) —
-	// the one entry that is not a plain overwrite. The probe below cannot see
-	// that: it writes a TEXT sentinel, and SQLite orders TEXT above every
-	// number, so max() keeps the sentinel and the column reads as "absent".
-	// Its forward-only property is what protects it, and dal.go says so at
-	// length; a registry entry would assert the wrong invariant.
-	"forced_stop_at": "carried under max(), forward-only — not a plain overwrite",
+	// 🔴 A NAMED BLIND SPOT, not a column that is safe.
+	//
+	// forced_stop_at IS in the SET list, but as
+	// max(forced_stop_at, excluded.forced_stop_at) — the one entry that is not a
+	// plain overwrite. What protects it is that direction, NOT absence from the
+	// list, so a registry entry would assert the wrong invariant.
+	//
+	// ① THIS GUARD DOES NOT COVER IT. The probe cannot even tell which side it
+	// is on: it writes a TEXT sentinel, SQLite orders TEXT above every number,
+	// so max() keeps the sentinel and the column reads as "absent". The blind
+	// spot comes from a collation accident, not from the column's own design.
+	//
+	// ② SO NOTHING HERE WOULD STOP SOMEONE MIGRATING IT. dal.go warns that the
+	// single-column writer already on the tree, SetMemberForcedStopAt, is a
+	// plain assignment with NO max() — swap the upsert for it and the
+	// forward-only property is gone, silently, and this test stays green.
+	// Whoever proposes that migration has to argue it on the code; this guard
+	// will not argue back.
+	"forced_stop_at": "carried under max(), forward-only — UNCOVERED by this guard, see above",
 }
 
 // TestEveryColumnOutOfTheSetListIsRegistered is the guard on the REGISTRY

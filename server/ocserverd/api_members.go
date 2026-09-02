@@ -855,8 +855,20 @@ func (s *apiServer) HandleUpdateMemberApiMembersMemberIdPatch(w http.ResponseWri
 	// the new model stored with NO epoch — the exact bug T-b6d9 fixed, arriving
 	// through a different door, and nothing ever converges it. This way round, a
 	// failure leaves the epoch open with the OLD value: the member winds down and
-	// comes back on what it was already running. One wasted recycle, and the
-	// owner's 500 is honest — nothing they asked for was stored.
+	// comes back on what it was already running — one wasted recycle, and the
+	// retry still sees a difference.
+	//
+	// ⚠️ The 500 is NOT "nothing was stored": the whole-row write above has
+	// already landed, so a `name` carried by the SAME request is saved even
+	// though the launch intent is not. What the failure guarantees is only that
+	// the launch intent did not land — which is what makes the retry work.
+	//
+	// relocate and activate are deliberately NOT reordered this way. Their
+	// wind-down is unconditional (relocate always arms one, activate always
+	// force-revives), so their retry always re-dispatches and the residue
+	// converges on its own. Only the launch-intent faces gate the wind-down on
+	// "the value actually changed", and that gate is what a value landing early
+	// closes.
 	if body.Model != nil {
 		if err := s.dal.SetMemberModel(m.ID, m.Model); err != nil {
 			internalError(w, err)
