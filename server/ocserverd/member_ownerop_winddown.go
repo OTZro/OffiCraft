@@ -300,8 +300,14 @@ func winddownKindFor(op string) (kind string, clocked bool) {
 }
 
 // armRefocusEpoch is the ONE way a refocus epoch is opened. It MUTATES m and
-// persists nothing: every caller folds it into its own single putMember, so the
-// stamp and whatever else that write carries are one row write and one delta.
+// persists nothing: every caller folds it into its own putMember, so the epoch
+// and whatever else that write carries land together.
+//
+// ⚠️ THAT IS THE EPOCH ALONE, not 「everything the handler is doing」 (T-55). The
+// launch intents and the five receipt columns have their own sole writers now,
+// so a caller of this function typically performs TWO writes and the ordering
+// between them is argued at the call site. Do not read this paragraph as a
+// promise that a handler using it is atomic.
 //
 // 🔴 The two zeroed anchors are the whole reason this is a named function and
 // not four hand-written lines. A NEW epoch must never inherit the PREVIOUS

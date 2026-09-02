@@ -1496,20 +1496,33 @@ func (s *apiServer) armDecidedHandover(memberID string, decision reconcileDecisi
 //
 // To re-check, grep `LastOpOK` over non-test .go — the COLUMN name, because the
 // `&ok` spelling is incidental and the next writer is free to name its bool
-// anything. Over the tree this comment lives in that is 31 hits, 2 of them inside
-// this comment block (the recipe finds its own subject; the previous one did
-// not). It was 27 before T-39 added the two converged clears, two lines each. Of
-// the rest, the hits that WRITE the column are:
+// anything. Over the tree this comment lives in that is 41 hits, 3 of them
+// inside this comment block (the recipe finds its own subject).
+//
+// ⚠️ THE ARITHMETIC HISTORY THAT USED TO SIT HERE IS GONE ON PURPOSE. It said
+// 31; by the time anyone re-ran the grep it was 33, and it derived that figure
+// from a "two lines each" that was three. A remembered count is a claim nothing
+// re-checks: it decays silently while reading as precise, which is the exact
+// defect this ticket exists to remove. Re-run the grep. Do not trust the last
+// number anyone wrote down, this one included.
+//
+// Of the rest, the hits that WRITE the column are:
 //   - seven `stampOpReceipt(&….LastOpOK, …)` call sites — reconcile.go ×3,
 //     receipt_watch.go ×2, worker_spawn.go ×2: the refusal class, all of it here;
 //   - stampWakeObservability below — refusal class, standing apart, anchored;
 //   - api_monitoring.go ×2 — the agent-verdict class described above;
-//   - seven that stamp no receipt at all: dal.go's row scan, this file's copy of
-//     an already-stamped row onto a freshly re-read one, and FIVE lines that
-//     clear back to nil — worker_spawn.go's clearWorkerPlacementBlock, plus the
-//     two T-39 converged clears (stampWakeObservability below and
-//     worker_spawn.go's clearWorkerConvergedFailureReceipt), each of which reads
-//     the column to test for a FAILURE and then writes nil.
+//   - seven `dal.SetMemberOpReceipt(…, ….LastOpOK, …)` call sites (T-55) —
+//     worker_spawn.go ×3, api_monitoring.go, api_members.go, receipt_watch.go,
+//     api_outsource.go. NOT a fourth class of receipt: they are the PERSISTENCE
+//     of the three above, which used to be a whole-row write. The five columns
+//     left PutMember's DO UPDATE SET, so stamping onto a struct stores nothing
+//     by itself — every stamp above now ends in one of these, and a stamp that
+//     does not is a receipt nobody will ever read;
+//   - three lines that clear back to nil rather than stamping —
+//     worker_spawn.go's clearWorkerPlacementBlock and
+//     clearWorkerConvergedFailureReceipt, plus this file's
+//     clearMemberConvergedFailureReceipt: each reads the column to test for a
+//     FAILURE and then writes nil.
 //
 // 🔴 A CLEAR IS NOT A RECEIPT, and it must not be routed through this core: the
 // core always leaves a non-nil FALSE with a reason, the clears leave nil with
@@ -1557,10 +1570,20 @@ func stampOpReceipt(lastOp *string, lastOpOK **bool, lastOpLog, lastOpReason *st
 }
 
 // stampMemberOpReceipt writes one op receipt onto an IN-MEMORY member the caller
-// is about to persist itself. It exists so an HTTP handler's explanation and the
-// change it explains are ONE row write and ONE delta — the same reason
-// armRefocusEpoch mutates instead of persisting. The receipt itself is
-// stampOpReceipt's; this is the staff shell.
+// is about to persist itself — the same reason armRefocusEpoch mutates instead
+// of persisting. The receipt itself is stampOpReceipt's; this is the staff shell.
+//
+// ⚠️ IT NO LONGER MAKES THE EXPLANATION AND THE CHANGE ONE WRITE (T-55), which
+// is what this comment used to promise. The five receipt columns left
+// PutMember's DO UPDATE SET, so a caller's whole-row write carries the change
+// and a separate dal.SetMemberOpReceipt carries the explanation. STAMPING ALONE
+// STORES NOTHING — a caller that forgets the second write leaves a receipt that
+// exists only in memory, and nothing goes red.
+//
+// Where the two writes go relative to each other is a per-site decision with a
+// real failure mode behind it, not a style choice: see HandleUpdateMember, where
+// the receipt has to land BEFORE the launch-intent setters because the gate that
+// decides whether to stamp at all compares against the STORED value.
 func stampMemberOpReceipt(m *Member, reason string, now float64) {
 	stampOpReceipt(&m.LastOp, &m.LastOpOK, &m.LastOpLog, &m.LastOpReason, &m.LastOpAt,
 		reconcileCmdStart, reason, now)
@@ -1632,7 +1655,11 @@ func (s *apiServer) stampMemberOpBlocked(memberID, reason string, now float64) {
 	}
 	stampOpReceipt(&fresh.LastOp, &fresh.LastOpOK, &fresh.LastOpLog, &fresh.LastOpReason,
 		&fresh.LastOpAt, reconcileCmdStart, reason, now)
-	if err := s.putMember(*fresh, triggerServer); err != nil {
+	// SINGLE WRITE, not two (T-55): the re-read above changed nothing but the
+	// receipt, so this whole-row write existed only to carry those five columns.
+	// Replacing it outright means there is no window between two writes here at
+	// all — see the ticket's 2.1a.
+	if err := s.persistMemberOpReceipt(*fresh, triggerServer); err != nil {
 		reconcileLog("%s: op-blocked stamp persist failed: %v", memberID, err)
 	}
 }
@@ -1675,7 +1702,8 @@ func (s *apiServer) stampMemberPlacementBlocked(m *Member, now float64) {
 	}
 	stampOpReceipt(&fresh.LastOp, &fresh.LastOpOK, &fresh.LastOpLog, &fresh.LastOpReason,
 		&fresh.LastOpAt, reconcileCmdStart, reason, now)
-	if err := s.putMember(*fresh, triggerServer); err != nil {
+	// Single write — same reason as stampMemberOpBlocked above.
+	if err := s.persistMemberOpReceipt(*fresh, triggerServer); err != nil {
 		reconcileLog("%s: placement-blocked stamp persist failed: %v", m.ID, err)
 	}
 }
@@ -1806,8 +1834,23 @@ func (s *apiServer) stampWakeObservability(m *Member, decision reconcileDecision
 	fresh.LastOpLog = m.LastOpLog
 	fresh.LastOpReason = m.LastOpReason
 	fresh.LastOpAt = m.LastOpAt
+	// 🔴 SIX COLUMNS, NOT FIVE — and that is why this site is still two writes
+	// (T-55). waking_since travels with the receipt here, and it has NOT left
+	// PutMember's SET list, so the whole-row write stays for it while the five
+	// receipt columns go through their sole writer. When waking_since is migrated
+	// in its own batch, this becomes two single-column writes and the whole-row
+	// write disappears; until then, deleting either half loses a column.
+	//
+	// Order: the whole-row write first, the receipt second — both halves are
+	// recomputed and re-attempted by the next reconcile tick, so a failure
+	// between them is visible to a retry either way; this order simply matches
+	// the rest of the ticket.
 	if err := s.putMember(*fresh, triggerServer); err != nil {
 		reconcileLog("%s: wake observability persist failed: %v", m.ID, err)
+		return
+	}
+	if err := s.persistMemberOpReceipt(*fresh, triggerServer); err != nil {
+		reconcileLog("%s: wake observability receipt persist failed: %v", m.ID, err)
 	}
 }
 
@@ -1894,7 +1937,8 @@ func (s *apiServer) clearMemberConvergedFailureReceipt(memberID string, snapshot
 	fresh.LastOpLog = ""
 	fresh.LastOpReason = ""
 	fresh.LastOpAt = 0.0
-	if err := s.putMember(*fresh, triggerServer); err != nil {
+	// Single write — the clear touches nothing but these five.
+	if err := s.persistMemberOpReceipt(*fresh, triggerServer); err != nil {
 		reconcileLog("%s: converged receipt clear failed: %v", memberID, err)
 	}
 }

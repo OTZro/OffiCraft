@@ -1398,16 +1398,21 @@ func TestPutOutsourceWorker_KeepsWindDownAnchors(t *testing.T) {
 	}
 
 	// Any unrelated read-modify-write of the worker row (the tick shape). The
-	// unrelated field has to be one the whole-row write still CARRIES: effort
-	// left PutMember's DO UPDATE SET in T-55, so writing it here would make this
-	// an upsert that changes nothing at all — the test would still pass, while no
-	// longer standing for the thing it is named after.
+	// unrelated field has to be one the whole-row write still CARRIES, and the
+	// answer keeps moving: effort left PutMember's DO UPDATE SET in T-55's first
+	// batch and last_op followed it in the second, so each of them in turn would
+	// have made this an upsert that changes nothing at all — passing while no
+	// longer standing for the thing the test is named after. last_machine_id is
+	// the current choice, and the re-read below is what will catch the day it
+	// stops being carried too. If you are here because that assertion fired, the
+	// fix is to pick another CARRIED column, never to delete the check.
 	w, _ := api.dal.GetOutsourceWorker(workerID)
-	w.LastOp = "tick"
+	w.LastMachineID = "m-tick"
 	if err := api.dal.PutOutsourceWorker(*w); err != nil {
 		t.Fatalf("put worker: %v", err)
 	}
-	if reread, _ := api.dal.GetOutsourceWorker(workerID); reread == nil || reread.LastOp != "tick" {
+	if reread, _ := api.dal.GetOutsourceWorker(workerID); reread == nil ||
+		reread.LastMachineID != "m-tick" {
 		t.Fatalf("the unrelated write must actually land, else this test asserts "+
 			"nothing: %+v", reread)
 	}

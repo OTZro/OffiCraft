@@ -392,10 +392,18 @@ var spawnBlockedReasonCodes = []string{
 // failure is logged and never changes the dispatch decision — observability must
 // not be able to stall the control loop.
 // stampWorkerOpReceipt writes one receipt onto an IN-MEMORY worker the caller is
-// about to persist itself — the twin of stampMemberOpReceipt, and the reason it
-// exists is the same: an owner verb's explanation and the change it explains
-// must be ONE row write and ONE delta. stampWorkerPlacementBlocked is the other
-// half of the pair, for callers (the tick) that own no write of their own.
+// about to persist itself — the twin of stampMemberOpReceipt.
+// stampWorkerPlacementBlocked is the other half of the pair, for callers (the
+// tick) that own no write of their own.
+//
+// ⚠️ THE REASON IT USED TO GIVE — that an owner verb's explanation and the change
+// it explains must be ONE row write and ONE delta — STOPPED BEING TRUE IN T-55.
+// The five receipt columns left PutMember's DO UPDATE SET, so the caller's own
+// write no longer carries them and every stamp must be followed by
+// dal.SetMemberOpReceipt. What survives of that reason is narrower and still
+// worth keeping: the receipt is stamped onto the SAME struct the caller is
+// about to write, so the two land from one consistent snapshot rather than
+// from two reads of a row somebody else may have moved in between.
 //
 // "Twin" is now literal rather than descriptive: both shells hand the same five
 // columns to stampOpReceipt (reconcile.go), which is where the receipt is
@@ -516,7 +524,9 @@ func (s *apiServer) stampWorkerPlacementBlocked(w *OutsourceWorker, reason strin
 	}
 	stampOpReceipt(&fresh.LastOp, &fresh.LastOpOK, &fresh.LastOpLog, &fresh.LastOpReason,
 		&fresh.LastOpAt, reconcileCmdStart, reason, now)
-	if err := s.dal.PutOutsourceWorker(*fresh); err != nil {
+	// Single write (T-55): the re-read above moved nothing but the receipt.
+	if err := s.dal.SetMemberOpReceipt(fresh.ID, fresh.LastOp, fresh.LastOpOK, fresh.LastOpLog,
+		fresh.LastOpReason, fresh.LastOpAt); err != nil {
 		outsourceLog("spawn %s: placement-blocked stamp persist failed: %v", w.ID, err)
 		return
 	}
@@ -549,7 +559,17 @@ func (s *apiServer) clearWorkerPlacementBlock(workerID string) {
 	// FAILED start with nothing to explain it — a fresh blank of the same kind. nil
 	// is the honest "no receipt yet"; the warden's own receipt fills it in.
 	fresh.LastOpOK = nil
-	if err := s.dal.PutOutsourceWorker(*fresh); err != nil {
+	// 🔴 THREE COLUMNS CHANGE, FIVE ARE WRITTEN, AND last_op / last_op_at GO BACK
+	// IN CARRYING THE VALUES THEY ALREADY HELD — that is deliberate, not a
+	// forgotten clear (T-55). This function has always kept both: last_op_at is
+	// what separates "stalled an hour ago" from "stalled right now", which is the
+	// whole point of the paragraph above. The sole writer takes the receipt whole
+	// (a partial receipt is a verdict nobody wrote — see SetMemberOpReceipt), so
+	// "keep it" is now spelled "pass the current value" instead of "leave that
+	// field out of the UPDATE". Anyone who "tidies" these two into zeroes deletes
+	// the timestamp this function exists to preserve.
+	if err := s.dal.SetMemberOpReceipt(fresh.ID, fresh.LastOp, fresh.LastOpOK, fresh.LastOpLog,
+		fresh.LastOpReason, fresh.LastOpAt); err != nil {
 		outsourceLog("spawn %s: placement-block clear failed: %v", workerID, err)
 	}
 }
@@ -606,7 +626,9 @@ func (s *apiServer) clearWorkerConvergedFailureReceipt(workerID string, snapshot
 	fresh.LastOpLog = ""
 	fresh.LastOpReason = ""
 	fresh.LastOpAt = 0.0
-	if err := s.dal.PutOutsourceWorker(*fresh); err != nil {
+	// Single write (T-55): the clear touches nothing but these five.
+	if err := s.dal.SetMemberOpReceipt(fresh.ID, fresh.LastOp, fresh.LastOpOK, fresh.LastOpLog,
+		fresh.LastOpReason, fresh.LastOpAt); err != nil {
 		outsourceLog("%s: converged receipt clear failed: %v", workerID, err)
 		return
 	}

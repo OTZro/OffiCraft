@@ -51,6 +51,32 @@ func (s *apiServer) putMember(m Member, trigger string) error {
 // into the database with it. Migrating a column out of PutMember's SET list and
 // forgetting this call is a silent loss: nothing goes red, the cockpit simply
 // stops converging.
+// persistMemberOpReceipt stores the five last_op* columns of an ALREADY-STAMPED
+// member row through their sole writer, then fans the member delta (T-55).
+//
+// It exists so the two halves cannot drift apart. Every caller below used to get
+// the delta for free from putMember; the columns left PutMember's SET list, so a
+// caller that wrote them and forgot publishMemberPatch would lose the cockpit
+// refresh SILENTLY — nothing red, the panel simply stops updating. Binding the
+// write and the fan into one call is what makes forgetting impossible rather
+// than merely discouraged.
+//
+// On a write failure NOTHING is fanned: a delta announcing a receipt the
+// database does not hold is worse than no delta at all.
+//
+// ⚠️ MEMBER ROWS ONLY. The outsource half deliberately does not fan a member
+// patch for an `ow-` id (its changes travel on the outsource_worker projection),
+// so worker callers write through s.dal.SetMemberOpReceipt directly and keep
+// whatever publish they already had.
+func (s *apiServer) persistMemberOpReceipt(m Member, trigger string) error {
+	if err := s.dal.SetMemberOpReceipt(m.ID, m.LastOp, m.LastOpOK, m.LastOpLog,
+		m.LastOpReason, m.LastOpAt); err != nil {
+		return err
+	}
+	s.publishMemberPatch(m, trigger)
+	return nil
+}
+
 func (s *apiServer) publishMemberPatch(m Member, trigger string) {
 	op := "patch"
 	if m.RosterStatus == RosterStatusRemoved {
@@ -833,10 +859,15 @@ func (s *apiServer) HandleUpdateMemberApiMembersMemberIdPatch(w http.ResponseWri
 	if launchIntentChanged {
 		// A member the owner has stopped takes the new value on its next 活化 and
 		// NOTHING happens now — which is right, and used to be indistinguishable
-		// from "it took effect". The receipt is folded into this same putMember, so
-		// the EXPLANATION still rides one write and one delta. The value does not
-		// (T-55: its setter runs after this write) — so "one write" now describes
-		// the receipt alone, never the pair.
+		// from "it took effect".
+		//
+		// ⚠️ THE RECEIPT NO LONGER RIDES THE putMember BELOW EITHER. The sentence
+		// here was corrected once already in T-55's first batch, to say the
+		// EXPLANATION still travelled in one write even though the value no longer
+		// did; the second batch moved the receipt columns out too, so both halves
+		// are now separate writes and the write below carries neither. The stamp
+		// is stored by the dal.SetMemberOpReceipt call after it — which must run
+		// BEFORE the launch-intent setters, for the reason spelled out there.
 		heldDown = !s.armMemberOwnerOpHandover(m, memberOpModel) &&
 			m.DesiredState == DesiredStateOffline
 		if heldDown {
@@ -846,6 +877,31 @@ func (s *apiServer) HandleUpdateMemberApiMembersMemberIdPatch(w http.ResponseWri
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
 		return
+	}
+	// 🔴 THE RECEIPT NO LONGER RIDES THE WRITE ABOVE (T-55), AND IT MUST LAND
+	// BEFORE THE LAUNCH-INTENT SETTERS BELOW — this is the one ordering on this
+	// handler that a retry cannot repair if you get it wrong.
+	//
+	// The gate for the whole block is launchIntentChanged, which compares the
+	// request against the STORED launch intent. Put this write after the setters
+	// and a failure here leaves the new model on the row with no receipt — and
+	// the owner's retry then finds nothing changed, takes neither branch, and
+	// never stamps the explanation. The member would sit held-down with the
+	// cockpit saying nothing about why, permanently. Before the setters, the
+	// stored value still differs, so the retry re-enters this branch and stamps.
+	//
+	// Same shape as T-b6d9, one door along: what makes a retry work here is that
+	// the thing the gate reads has not moved yet.
+	//
+	// Gated on heldDown because only that branch wrote a receipt. Persisting
+	// unconditionally would push this handler's SNAPSHOT of the five columns back
+	// over whatever a reconcile tick stamped meanwhile — the exact clobber this
+	// ticket removes, re-introduced through the fix for it.
+	if heldDown {
+		if err := s.persistMemberOpReceipt(*m, requestTrigger(r)); err != nil {
+			internalError(w, err)
+			return
+		}
 	}
 	// The three launch intents left PutMember's DO UPDATE SET in T-55, so the
 	// write above no longer carries them — their sole writers do, and ONLY for a
@@ -1072,14 +1128,28 @@ func (s *apiServer) HandleRelocateMemberApiMembersMemberIdRelocatePost(w http.Re
 	// delta the agent wakes on still names the destination, because the pin is
 	// already on the row by the time this write fans it.
 	windDown := s.armMemberOwnerOpHandover(m, memberOpRelocate)
-	// Held down: the pin is stored and nothing is moved. Same receipt, same
-	// single write — see memberHeldDownReceipt.
-	if !windDown && m.DesiredState == DesiredStateOffline {
+	// Held down: the pin is stored and nothing is moved. Same receipt as the
+	// model face — see memberHeldDownReceipt.
+	heldDown := !windDown && m.DesiredState == DesiredStateOffline
+	if heldDown {
 		stampMemberOpReceipt(m, memberHeldDownReceipt(memberOpRelocate), nowSecs())
 	}
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
 		return
+	}
+	// The receipt left the write above (T-55) and now lands through its sole
+	// writer. Unlike the model face, the ORDER here carries no convergence
+	// argument: this handler's wind-down is armed unconditionally, so nothing
+	// gates on a stored value that an early landing could close — a retry
+	// re-enters this branch whatever happened. Gated on heldDown for the reason
+	// the model face gives: persisting unconditionally would push this handler's
+	// snapshot of the five columns over whatever a tick stamped meanwhile.
+	if heldDown {
+		if err := s.persistMemberOpReceipt(*m, requestTrigger(r)); err != nil {
+			internalError(w, err)
+			return
+		}
 	}
 	// Event-driven reconcile: with a wind-down open this decides "awaiting agent
 	// dump" and dispatches NOTHING (the 收口 owns the move); it still runs so the

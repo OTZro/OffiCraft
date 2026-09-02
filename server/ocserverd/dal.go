@@ -472,10 +472,6 @@ func (d *DAL) PutMember(m Member) error {
 			stopped_since = excluded.stopped_since,
 			refocus_since = excluded.refocus_since,
 			refocus_op = excluded.refocus_op,
-			last_op = excluded.last_op, last_op_ok = excluded.last_op_ok,
-			last_op_log = excluded.last_op_log,
-			last_op_reason = excluded.last_op_reason,
-			last_op_at = excluded.last_op_at,
 			roster_status = excluded.roster_status,
 			linked_task_id = excluded.linked_task_id,
 			codename = excluded.codename,
@@ -742,6 +738,43 @@ func (d *DAL) SetMemberRuntime(id, runtime string) error {
 // SetMemberEffort writes ONLY member.effort — see SetMemberModel.
 func (d *DAL) SetMemberEffort(id, effort string) error {
 	_, err := d.wdb.Exec(`UPDATE member SET effort = ? WHERE id = ?`, effort, id)
+	return err
+}
+
+// SetMemberOpReceipt writes the five last_op* columns and NOTHING else (T-55) —
+// the OP RECEIPT the cockpit renders as the ✓/✗ block under a member or worker.
+// It is the sole writer of all five; PutMember carries them on INSERT and none
+// of them in its DO UPDATE SET.
+//
+// 🔴 ONE WRITER FOR FIVE COLUMNS, not five writers — the opposite of the launch
+// intents next door, and for the opposite reason. receiptRendersAsFailure reads
+// last_op, last_op_at and last_op_ok TOGETHER to decide what the panel shows, so
+// any moment in which some of the five have landed and the rest have not is a
+// state the cockpit renders as a verdict nobody wrote. Five writers would
+// manufacture that moment on every stamp. The launch intents split because their
+// two editing faces genuinely write them independently; a receipt is always
+// written whole.
+//
+// 🔴 ok is *bool BECAUSE THE COLUMN IS THREE-VALUED — nil / true / false, with
+// nil meaning "nothing folded yet" and stored as SQL NULL (scanMember reads it
+// back through sql.NullBool). It is NOT a bool with nil folded onto false:
+// receiptRendersAsFailure treats nil and false alike for RENDERING, but three
+// clear paths (clearWorkerPlacementBlock and the two converged clears) write nil
+// back DELIBERATELY, and a bool signature would silently turn each of them into
+// a written `false` — a verdict, where they meant to withdraw one.
+//
+// A missing row is a clean no-op (0 rows affected, no error).
+func (d *DAL) SetMemberOpReceipt(id, op string, ok *bool, log, reason string, at float64) error {
+	// nil interface binds SQL NULL, exactly as PutMember's own bind does — the
+	// round trip that keeps the third state a third state.
+	var okVal any
+	if ok != nil {
+		okVal = *ok
+	}
+	_, err := d.wdb.Exec(
+		`UPDATE member SET last_op = ?, last_op_ok = ?, last_op_log = ?,
+			last_op_reason = ?, last_op_at = ? WHERE id = ?`,
+		op, okVal, log, reason, at, id)
 	return err
 }
 

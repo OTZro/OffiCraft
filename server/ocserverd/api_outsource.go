@@ -799,15 +799,15 @@ func (s *apiServer) HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost
 	// reason-code family instead — stamped only when it is TRUE of this worker,
 	// and cleared by the landed START (spawnBlockedReasonCodes) so it never
 	// outlives the restart it describes.
-	if s.hub.IsOnline(id) {
-		// Folded onto the row this handler is about to persist, not written
-		// through stampWorkerPlacementBlocked: that helper re-reads and writes on
-		// its own, and the whole-row PutOutsourceWorker below would then clobber
-		// it. One write, one delta — still true of THIS verb, whose columns
-		// (desired_state and the receipt) the whole-row write all still carries.
-		// ⚠️ It is NO LONGER the rule every owner verb here follows: since T-55
-		// the 換 model verb stores its three launch intents through their own
-		// setters, which run AFTER its whole-row write (see the 🔴 block there).
+	sessionAliveReceipt := s.hub.IsOnline(id)
+	if sessionAliveReceipt {
+		// Stamped onto the in-memory row rather than written through
+		// stampWorkerPlacementBlocked: that helper re-reads and writes on its own,
+		// and this handler's own write would then race it.
+		// ⚠️ NOT one write any more, and it is no longer the rule every owner verb
+		// here follows: since T-55 the receipt columns land through
+		// SetMemberOpReceipt below, and the 換 model verb stores its three launch
+		// intents through their own setters (see the 🔴 block there).
 		stampWorkerOpReceipt(worker, spawnReasonSessionAlive+
 			": this worker was still running — 重啟 is replacing that session, not "+
 			"starting a first one. If it does not come back, its previous session "+
@@ -852,10 +852,26 @@ func (s *apiServer) HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost
 	worker.RefocusOp = ""
 	worker.StoppingSince = 0.0
 	worker.StoppedSince = 0.0
+	// The whole-row write still carries desired_state and the four anchors above;
+	// only the receipt has moved out (T-55), and it is written right after, gated
+	// on having actually been stamped. Order carries no convergence argument
+	// here: the gate is hub liveness, not a stored value, so nothing an early
+	// landing could close.
 	if err := s.dal.PutOutsourceWorker(*worker); err != nil {
 		s.outsourceMu.Unlock()
 		internalError(w, err)
 		return
+	}
+	// BEFORE the respawn, so the row this handler is about to re-read for its
+	// response already carries the receipt. No publish of its own: the
+	// publishOutsourceWorker below fans the projection once, for both writes.
+	if sessionAliveReceipt {
+		if err := s.dal.SetMemberOpReceipt(worker.ID, worker.LastOp, worker.LastOpOK,
+			worker.LastOpLog, worker.LastOpReason, worker.LastOpAt); err != nil {
+			s.outsourceMu.Unlock()
+			internalError(w, err)
+			return
+		}
 	}
 	outcome := s.respawnWorkerForOwnerOp(*worker, ownerOpRestart)
 	if fresh, ferr := s.dal.GetOutsourceWorker(id); ferr == nil && fresh != nil {
