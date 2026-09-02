@@ -798,22 +798,27 @@ func TestSetWorkerModel_ImmediateRespawnCarriesTheNewModel(t *testing.T) {
 			continue
 		}
 		starts++
-		for _, want := range []struct{ field, value string }{
-			{"model", "claude-opus-4-9"},
-			{"runtime", RuntimeCodex},
-			{"effort", "high"},
-		} {
-			// Errorf, not Fatalf: the three are independent facts about one frame,
-			// and a re-read stales all three at once. Failing fast would show only
-			// the first and hide that the other two are equally unpinned.
-			if args[want.field] != want.value {
+		// Errorf, not Fatalf: the three are independent facts about one frame, and
+		// a re-read stales all three at once. Failing fast would show only the
+		// first and hide that the other two are equally unpinned.
+		//
+		// Three calls rather than a table: a {field, value} slice literal reads to
+		// lint-effort-vocab as a hand-written effort vocabulary and it correctly
+		// reports the list as incomplete. Silencing that with a SKIP_FILES line
+		// would blind this whole file to the guard for the sake of one row.
+		assertArg := func(field, want string) {
+			t.Helper()
+			if args[field] != want {
 				t.Errorf("the synchronous respawn dispatched %s %v, want %q — "+
 					"the frame is built from the VALUE the handler holds, and the launch-intent "+
 					"setters run AFTER it (T-55). Something under notifyWorkerSpawn re-read the "+
 					"row, which still carries the previous value at that instant.",
-					want.field, args[want.field], want.value)
+					field, args[field], want)
 			}
 		}
+		assertArg("model", "claude-opus-4-9")
+		assertArg("runtime", RuntimeCodex)
+		assertArg("effort", "high")
 	}
 	if starts != 1 {
 		t.Fatalf("a 換 model landing after the collect must dispatch exactly one START "+
