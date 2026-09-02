@@ -803,7 +803,11 @@ func (s *apiServer) HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost
 		// Folded onto the row this handler is about to persist, not written
 		// through stampWorkerPlacementBlocked: that helper re-reads and writes on
 		// its own, and the whole-row PutOutsourceWorker below would then clobber
-		// it. One write, one delta — the rule every owner verb here follows.
+		// it. One write, one delta — still true of THIS verb, whose columns
+		// (desired_state and the receipt) the whole-row write all still carries.
+		// ⚠️ It is NO LONGER the rule every owner verb here follows: since T-55
+		// the 換 model verb stores its three launch intents through their own
+		// setters, which run AFTER its whole-row write (see the 🔴 block there).
 		stampWorkerOpReceipt(worker, spawnReasonSessionAlive+
 			": this worker was still running — 重啟 is replacing that session, not "+
 			"starting a first one. If it does not come back, its previous session "+

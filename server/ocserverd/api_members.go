@@ -821,14 +821,22 @@ func (s *apiServer) HandleUpdateMemberApiMembersMemberIdPatch(w http.ResponseWri
 	// live session — the owner pressed 儲存, got a 200, and the member went on
 	// running the OLD model until something unrelated respawned it. Now the
 	// change opens the SAME graceful wind-down 重新聚焦 has always had, so the
-	// member finishes what it was doing and comes back on the new value. Same
-	// single write: the epoch and the new value can never land apart.
+	// member finishes what it was doing and comes back on the new value.
+	//
+	// ⚠️ SINCE T-55 THE EPOCH AND THE NEW VALUE NO LONGER LAND TOGETHER. This
+	// was one write, so they could not land apart; the three launch intents have
+	// since left PutMember's SET list and land through their own setters, which
+	// run AFTER the whole-row write below. Only that order converges on a partial
+	// failure — the 🔴 block sitting above those setters is the whole argument,
+	// and it is the one to read. Do not restore the claim that was here.
 	heldDown := false
 	if launchIntentChanged {
 		// A member the owner has stopped takes the new value on its next 活化 and
 		// NOTHING happens now — which is right, and used to be indistinguishable
-		// from "it took effect". The receipt is folded into this same putMember so
-		// the value and the explanation land in one write and one delta.
+		// from "it took effect". The receipt is folded into this same putMember, so
+		// the EXPLANATION still rides one write and one delta. The value does not
+		// (T-55: its setter runs after this write) — so "one write" now describes
+		// the receipt alone, never the pair.
 		heldDown = !s.armMemberOwnerOpHandover(m, memberOpModel) &&
 			m.DesiredState == DesiredStateOffline
 		if heldDown {
@@ -1054,9 +1062,15 @@ func (s *apiServer) HandleRelocateMemberApiMembersMemberIdRelocatePost(w http.Re
 	// reconcile below — no 預告, no grace, not even a stopping_since, so it just
 	// vanished from the cockpit with whatever it was mid-way through. It now
 	// gets the same wind-down 重新聚焦 has always had; the winding-down anchors
-	// ARE written in that case, and only in that case. Same putMember, so the
-	// new pin and the epoch land together and the delta the agent wakes on
-	// already names the destination.
+	// ARE written in that case, and only in that case.
+	//
+	// ⚠️ THE PIN NO LONGER RIDES THIS WRITE (T-55) — it landed through its sole
+	// writer a few lines above, BEFORE the epoch. That is the REVERSE of the
+	// launch-intent faces, and deliberately so: relocate arms its wind-down
+	// unconditionally, so nothing here gates on "the value actually changed" and
+	// a retry re-dispatches regardless — the residue converges on its own. The
+	// delta the agent wakes on still names the destination, because the pin is
+	// already on the row by the time this write fans it.
 	windDown := s.armMemberOwnerOpHandover(m, memberOpRelocate)
 	// Held down: the pin is stored and nothing is moved. Same receipt, same
 	// single write — see memberHeldDownReceipt.

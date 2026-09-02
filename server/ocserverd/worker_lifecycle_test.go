@@ -734,14 +734,23 @@ func TestSetWorkerModel_ActiveWindsDownThenRespawns(t *testing.T) {
 // session still reads as online, which is the window
 // TestOwnerOp_VerbAfterTheCollectIsNotSwallowed opens.
 //
-// 🔴 WHY IT HAS TO EXIST SINCE T-55: on that arm the frame goes out BEFORE
-// SetMemberModel stores the value, so the START can only be right because
+// 🔴 WHY IT HAS TO EXIST SINCE T-55: on that arm the frame goes out BEFORE the
+// setters store the values, so the START can only be right because
 // respawnWorkerForOwnerOp takes the worker BY VALUE and nothing under it
 // re-reads the row for the launch spec. That was an incidental property before;
 // it is load-bearing now. Mutant: make notifyWorkerSpawn (or anything below it)
 // build the frame from a fresh GetOutsourceWorker and this test goes red with
-// the OLD model — which is exactly what the owner would get in production, on a
+// the OLD values — which is exactly what the owner would get in production, on a
 // 200, with no receipt.
+//
+// ALL THREE launch intents are sent and asserted, not just the model: the same
+// window carries runtime and effort through the same by-value chain, and a
+// single-field pin would leave the other two riding on nothing. runtime is the
+// one that hurts most when it slips, because it has a SECOND consumer the frame
+// column does not show — buildWorkerBootContext feeds w.Runtime to
+// workerBootSequence, so a stale runtime boots the worker on the OTHER runtime's
+// 啟動步驟 document. That failure is invisible from every direction: 200, no
+// receipt, nothing red, and the row afterwards holds the NEW value.
 //
 // The sibling above covers the wind-down arm, where the row is written long
 // before the collect dispatches. Neither one covers the other.
@@ -749,6 +758,12 @@ func TestSetWorkerModel_ImmediateRespawnCarriesTheNewModel(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
 	workerID := newActiveOnlineWorker(t, api)
+	// The warden must be able to take a CODEX worker, or step 3's runtime change
+	// would be refused at placement and dispatch nothing — a green that proves
+	// the opposite of what this test is for.
+	if rec := doIngestTelemetry(api, ServerSelfHost, ServerSelfHost, bothRuntimes); rec.Code != 200 {
+		t.Fatalf("fixture: telemetry ingest: %d %s", rec.Code, rec.Body.String())
+	}
 
 	// 1) The first 換 model opens a wind-down and dispatches nothing.
 	setWorkerModelBody(t, api, workerID, map[string]any{"model": "claude-opus-4-8"})
@@ -771,8 +786,9 @@ func TestSetWorkerModel_ImmediateRespawnCarriesTheNewModel(t *testing.T) {
 	}
 	api.hub.DrainWardenCommands(ServerSelfHost)
 
-	// 3) The owner changes the model again. This one dispatches NOW.
-	setWorkerModelBody(t, api, workerID, map[string]any{"model": "claude-opus-4-9"})
+	// 3) The owner changes all three launch intents at once. This one dispatches NOW.
+	setWorkerModelBody(t, api, workerID, map[string]any{
+		"model": "claude-opus-4-9", "runtime": RuntimeCodex, "effort": "high"})
 
 	frames := api.hub.DrainWardenCommands(ServerSelfHost)
 	var starts int
@@ -782,11 +798,21 @@ func TestSetWorkerModel_ImmediateRespawnCarriesTheNewModel(t *testing.T) {
 			continue
 		}
 		starts++
-		if args["model"] != "claude-opus-4-9" {
-			t.Fatalf("the synchronous respawn dispatched model %v, want claude-opus-4-9 — "+
-				"the frame is built from the VALUE the handler holds, and the launch-intent "+
-				"setters run AFTER it (T-55). Something under notifyWorkerSpawn re-read the "+
-				"row, which still carries the previous model at that instant.", args["model"])
+		for _, want := range []struct{ field, value string }{
+			{"model", "claude-opus-4-9"},
+			{"runtime", RuntimeCodex},
+			{"effort", "high"},
+		} {
+			// Errorf, not Fatalf: the three are independent facts about one frame,
+			// and a re-read stales all three at once. Failing fast would show only
+			// the first and hide that the other two are equally unpinned.
+			if args[want.field] != want.value {
+				t.Errorf("the synchronous respawn dispatched %s %v, want %q — "+
+					"the frame is built from the VALUE the handler holds, and the launch-intent "+
+					"setters run AFTER it (T-55). Something under notifyWorkerSpawn re-read the "+
+					"row, which still carries the previous value at that instant.",
+					want.field, args[want.field], want.value)
+			}
 		}
 	}
 	if starts != 1 {
@@ -794,9 +820,11 @@ func TestSetWorkerModel_ImmediateRespawnCarriesTheNewModel(t *testing.T) {
 			"now, got %d (0 means it opened a second wind-down instead and this test "+
 			"is no longer covering the immediate arm)", starts)
 	}
-	// …and the row caught up too, so the two writes did not disagree.
-	if w, _ := api.dal.GetOutsourceWorker(workerID); w.Model != "claude-opus-4-9" {
-		t.Fatalf("row model = %q, want claude-opus-4-9", w.Model)
+	// …and the row caught up on all three, so the two writes did not disagree.
+	w, _ := api.dal.GetOutsourceWorker(workerID)
+	if w.Model != "claude-opus-4-9" || w.Runtime != RuntimeCodex || w.Effort != "high" {
+		t.Fatalf("row = model %q / runtime %q / effort %q, want claude-opus-4-9 / %s / high",
+			w.Model, w.Runtime, w.Effort, RuntimeCodex)
 	}
 }
 
