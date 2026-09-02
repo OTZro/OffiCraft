@@ -516,6 +516,15 @@ func (l *listener) connectOnce(ctx context.Context) (opened, activity, selfExit 
 	// answered-pane authority NOW, before the live stream takes over (the
 	// shared seen state collapses a drain/delta race to one printed line).
 	drainReplyCards(l.api, l.cfg, l.replySeen, l.out)
+	// …and CHAT, for exactly the same reason. A chat message fanned during the
+	// outage window is gone from the stream too, and the only thing that used to
+	// surface it was the NEXT chat delta — so if nobody spoke again, the agent
+	// was never told anyone had called. Draining here, before the live stream
+	// takes over, is what makes "reconnected" mean "caught up".
+	//
+	// This cannot re-print history: the seen cursor was advanced by whichever
+	// drain surfaced a line, so a re-drain of the same window prints nothing.
+	l.drainChatNow()
 
 	onAct := func() { activity = true }
 	if l.idleReadTimeout > 0 {
@@ -536,6 +545,27 @@ func (l *listener) connectOnce(ctx context.Context) (opened, activity, selfExit 
 	return true, activity, false, err
 }
 
+// drainChatNow runs the catch-up chat drain shared by the two no-stream-held
+// paths: process boot (run, before the connect loop) and every connect/reconnect
+// (connectOnce, before the live stream takes over).
+//
+// 🔴 SILENCE IS DECIDED BY THE CURSOR, NOT BY WHICH PATH CALLED. An UNPRIMED
+// store means this machine has never surfaced chat for this member, and there is
+// no "last seen" to diff against — printing then would wash a brand-new session
+// out with however much history predates it. That must hold on the connect path
+// too: a boot whose drain could not fetch leaves the store unprimed, and the
+// connect drain that follows is the first one to see the inbox. Passing a bare
+// `false` there would dump the whole history in exactly the case the silent
+// baseline exists to protect. In the ordinary cold boot the boot drain has
+// already primed and marked what it saw, so the connect drain finds nothing
+// unread and prints nothing — silence there comes from the cursor, not the flag.
+func (l *listener) drainChatNow() int {
+	if l.seen == nil {
+		l.seen = loadChatSeen(chatSeenPath(l.cfg))
+	}
+	return drainChat(l.api, l.cfg, l.seen, l.out, !l.seen.primed)
+}
+
 // run is the always-online listen loop. It blocks until ctx is cancelled or a self-exit
 // fires, re-dialing whenever the stream drops (exponential + jittered backoff, floor
 // reset when a healthy connection dropped). Returns the process exit code (always 0 —
@@ -551,17 +581,15 @@ func (l *listener) run(ctx context.Context) int {
 	//     predates it. This is the original behaviour, now scoped to the one case
 	//     that actually needs it.
 	//   - a persisted cursor exists ⇒ PRINT the messages that arrived since it
-	//     (bounded by chatBacklogPrintCap). /api/events has no replay, so this is
-	//     the ONLY path that can recover a message fanned while this agent held no
-	//     stream — a cold boot or a listener restarted mid-life.
+	//     (bounded by chatBacklogPrintCap). /api/events has no replay, so a drain
+	//     is the only path that can recover a message fanned while this agent held
+	//     no stream — a cold boot or a listener restarted mid-life.
 	//
-	// Either way this runs ONCE per process, BEFORE the connect loop: a re-dial
-	// never re-enters here, and every id already surfaced is in the cursor, so a
-	// reconnect can never re-print history.
-	if l.seen == nil {
-		l.seen = loadChatSeen(chatSeenPath(l.cfg))
-	}
-	drainChat(l.api, l.cfg, l.seen, l.out, !l.seen.primed)
+	// This one covers the window BEFORE the first dial; connectOnce runs the same
+	// drain on every connect, covering the window of each outage. Both are safe to
+	// repeat: every id already surfaced is in the cursor, so a re-drain of the same
+	// window prints nothing.
+	l.drainChatNow()
 
 	backoff := l.backoffStart
 	for {

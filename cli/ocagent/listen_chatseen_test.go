@@ -23,8 +23,9 @@ import (
 // how many /api/chat refetches landed.
 type mutableChatServer struct {
 	*httptest.Server
-	list atomic.Value // string
-	hits int32
+	list  atomic.Value // string
+	hits  int32
+	conns int32 // /api/events dials
 }
 
 func newMutableChatServer(t *testing.T, list string) *mutableChatServer {
@@ -38,11 +39,23 @@ func newMutableChatServer(t *testing.T, list string) *mutableChatServer {
 			_, _ = w.Write([]byte(m.list.Load().(string)))
 			return
 		}
+		if strings.HasPrefix(r.URL.Path, eventsPath) {
+			// open, say nothing, close ⇒ the listener re-dials forever, and
+			// every dial is one reconnect the drain has to cover.
+			atomic.AddInt32(&m.conns, 1)
+			w.Header().Set("Content-Type", "text/event-stream")
+			if fl, ok := w.(http.Flusher); ok {
+				fl.Flush()
+			}
+			return
+		}
 		w.WriteHeader(404)
 	}))
 	t.Cleanup(m.Server.Close)
 	return m
 }
+
+func (m *mutableChatServer) dials() int32 { return atomic.LoadInt32(&m.conns) }
 
 func (m *mutableChatServer) setList(s string) { m.list.Store(s) }
 
@@ -155,8 +168,8 @@ func TestListenerRun_ColdStart_BackfillsWhatArrivedWhileDown(t *testing.T) {
 }
 
 // HARD CONDITION #1, at the run() level: a listener that DROPS and re-dials many
-// times drains chat exactly ONCE — the boot drain sits before the connect loop,
-// so no reconnect can re-print history.
+// times drains chat on EVERY dial and still prints each line exactly ONCE — the
+// persisted cursor, not the number of drains, is what stops history re-printing.
 func TestListenerRun_Reconnects_NeverRePrintHistory(t *testing.T) {
 	home := t.TempDir()
 	cfg := Config{Base: "", Token: "tok", ID: "kyle", Home: home}
@@ -225,9 +238,12 @@ func TestListenerRun_Reconnects_NeverRePrintHistory(t *testing.T) {
 	if c := atomic.LoadInt32(&conns); c < 5 {
 		t.Fatalf("only %d reconnects — this test proved nothing", c)
 	}
-	// And chat was refetched exactly once (no delta frames were ever sent).
-	if h := atomic.LoadInt32(&chatHits); h != 1 {
-		t.Fatalf("/api/chat refetched %d times, want 1 (boot drain only)", h)
+	// Chat IS refetched on every dial now (the reconnect drain — no delta frames
+	// were ever sent, so these are all drains). That is the point: the dedup that
+	// keeps m2 at one printed line is the cursor, not a refusal to look.
+	if h := atomic.LoadInt32(&chatHits); h < 2 {
+		t.Fatalf("/api/chat refetched %d times across %d dials — the reconnect drain never ran",
+			h, atomic.LoadInt32(&conns))
 	}
 }
 
@@ -756,5 +772,129 @@ func TestChatSeen_PersistSuccess_SaysNothing(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "chat-seen") {
 		t.Fatalf("a healthy drain must not mention the cursor at all; out = %q", out.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// T-48: /api/events has NO replay, so a chat message fanned while this listener
+// held no stream is gone from the stream forever. Before the reconnect drain,
+// the only thing that could surface it was the NEXT chat delta — so if nobody
+// spoke again, the agent was never told anyone had called, and nothing errored.
+// ---------------------------------------------------------------------------
+
+// THE THING THIS CHANGE BUYS. A message arrives in the outage window and NO chat
+// delta is ever dispatched afterwards; the reconnect drain is the only thing that
+// can surface it, and it must — exactly once.
+func TestListenerRun_MessageArrivingDuringTheOutage_PrintsOnReconnect(t *testing.T) {
+	home := t.TempDir()
+	srv := newMutableChatServer(t, msgsJSON("m1"))
+	cfg := Config{Base: srv.URL, Token: "tok", ID: "kyle", Home: home}
+
+	// A previous process already baselined on m1: nothing is owed at boot.
+	seedPath := chatSeenPath(cfg)
+	if err := os.MkdirAll(filepath.Dir(seedPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(seedPath, []byte(`["m1"]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := &syncBuf{}
+	l := newTestListener(srv.Server, cfg, out)
+	l.cursorPath = filepath.Join(home, "cursor")
+	l.seen = loadChatSeen(seedPath)
+	l.replySeen = loadReplyCardSeen(filepath.Join(home, "replycards-seen"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() { done <- l.run(ctx) }()
+
+	waitForCond(t, func() bool { return srv.dials() >= 3 },
+		"the listener is up and re-dialling with nothing owed")
+	if strings.Contains(out.String(), "chat from boss") {
+		t.Fatalf("precondition: nothing was owed at boot, got %q", out.String())
+	}
+
+	// m2 is fanned INTO THE GAP. Note what is deliberately absent from here on:
+	// no l.dispatch, no chat frame on the wire. The reconnect drain is the only
+	// path left, which is precisely the case that used to go dark.
+	//
+	// 🔴 WAIT ON THE DIAL COUNT, NOT ON THE LINE. A build with no reconnect drain
+	// never prints m2 at all, and you cannot wait for something that never comes:
+	// waiting on the output turns that build's failure into a 3-second TIMEOUT,
+	// which is also what a deadlock, a hung dial or a mis-wired fake look like.
+	// Dials give every build the same bounded, positively-observed moment to be
+	// judged at, so the regression reports as `0 != 1` on a named count.
+	srv.setList(msgsJSON("m1", "m2"))
+	staged := srv.dials()
+	waitForCond(t, func() bool { return srv.dials() >= staged+3 },
+		"three more reconnects happened after the message landed in the gap")
+	cancel()
+	<-done
+
+	if got := strings.Count(out.String(), "chat from boss (#m2): body-m2"); got != 1 {
+		t.Fatalf("a message that arrived during the outage printed %d times across %d "+
+			"reconnects — want exactly 1; out = %q", got, srv.dials(), out.String())
+	}
+	if strings.Contains(out.String(), "#m1") {
+		t.Fatalf("the pre-baselined m1 must never print; out = %q", out.String())
+	}
+}
+
+// THE SILENT-BASELINE INVARIANT, ON THE CONNECT PATH. The boot drain decides
+// silence from the persisted cursor; the connect drain must decide it the same
+// way, and the case where that is load-bearing is a boot drain that FAULTED —
+// it left the store unprimed, so the connect drain is the first one ever to see
+// this member's inbox. It must prime silently, exactly as the boot drain would
+// have: a brand-new session must not be washed out by history that predates it.
+func TestListenerRun_FirstEverWithAFaultedBootDrain_ConnectDrainStaysSilent(t *testing.T) {
+	home := t.TempDir()
+	var chatHits, conns int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/chat") {
+			if atomic.AddInt32(&chatHits, 1) == 1 {
+				w.WriteHeader(500) // the BOOT drain faults ⇒ store stays unprimed
+				return
+			}
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(msgsJSON("m1", "m2", "m3")))
+			return
+		}
+		if !strings.HasPrefix(r.URL.Path, eventsPath) {
+			w.WriteHeader(404)
+			return
+		}
+		atomic.AddInt32(&conns, 1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		if fl, ok := w.(http.Flusher); ok {
+			fl.Flush()
+		}
+	}))
+	defer srv.Close()
+	cfg := Config{Base: srv.URL, Token: "tok", ID: "kyle", Home: home}
+
+	out := &syncBuf{}
+	l := newTestListener(srv, cfg, out)
+	l.cursorPath = filepath.Join(home, "cursor")
+	l.seen = loadChatSeen(chatSeenPath(cfg))
+	if l.seen.primed {
+		t.Fatal("precondition: a virgin home must load UNPRIMED")
+	}
+	l.replySeen = loadReplyCardSeen(filepath.Join(home, "replycards-seen"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() { done <- l.run(ctx) }()
+	waitForCond(t, func() bool { return atomic.LoadInt32(&conns) >= 3 },
+		"the listener dialled 3 times, so several connect drains have run")
+	cancel()
+	<-done
+
+	if strings.Contains(out.String(), "chat from boss") {
+		t.Fatalf("the connect drain of a first-ever listener must print NO history; out = %q",
+			out.String())
+	}
+	if got := readSeenFile(t, chatSeenPath(cfg)); len(got) != 3 {
+		t.Fatalf("the connect drain must still leave a primed baseline, got %v", got)
 	}
 }

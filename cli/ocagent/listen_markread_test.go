@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -38,6 +39,7 @@ type markReadServer struct {
 	mu    sync.Mutex
 	list  string
 	calls []markCall
+	conns int32 // /api/events dials, read atomically
 	// bodies are the mark-read request bodies EXACTLY as they came off the
 	// wire. calls is the decoded convenience view; the wire test needs the raw
 	// text, because an undeclared key is invisible once it has been decoded
@@ -84,6 +86,7 @@ func newMarkReadServer(t *testing.T, list string) *markReadServer {
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, eventsPath) {
+			atomic.AddInt32(&m.conns, 1)
 			w.Header().Set("Content-Type", "text/event-stream")
 			if fl, ok := w.(http.Flusher); ok {
 				fl.Flush()
@@ -95,6 +98,8 @@ func newMarkReadServer(t *testing.T, list string) *markReadServer {
 	t.Cleanup(m.Server.Close)
 	return m
 }
+
+func (m *markReadServer) dials() int32 { return atomic.LoadInt32(&m.conns) }
 
 func (m *markReadServer) setList(s string) {
 	m.mu.Lock()
@@ -371,14 +376,20 @@ func TestListener_ChatDeltaAfterReconnect_FilesReadReceipt(t *testing.T) {
 	waitForCond(t, func() bool { return strings.Contains(out.String(), "chat from boss (#m1") },
 		"the boot drain printed m1")
 
-	// …then, mid-life (after the stream has dropped and re-dialled), a delta.
+	// Stop the loop BEFORE staging the delta. drainChat is single-goroutine by
+	// construction (every real caller runs on the listen loop), and since the
+	// reconnect path drains chat too, a delta dispatched from the test goroutine
+	// while the loop is still re-dialling would be a second concurrent drain of
+	// the same window — a race this test invented, not one the listener can have.
+	cancel()
+	<-done
+
+	// …then the delta, on the only goroutine left, exactly as dispatch sees it.
 	srv.setList("[" + strings.Join([]string{
 		tsMsg("m1", "boss", "kyle", now-300),
 		tsMsg("m2", "alice", "kyle", now-10),
 	}, ",") + "]")
 	l.dispatch([]byte(`{"topic":"chat","data":{"id":"m2"}}`))
-	cancel()
-	<-done
 
 	if !strings.Contains(out.String(), "chat from alice (#m2") {
 		t.Fatalf("precondition: the delta drain must print m2, got %q", out.String())
@@ -490,5 +501,68 @@ func TestDrainChat_MarkReadBodyMatchesFrozenSchema(t *testing.T) {
 		t.Errorf("cli/uplinks.json commits %v to this wire test but the producer posted to "+
 			"%v — a committed uplink nobody compared is the gap this manifest exists to close.",
 			want, walked)
+	}
+}
+
+// The reconnect drain is a THIRD drain entrance, and the rule the other two obey
+// holds here too: it prints, so it marks — and the receipt carries the message's
+// own ts, not the boot drain's. Nothing is dispatched: a chat delta would let
+// the pre-T-48 path take the credit, and this test would then prove nothing.
+func TestListenerRun_ReconnectBackfill_PrintsThenFilesReadReceipt(t *testing.T) {
+	home := t.TempDir()
+	now := float64(time.Now().Unix())
+	srv := newMarkReadServer(t, "["+tsMsg("m1", "boss", "kyle", now-300)+"]")
+	cfg := markCfg(srv.URL, home)
+
+	seedPath := chatSeenPath(cfg)
+	if err := os.MkdirAll(filepath.Dir(seedPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(seedPath, []byte(`["m1"]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := &syncBuf{}
+	l := newTestListener(srv.Server, cfg, out)
+	l.cursorPath = filepath.Join(home, "cursor")
+	l.seen = loadChatSeen(seedPath)
+	l.replySeen = loadReplyCardSeen(filepath.Join(home, "replycards-seen"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() { done <- l.run(ctx) }()
+	waitForCond(t, func() bool { return srv.dials() >= 3 },
+		"the listener is up and re-dialling with nothing owed")
+	if len(srv.snapshot()) != 0 {
+		t.Fatalf("precondition: nothing was owed, so nothing may be marked yet: %+v", srv.snapshot())
+	}
+
+	// alice writes into the outage gap; no delta is ever fanned.
+	srv.setList("[" + strings.Join([]string{
+		tsMsg("m1", "boss", "kyle", now-300),
+		tsMsg("m2", "alice", "kyle", now-10),
+	}, ",") + "]")
+	// Bounded on DIALS, not on the line — see the sibling outage test for why a
+	// missing-drain build must fail on a count rather than on a timeout.
+	staged := srv.dials()
+	waitForCond(t, func() bool { return srv.dials() >= staged+3 },
+		"three more reconnects happened after alice's message landed in the gap")
+	cancel()
+	<-done
+
+	if n := strings.Count(out.String(), "chat from alice (#m2"); n != 1 {
+		t.Fatalf("the reconnect drain printed alice's message %d times, want exactly 1; out = %q",
+			n, out.String())
+	}
+
+	var got []markCall
+	for _, c := range srv.snapshot() {
+		if c.Peer == "alice" {
+			got = append(got, c)
+		}
+	}
+	if len(got) != 1 || got[0].LastReadTS != now-10 {
+		t.Fatalf("the reconnect drain filed %+v for alice, want exactly one at ts %g "+
+			"(all receipts: %+v)", got, now-10, srv.snapshot())
 	}
 }
