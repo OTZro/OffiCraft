@@ -32,6 +32,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, act } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
+import { zh } from "../i18n/locales/zh";
 import { ChatArea } from "./ChatArea";
 import type { Member } from "../types";
 import type { ChatMessage } from "../api/adapter";
@@ -140,6 +141,11 @@ function setScrollGeometry(
 
 beforeEach(() => {
   localStorage.clear();
+  // jsdom reports the window as UNFOCUSED, and ChatArea's read receipt is gated
+  // on `useWindowActive()` — leaving the default in place would make every
+  // "did not mark read" assertion below true for the wrong reason. The cockpit
+  // under test is the one the owner is looking at.
+  document.hasFocus = () => true;
   markRead.mockClear();
   loadAround.mockClear();
   loadAroundResult = true;
@@ -794,6 +800,11 @@ describe("③ jump-to-origin (跳到原訊息, B3)", () => {
     expect(
       scrollCalls.some((c) => c.el.classList.contains("chat__scroll-anchor")),
     ).toBe(false);
+    // 🔴 …and NOT read either. Arriving through a jump link mounts the thread on
+    // the NEWEST window for the moment the anchor fetch is in flight; marking
+    // that read would consume the whole unread run before the reader has been
+    // taken anywhere near it.
+    expect(markRead).not.toHaveBeenCalled();
 
     // The anchor window lands — this is what useChat's setThread does.
     messages = [
@@ -842,5 +853,92 @@ describe("③ jump-to-origin (跳到原訊息, B3)", () => {
       scrollCalls.some((c) => c.el.classList.contains("chat__scroll-anchor")),
     ).toBe(true);
     expect(container.querySelector(".chat__msg--located")).toBeNull();
+    // 🔴 …AND IT SAYS SO. Landing at the bottom without a word is pixel-for-pixel
+    // a jump that worked, which is the silence this whole ticket is about. The
+    // notice is asserted by its TEXT, not by the node alone — an empty box would
+    // satisfy a class-only assertion.
+    const miss = container.querySelector(".chat__jump-miss");
+    expect(miss).not.toBeNull();
+    // 🔑 And the read watermark is UNBLOCKED again: the jump is over (it failed),
+    // the thread is the live tail, and the owner is looking at it. A gate that
+    // stayed shut here would be the "never marks read at all" silent failure.
+    expect(markRead).toHaveBeenCalledWith(1000);
+    expect(miss!.textContent).toContain(zh.chat.jumpTargetMissing);
+    // …and the reader can put it away.
+    fireEvent.click(miss!.querySelector("button")!);
+    expect(container.querySelector(".chat__jump-miss")).toBeNull();
+  });
+
+  it("沒有跳轉、或跳轉找到了,都不會冒出「找不到那則訊息」", async () => {
+    // The other direction of the same guardrail: a notice that is always on is
+    // as uninformative as one that never is. Both no-jump-at-all and a jump
+    // that landed have to stay quiet.
+    messages = [mkMsg("c1", "b", "owner", 1000)];
+    const plain = renderChat(0);
+    expect(plain.container.querySelector(".chat__jump-miss")).toBeNull();
+    plain.unmount();
+
+    const { container } = renderChat(0, "c1");
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector(".chat__msg--located")).not.toBeNull();
+    expect(container.querySelector(".chat__jump-miss")).toBeNull();
+  });
+
+  it("錨點視窗不標已讀 —— 跳過去不等於看過,回到最新那一端才標", async () => {
+    // 🔴 The same shape as the defect this ticket removed, pointing the other
+    // way: after a jump the thread is a window from the middle of the history,
+    // so its last row is NOT the newest message. Marking read to that watermark
+    // declares the whole unfetched stretch below it "seen" — messages nobody
+    // ever looked at. Owner ruling: mark-read must mean 「我看過了」.
+    hasNewer = true;
+    messages = [mkMsg("a1", "b", "owner", 100), mkMsg("a2", "b", "owner", 101)];
+    const { container, rerender } = renderChat(0, "a1");
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // ① entering the anchor window marks nothing read…
+    expect(markRead).not.toHaveBeenCalled();
+
+    // …and neither does reaching the bottom of the BOX, which is not the bottom
+    // of the THREAD.
+    const list = container.querySelector(".chat__messages")!;
+    setScrollGeometry(list, {
+      scrollHeight: 1000,
+      clientHeight: 300,
+      scrollTop: 100,
+    });
+    fireEvent.scroll(list);
+    setScrollGeometry(list, {
+      scrollHeight: 1000,
+      clientHeight: 300,
+      scrollTop: 700,
+    });
+    fireEvent.scroll(list);
+    expect(markRead).not.toHaveBeenCalled();
+
+    // ② 🔑 the other direction, and it is NOT optional: gating alone would also
+    // be satisfied by a mark-read path that is simply broken forever, which is
+    // its own silent failure. Once the walk (or the 回到最新 arrow) reaches the
+    // live tail, `hasNewer` goes false and the watermark is stamped — at the
+    // real newest message.
+    hasNewer = false;
+    messages = [...messages, mkMsg("a3", "b", "owner", 102)];
+    await act(async () => {
+      rerender(
+        <I18nProvider>
+          <ChatArea
+            member={mkMember(0)}
+            members={[mkMember(0)]}
+            jumpToMsgId="a1"
+          />
+        </I18nProvider>,
+      );
+    });
+
+    expect(markRead).toHaveBeenCalledWith(102);
   });
 });

@@ -48,6 +48,8 @@ export const MESSAGE_KEYS: readonly string[] = [
   "chat.interAgentCollapse",
   "chat.interAgentExpandMany",
   "chat.interAgentExpandOne",
+  "chat.jumpTargetMissing",
+  "chat.jumpTargetMissingDismiss",
   "chat.jumpToLatest",
   "chat.mdPreview.close",
   "chat.mdPreview.download",

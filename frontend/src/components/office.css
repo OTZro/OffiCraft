@@ -2159,6 +2159,43 @@ button.chat__msg-file {
   font-size: 14px;
 }
 
+/* 🔴 T-48 jump miss — "that message isn't there". Warn tokens, the same as
+ * .chat__gap-notice above, because it is the same class of statement: the app
+ * saying what it could NOT do, in a place the reader would otherwise read as
+ * success. Sits above the composer, so it survives the fallback scroll to the
+ * bottom that follows the miss. */
+.chat__jump-miss {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--color-warn-border);
+  border-radius: 8px;
+  background: var(--color-warn-bg);
+  color: var(--color-warn-fg);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.chat__jump-miss span {
+  flex: 1;
+  min-width: 0;
+}
+.chat__jump-miss__x {
+  flex: none;
+  border: none;
+  background: none;
+  padding: 0 2px;
+  color: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.chat__jump-miss__x:hover {
+  opacity: 1;
+}
+
 /* ---- T-94c1 wake row: offline/stopped queue notice + in-place wake ---- */
 /* One row above the (full-width) composer: an accent-tinted panel with the
  * "your message will queue" hint on the left and an outline ⚡喚醒 button on the

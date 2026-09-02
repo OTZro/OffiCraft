@@ -20,7 +20,9 @@ const {
   BASE,
   ownerToken,
   hireMember,
+  mintMemberToken,
   postChatAs,
+  unreadCountOf,
   bootAuthedSpa,
   uniqueName,
 } = require('../lib/fixtures');
@@ -146,3 +148,87 @@ for (const w of WIDTHS) {
     });
   });
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 這一票剩下的兩個「安靜地做錯事」。兩件都只在真瀏覽器 + 真 server 才算數:
+// 一件要看畫面上有沒有真的出現那句話,一件要看 server 端的未讀數有沒有被動到。
+// 只跑一個寬度就夠 —— 這兩件都不是版面問題。
+test.describe('T-48 · 剩下的靜默失敗', () => {
+  test('定位失敗時,畫面上真的講一句話 —— 不是只有 console', async ({ page }) => {
+    // 🔴 接上以訊息 id 開窗之後,「那則訊息真的不存在」變成 server 的 404。
+    // 前端退回底部 —— 光是這樣,跟「跳成功、剛好那則在最下面」長得一模一樣,
+    // 正是這張票要拿掉的那個病。所以要在畫面上說出來。
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const request = page.request;
+    const token = await ownerToken(request);
+    const M = await hireMember(request, token, uniqueName('JumpMiss M'));
+    await postChatAs(request, token, M.id, `only line ${PAD}`);
+
+    await bootAuthedSpa(page, token);
+    // 格式合法(c-<hex>)但 server 上沒有這一則 —— 空白頁與 404 的差別就在這裡。
+    await page.evaluate(
+      (cid) => {
+        window.location.hash = `#office/chat/${cid}/msg/c-00000000000000000000000000000000`;
+      },
+      M.id,
+    );
+
+    const notice = page.locator('.chat__jump-miss');
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText('找不到那則訊息');
+    // 而且是關得掉的,不是永遠賴在那裡。
+    await notice.locator('button').click();
+    await expect(notice).toHaveCount(0);
+  });
+
+  test('跳到舊訊息不會把中間沒看過的標成已讀,回到最新那一端才標', async ({
+    page,
+  }) => {
+    // owner 裁定逐字:mark-read 表達的意圖是「我看過了」,不是「我跳過來過」。
+    // 這裡量的是 server 端的未讀數 —— 前端旗標可以說謊,未讀數不會。
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const request = page.request;
+    const token = await ownerToken(request);
+    const M = await hireMember(request, token, uniqueName('JumpRead M'));
+    const tokM = await mintMemberToken(request, token, M.id, 1);
+
+    const ids = [];
+    for (let i = 1; i <= TOTAL; i++) {
+      const msg = await postChatAs(request, tokM, 'owner', `line ${i} ${PAD}`);
+      ids.push(msg.id);
+    }
+    expect(await unreadCountOf(request, token, M.id)).toBe(TOTAL);
+
+    await bootAuthedSpa(page, token);
+    await page.evaluate(
+      ([mid, cid]) => {
+        window.location.hash = `#office/chat/${cid}/msg/${mid}`;
+      },
+      [ids[TARGET_INDEX - 1], M.id],
+    );
+
+    const thread = page.locator('.chat__messages');
+    const target = thread.locator(`[data-msg-id="${ids[TARGET_INDEX - 1]}"]`);
+    await expect(target).toBeInViewport();
+
+    // ① 停在錨點視窗上 —— 中間那一大段誰都沒看過,未讀數一則都不准少。
+    // 給它時間去做錯事:mark-read 是 fire-and-forget,不等它就等於沒量到。
+    await page.waitForTimeout(1500);
+    expect(
+      await unreadCountOf(request, token, M.id),
+      '停在錨點視窗時不該送出 mark-read',
+    ).toBe(TOTAL);
+
+    // ② 🔑 另一個方向,而且不能省:只釘①的話,「整條路壞掉、永遠不標」也會過,
+    // 那本身就是另一個靜默失敗。按下回到最新 → 真的到了活的尾巴 → 才標。
+    await page.getByTestId('chat-jump-latest').click();
+    await expect(
+      thread.locator(`[data-msg-id="${ids[TOTAL - 1]}"]`),
+    ).toBeInViewport();
+    await expect
+      .poll(async () => unreadCountOf(request, token, M.id), {
+        message: '回到最新那一端之後就要標已讀',
+      })
+      .toBe(0);
+  });
+});

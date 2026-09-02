@@ -750,6 +750,13 @@ export const en: Dict = {
     // server has already marked those messages read: the unread count will not
     // betray it and nothing else on screen looks wrong.
     gapSuspected: "Some messages may be missing from this conversation (could not be recovered)",
+    // 🔴 T-48: the jump (跳到原訊息 / a kept link) asked for a message the
+    // server has no record of — a 404 on the anchor-window fetch, not an empty
+    // page. The thread falls back to the bottom, which on its own is EXACTLY
+    // the silent lie this ticket removed: indistinguishable from a jump that
+    // worked. So it is said out loud, on screen, in the reader's language.
+    jumpTargetMissing: "Couldn't find that message — it may have been cleared already.",
+    jumpTargetMissingDismiss: "Dismiss this notice",
     // LINE-style day dividers in the message stream (centered pill at each day
     // crossing; sticky at the top while scrolling). weekday 0=Sun … 6=Sat; the
     // year only appears when it isn't the current year (LINE convention).

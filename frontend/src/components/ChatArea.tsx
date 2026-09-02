@@ -585,6 +585,11 @@ export function ChatArea({
   // this ref is what stops the effect firing a second pair of requests on every
   // re-render while the first pair is still in flight.
   const jumpFetchedRef = useRef<string | null>(null);
+  // 🔴 T-48: the jump target the server has NO RECORD OF. The fallback (open at
+  // the bottom) is indistinguishable from a jump that worked, which is the very
+  // silence this ticket exists to remove — so the miss is state, and state is
+  // rendered. A `console.warn` is not a user-visible thing.
+  const [jumpMissed, setJumpMissed] = useState(false);
   const [highlightMsgId, setHighlightMsgId] = useState<string | null>(null);
   // T-e987 compose seed: the seed value already applied (one-shot per distinct
   // value, reset on a peer switch so the same taskNo can seed another peer).
@@ -605,6 +610,7 @@ export function ChatArea({
     entryScrollPendingRef.current = false;
     jumpConsumedRef.current = null;
     jumpFetchedRef.current = null;
+    setJumpMissed(false);
     seedConsumedRef.current = null;
     prependAnchorRef.current = null;
     setFirstUnreadId(null);
@@ -771,7 +777,12 @@ export function ChatArea({
     setLatestInView(distance <= AT_LATEST_PX);
     // Crossing into the bottom band = the owner has now read to the latest → mark
     // the newest message read (monotonic server-side; safe to fire repeatedly).
-    if (nowNearBottom && !nearBottomRef.current && newestTs > 0) {
+    //
+    // 🔴 `mayMarkRead` because in an ANCHOR WINDOW the bottom of the BOX is not
+    // the bottom of the THREAD — see where it is derived. The forward walk
+    // above (`loadNewer`) is what eventually reaches the live tail, and this
+    // resumes there.
+    if (nowNearBottom && !nearBottomRef.current && newestTs > 0 && mayMarkRead) {
       void markRead(newestTs);
     }
     // Reaching the bottom means the preview strip's message has been seen →
@@ -787,6 +798,29 @@ export function ChatArea({
   // The newest message ts in the thread — the watermark the owner marks read up
   // to (0 when empty).
   const newestTs = messages.length > 0 ? messages[messages.length - 1].ts : 0;
+
+  // 🔴 T-48 — MAY THE OWNER'S READ WATERMARK BE MOVED RIGHT NOW? Two ways it
+  // must not be, and both are the same mistake: stamping "seen" on messages
+  // nobody has looked at (owner ruling — mark-read is 「我看過了」, not 「我跳過
+  // 來過」).
+  //
+  //   • `hasNewer` — the thread is an ANCHOR WINDOW from the middle of the
+  //     history. `newestTs` is that window's last row and everything between it
+  //     and the live tail is unfetched, unseen material.
+  //   • a jump still PENDING — arriving through 跳到原訊息 / a kept link mounts
+  //     the thread on the NEWEST window first, and the anchor fetch replaces it
+  //     a moment later. That first window is on screen for no time at all and
+  //     the reader is on their way somewhere else entirely; marking it read
+  //     would consume the whole unread run before the jump has even landed,
+  //     which is worse than the anchor-window case, not milder.
+  //
+  // Nothing is lost by waiting — the watermark is monotonic. Walking forward,
+  // the 回到最新 arrow, and a jump that finishes (landed OR missed — both consume
+  // the latch) each end the block, which is exactly when the owner really is
+  // looking at the latest.
+  const jumpPending =
+    jumpToMsgId !== undefined && jumpConsumedRef.current !== jumpToMsgId;
+  const mayMarkRead = !hasNewer && !jumpPending;
 
   // ===== T-4e95 quote resolution =====
   //
@@ -890,13 +924,13 @@ export function ChatArea({
         void loadAround(jumpToMsgId).then((found) => {
           if (found) return;
           // Genuinely unreachable (the id names nothing, or the request
-          // failed). Fall back to the bottom — the thread still opens — and
-          // say so where a developer can see it. ⚠️ It is NOT said in the UI:
-          // a user-visible notice needs a new i18n key, and message keys are
-          // regenerated into a server/ file that this change may not touch.
+          // failed). Fall back to the bottom — the thread still opens — and SAY
+          // SO ON SCREEN. The console line stays for the developer; the notice
+          // is what stops the fallback reading as a successful jump.
           console.warn(
             `ChatArea: jump target ${jumpToMsgId} could not be located`,
           );
+          setJumpMissed(true);
           jumpConsumedRef.current = jumpToMsgId;
           nearBottomRef.current = true;
           endRef.current?.scrollIntoView();
@@ -905,6 +939,7 @@ export function ChatArea({
       return;
     }
     jumpConsumedRef.current = jumpToMsgId;
+    setJumpMissed(false);
     // The jump owns the initial viewport — mark entry positioning done.
     initialPositionedRef.current = true;
     prevIdsRef.current = new Set(messages.map((m) => m.id));
@@ -1129,7 +1164,7 @@ export function ChatArea({
   // firing on every settle is safe. If the owner has scrolled UP to read history
   // we still mark read: the newest message is loaded and being viewed on entry.
   //
-  // Gated TWICE (badge-flash fix):
+  // Gated THREE ways:
   //   • `windowActive` — "seen" requires the owner to actually be looking. A
   //     message landing while the window is backgrounded must NOT be consumed;
   //     the flip back to active re-runs this effect, so everything accumulated
@@ -1137,11 +1172,14 @@ export function ChatArea({
   //   • `messagesPeer === member.id` — on a peer switch `newestTs` still comes
   //     from the PREVIOUS peer's thread for one commit; firing then would stamp
   //     the NEW peer's watermark with the OLD thread's timestamp.
+  //   • 🔴 `mayMarkRead` — the thread must be the LIVE TAIL and no jump may be
+  //     in flight (T-48; see where it is derived for both halves and why).
   useEffect(() => {
     if (!windowActive) return;
     if (messagesPeer !== member.id) return;
+    if (!mayMarkRead) return;
     if (newestTs > 0) void markRead(newestTs);
-  }, [newestTs, markRead, windowActive, messagesPeer, member.id]);
+  }, [newestTs, markRead, windowActive, messagesPeer, member.id, mayMarkRead]);
 
   // Esc handling for the full-view overlay lives inside MarkdownPreviewOverlay.
 
@@ -1918,6 +1956,28 @@ export function ChatArea({
       </div>
 
       <footer className="chat__composer">
+        {/* 🔴 T-48: the jump could not find its target. Pinned above the
+         * composer rather than dropped into the stream, because the fallback
+         * has just scrolled the thread to the BOTTOM — a notice placed in the
+         * stream would land wherever the missing message would have been, i.e.
+         * off screen, which is another way of not saying it. It outlives the
+         * fallback scroll on purpose (the reader has to be able to look up and
+         * find out why they are where they are) and is cleared by the x, by a
+         * peer switch, or by a jump that later succeeds. */}
+        {jumpMissed && (
+          <div className="chat__jump-miss" role="status">
+            <span>{t.chat.jumpTargetMissing}</span>
+            <button
+              type="button"
+              className="chat__jump-miss__x"
+              aria-label={t.chat.jumpTargetMissingDismiss}
+              title={t.chat.jumpTargetMissingDismiss}
+              onClick={() => setJumpMissed(false)}
+            >
+              ×
+            </button>
+          </div>
+        )}
         {/* ② the new-message preview strip. FIRST child of the composer, so it
          * sits above the 「正在回覆」 banner (owner's requirement) and above the
          * wake row and the attachment previews as well — and it is outside the

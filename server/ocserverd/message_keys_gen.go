@@ -49,6 +49,8 @@ var messageKeys = map[string]bool{
 	"chat.interAgentCollapse":                          true,
 	"chat.interAgentExpandMany":                        true,
 	"chat.interAgentExpandOne":                         true,
+	"chat.jumpTargetMissing":                           true,
+	"chat.jumpTargetMissingDismiss":                    true,
 	"chat.jumpToLatest":                                true,
 	"chat.mdPreview.close":                             true,
 	"chat.mdPreview.download":                          true,
