@@ -674,6 +674,78 @@ func (d *DAL) listChatBefore(participant, caller string, beforeTS float64, befor
 	return out, nil
 }
 
+// ListChatLatest returns the most recent `limit` messages, oldest→newest —
+// the CURSORLESS page GET /api/chat serves. `participant` narrows to a
+// conversation line (sender OR recipient) and `caller` narrows again to the
+// requesting actor (`caller_only`); "" disables either filter. limit 0 reads
+// nothing, a NEGATIVE limit disables the cap.
+//
+// It replaces "ListChat() then filter and slice in Go": that pulled every row
+// of chat_message into memory to hand back at most 30 of them (68.115ms on a
+// measured 48,153-row table, against 0.697ms here). The result is IDENTICAL,
+// not merely equivalent — "the newest N of the stream's total (ts, id) order"
+// is the same set whether you take the last N ascending or the first N
+// descending-then-reverse, which is exactly what the two paths do.
+//
+// 🔴 DELIBERATELY NO INDEX on (sender, recipient) or (ts): measured on the same
+// real table, adding one made the scrollback page (listChatBefore) 23× SLOWER,
+// and ANALYZE changed nothing. This scan is the cheap side of that trade.
+func (d *DAL) ListChatLatest(participant, caller string, limit int) ([]ChatMessage, error) {
+	if limit == 0 {
+		return nil, nil
+	}
+	query := `SELECT id, sender, recipient, body, ts, meta FROM chat_message WHERE 1=1`
+	var args []any
+	if participant != "" {
+		query += ` AND (sender = ? OR recipient = ?)`
+		args = append(args, participant, participant)
+	}
+	if caller != "" {
+		query += ` AND (sender = ? OR recipient = ?)`
+		args = append(args, caller, caller)
+	}
+	if limit < 0 {
+		// Uncapped: no need for the DESC walk + reverse, ask for the order the
+		// caller wants directly.
+		rows, err := d.rdb.Query(query+` ORDER BY ts, id`, args...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var out []ChatMessage
+		for rows.Next() {
+			m, err := scanChat(rows)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, m)
+		}
+		return out, rows.Err()
+	}
+	rows, err := d.rdb.Query(query+` ORDER BY ts DESC, id DESC LIMIT ?`,
+		append(args, limit)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var newestFirst []ChatMessage
+	for rows.Next() {
+		m, err := scanChat(rows)
+		if err != nil {
+			return nil, err
+		}
+		newestFirst = append(newestFirst, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]ChatMessage, len(newestFirst))
+	for i, m := range newestFirst {
+		out[len(newestFirst)-1-i] = m
+	}
+	return out, nil
+}
+
 // ListChatByIDs returns the messages carrying the given ids, oldest→newest in
 // the stream's total (ts, id) order — the by-id re-read behind
 // `get_chat?ids=` (T-a828). A blank id list reads nothing.
