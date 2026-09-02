@@ -13,8 +13,8 @@
 //      but ChatArea's explicit POST /api/chat/mark-read, which fires once the
 //      open thread's newest page lands on a focused window — so the server fans
 //      a `chat_read` delta BACK at us. That echo must not re-run the fan-out,
-//      and above all a delta about ANOTHER conversation must not re-enter the
-//      marking read — that is the cockpit driving its own event loop.
+//      and above all a delta about ANOTHER conversation must not re-enter that
+//      POST — that is the cockpit driving its own event loop.
 //
 // 🔴 EVERY cost assertion here is paired with a VALUE assertion, because "fewer
 // requests" is trivially satisfied by a hook that stopped updating. The numbers
@@ -836,7 +836,7 @@ describe("the read echo does not drive another round (T-8115)", () => {
     };
     const view = await mountedCockpit();
 
-    // Re-emit the echo whenever the marking read actually advances anything —
+    // Re-emit the echo whenever the mark-read POST actually advances anything —
     // dal.go PutChatRead fans ONLY on an advance, so this terminates.
     const withEcho = () => {
       if (!watermarkBehind) return;

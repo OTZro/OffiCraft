@@ -756,6 +756,12 @@ export const en: Dict = {
     // the silent lie this ticket removed: indistinguishable from a jump that
     // worked. So it is said out loud, on screen, in the reader's language.
     jumpTargetMissing: "Couldn't find that message — it may have been cleared already.",
+    // 🔴 T-48 F3: a DIFFERENT fact, and it must not borrow the sentence above.
+    // The anchor fetch was overtaken by a newer load often enough to give up
+    // retrying; the message is still there and claiming it was cleared would be
+    // a lie with a dead end behind it. Say what happened and what to do.
+    jumpTargetInterrupted:
+      "The jump was interrupted by newer messages — open the link again to retry.",
     jumpTargetMissingDismiss: "Dismiss this notice",
     // LINE-style day dividers in the message stream (centered pill at each day
     // crossing; sticky at the top while scrolling). weekday 0=Sun … 6=Sat; the

@@ -181,8 +181,11 @@ describe("useChat: a failed load is marked and paid on the next relevant event",
 
     // The debt is paid. A foreign delta is once again none of our business —
     // this is the guard against "fix" = delete the per-conversation filter,
-    // which would resurrect the T-8115 self-drive (a marking listChat fans a
-    // chat_read echo straight back at us, once per chat line company-wide).
+    // which would resurrect the T-8115 self-drive. That listChat no longer
+    // marks anything (T-48 removed the write), but the echo did not go away —
+    // it moved to ChatArea's POST /api/chat/mark-read, so an unfiltered reload
+    // still fans a chat_read echo straight back at us once per chat line
+    // company-wide.
     await emit(elsewhere);
     expect(h.listChat).toHaveBeenCalledTimes(3);
   });

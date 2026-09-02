@@ -182,17 +182,32 @@ interface UseChat {
   // ending at the target (context above) and the page starting at it (context
   // below) — never the whole history.
   //
-  // Resolves TRUE when the target really is in the thread afterwards and FALSE
-  // when it is not (the id names nothing, or a request failed). The caller must
-  // branch on it: the defect this replaces was a miss that drew the same pixels
-  // as a hit.
-  loadAround: (msgId: string) => Promise<boolean>;
+  // Resolves with WHICH of the three things happened — see JumpOutcome. The
+  // caller must branch on it: the defect this replaces was a miss that drew the
+  // same pixels as a hit, and collapsing "someone overtook us" into "missing"
+  // is that same defect wearing the fix's clothes.
+  loadAround: (msgId: string) => Promise<JumpOutcome>;
   // Leave an anchor window and go back to the LIVE newest window, REPLACING the
   // thread. The historical rows are dropped rather than spliced onto the tail:
   // the range between them is genuinely unloaded, and pretending otherwise is
   // the T-b0bb hole with a friendlier name.
   resetToLatest: () => Promise<void>;
 }
+
+// What `loadAround` actually did, and the reason it is not a boolean (T-48, F3).
+//
+//   • "found"      — the target is in the thread now.
+//   • "missing"    — the server has no such row in this conversation (404), or
+//                    the request failed. The reader is told, truthfully, that
+//                    the message could not be located.
+//   • "superseded" — a LATER load committed while our two windows were in the
+//                    air, so this result was dropped to keep the thread in
+//                    order. THE MESSAGE IS STILL THERE. Reporting this as
+//                    "missing" put 「找不到那則訊息,可能已經被清掉了」 on screen
+//                    about a message that exists, with no retry and no button —
+//                    a lie with a dead end behind it. The caller must retry or
+//                    re-schedule, never accuse.
+export type JumpOutcome = "found" | "missing" | "superseded";
 
 // Topics that mutate the chat thread → trigger a refetch. "chat_read" advances a
 // participant's last-read watermark (the peer read our messages).
@@ -396,7 +411,24 @@ function mergeLatestPage(
   };
 }
 
-export function useChat(withId: string): UseChat {
+// `entryAnchorMsgId` — THE ROOM IS ENTERED AT THE ANCHOR, NOT AT THE TAIL
+// (T-48, owner ruling: 「你應該直接打成我們希望的流程」).
+//
+// Arriving through 跳到原訊息 / a kept link used to load the NEWEST page first
+// and let ChatArea's anchor window replace it a moment later: one wasted
+// round-trip, and — far worse — a real intermediate screen showing the live tail
+// to a reader who is on their way somewhere else entirely. Every unpleasant
+// consequence of that intermediate screen (the unread run being consumed before
+// the jump landed, the entry scroll fighting the jump's) then needed its own
+// patch to hold it back.
+//
+// So the caller names the anchor UP FRONT and this hook simply does not fetch a
+// newest page on entry; ChatArea fetches the window around the id instead
+// (`loadAround`, which it owns because the jump's viewport, highlight and
+// miss-notice are its business). Passing `undefined` — every entry that is not
+// a jump — is byte-for-byte the old path, and `useChat.scrollback.test.ts` pins
+// exactly that.
+export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   const [thread, setThread] = useState<Thread>(() => ({
     peer: withId,
     messages: [],
@@ -434,6 +466,30 @@ export function useChat(withId: string): UseChat {
   // IS screen order: a late commit is not a cosmetic race.
   const loadSeqRef = useRef(0);
   const committedSeqRef = useRef(0);
+  // The entry anchor, mirrored for the subscription effect below. Read in the
+  // effect's SETUP body only — never a dependency, or a route that keeps the
+  // msgId in the hash (it does) would re-subscribe the whole SSE sink.
+  const entryAnchorRef = useRef(entryAnchorMsgId);
+  entryAnchorRef.current = entryAnchorMsgId;
+  // 🔴 TWO REASONS THE NEWEST-PAGE LOAD MUST HOLD OFF, AND THEY ARE NOT THE
+  // SAME REASON (T-48).
+  //
+  //  • `entryAnchorPendingRef` — this subscription started at an anchor, so the
+  //    thread is deliberately EMPTY until ChatArea's `loadAround` lands. A
+  //    `load()` in that window (SSE burst, focus, visibilitychange) would put
+  //    the live tail on screen — reinstating the very intermediate screen the
+  //    anchor-first entry exists to remove — and would then be replaced again.
+  //    Cleared by the anchor settling (found OR missing) and by `resetToLatest`;
+  //    see each of those for why. IT MUST NEVER BE LEFT SET: while it is, this
+  //    conversation does not refresh at all.
+  //  • `anchorFetchingRef` — a `loadAround` pair is in the air right now. A
+  //    `load()` starting after it takes a HIGHER generation ticket and can
+  //    commit first, which makes the anchor's own commit "superseded" — measured
+  //    as: the jump silently does not happen and the reader is told the message
+  //    was probably cleared (F3). Holding the ordinary refresh for the two round
+  //    trips is cheaper than every way of apologising for it afterwards.
+  const entryAnchorPendingRef = useRef(entryAnchorMsgId !== undefined);
+  const anchorFetchingRef = useRef(0);
   // 🔴 "THE LAST LOAD NEVER LANDED" (T-929f). `load()` below used to end a
   // rejection at `console.warn` and nothing else. Two failure worlds, and only
   // one of them was already covered:
@@ -514,6 +570,13 @@ export function useChat(withId: string): UseChat {
   // `gapSuspected` is carried over rather than cleared — it is sticky for the
   // life of the conversation view on purpose (see Thread.gapSuspected).
   const resetToLatest = useCallback(async () => {
+    // 「回到最新」 is the owner saying, in as many words, that they want the live
+    // tail — so whatever the entry anchor was holding back is released HERE,
+    // before the fetch rather than after it. Leaving it set would leave the
+    // conversation with no periodic/SSE refresh for the rest of the session:
+    // a room that quietly stops receiving, which is the failure shape this
+    // ticket exists to stop shipping.
+    entryAnchorPendingRef.current = false;
     const seq = ++loadSeqRef.current;
     try {
       const next = await api.listChat(withId);
@@ -611,6 +674,11 @@ export function useChat(withId: string): UseChat {
     // unconditionally, so it owes nothing yet, and any debt the PREVIOUS peer
     // left behind is not this conversation's to pay.
     loadStaleRef.current = false;
+    // Same for the anchor: this subscription is entered at the anchor named
+    // NOW, not at whatever the previous conversation was doing. (Written in
+    // the setup body, never only in cleanup — see loadStaleRef's StrictMode
+    // note; a cleanup-only write is stuck off forever under setup→cleanup→setup.)
+    entryAnchorPendingRef.current = entryAnchorRef.current !== undefined;
 
     // Switching conversations: drop the PREVIOUS peer's thread/receipt state
     // immediately instead of letting it linger under the new peer's header
@@ -642,6 +710,13 @@ export function useChat(withId: string): UseChat {
       // thread for this tick, and that peer's anchor must not silence the new
       // conversation's first load.
       if (threadRef.current.peer === withId && threadRef.current.hasNewer) {
+        return;
+      }
+      // 🔴 …AND NEITHER WHILE THE ANCHOR IS STILL COMING (T-48). `hasNewer`
+      // only says "the thread I am holding is a historical window"; it cannot
+      // say "the window is on its way", which is precisely the interval that
+      // needs covering on an anchor-first entry. See the two refs.
+      if (entryAnchorPendingRef.current || anchorFetchingRef.current > 0) {
         return;
       }
       // The generation ticket is taken at FIRE time, so a load that started
@@ -708,6 +783,18 @@ export function useChat(withId: string): UseChat {
         });
     };
 
+    // 🔴 ANCHOR-FIRST ENTRY (T-48). This call is unconditional and it is
+    // `entryAnchorPendingRef` inside `load()` that turns it into a no-op when an
+    // anchor was named — ONE gate rather than two, because the entry is not the
+    // only load that has to hold off (the SSE sink and the focus listener below
+    // reach the same function) and a second copy of the condition here would be
+    // a copy no test could tell from the original.
+    //
+    // ⚠️ THE INVARIANT THIS RESTS ON: somebody must actually fetch the anchor.
+    // ChatArea does, unconditionally, from an empty thread (its jump reactor's
+    // "not in the DOM" branch — an empty thread has nothing in the DOM), and its
+    // miss branch falls back to `resetToLatest`. Both endings clear the pending
+    // flag. If that ever stops being true this room stays blank.
     load();
     void refetchReads();
 
@@ -867,6 +954,22 @@ export function useChat(withId: string): UseChat {
       return;
     if (loadingNewerRef.current) return;
     loadingNewerRef.current = true;
+    // 🔴 THE GENERATION TICKET THIS WALK WENT WITHOUT (T-48, F2). `loadingNewerRef`
+    // is a SAME-DIRECTION mutex and nothing more: it stops two forward pages
+    // stacking, and says nothing about a load in the OTHER direction landing
+    // in between. Measured on the unguarded code — forward page in flight, owner
+    // presses 回到最新, `resetToLatest` replaces the thread with the live tail,
+    // then the forward page returns and appends onto it:
+    //
+    //   len 60 head ['z0','z1','z2'] tail ['mid27','mid28','mid29']
+    //   hasNewer true gapSuspected false
+    //
+    // 30 history rows (ts 158…) drawn BELOW the newest messages (ts 9000+), no
+    // gap notice, and `hasNewer` flipped back to true — which re-arms `load()`'s
+    // anchor gate and pins `mayMarkRead` false, so that conversation stops
+    // marking itself read for good, silently. Every other loader in this file
+    // already takes a ticket; this one now does too.
+    const seq = ++loadSeqRef.current;
     try {
       const newest = cur.messages[cur.messages.length - 1];
       const page = await api.listChatWindow(
@@ -874,6 +977,10 @@ export function useChat(withId: string): UseChat {
         { startId: newest.id },
         CHAT_PAGE_SIZE,
       );
+      // A later load committed while we were paging forwards ⇒ the thread this
+      // page continues no longer exists. Drop it whole.
+      if (seq < committedSeqRef.current) return;
+      committedSeqRef.current = seq;
       setThread((prev) => {
         if (prev.peer !== withId) return prev;
         const have = new Set(prev.messages.map((m) => m.id));
@@ -910,8 +1017,9 @@ export function useChat(withId: string): UseChat {
   // loaded window) that landed the reader at the bottom, pixel-identical to a
   // hit on a recent message.
   const loadAround = useCallback(
-    async (msgId: string): Promise<boolean> => {
+    async (msgId: string): Promise<JumpOutcome> => {
       const seq = ++loadSeqRef.current;
+      anchorFetchingRef.current += 1;
       let older: ChatMessage[];
       let newer: ChatMessage[];
       try {
@@ -924,16 +1032,28 @@ export function useChat(withId: string): UseChat {
         // to make "no such message" look like "a window that happens to be
         // empty". Either way the caller is told, and told the truth.
         console.warn("useChat: loadAround failed", e);
-        return false;
+        anchorFetchingRef.current -= 1;
+        entryAnchorPendingRef.current = false;
+        return "missing";
       }
-      if (seq < committedSeqRef.current) return false;
+      anchorFetchingRef.current -= 1;
+      // Overtaken, NOT missing — and the difference is the whole of F3. The
+      // pending flag stays SET: the caller re-schedules, and a newest-page load
+      // sneaking in between the two attempts is exactly what it is holding off.
+      if (seq < committedSeqRef.current) return "superseded";
+      entryAnchorPendingRef.current = false;
       const byId = new Map<string, ChatMessage>();
       for (const m of [...older, ...newer]) byId.set(m.id, m);
       const window = [...byId.values()].sort(cmpStreamOrder);
-      // Defensive: a server that answered both calls without carrying the
-      // anchor would be a contract break, and adopting that window would put
-      // the reader somewhere with no way to tell. Refuse instead.
-      if (!window.some((m) => m.id === msgId)) return false;
+      // 🔴 NOT MERELY DEFENSIVE — THIS IS A REACHABLE 200 (T-48, F1). The server
+      // resolves the anchor WITHOUT the participant filter on purpose
+      // (api_chat.go: "a window anchored outside it simply comes back empty,
+      // which is the honest answer"), so a msgId that EXISTS but belongs to a
+      // DIFFERENT conversation answers both calls with 200 + an empty array.
+      // Adopting that window writes `messages: []` into the thread: the room
+      // goes blank, the miss notice does not light, and nothing is logged.
+      // Refusing turns it into the ordinary miss, which is what it is.
+      if (!window.some((m) => m.id === msgId)) return "missing";
       committedSeqRef.current = seq;
       setThread((prev) =>
         prev.peer !== withId
@@ -950,7 +1070,7 @@ export function useChat(withId: string): UseChat {
               hasNewer: newer.length >= CHAT_PAGE_SIZE,
             },
       );
-      return true;
+      return "found";
     },
     [withId],
   );

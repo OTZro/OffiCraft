@@ -833,6 +833,7 @@ export const zh = {
     // 這張票剛拿掉的那個安靜的謊:跟跳成功長得一模一樣。所以要在畫面上說
     // 出來。
     jumpTargetMissing: "找不到那則訊息,可能已經被清掉了",
+    jumpTargetInterrupted: "定位被較新的訊息打斷了,再點一次連結可以重試",
     jumpTargetMissingDismiss: "關閉這則提示",
     // 訊息流的 LINE 式日期分隔線(跨日處置中 pill;捲動時 sticky 浮在頂端)。
     // weekday 0=週日 … 6=週六;非今年才帶年份(LINE 慣例)。

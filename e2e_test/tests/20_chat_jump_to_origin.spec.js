@@ -232,3 +232,109 @@ test.describe('T-48 · 剩下的靜默失敗', () => {
       .toBe(0);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// owner 交辦逐字:「也要測試如果有新訊息跳進來,點選預覽畫面跳下去時,運作會正常」。
+//
+// 這是這一票最容易壞的接縫,因為它同時要滿足兩件相反的事:**停在錨點**(不准被
+// 新訊息拉走、不准把中間那段標成看過)與**跳到最新**(點下去要真的到活的尾巴)。
+// 而錨點視窗期間 useChat 刻意不跑最新頁的載入,所以新訊息**進不了那個 thread**
+// —— 預覽列在錨點視窗下是不會出現的,讓位給箭頭(rc-72054864ff88 的互斥規則)。
+// 這支把整條脊椎走完:錨點 →(新訊息)→ 箭頭回到活尾巴 → 捲上去 →(再一則新訊息)
+// → 預覽列 → 點它 → 落在最新那一則 → 未讀歸零。
+//
+// 🔴 只有真瀏覽器算數:jsdom 沒有版面,量不到「那一則真的在視窗裡」;而未讀數要
+// 問 server,前端旗標可以說謊。
+test.describe('T-48 · 錨點視窗中有新訊息進來,點預覽列跳下去', () => {
+  test('停在錨點時讓位給箭頭,回到活尾巴之後預覽列照常運作,點下去落在最新那一則', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const request = page.request;
+    const token = await ownerToken(request);
+    const M = await hireMember(request, token, uniqueName('JumpPreview M'));
+    const tokM = await mintMemberToken(request, token, M.id, 1);
+
+    const ids = [];
+    for (let i = 1; i <= TOTAL; i++) {
+      const msg = await postChatAs(request, tokM, 'owner', `line ${i} ${PAD}`);
+      ids.push(msg.id);
+    }
+
+    // 🔴 這一支**必須從一個已經帶著 msgId 的 URL 開機**,不能像上面幾支那樣先開
+    // 座艙再改 hash。實測(cold run,加了 [REQ] 追蹤):辦公室會自己選一間房,於是
+    // ChatArea 先以「沒有跳轉目標」掛載一次 —— `GET /api/chat?with=M` +
+    // `POST /api/chat/mark-read` 都已經發出去了,65ms 後 end_id/start_id 才進來。
+    // 未讀 81 因此變成 1,而那與被測行為無關,是測試自己把房間先打開的。
+    // 帶著 hash 開機就是通知/保存連結真正的那條路,也讓第一次掛載就拿到 anchor。
+    await bootAuthedSpa(page, token);
+    await page.goto(`/#office/chat/${M.id}/msg/${ids[TARGET_INDEX - 1]}`);
+    await page.reload();
+
+    const thread = page.locator('.chat__messages');
+    const target = thread.locator(`[data-msg-id="${ids[TARGET_INDEX - 1]}"]`);
+    await expect(target).toBeInViewport();
+
+    // ① 新訊息在錨點視窗期間進來 —— 畫面必須**留在原地**,而且是箭頭在場,
+    //    不是預覽列(錨點視窗下 thread 不吃最新頁,所以沒有東西可以預覽)。
+    const duringBody = `during-anchor ${PAD}`;
+    const during = await postChatAs(request, tokM, 'owner', duringBody);
+    await page.waitForTimeout(1500);
+    await expect(target, '新訊息不准把讀者從錨點拉走').toBeInViewport();
+    await expect(page.getByTestId('chat-jump-latest')).toBeVisible();
+    await expect(page.getByTestId('chat-new-msg-preview')).toBeHidden();
+    // 中間那一大段誰都沒看過 —— server 端的未讀數一則都不准少。
+    expect(
+      await unreadCountOf(request, token, M.id),
+      '停在錨點視窗時不該送出 mark-read',
+    ).toBe(TOTAL + 1);
+
+    // ② 按箭頭回到活的尾巴 —— 錨點期間那則新訊息也在這裡出現。
+    await page.getByTestId('chat-jump-latest').click();
+    await expect(thread.locator(`[data-msg-id="${during.id}"]`)).toBeInViewport();
+    await expect
+      .poll(async () => unreadCountOf(request, token, M.id), {
+        message: '回到活的尾巴之後就要標已讀',
+      })
+      .toBe(0);
+
+    // ③ 🔑 接回活尾巴之後,普通的預覽列路徑要**完全正常** —— 這一格才是 owner
+    //    問的那句話。捲上去(讓最新那一則離開視窗)、對方再開口。
+    //
+    // ⚠️ 要先等 scrollToLatest 的 2600ms 修正窗關掉:那段期間任何一次 reflow
+    // (往上捲觸發 loadOlder、圖片解碼)都會把畫面**再拉回底部**,於是新訊息落地
+    // 時 near-bottom 仍為真、走的是自動跟隨而不是預覽列 —— 測試會因為一個與被測
+    // 行為無關的理由變紅。捲的幅度也刻意只夠讓最新那一則離開視窗,不捲到頂,
+    // 免得順帶把 loadOlder 也牽進來。
+    await page.waitForTimeout(3000);
+    await thread.evaluate((el) => {
+      el.scrollTop = el.scrollHeight - el.clientHeight - 600;
+    });
+    await expect(
+      page.getByTestId('chat-jump-latest'),
+      '最新那一則離開視窗就該有箭頭 —— 沒有的話下面那半是白等的',
+    ).toBeVisible({ timeout: 10_000 });
+    const lateBody = `after-return ${PAD}`;
+    const late = await postChatAs(request, tokM, 'owner', lateBody);
+    const strip = page.getByTestId('chat-new-msg-preview');
+    await expect(
+      strip,
+      '接回活尾巴之後,新訊息必須進得來(SSE 載入不能還被錨點擋著)',
+    ).toBeVisible({ timeout: 15_000 });
+    await expect(strip).toContainText(lateBody);
+    await expect(
+      page.getByTestId('chat-jump-latest'),
+      '箭頭要讓位給預覽列',
+    ).toBeHidden();
+
+    // ④ 點預覽列跳下去 —— 落在**最新那一則**,提示消失,未讀再次歸零。
+    await page.getByTestId('chat-new-msg-jump').click();
+    await expect(thread.locator(`[data-msg-id="${late.id}"]`)).toBeInViewport();
+    await expect(strip).toBeHidden({ timeout: 10_000 });
+    await expect
+      .poll(async () => unreadCountOf(request, token, M.id), {
+        message: '點預覽列跳到最新之後要標已讀',
+      })
+      .toBe(0);
+  });
+});

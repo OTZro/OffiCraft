@@ -36,6 +36,7 @@ import { zh } from "../i18n/locales/zh";
 import { ChatArea } from "./ChatArea";
 import type { Member } from "../types";
 import type { ChatMessage } from "../api/adapter";
+import type { JumpOutcome } from "../hooks/useChat";
 
 // Window peer = agent "b" (Beto). Owner id is "owner". `messagesPeer` mirrors
 // useChat's contract: the peer the CURRENT messages array belongs to (set
@@ -44,10 +45,12 @@ let messages: ChatMessage[] = [];
 let messagesPeer = "b";
 const markRead = vi.fn(() => Promise.resolve());
 // ③ T-48: the anchor-window fetch behind 跳到原訊息. `loadAroundResult` is what
-// the fetch reports back — true once the target really is in the thread, false
-// when the id names nothing or the request failed.
+// the fetch reports back — see useChat's JumpOutcome: the target is in the
+// thread ("found"), the id names nothing here ("missing"), or a later load
+// committed on top of ours and the message is still perfectly present
+// ("superseded").
 const loadAround = vi.fn(async (_id: string) => loadAroundResult);
-let loadAroundResult = true;
+let loadAroundResult: JumpOutcome = "found";
 // ③ T-48: the thread is an ANCHOR WINDOW with live messages below it (useChat's
 // `hasNewer`), and the way back to the tail.
 let hasNewer = false;
@@ -147,8 +150,9 @@ beforeEach(() => {
   // under test is the one the owner is looking at.
   document.hasFocus = () => true;
   markRead.mockClear();
-  loadAround.mockClear();
-  loadAroundResult = true;
+  loadAround.mockReset();
+  loadAround.mockImplementation(async () => loadAroundResult);
+  loadAroundResult = "found";
   resetToLatest.mockClear();
   loadNewer.mockClear();
   hasNewer = false;
@@ -838,10 +842,122 @@ describe("③ jump-to-origin (跳到原訊息, B3)", () => {
     expect(loadAround).toHaveBeenCalledTimes(1);
   });
 
+  it("跳轉進房時,房間還一列都沒有就先撈錨點視窗", async () => {
+    // 🔴 ANCHOR-FIRST ENTRY (T-48, owner ruling: 「你應該直接打成我們希望的流程」).
+    // useChat no longer fetches a newest page when the room is entered at an
+    // anchor, so the thread this reactor sees on the first commit is EMPTY. It
+    // used to wait for `messages.length > 0` — which, on this path, never comes:
+    // the room would sit blank forever. An empty thread has nothing in the DOM,
+    // so the fetch branch is exactly where it belongs.
+    messages = [];
+    renderChat(0, "c-ancient");
+
+    expect(loadAround).toHaveBeenCalledWith("c-ancient");
+    // Nothing is claimed about a message nobody has fetched yet: no landing, no
+    // highlight, no miss notice, and no watermark.
+    expect(markRead).not.toHaveBeenCalled();
+  });
+
+  it("被別的載入超車不是「找不到」—— 重排一次就落在那一則,一句話都不用說", async () => {
+    // 🔴 T-48 F3. `loadAround` used to answer a bare false for three unrelated
+    // facts, and one of them was "a newer load committed while our two windows
+    // were in the air". The message is still there; the screen said 「找不到那則
+    // 訊息,可能已經被清掉了」 and, because the fetch latch was already spent,
+    // offered no retry and no button to ask for one.
+    let calls = 0;
+    loadAround.mockImplementation(async () => {
+      calls += 1;
+      return calls === 1 ? "superseded" : "found";
+    });
+    messages = [mkMsg("c1", "b", "owner", 1000)];
+    const { container, rerender } = renderChat(0, "c-ancient");
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Overtaken once ⇒ tried again, and nothing on screen accused the server of
+    // losing a message it still has.
+    expect(loadAround).toHaveBeenCalledTimes(2);
+    expect(container.querySelector(".chat__jump-miss")).toBeNull();
+
+    // The window lands on the second attempt and the jump does what it came for.
+    messages = [mkMsg("c-ancient", "b", "owner", 10), mkMsg("c-after", "b", "owner", 11)];
+    await act(async () => {
+      rerender(
+        <I18nProvider>
+          <ChatArea
+            member={mkMember(0)}
+            members={[mkMember(0)]}
+            jumpToMsgId="c-ancient"
+          />
+        </I18nProvider>,
+      );
+    });
+    expect(
+      container
+        .querySelector('[data-msg-id="c-ancient"]')!
+        .classList.contains("chat__msg--located"),
+    ).toBe(true);
+    expect(container.querySelector(".chat__jump-miss")).toBeNull();
+  });
+
+  it("超車到放棄重試,說的也是「被打斷」,不是「訊息不見了」", async () => {
+    // The retry is BOUNDED — an unbounded one is a fetch loop — so there has to
+    // be an ending, and the ending may not borrow the miss sentence. Two facts,
+    // two sentences: this one is true and it tells the reader what to do.
+    loadAroundResult = "superseded";
+    messages = [mkMsg("c1", "b", "owner", 1000)];
+    const { container } = renderChat(0, "c-ancient");
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const notice = container.querySelector(".chat__jump-miss");
+    expect(notice).not.toBeNull();
+    expect(notice!.textContent).toContain(zh.chat.jumpTargetInterrupted);
+    expect(notice!.textContent).not.toContain(zh.chat.jumpTargetMissing);
+  });
+
+  it("按下回到最新就結束了那次跳轉 —— 不重排、也不冒出提示", async () => {
+    // 🔴 The arrow and the preview strip both mean "take me to the newest
+    // message", said by the owner, and they are the one thing allowed to
+    // overtake an anchor fetch. Without spending the jump latch here the two
+    // fight: the fetch comes back superseded, the reactor re-schedules, and the
+    // owner is dragged back to the old message they just asked to leave.
+    hasNewer = true;
+    let settleJump!: (o: JumpOutcome) => void;
+    loadAround.mockImplementation(
+      () =>
+        new Promise<JumpOutcome>((r) => {
+          settleJump = r;
+        }),
+    );
+    messages = [mkMsg("a1", "b", "owner", 100), mkMsg("a2", "b", "owner", 101)];
+    const { container } = renderChat(0, "c-ancient");
+    expect(loadAround).toHaveBeenCalledTimes(1);
+
+    const arrow = container.querySelector(
+      "[data-testid='chat-jump-latest']",
+    ) as HTMLButtonElement;
+    expect(arrow).not.toBeNull();
+    fireEvent.click(arrow);
+    expect(resetToLatest).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      settleJump("superseded");
+      await Promise.resolve();
+    });
+
+    // The jump is over because the owner ended it — not retried, and above all
+    // nothing on screen apologises for a message that was never missing.
+    expect(loadAround).toHaveBeenCalledTimes(1);
+    expect(container.querySelector(".chat__jump-miss")).toBeNull();
+  });
+
   it("falls back to the bottom only when the target really cannot be located", async () => {
     // The fetch is the difference between "not loaded yet" and "not there".
     // Only the second one may land at the bottom.
-    loadAroundResult = false;
+    loadAroundResult = "missing";
     messages = [mkMsg("c1", "b", "owner", 1000)];
     const { container } = renderChat(0, "c-ancient");
     await act(async () => {

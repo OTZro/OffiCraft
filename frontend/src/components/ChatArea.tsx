@@ -286,7 +286,12 @@ export function ChatArea({
     loadNewer,
     loadAround,
     resetToLatest,
-  } = useChat(member.id);
+    // 🔴 ANCHOR-FIRST ENTRY (T-48, owner ruling). The target is named at
+    // SUBSCRIPTION time, so a room entered through 跳到原訊息 / a kept link never
+    // loads the live tail first and then throws it away — see useChat's note.
+    // The fetch itself still happens below, in the jump reactor, because the
+    // viewport, the highlight and the miss notice are this component's business.
+  } = useChat(member.id, jumpToMsgId);
 
   // Released-worker codenames: an ow- participant that is NOT in the live
   // `workers` list (task closed → dropped off) still has a codename on the
@@ -585,11 +590,27 @@ export function ChatArea({
   // this ref is what stops the effect firing a second pair of requests on every
   // re-render while the first pair is still in flight.
   const jumpFetchedRef = useRef<string | null>(null);
-  // 🔴 T-48: the jump target the server has NO RECORD OF. The fallback (open at
+  // 🔴 T-48: the jump target the server has NO RECORD OF ("missing"), and — a
+  // DIFFERENT fact that used to be collapsed into it — an anchor fetch that was
+  // repeatedly OVERTAKEN by newer loads ("interrupted"). The fallback (open at
   // the bottom) is indistinguishable from a jump that worked, which is the very
-  // silence this ticket exists to remove — so the miss is state, and state is
+  // silence this ticket exists to remove — so the outcome is state, and state is
   // rendered. A `console.warn` is not a user-visible thing.
-  const [jumpMissed, setJumpMissed] = useState(false);
+  const [jumpNotice, setJumpNotice] = useState<null | "missing" | "interrupted">(
+    null,
+  );
+  // How many times a jump may be re-scheduled after being overtaken. `load()`
+  // is held off for the duration of the anchor fetch, so losing the race even
+  // once takes a deliberate 回到最新 or a send; three is a ceiling on a loop,
+  // not a budget anybody is expected to spend.
+  const MAX_JUMP_RETRIES = 3;
+  // 🔴 T-48 (F3): the anchor fetch was OVERTAKEN, which is not the same fact as
+  // "the message is gone" and must not be reported as one. Bumping this state
+  // re-runs the reactor below — a ref alone would not, and the retry would sit
+  // there until some unrelated render happened to carry it. BOUNDED: without a
+  // ceiling a load that keeps winning the race turns "retry" into an unbounded
+  // fetch loop, which is a worse failure than the one being fixed.
+  const [jumpRetry, setJumpRetry] = useState(0);
   const [highlightMsgId, setHighlightMsgId] = useState<string | null>(null);
   // T-e987 compose seed: the seed value already applied (one-shot per distinct
   // value, reset on a peer switch so the same taskNo can seed another peer).
@@ -610,7 +631,8 @@ export function ChatArea({
     entryScrollPendingRef.current = false;
     jumpConsumedRef.current = null;
     jumpFetchedRef.current = null;
-    setJumpMissed(false);
+    setJumpNotice(null);
+    setJumpRetry(0);
     seedConsumedRef.current = null;
     prependAnchorRef.current = null;
     setFirstUnreadId(null);
@@ -892,7 +914,13 @@ export function ChatArea({
   // tab) — see the prop's note for the miss this can still land on.
   useEffect(() => {
     if (!jumpToMsgId) return;
-    if (messagesPeer !== member.id || messages.length === 0) return;
+    // 🔴 AN EMPTY THREAD IS THE NORMAL ENTRY NOW, NOT A REASON TO WAIT (T-48).
+    // With the anchor named at subscription time useChat fetches NOTHING on
+    // entry, so waiting for `messages.length > 0` here would wait forever and
+    // the room would never fill. An empty thread has nothing in the DOM, which
+    // sends this straight down the fetch branch below — which is the point:
+    // the FIRST request the room makes is the window around the target.
+    if (messagesPeer !== member.id) return;
     if (jumpConsumedRef.current === jumpToMsgId) return;
     // Raw interpolation matches the chip-jump selector above — message ids
     // are server-minted (`c-<hex>`), never arbitrary strings.
@@ -921,25 +949,48 @@ export function ChatArea({
         initialPositionedRef.current = true;
         prevIdsRef.current = new Set(messages.map((m) => m.id));
         nearBottomRef.current = false;
-        void loadAround(jumpToMsgId).then((found) => {
-          if (found) return;
-          // Genuinely unreachable (the id names nothing, or the request
-          // failed). Fall back to the bottom — the thread still opens — and SAY
-          // SO ON SCREEN. The console line stays for the developer; the notice
-          // is what stops the fallback reading as a successful jump.
+        void loadAround(jumpToMsgId).then((outcome) => {
+          if (outcome === "found") return;
+          if (outcome === "superseded" && jumpRetry < MAX_JUMP_RETRIES) {
+            // 🔴 NOT A MISS (T-48, F3). Another load committed on top of ours,
+            // so our window was dropped to keep the thread in order — the
+            // message is still there. Saying 「找不到那則訊息」 here accused the
+            // server of losing a message it still has, and because the fetch
+            // latch had already been spent there was no retry and no button to
+            // ask for one. Re-arm and go round again; if the owner has mean-
+            // while asked for the live tail (回到最新 spends the jump latch),
+            // the guard at the top of this effect ends it instead.
+            jumpFetchedRef.current = null;
+            setJumpRetry((n) => n + 1);
+            return;
+          }
+          // Genuinely unreachable (the id names nothing, the id belongs to
+          // ANOTHER conversation — both windows answer 200 + empty — or the
+          // request failed). Fall back to the bottom — the thread still opens —
+          // and SAY SO ON SCREEN. The console line stays for the developer; the
+          // notice is what stops the fallback reading as a successful jump.
           console.warn(
             `ChatArea: jump target ${jumpToMsgId} could not be located`,
+            outcome,
           );
-          setJumpMissed(true);
+          setJumpNotice(outcome === "superseded" ? "interrupted" : "missing");
           jumpConsumedRef.current = jumpToMsgId;
           nearBottomRef.current = true;
+          // ⚠️ ANCHOR-FIRST ENTRY LEAVES THE ROOM EMPTY UNTIL SOMEBODY FILLS IT
+          // (T-48). On this path nobody has: useChat skipped its entry load
+          // because an anchor was named, and the anchor is not there. "Fall
+          // back to the bottom" therefore has to fetch the bottom first, or the
+          // owner is left staring at an empty conversation with a notice on it.
+          // Only when the thread really is empty — a miss with history already
+          // loaded still just lands where it always did.
+          if (messages.length === 0) void resetToLatest();
           endRef.current?.scrollIntoView();
         });
       }
       return;
     }
     jumpConsumedRef.current = jumpToMsgId;
-    setJumpMissed(false);
+    setJumpNotice(null);
     // The jump owns the initial viewport — mark entry positioning done.
     initialPositionedRef.current = true;
     prevIdsRef.current = new Set(messages.map((m) => m.id));
@@ -969,7 +1020,15 @@ export function ChatArea({
         };
       }
     }
-  }, [jumpToMsgId, messages, messagesPeer, member.id, loadAround]);
+  }, [
+    jumpToMsgId,
+    messages,
+    messagesPeer,
+    member.id,
+    loadAround,
+    resetToLatest,
+    jumpRetry,
+  ]);
 
   // The jump highlight is a transient flash — clear it after the CSS pulse so
   // the row returns to the normal thread look.
@@ -1117,6 +1176,14 @@ export function ChatArea({
     setLatestInView(true);
     nearBottomRef.current = true;
     unreadRunOpenRef.current = false;
+    // 🔴 THE ARROW / THE PREVIEW STRIP ENDS AN IN-FLIGHT JUMP (T-48). Both mean
+    // "take me to the newest message", said by the owner, and they are the one
+    // thing allowed to overtake the anchor fetch. Spending the jump latch here
+    // is what makes the overtake DELIBERATE rather than a race: `loadAround`
+    // comes back "superseded", the reactor's own top guard ends it without a
+    // retry and without a notice, and `mayMarkRead` opens because the owner
+    // really is on their way to the live tail.
+    if (jumpToMsgId !== undefined) jumpConsumedRef.current = jumpToMsgId;
     // 🔴 SCROLLING IS NOT ENOUGH WHEN THE THREAD IS AN ANCHOR WINDOW (T-48 ③).
     // `scrollToLatest` lands on the last row IN THE DOM; after a jump to an old
     // message that row is nowhere near the newest one, so the arrow would move
@@ -1964,15 +2031,19 @@ export function ChatArea({
          * fallback scroll on purpose (the reader has to be able to look up and
          * find out why they are where they are) and is cleared by the x, by a
          * peer switch, or by a jump that later succeeds. */}
-        {jumpMissed && (
+        {jumpNotice && (
           <div className="chat__jump-miss" role="status">
-            <span>{t.chat.jumpTargetMissing}</span>
+            <span>
+              {jumpNotice === "interrupted"
+                ? t.chat.jumpTargetInterrupted
+                : t.chat.jumpTargetMissing}
+            </span>
             <button
               type="button"
               className="chat__jump-miss__x"
               aria-label={t.chat.jumpTargetMissingDismiss}
               title={t.chat.jumpTargetMissingDismiss}
-              onClick={() => setJumpMissed(false)}
+              onClick={() => setJumpNotice(null)}
             >
               ×
             </button>

@@ -102,7 +102,15 @@ class 名 `.reply-tag--ai` / `.reply-option--ai` **不要改**:`TaskReplyCard` �
 
 view=full 只在 HTTP list seam 表示整個 pane 的一次請求，不上提到 adapter，也不向 agent 的 MCP tools/list 宣傳；否則 agent 會拿到一次拉整個 pane 的昂貴把手，抵消輕量摘要契約。light/default 行為不變、未知 view 回 400。等待卡的 expire 規則以 server 為準：owner/admin 或卡片作者可過期自己的 waiting 卡；其他人 403，已回答 409。
 
-hash route #office/chat/<id>/msg/<msgId> 只做一次定位與 highlight；若訊息不在最近窗口就誠實落到底。產生它的是「請示」頁的**跳到原訊息**與任務卡內嵌回覆卡的**在聊天室回覆**（外加使用者自己留存的舊 URL）；聊天氣泡引用列的**看原訊息**不走這條，它撈那一則開覆蓋層（見下方「看原訊息」一節）。⚠️ T-0b78 曾把那兩顆也改成覆蓋層，owner 2026-08-29 裁定「1 跟 2 變回去原本那樣」，**知情接受**「目標不在已載入視窗時會靜默落在最新那一則」這個代價，並把修法另案（「無法跳回去很久以前訊息的問題我們改天再說」）—— 所以不要順手替這兩顆補往回分頁、補提示或改走覆蓋層。回覆卡的 red badge 與聊天未讀互不清除；任務關聯卡共用卡身，只顯示任務標題與查看詳情連結。
+hash route #office/chat/<id>/msg/<msgId> 只做一次定位與 highlight。產生它的是「請示」頁的**跳到原訊息**與任務卡內嵌回覆卡的**在聊天室回覆**（外加使用者自己留存的舊 URL）；聊天氣泡引用列的**看原訊息**不走這條，它撈那一則開覆蓋層（見下方「看原訊息」一節）。⚠️ T-0b78 曾把那兩顆也改成覆蓋層，owner 2026-08-29 裁定「1 跟 2 變回去原本那樣」—— 所以不要順手把它們改回覆蓋層。
+
+**目標不在最近視窗時是撈，不是落到底（T-48，取代上面那一段原本的「知情接受」）。** owner 後來把那個暫緩解掉了（「都可以正確定位到該訊息」），所以這條路現在是：**進房當下就以那個 id 開窗**——`useChat(peer, jumpToMsgId)` 收到 anchor 就**完全不載最新那一頁**，ChatArea 的 jump reactor 從一個空 thread 直接打 `loadAround`（`?end_id=` 往舊、`?start_id=` 往新，兩端都含，兩頁而已，不是整條歷史）。⚠️ 這條鏈有一個**沒有機械保護的不變量**：anchor 被指定時**一定要有人真的去撈**，否則房間永遠空白；今天唯一的撈家是那個 reactor，它的 miss 分支再退回 `resetToLatest`。
+
+`loadAround` 回的是**三態**（`JumpOutcome`），不是 bool：`found` / `missing`（404、失敗、或**存在但屬於別條對話**——server 解析錨點不套 participant 過濾，那種 id 兩個請求都回 200＋空陣列，採用它會把聊天室寫成空白）/ `superseded`（被更晚的載入超車，**訊息還在**）。**不要把 superseded 併回 missing**：那會對著一則還在的訊息說「可能已經被清掉了」，而且跳轉閂已經用掉，沒有重試也沒有按鈕。三態各有自己的畫面語言（`chat.jumpTargetMissing` / `chat.jumpTargetInterrupted`），重排有上限。
+
+錨點視窗期間 `hasNewer=true`，這時**不標已讀**（`mayMarkRead`）、**不跑週期性/SSE 的最新頁載入**（把活尾巴併進歷史視窗會造出一段沒人撈過卻被畫成相鄰的縫）。回到活尾巴的路有兩條：往下捲 `loadNewer`（有世代票，晚到的一頁要丟掉，不然歷史會被接在最新後面而且 `hasNewer` 會翻回 true ⇒ 那條對話從此不標已讀）、或 `resetToLatest`（**取代**不是合併，並且負責解除 anchor 的載入 hold-off——不解除的話那間房從此不再刷新）。
+
+回覆卡的 red badge 與聊天未讀互不清除；任務關聯卡共用卡身，只顯示任務標題與查看詳情連結。
 
 ## 「回覆這則」（T-4e95，owner 2026-08-21 改設計）
 

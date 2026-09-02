@@ -9,7 +9,7 @@
 // 回覆橫幅緊接在後）。外殼一旦寫錯，量到的是一個不會出貨的版面。
 import { ChatJumpLatestButton } from "../../src/components/ChatJumpLatestButton";
 import { ChatNewMsgPreview } from "../../src/components/ChatNewMsgPreview";
-import { I18nProvider } from "../../src/i18n";
+import { I18nProvider, useI18n } from "../../src/i18n";
 import { LONG_BODY, LONG_WHO } from "./chatBottomAffordanceFixtures";
 
 function Shell({ children }: { children: React.ReactNode }) {
@@ -145,5 +145,59 @@ export function NewMsgPreviewHeightStory() {
         </footer>
       </div>
     </Shell>
+  );
+}
+
+/**
+ * ③ 跳轉提示列（`.chat__jump-miss`），兩句話各畫一條，放在同一個 composer 裡。
+ *
+ * 🔴 為什麼要量它：這條列是**寫在 composer 上面**的，而它的兩句話長度差很多
+ * （英文那句更長）。折行本身不是罪，但它會把輸入框往下推 —— 而且這條列的出現
+ * 時機是「跳轉剛落空」，正是使用者準備打字的那一刻。jsdom 量不到任何一格：
+ * 沒有版面、沒有 @media、offsetHeight 永遠 0。
+ *
+ * DOM 形狀照抄 ChatArea 的實際輸出（composer 的第一個子元素，一個 span + 一顆
+ * ×），文字由 I18nProvider 的真字串提供，不是手打的假字。
+ */
+export function ChatJumpNoticeStory({
+  text,
+}: {
+  /** 真正的出貨文案，由 spec 從 locale 模組直接餵進來 —— 兩個語系的長度差很多，
+   * 而**最長的那一句才是會現形的那一句**。手打的假字或只量預設語系，等於量一個
+   * 一定塞得下的 fixture（LONG_BODY 那格已經踩過一次）。 */
+  text: string;
+}) {
+  return (
+    <Shell>
+      <div className="chat" style={{ flex: 1, minWidth: 0 }}>
+        <div className="chat__body">
+          <div className="chat__messages" />
+        </div>
+        <footer className="chat__composer">
+          <JumpMissRow text={text} />
+          <div className="chat__composer-row" data-testid="composer-row">
+            <textarea className="chat__input" rows={1} defaultValue="" />
+          </div>
+        </footer>
+      </div>
+    </Shell>
+  );
+}
+
+function JumpMissRow({ text }: { text: string }) {
+  const { t } = useI18n();
+  return (
+    <div className="chat__jump-miss" role="status" data-testid="jump-miss">
+      <span data-testid="jump-miss-text">{text}</span>
+      <button
+        type="button"
+        className="chat__jump-miss__x"
+        aria-label={t.chat.jumpTargetMissingDismiss}
+        title={t.chat.jumpTargetMissingDismiss}
+        data-testid="jump-miss-x"
+      >
+        ×
+      </button>
+    </div>
   );
 }

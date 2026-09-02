@@ -67,6 +67,21 @@ vi.mock("../api", () => ({
 }));
 
 import { useChat } from "./useChat";
+import type { JumpOutcome } from "./useChat";
+
+/** A promise the test resolves by hand — the only way to hold a request in
+ * flight and land something else on top of it, which is what every race below
+ * is about. */
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+/** Let the microtask queue (and the SSE sink's own tick) drain. */
+const settle = () => new Promise((r) => setTimeout(r, 20));
 
 function mkMsg(id: string, from: string, to: string, ts: number): ChatMessage {
   return {
@@ -235,12 +250,12 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     ]; // short → the live tail is inside this page
     h.listChatWindow.mockResolvedValueOnce(above).mockResolvedValueOnce(below);
 
-    let found: boolean | undefined;
+    let outcome: JumpOutcome | undefined;
     await act(async () => {
-      found = await result.current.loadAround("a29");
+      outcome = await result.current.loadAround("a29");
     });
 
-    expect(found).toBe(true);
+    expect(outcome).toBe("found");
     // Both ends INCLUSIVE and both anchored on the SAME id: the context above
     // it and the context below it.
     expect(h.listChatWindow.mock.calls[0]).toEqual(["b", { endId: "a29" }, 30]);
@@ -343,12 +358,12 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     await waitFor(() => expect(result.current.messages).toHaveLength(30));
 
     h.listChatWindow.mockRejectedValue(new Error("404"));
-    let found: boolean | undefined;
+    let outcome: JumpOutcome | undefined;
     await act(async () => {
-      found = await result.current.loadAround("c-nope");
+      outcome = await result.current.loadAround("c-nope");
     });
 
-    expect(found).toBe(false);
+    expect(outcome).toBe("missing");
     expect(result.current.messages).toHaveLength(30);
     expect(result.current.hasNewer).toBe(false);
   });
@@ -379,5 +394,336 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
       live.map((m) => m.id),
     );
     expect(result.current.hasNewer).toBe(false);
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // ANCHOR-FIRST ENTRY (T-48, owner ruling). Arriving through a jump link no
+  // longer loads the live tail and then throws it away.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  it("entering AT an anchor fetches the window around it and never a newest page first", async () => {
+    // 🔴 The measured defect: entry fired `GET /api/chat?with=` and the anchor
+    // window replaced it tens of ms later. One wasted round-trip, and a real
+    // intermediate screen showing the live tail to a reader on their way
+    // somewhere else — the screen every mark-read patch downstream exists to
+    // hold back.
+    const above = page("a", 100, 30); // full → history continues above
+    const below = [mkMsg("a29", "b", "owner", 129), mkMsg("t1", "b", "owner", 130)];
+    h.listChatWindow.mockResolvedValueOnce(above).mockResolvedValueOnce(below);
+
+    const { result } = renderHook(() => useChat("b", "a29"));
+    // The subscription is up (receipts were pulled) and yet NOTHING asked for
+    // the newest page.
+    await waitFor(() => expect(h.listChatReads).toHaveBeenCalled());
+    expect(h.listChat).not.toHaveBeenCalled();
+
+    let outcome: JumpOutcome | undefined;
+    await act(async () => {
+      outcome = await result.current.loadAround("a29");
+    });
+    expect(outcome).toBe("found");
+    expect(result.current.messages.map((m) => m.id)).toContain("a29");
+    // Still not one newest page: the FIRST request this room made was the
+    // window around the target, and it was the only kind it needed.
+    expect(h.listChat).not.toHaveBeenCalled();
+
+    // …and the hold-off is released the moment the anchor lands, or the room
+    // would never refresh again (this window already reaches the live tail).
+    await act(async () => {
+      h.sseHandler?.("chat");
+      await settle();
+    });
+    expect(h.listChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("entering WITHOUT an anchor is the ordinary entry, unchanged: one newest page and no window request", async () => {
+    // The other half of the ruling, and the one worth a guard of its own: the
+    // anchor-first path must be reachable ONLY from a jump. Every ordinary
+    // entry — the overwhelming majority — has to be byte-for-byte what it was.
+    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
+    const { result } = renderHook(() => useChat("b"));
+    await waitFor(() => expect(result.current.messages).toHaveLength(30));
+
+    expect(h.listChat).toHaveBeenCalledTimes(1);
+    expect(h.listChat.mock.calls[0]).toEqual(["b"]);
+    expect(h.listChatWindow).not.toHaveBeenCalled();
+    expect(result.current.hasNewer).toBe(false);
+
+    // and the refresh is live from the start.
+    await act(async () => {
+      h.sseHandler?.("chat");
+      await settle();
+    });
+    expect(h.listChat).toHaveBeenCalledTimes(2);
+  });
+
+  it("an SSE burst arriving DURING the anchor fetch does not overtake it with a newest page", async () => {
+    // 🔴 F3's cause, not its symptom. A newest-page load started after the
+    // anchor takes a HIGHER generation ticket and can commit first; the anchor
+    // is then dropped as superseded, and the reader is told the message was
+    // probably cleared. Holding the ordinary refresh for the two round-trips is
+    // cheaper than any way of apologising afterwards.
+    const above = deferred<ChatMessage[]>();
+    const below = deferred<ChatMessage[]>();
+    h.listChatWindow
+      .mockReturnValueOnce(above.promise)
+      .mockReturnValueOnce(below.promise);
+
+    const { result } = renderHook(() => useChat("b", "a0"));
+    await waitFor(() => expect(h.listChatReads).toHaveBeenCalled());
+
+    let pending!: Promise<JumpOutcome>;
+    act(() => {
+      pending = result.current.loadAround("a0");
+    });
+    await act(async () => {
+      h.sseHandler?.("chat");
+      await settle();
+    });
+    expect(h.listChat).not.toHaveBeenCalled();
+
+    above.resolve(page("a", 100, 30));
+    below.resolve([mkMsg("a0", "b", "owner", 100), mkMsg("t1", "b", "owner", 131)]);
+    let outcome: JumpOutcome | undefined;
+    await act(async () => {
+      outcome = await pending;
+    });
+    expect(outcome).toBe("found");
+  });
+
+  it("回到最新 out of an anchor-first entry hands the room back to the LIVE refresh", async () => {
+    // The second line that may not break: an anchor window must never be a dead
+    // end. If the hold-off outlived the anchor this conversation would stop
+    // refreshing for the rest of the session — silently, and only for the
+    // people who arrived through a jump link.
+    h.listChatWindow
+      .mockResolvedValueOnce(page("a", 100, 30))
+      .mockResolvedValueOnce(page("a", 129, 30)); // full → live tail is below
+    const { result } = renderHook(() => useChat("b", "a0"));
+    await act(async () => {
+      await result.current.loadAround("a0");
+    });
+    expect(result.current.hasNewer).toBe(true);
+
+    const live = page("z", 9000, 30);
+    h.listChat.mockResolvedValueOnce(live);
+    await act(async () => {
+      await result.current.resetToLatest();
+    });
+    expect(result.current.messages.map((m) => m.id)).toEqual(
+      live.map((m) => m.id),
+    );
+
+    const before = h.listChat.mock.calls.length;
+    await act(async () => {
+      h.sseHandler?.("chat");
+      await settle();
+    });
+    expect(
+      h.listChat.mock.calls.length,
+      "after 回到最新 the ordinary refresh must be live again",
+    ).toBe(before + 1);
+  });
+
+  it("回到最新 while the anchor is STILL IN THE AIR does not leave the room without a refresh", async () => {
+    // The nastiest shape of the same line, and the one the tidy version misses:
+    // the anchor never settles because the owner overtook it, so the flag that
+    // holds the refresh off is not cleared by the anchor landing — it has to be
+    // cleared by 回到最新 itself, or this room never fetches again and looks
+    // merely quiet while doing it.
+    const above = deferred<ChatMessage[]>();
+    const below = deferred<ChatMessage[]>();
+    h.listChatWindow
+      .mockReturnValueOnce(above.promise)
+      .mockReturnValueOnce(below.promise);
+    const { result } = renderHook(() => useChat("b", "a0"));
+    await waitFor(() => expect(h.listChatReads).toHaveBeenCalled());
+    let pending!: Promise<JumpOutcome>;
+    act(() => {
+      pending = result.current.loadAround("a0");
+    });
+
+    const live = page("z", 9000, 30);
+    h.listChat.mockResolvedValueOnce(live);
+    await act(async () => {
+      await result.current.resetToLatest();
+    });
+    above.resolve(page("a", 100, 30));
+    below.resolve(page("a", 129, 30));
+    await act(async () => {
+      expect(await pending).toBe("superseded");
+    });
+
+    const before = h.listChat.mock.calls.length;
+    h.listChat.mockResolvedValueOnce(live);
+    await act(async () => {
+      h.sseHandler?.("chat");
+      await settle();
+    });
+    expect(
+      h.listChat.mock.calls.length,
+      "an anchor that never landed must not silence this room for good",
+    ).toBe(before + 1);
+  });
+
+  it("a MID-SESSION jump is not overtaken by an SSE burst either", async () => {
+    // The entry hold-off does not cover this one: the room is already the live
+    // tail (nothing pending) and the owner jumps from inside it — 請示卡's
+    // 跳到原訊息 while the conversation is open. A newest-page load starting
+    // inside those two round-trips takes a higher ticket and commits first, and
+    // the jump is then reported to the reader as a message that is not there.
+    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
+    const { result } = renderHook(() => useChat("b"));
+    await waitFor(() => expect(result.current.messages).toHaveLength(30));
+    const before = h.listChat.mock.calls.length;
+
+    const above = deferred<ChatMessage[]>();
+    const below = deferred<ChatMessage[]>();
+    h.listChatWindow
+      .mockReturnValueOnce(above.promise)
+      .mockReturnValueOnce(below.promise);
+    let pending!: Promise<JumpOutcome>;
+    act(() => {
+      pending = result.current.loadAround("a0");
+    });
+    await act(async () => {
+      h.sseHandler?.("chat");
+      await settle();
+    });
+    expect(
+      h.listChat.mock.calls.length,
+      "no newest page may start while the anchor pair is in the air",
+    ).toBe(before);
+
+    above.resolve(page("a", 100, 30));
+    below.resolve([mkMsg("a0", "b", "owner", 100), mkMsg("t1", "b", "owner", 131)]);
+    let outcome: JumpOutcome | undefined;
+    await act(async () => {
+      outcome = await pending;
+    });
+    expect(outcome).toBe("found");
+    expect(result.current.messages.map((m) => m.id)).toContain("a0");
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // The three ways this seam used to fail silently.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  it("an id that exists but belongs to ANOTHER conversation is a miss, not an empty room", async () => {
+    // 🔴 F1 — a reachable 200, not a defensive branch. The server resolves the
+    // anchor WITHOUT the participant filter on purpose ("a window anchored
+    // outside it simply comes back empty, which is the honest answer"), so a
+    // real message id from a DIFFERENT thread answers both calls 200 + [].
+    // Adopting that window writes `messages: []`: the room goes blank, the miss
+    // notice does not light, and the console says nothing either.
+    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
+    const { result } = renderHook(() => useChat("b"));
+    await waitFor(() => expect(result.current.messages).toHaveLength(30));
+
+    h.listChatWindow.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    let outcome: JumpOutcome | undefined;
+    await act(async () => {
+      outcome = await result.current.loadAround("c-someone-elses");
+    });
+
+    expect(outcome).toBe("missing");
+    // The thread the owner was reading is left exactly as it was.
+    expect(result.current.messages).toHaveLength(30);
+    expect(result.current.messages.map((m) => m.id)).toEqual(
+      page("n", 9000, 30).map((m) => m.id),
+    );
+    expect(result.current.hasNewer).toBe(false);
+  });
+
+  it("being OVERTAKEN is reported as superseded, never as a missing message", async () => {
+    // 🔴 F3. `loadAround` used to answer false for three different facts — 404,
+    // a failed request, and "a newer load committed while we were in the air".
+    // ChatArea has one branch for false, so the third one put 「找不到那則訊息,
+    // 可能已經被清掉了」 on screen about a message that is still there, with the
+    // fetch latch already spent: no retry, no button, jump silently abandoned.
+    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
+    const { result } = renderHook(() => useChat("b"));
+    await waitFor(() => expect(result.current.messages).toHaveLength(30));
+
+    const above = deferred<ChatMessage[]>();
+    const below = deferred<ChatMessage[]>();
+    h.listChatWindow
+      .mockReturnValueOnce(above.promise)
+      .mockReturnValueOnce(below.promise);
+    let pending!: Promise<JumpOutcome>;
+    act(() => {
+      pending = result.current.loadAround("a0");
+    });
+
+    // The owner presses 回到最新 while the anchor pair is still in the air.
+    const live = page("z", 9000, 30);
+    h.listChat.mockResolvedValueOnce(live);
+    await act(async () => {
+      await result.current.resetToLatest();
+    });
+
+    above.resolve(page("a", 100, 30));
+    below.resolve(page("a", 129, 30));
+    let outcome: JumpOutcome | undefined;
+    await act(async () => {
+      outcome = await pending;
+    });
+
+    expect(outcome).toBe("superseded");
+    // …and the window that lost the race did not land on top of the winner.
+    expect(result.current.messages.map((m) => m.id)).toEqual(
+      live.map((m) => m.id),
+    );
+    expect(result.current.hasNewer).toBe(false);
+  });
+
+  it("a forward page that lands AFTER 回到最新 is dropped, not appended under the live tail", async () => {
+    // 🔴 F2. `loadingNewerRef` is a same-direction mutex and nothing else, so
+    // the forward walk was the one loader in this file with no generation
+    // ticket. Measured on the unguarded code:
+    //
+    //   len 60 head ['z0','z1','z2'] tail ['mid27','mid28','mid29']
+    //   hasNewer true gapSuspected false
+    //
+    // 30 history rows drawn BELOW the newest ones, no gap notice — and
+    // `hasNewer` back to true, which re-arms the anchor gate on load() and pins
+    // mayMarkRead false: that conversation stops marking itself read for good.
+    h.listChatWindow
+      .mockResolvedValueOnce(page("a", 100, 30))
+      .mockResolvedValueOnce(page("a", 129, 30));
+    const { result } = renderHook(() => useChat("b", "a0"));
+    await act(async () => {
+      await result.current.loadAround("a0");
+    });
+    expect(result.current.hasNewer).toBe(true);
+
+    const forward = deferred<ChatMessage[]>();
+    h.listChatWindow.mockReturnValueOnce(forward.promise);
+    let walking!: Promise<void>;
+    act(() => {
+      walking = result.current.loadNewer();
+    });
+
+    // Scrolled to the bottom of the window, saw it was not the latest, pressed
+    // the arrow — the most natural gesture order there is.
+    const live = page("z", 9000, 30);
+    h.listChat.mockResolvedValueOnce(live);
+    await act(async () => {
+      await result.current.resetToLatest();
+    });
+
+    forward.resolve(page("mid", 158, 30));
+    await act(async () => {
+      await walking;
+    });
+
+    expect(result.current.messages.map((m) => m.id)).toEqual(
+      live.map((m) => m.id),
+    );
+    expect(
+      result.current.hasNewer,
+      "a stale forward page must not re-arm the anchor gate",
+    ).toBe(false);
+    expect(result.current.gapSuspected).toBe(false);
   });
 });
