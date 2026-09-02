@@ -898,6 +898,112 @@ func (s *apiServer) bankLiveCost(actorID string) {
 	}
 }
 
+// dropLiveCost removes the live telemetry cost from an actor's entry and
+// reports what it removed (nil when there was nothing there). It is the half of
+// a cost reset that bankLiveCost's pop() is the half of a bank: same key, same
+// read-modify-Set shape, so the two operations cannot drift apart on where the
+// live figure lives.
+func (s *apiServer) dropLiveCost(actorID string) *float64 {
+	entry := s.telemetry.Get(actorID)
+	if entry == nil {
+		return nil
+	}
+	cost, ok := entry["cost"].(float64)
+	if !ok {
+		return nil
+	}
+	delete(entry, "cost")
+	s.telemetry.Set(actorID, entry)
+	return &cost
+}
+
+// HandleResetCostApiMembersMemberIdCostResetPost — POST
+// /api/members/{member_id}/cost/reset, the cockpit's 成本歸零 button (owner
+// ruling rc-7dea0deefa63, option 0「最小、不可逆」).
+//
+// 🔴 BOTH HALVES OR NEITHER. The owner-visible 估計$ is two numbers added on the
+// client: the durable banked_cost column and the live in-memory telemetry
+// figure. Clearing only the durable half is not a smaller version of this
+// button — the live figure reappears on the very next cockpit read, which the
+// owner cannot tell apart from the button doing nothing at all. That is why the
+// live drop is not an optimisation here and why a test pins it.
+//
+// 🔴 IRREVERSIBLE, deliberately. No snapshot is kept and there is no undo route:
+// spend is stored as two accumulators with no per-charge ledger behind them, so
+// nothing else in this system holds the discarded figure. The response is
+// therefore a RECEIPT of what was destroyed — the two values as they stood
+// immediately before the write, which is the last moment they exist anywhere.
+// It is not an undo and must never grow into one without a fresh owner ruling.
+//
+// The actor is resolved the way bankLiveCost resolves it, so ONE route serves
+// both kinds: a staff member, or a live outsource worker. A released worker is
+// refused (404) like every other outsource write door — its spend still counts
+// on the account card, but a removed roster row is not a thing this button
+// reaches; widening that is a separate decision.
+func (s *apiServer) HandleResetCostApiMembersMemberIdCostResetPost(w http.ResponseWriter, r *http.Request, memberId string) {
+	// Staff first, mirroring bankLiveCost: an outsource member banks (and so
+	// resets) through the WORKER branch, never as a member patch.
+	if m, err := s.dal.GetMember(memberId); err == nil && m != nil &&
+		m.RosterStatus != RosterStatusRemoved && m.Kind != KindOutsource {
+		cleared := s.dropLiveCost(memberId)
+		clearedBanked := nonZeroCost(m.BankedCost)
+		m.BankedCost = 0
+		if err := s.putMember(*m, requestTrigger(r)); err != nil {
+			internalError(w, err)
+			return
+		}
+		s.publishMonitoringSignal(memberId, requestTrigger(r))
+		writeJSON(w, http.StatusOK, costResetDTO{
+			MemberID:          memberId,
+			ClearedCost:       cleared,
+			ClearedBankedCost: clearedBanked,
+		})
+		return
+	}
+	wk, err := s.dal.GetOutsourceWorker(memberId)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	if wk == nil || wk.Status == WorkerStatusReleased {
+		writeError(w, http.StatusNotFound, "member '"+memberId+"' not found")
+		return
+	}
+	cleared := s.dropLiveCost(memberId)
+	clearedBanked := nonZeroCost(wk.BankedCost)
+	wk.BankedCost = 0
+	if err := s.dal.PutOutsourceWorker(*wk); err != nil {
+		internalError(w, err)
+		return
+	}
+	s.publishOutsourceWorker(*wk, requestTrigger(r))
+	s.publishMonitoringSignal(memberId, requestTrigger(r))
+	writeJSON(w, http.StatusOK, costResetDTO{
+		MemberID:          memberId,
+		ClearedCost:       cleared,
+		ClearedBankedCost: clearedBanked,
+	})
+}
+
+// nonZeroCost mirrors foldActorRuntime's rule for the banked figure: 0 is not
+// put on the wire. On this receipt that reads as "there was nothing banked to
+// clear" rather than "zero was cleared", and it keeps the reset's two fields
+// field-for-field identical to the read side so a client reuses one summing
+// rule instead of growing a second one.
+func nonZeroCost(v float64) *float64 {
+	if v == 0 {
+		return nil
+	}
+	return &v
+}
+
+// publishMonitoringSignal fans the same owner-only cockpit invalidation the
+// telemetry ingest fans, so a reset converges the 估計$ cell without waiting for
+// the next sample. No agent consumes it.
+func (s *apiServer) publishMonitoringSignal(actorID, trigger string) {
+	s.hub.Publish("monitoring", "signal", "monitoring", actorID, nil, audienceOwnerOnly(), trigger)
+}
+
 // ── POST /api/mcp ────────────────────────────────────────────────────────────
 
 // JSON-RPC error codes (spec/mcp.md closed set).

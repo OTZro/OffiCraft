@@ -197,6 +197,19 @@ class Happy:
     check: CheckFn | None = None
 
 
+def _check_cost_reset_receipt(_ctx: HCtx, r: httpx.Response) -> None:
+    """A fresh member has never reported telemetry and has banked nothing, so
+    the receipt honestly says NOTHING WAS DESTROYED — both halves null rather
+    than 0. That distinction is the wire contract (null = there was nothing to
+    clear; 0 would read as "zero was cleared"), and it is what lets the cockpit
+    fall back to the existing "both null -> dash" rule after a reset instead of
+    rendering $0."""
+    data = r.json()
+    assert data["member_id"], data
+    assert data["cleared_cost"] is None, data
+    assert data["cleared_banked_cost"] is None, data
+
+
 def _check_version(_ctx: HCtx, r: httpx.Response) -> None:
     data = r.json()
     assert data["version"] and data["catalog_hash"], data
@@ -1147,6 +1160,10 @@ HAPPY: dict[str, Happy] = {
     ),
     "POST /api/members/{member_id}/force-stop": Happy(
         path=lambda ctx: f"/api/members/{ctx.fresh_member()}/force-stop",
+    ),
+    "POST /api/members/{member_id}/cost/reset": Happy(
+        path=lambda ctx: f"/api/members/{ctx.fresh_member()}/cost/reset",
+        check=_check_cost_reset_receipt,
     ),
     "DELETE /api/members/{member_id}": Happy(
         path=lambda ctx: f"/api/members/{ctx.fresh_member()}",

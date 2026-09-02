@@ -110,6 +110,10 @@ export interface Messages {
   machineUninstallConfirmBody: (name: string) => string;
   machineUninstallWarnBody: (name: string, count: number) => string;
   machineDeleteConfirmBody: (name: string) => string;
+  /** 成本歸零 confirm. Takes the RENDERED amount (already through formatCost, or
+   * the dash) rather than a number: the panel has it, and a second formatting
+   * site is a second place for the rounding rule to drift. */
+  costResetConfirmBody: (amount: string) => string;
   // ── settings ──
   themeImportSkipped: (count: number, sample: string[]) => string;
   themeDeleteConfirm: (name: string) => string;
@@ -407,6 +411,8 @@ export function makeMessages(t: Dict, language: Lang): Messages {
       `${mach.uninstallWarnBody1}${name}${mach.uninstallWarnBody2}${count}${mach.uninstallWarnBody3}`,
     machineDeleteConfirmBody: (name) =>
       `${mach.deleteConfirmBodyLead}${name}${mach.deleteConfirmBodyTail}`,
+    costResetConfirmBody: (amount) =>
+      `${t.mp.costResetConfirmBodyLead}${amount}${t.mp.costResetConfirmBodyTail}`,
 
     // `sample` is the SHORT head of the skipped set, never the whole thing; the
     // count carries the rest and the trailing marker says it was cut.

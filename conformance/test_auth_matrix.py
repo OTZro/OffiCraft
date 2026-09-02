@@ -662,6 +662,15 @@ MATRIX: dict[str, Route] = {
         requires="admin_agent",
         path=_member_path("/api/members/{member_id}/force-stop"),
     ),
+    "POST /api/members/{member_id}/cost/reset": Route(
+        # OWNER floor, alone among the member action rows — the neighbours
+        # control a member, this one destroys the owner's own spend record with
+        # nothing else in the system holding a copy (T-53). The admin_agent cell
+        # is therefore a DERIVED 403 here while it is 200 for every row above,
+        # which is the whole point of pinning it.
+        requires="owner",
+        path=_member_path("/api/members/{member_id}/cost/reset"),
+    ),
     "POST /api/members/{member_id}/accelerated-stop": Route(
         # positive faces: 409 — the fresh target has no live session, and
         # 加速停止 is an ESCALATION of a wind-down that is already open. That

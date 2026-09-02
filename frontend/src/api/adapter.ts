@@ -1523,6 +1523,19 @@ export interface SseDeltaNames {
  *   "live"         — open and delivering.
  *   "unauthorized" — the session is dead; retrying has STOPPED on purpose.
  */
+/**
+ * What a 成本歸零 destroyed, as the server read it immediately before the write.
+ *
+ * Null on a half means there was nothing to clear there — NOT that zero was
+ * cleared. The distinction matters because it is the same null semantics the
+ * cost READ side uses, so a caller keeps one rule for both.
+ */
+export type CostResetReceipt = {
+  memberId: string;
+  clearedCost: number | null;
+  clearedBankedCost: number | null;
+};
+
 export type SseConnectionState = "idle" | "connecting" | "live" | "unauthorized";
 
 export interface SseDelta {
@@ -1617,6 +1630,23 @@ export interface Api {
    * surfaces stopped.
    */
   forceStopMember(id: string): Promise<void>;
+  /**
+   * 成本歸零: POST /api/members/{id}/cost/reset → clear ONE actor's estimated
+   * spend, both halves at once (the durable banked figure AND the live
+   * telemetry figure). Serves staff and live outsource workers alike; a
+   * released worker is a 404.
+   *
+   * 🔴 IRREVERSIBLE (owner ruling rc-7dea0deefa63). Nothing is retained and
+   * there is no undo route — call it behind a confirm, never optimistically.
+   *
+   * Resolves with a RECEIPT of what was destroyed, read immediately before the
+   * write, because that response is the last moment those numbers exist
+   * anywhere. Null on a half means there was nothing to clear there, NOT that
+   * zero was cleared — the same null semantics the read side uses, so the
+   * caller reuses one summing rule. After the reset the 估計$ cell falls back
+   * to the dash on its own; the caller refetches.
+   */
+  resetMemberCost(id: string): Promise<CostResetReceipt>;
   /**
    * 加速停止 (accelerated stop): POST /api/members/{id}/accelerated-stop → put a
    * wind-down that is ALREADY OPEN on the server's stop.accelerated_grace_secs

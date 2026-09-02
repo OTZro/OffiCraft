@@ -1017,6 +1017,13 @@ export const zh = {
     lastOpFail: "失敗",
     lastOpLogLabel: "查看記錄",
     estimatedCost: "估計$",
+    costReset: "歸零",
+    costResetHint: "把這個成員的累計估計花費歸零。按下去救不回來。",
+    costResetConfirm: "確定歸零",
+    costResetError: "歸零失敗，數字沒有被清掉。",
+    costResetConfirmBodyLead: "這會把目前累計的 ",
+    costResetConfirmBodyTail:
+      " 歸零，從 0 重新開始累積。這個數字沒有留在任何其他地方，清掉就回不來了。",
     terminal: "終端 · TMUX",
     copyCommand: "複製指令",
     copied: "已複製",

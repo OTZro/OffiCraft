@@ -1949,6 +1949,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/members/{member_id}/cost/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset one actor's estimated spend to zero (owner-only, irreversible): clears the durable banked figure AND the live telemetry figure.
+         * @description Reset ONE actor's estimated spend to zero — the cockpit's 成本歸零 button (owner ruling rc-7dea0deefa63, option 0 「最小、不可逆」).
+         *
+         *     🔴 IRREVERSIBLE, and that is the ruling rather than an omission. No snapshot is retained, there is no undo route, and nothing else in this system holds the discarded figure: spend is stored as TWO ACCUMULATORS and never as a per-charge ledger, so a reset is the one operation that cannot be recomputed away. The owner was shown a recoverable variant and did not take it. The cockpit is expected to confirm before calling.
+         *
+         *     BOTH halves of the figure are cleared, and clearing only one would not be a smaller version of this endpoint — it would be a broken one. The durable accumulator (`member.banked_cost` / `outsource_worker.banked_cost`) is written to 0, AND the live in-memory telemetry `cost` key is dropped from the actor's entry. Clearing the durable half alone leaves the live figure to reappear on the very next cockpit read, which is indistinguishable to the owner from the button doing nothing.
+         *
+         *     The actor is resolved exactly the way the banking fold (`bankLiveCost`) resolves it, so ONE route serves both kinds: a staff member, or an outsource worker (including a released one, whose spend still shows on the account card). An id that resolves to neither is a 404 and nothing is written — the same deny-first ordering the rest of the member routes use.
+         *
+         *     IDEMPOTENT: resetting an actor that already has nothing measured writes 0 over 0, drops a key that is not there, and answers 200 with both figures null.
+         *
+         *     RESPONSE: a receipt of WHAT WAS DESTROYED (`CostResetDTO`) — the two figures as they stood immediately BEFORE the write, because this response is the last moment they exist anywhere. It is a receipt, not an undo; nothing is retained.
+         *
+         *     AFTER the reset the cockpit's 估計$ cell falls back to `—` (未量到) rather than showing `$0` (花了 0 元), with no display-side special case needed: `foldActorRuntime` does not put a banked figure of 0 on the wire, and the live key is gone, so both halves read as absent. The next telemetry sample starts the count again from zero.
+         *
+         *     This does NOT touch the account-level aggregation logic, which keeps summing whatever the per-actor figures now say — a shared account's total simply drops by the amount that was cleared.
+         *
+         *     A `monitoring` signal fans out so the cockpit refetches; when the actor is an outsource worker an `outsource_worker` delta fans as well, matching the banking path.
+         *
+         *     RBAC: route-table ``requires="owner"`` and MCP-excluded. Only an owner-scoped token may press it — deliberately NOT opened to admin_agent, and deliberately not an agent tool: destroying the owner's own spend record is not something an agent does on his behalf. Any other caller → 403, decided before the actor is looked up.
+         */
+        post: operations["handle_reset_cost_api_members__member_id__cost_reset_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/members/{member_id}/activate": {
         parameters: {
             query?: never;
@@ -5154,6 +5192,33 @@ export interface components {
         ChatUnreadCountDTO: {
             /** Unread */
             unread: number;
+        };
+        /**
+         * CostResetDTO
+         * @description Receipt of a cost reset (`POST /api/members/{member_id}/cost/reset`, owner-gated): WHAT WAS DESTROYED, read from the actor immediately before the write.
+         *
+         *     🔴 It carries the PRE-reset figures on purpose, and the reason is the same reason the reset is dangerous. Spend lives in exactly TWO accumulators and there is no per-charge ledger anywhere in this system, so once they are cleared the discarded amount is not recoverable from any other record — this response is the LAST MOMENT that number exists. Answering with the post-reset state instead would make the receipt of an irreversible operation say nothing at all.
+         *
+         *     This is a receipt, NOT an undo: nothing is retained server-side and there is no route that puts the figure back (owner ruling rc-7dea0deefa63, option 0 「最小、不可逆」). It only lets whoever pressed the button see what they destroyed.
+         *
+         *     The two fields mirror `MonitoringSessionDTO` / `OutsourceWorkerDTO` field-for-field, including their null semantics, so a client reuses ONE summing rule instead of growing a second one: null means there was nothing to clear on that half — not that zero was cleared. Resetting an actor with nothing measured therefore answers 200 with both null, which honestly reads as 'nothing was destroyed'. A deliberate consequence of that mirroring is that the same rule the cockpit already applies to the read side (both null → `—`) also describes this receipt.
+         */
+        CostResetDTO: {
+            /**
+             * Cleared Banked Cost
+             * @description The durable accumulator (`banked_cost`) as it stood BEFORE the write, i.e. the banked amount this call destroyed. Null when there was nothing banked — mirroring the read side, which does not put a banked figure of 0 on the wire.
+             */
+            cleared_banked_cost?: number | null;
+            /**
+             * Cleared Cost
+             * @description The live in-memory telemetry figure as it stood BEFORE the write, i.e. the live amount this call dropped. Null when the actor had no live figure being tracked.
+             */
+            cleared_cost?: number | null;
+            /**
+             * Member Id
+             * @description The actor whose spend was reset — a staff member or an outsource worker, resolved the same way the banking fold resolves it.
+             */
+            member_id: string;
         };
         /**
          * DocDTO
@@ -13042,6 +13107,55 @@ export interface operations {
                 };
             };
             /** @description Authentication, authorization, or not-found error. */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_reset_cost_api_members__member_id__cost_reset_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostResetDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
             "4XX": {
                 headers: {
                     [name: string]: unknown;

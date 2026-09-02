@@ -100,6 +100,7 @@ import type {
   ThemeWriteReceipt,
   ThemeDeleteResult,
   SseConnectionState,
+  CostResetReceipt,
 } from "./adapter";
 import {
   toMember,
@@ -988,6 +989,27 @@ export const httpApi: Api = {
     await client.POST("/api/members/{member_id}/deactivate", {
       params: { path: { member_id: id } },
     });
+  },
+
+  async resetMemberCost(id: string): Promise<CostResetReceipt> {
+    // POST /api/members/{id}/cost/reset -> CostResetDTO. Clears BOTH halves of
+    // the actor's estimated spend (durable banked figure + live telemetry
+    // figure) — clearing one would let the number reappear on the next read.
+    // Takes no body. IRREVERSIBLE: nothing is retained server-side and there is
+    // no undo route, so callers gate it behind a confirm.
+    //
+    // The receipt carries the PRE-reset figures: that response is the last
+    // moment they exist anywhere. Nulls are passed through unchanged (null =
+    // nothing was there to clear, not zero cleared). Caller refetches; the
+    // 估計$ cell falls back to the dash on its own.
+    const { data } = await client.POST("/api/members/{member_id}/cost/reset", {
+      params: { path: { member_id: id } },
+    });
+    return {
+      memberId: data?.member_id ?? id,
+      clearedCost: data?.cleared_cost ?? null,
+      clearedBankedCost: data?.cleared_banked_cost ?? null,
+    };
   },
 
   async forceStopMember(id: string): Promise<void> {

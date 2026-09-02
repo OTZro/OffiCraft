@@ -85,6 +85,7 @@ import type {
   ThemeWriteReceipt,
   ThemeDeleteResult,
   SseConnectionState,
+  CostResetReceipt,
 } from "./adapter";
 import type {
   WireMember,
@@ -2478,6 +2479,22 @@ export const mockApi: Api = {
     const w = findWire(id);
     w.desired_state = "offline";
     w.presence = "offline";
+  },
+
+  async resetMemberCost(id: string): Promise<CostResetReceipt> {
+    // 成本歸零 (mirror handle_reset_cost): clear BOTH halves of the actor's spend
+    // and answer with what was destroyed. Cost lives on the monitoring session
+    // row here — MemberDTO carries none — which is also where the real backend's
+    // two halves surface, so the mutation lands where the cockpit reads it.
+    // An id with no session row clears nothing and honestly reports nulls.
+    const row = wireMonitoring.sessions.find((s) => s.id === id);
+    const clearedCost = row?.cost ?? null;
+    const clearedBankedCost = row?.banked_cost ?? null;
+    if (row) {
+      row.cost = null;
+      row.banked_cost = null;
+    }
+    return { memberId: id, clearedCost, clearedBankedCost };
   },
 
   async forceStopMember(id: string): Promise<void> {

@@ -211,6 +211,14 @@ export function MonitorPage() {
           await api.refocusMember(detail.id);
           await refetchMembers();
         }}
+        // 成本歸零 (T-53, owner-only + irreversible; the panel confirms first).
+        // Both refetches: the figure the cockpit renders is folded from the
+        // monitoring read, not the roster row, so refetching members alone
+        // would leave the old number on screen.
+        onResetCost={async () => {
+          await api.resetMemberCost(detail.id);
+          await Promise.all([refetchMembers(), refetch()]);
+        }}
         onRename={async (name) => {
           await api.patchMember(detail.id, { name });
           await refetchMembers();

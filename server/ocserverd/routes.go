@@ -447,6 +447,24 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			MCPTool:  "force_stop_member",
 		},
 		{
+			Method:  "POST",
+			Path:    "/api/members/{member_id}/cost/reset",
+			Handler: w.HandleResetCostApiMembersMemberIdCostResetPost,
+			Auth:    authGated,
+			// principalOwner, NOT the admin_agent floor its neighbours sit on,
+			// and that gap is the decision rather than an oversight (T-53,
+			// owner ruling rc-7dea0deefa63). The rows above control a member;
+			// this one destroys the owner's own spend record, irreversibly and
+			// with nothing else in the system holding a copy. An admin agent
+			// deciding that on his behalf is not a thing he asked for.
+			Requires: principalOwner,
+			Summary:  "Reset one actor's estimated spend to zero (owner-only, irreversible): clears the durable banked figure AND the live telemetry figure.",
+			// Owner-only cockpit surface, so MCP-excluded on the same reasoning
+			// as the mint / credential / avatar rows: an agent has nothing
+			// legitimate to do with the owner's spend record.
+			MCPExclude: true,
+		},
+		{
 			Method:   "POST",
 			Path:     "/api/self/waking",
 			Handler:  w.HandleReportWakingApiSelfWakingPost,

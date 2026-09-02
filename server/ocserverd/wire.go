@@ -641,6 +641,28 @@ type monitoringSessionDTO struct {
 	Tokens          map[string]any `json:"tokens"`
 }
 
+// costResetDTO is the receipt of POST /api/members/{member_id}/cost/reset:
+// WHAT WAS DESTROYED, read immediately before the write.
+//
+// 🔴 It carries the PRE-reset figures on purpose. Spend lives in exactly two
+// accumulators and there is no per-charge ledger behind them, so once they are
+// cleared the discarded amount is not recoverable from any other record — this
+// response is the last moment it exists. A receipt of the post-reset state
+// would say nothing at all about an irreversible operation.
+//
+// It is a receipt, NOT an undo: nothing is retained and no route puts the
+// figure back (owner ruling rc-7dea0deefa63, option 0「最小、不可逆」).
+//
+// The two fields mirror monitoringSessionDTO field-for-field, null semantics
+// included: null means there was nothing to clear on that half, not that zero
+// was cleared. A client therefore reuses ONE summing rule rather than growing a
+// second one.
+type costResetDTO struct {
+	MemberID          string   `json:"member_id"`
+	ClearedCost       *float64 `json:"cleared_cost"`
+	ClearedBankedCost *float64 `json:"cleared_banked_cost"`
+}
+
 type monitoringMachineDTO struct {
 	Machine     string   `json:"machine"`
 	DisplayName string   `json:"display_name"`

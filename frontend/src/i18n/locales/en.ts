@@ -948,6 +948,13 @@ export const en: Dict = {
     lastOpFail: "failed",
     lastOpLogLabel: "View log",
     estimatedCost: "est. $",
+    costReset: "Reset",
+    costResetHint: "Reset this member's accumulated estimated spend to zero. This cannot be undone.",
+    costResetConfirm: "Reset to zero",
+    costResetError: "Reset failed — the figure was not cleared.",
+    costResetConfirmBodyLead: "This resets the accumulated ",
+    costResetConfirmBodyTail:
+      " to zero and starts counting again from 0. The figure is not kept anywhere else, so it cannot be recovered.",
     terminal: "Terminal · TMUX",
     copyCommand: "Copy command",
     copied: "Copied",
