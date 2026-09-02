@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -34,9 +35,14 @@ type markCall struct {
 // POST /api/chat/mark-read body. `status` is what the mark-read route answers.
 type markReadServer struct {
 	*httptest.Server
-	mu     sync.Mutex
-	list   string
-	calls  []markCall
+	mu    sync.Mutex
+	list  string
+	calls []markCall
+	// bodies are the mark-read request bodies EXACTLY as they came off the
+	// wire. calls is the decoded convenience view; the wire test needs the raw
+	// text, because an undeclared key is invisible once it has been decoded
+	// into markCall's fixed fields.
+	bodies []string
 	status int
 	// beforeMark, if set, runs on the mark-read route before the call is
 	// recorded — the hook the "print first" guardrail uses to snapshot what the
@@ -63,6 +69,7 @@ func newMarkReadServer(t *testing.T, list string) *markReadServer {
 			}
 			m.mu.Lock()
 			m.calls = append(m.calls, c)
+			m.bodies = append(m.bodies, string(raw))
 			m.mu.Unlock()
 			w.WriteHeader(st)
 			_, _ = w.Write([]byte(`{"reader_id":"kyle","peer_id":"` + c.Peer + `","last_read_ts":0}`))
@@ -100,6 +107,12 @@ func (m *markReadServer) snapshot() []markCall {
 	defer m.mu.Unlock()
 	out := append([]markCall(nil), m.calls...)
 	return out
+}
+
+func (m *markReadServer) rawBodies() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.bodies...)
 }
 
 // tsMsg builds one wire message with an explicit ts.
@@ -360,5 +373,71 @@ func TestDrainChat_MarkReadRejected_WarnsOncePerProcess(t *testing.T) {
 	drainChat(srv.Client(), cfg, seen, &out, false)
 	if strings.Contains(out.String(), "mark-read") {
 		t.Fatalf("the warning must not repeat every drain; second drain out = %q", out.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// THE WIRE TEST — the receipt body against the frozen MarkChatReadDTO.
+// ---------------------------------------------------------------------------
+
+// TestDrainChat_MarkReadBodyMatchesFrozenSchema drives the REAL producer
+// (drainChat → reportChatRead → postJSON) and confronts the bodies a real test
+// server caught with the schema frozen in spec/openapi.json.
+//
+// It has to be the producer's own body, never one assembled here: MarkChatReadDTO
+// declares additionalProperties:false and the server decodes with
+// DisallowUnknownFields, so ONE key this listener sends that the schema does not
+// declare rejects the whole receipt. The listener already prints before it
+// reports and warns at most once per process, so a permanently-422 receipt looks
+// from the outside exactly like a healthy one after the first line — the ✓ simply
+// never lights. A hand-built body compared here would agree with itself and say
+// nothing about that.
+func TestDrainChat_MarkReadBodyMatchesFrozenSchema(t *testing.T) {
+	declared := frozenIngestProperties(t, "MarkChatReadDTO")
+
+	now := float64(time.Now().Unix())
+	// Two senders, so the loop below confronts more than one produced body.
+	srv := newMarkReadServer(t, "["+strings.Join([]string{
+		tsMsg("a1", "alice", "kyle", now-90),
+		tsMsg("b1", "bob", "kyle", now-80),
+		tsMsg("a2", "alice", "kyle", now-70),
+	}, ",")+"]")
+	var out bytes.Buffer
+
+	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), loadChatSeen(""), &out, false)
+
+	bodies := srv.rawBodies()
+	if len(bodies) != 2 {
+		t.Fatalf("precondition: want one receipt per sender (2), got %d: %q", len(bodies), bodies)
+	}
+
+	// Which uplinks this test actually walked against the frozen schema — not
+	// which ones it meant to. Joined below against the manifest's own commitment.
+	walked := map[string]int{}
+	for _, body := range bodies {
+		walked[markReadPath]++
+		if bad := schemaViolations(body, declared); len(bad) > 0 {
+			t.Errorf("mark-read body has keys the frozen schema refuses %v — the receipt "+
+				"would 422 and the sender's ✓ would stay dark forever, with at most one "+
+				"warning line ever printed; body=%s", bad, body)
+		}
+	}
+
+	want := manifestUplinkPaths(t, "cli/ocagent/listen_markread_test.go")
+	for route, rows := range want {
+		if rows != 1 {
+			t.Fatalf("cli/uplinks.json commits %d uplinks to %s through this wire test. "+
+				"This join compares route SETS, so it cannot tell them apart — give the "+
+				"second one its own assertion, or split the wire test.", rows, route)
+		}
+	}
+	seen := map[string]int{}
+	for route := range walked {
+		seen[route] = 1
+	}
+	if !maps.Equal(seen, want) {
+		t.Errorf("cli/uplinks.json commits %v to this wire test but the producer posted to "+
+			"%v — a committed uplink nobody compared is the gap this manifest exists to close.",
+			want, walked)
 	}
 }

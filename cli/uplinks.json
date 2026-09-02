@@ -786,6 +786,24 @@
       "callsite": "w.verify, w.writeTok",
       "kind": "seam",
       "seam_reason": "The other half of the same copy: the probe seam read OUT of the wiring struct. One row per send is why the two sides of one assignment are two rows."
+    },
+    {
+      "id": "ocagent-chat-mark-read-seam",
+      "source": "cli/ocagent/listen.go",
+      "callsite": "reportChatRead(client, cfg, show, seen, out)",
+      "kind": "seam",
+      "seam_reason": "Hands drainChat's just-printed lines to the read-receipt reporter and puts nothing on the wire itself — the grouping by sender and the send both happen inside reportChatRead, whose postJSON call is declared as ocagent-chat-mark-read."
+    },
+    {
+      "id": "ocagent-chat-mark-read",
+      "source": "cli/ocagent/listen.go",
+      "callsite": "postJSON(client, cfg, markReadPath, map[string]any{",
+      "kind": "json",
+      "method": "post",
+      "path": "/api/chat/mark-read",
+      "request_schema": "#/components/schemas/MarkChatReadDTO",
+      "wire_test": "cli/ocagent/listen_markread_test.go",
+      "wire_needle": "if bad := schemaViolations(body, declared); len(bad) > 0 {"
     }
   ]
 }
