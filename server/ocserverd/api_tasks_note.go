@@ -220,7 +220,7 @@ func (s *apiServer) resolveStepForNoteWrite(w http.ResponseWriter, r *http.Reque
 	// rights in the same transaction and the creator never had any — so 全域脈絡
 	// §3.4 is untouched; what they share is one text field, last write wins.
 	if !s.callerMayWriteHandover(r, *t) && !s.callerMayEditTaskText(r, *t) {
-		writeError(w, http.StatusForbidden, "caller is not the task's executor")
+		writeError(w, http.StatusForbidden, executorGuardRefusal)
 		return nil, nil, false
 	}
 	if TaskIsTerminal(t.Status) {

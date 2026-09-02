@@ -614,7 +614,7 @@ func (s *apiServer) taskDescriptionRestoreAuthz(w http.ResponseWriter, r *http.R
 		return false
 	}
 	if !s.callerMayEditTaskText(r, *t) {
-		writeError(w, http.StatusForbidden, "caller is not the task's executor")
+		writeError(w, http.StatusForbidden, executorGuardRefusal)
 		return false
 	}
 	return true

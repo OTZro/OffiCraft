@@ -86,37 +86,39 @@ func seedStep(t *testing.T, api *apiServer, taskID, stepID string) {
 
 // textDoor is one of the nine doors owner opened (2026-09-02, rc-1bb6e01c4bf7):
 // 改描述／標題／產物增刪／步驟筆記, and the two document-history restores that
-// put earlier text back. Each returns the status code its caller received.
+// put earlier text back. Each returns the response its caller received —
+// the whole response and not just the code, because a refusal has to be
+// checked for its REASON (executorGuardRefusal) and not merely for 403.
 type textDoor struct {
 	name string
-	call func(t *testing.T, api *apiServer, task taskDTO, stepID, caller string) int
+	call func(t *testing.T, api *apiServer, task taskDTO, stepID, caller string) *httptest.ResponseRecorder
 }
 
 // textDoors is the enumeration the two halves share, so the open case and the
 // shut case can never drift into testing different doors.
 func textDoors() []textDoor {
 	return []textDoor{
-		{"update_task title+description", func(t *testing.T, api *apiServer, task taskDTO, _, caller string) int {
+		{"update_task title+description", func(t *testing.T, api *apiServer, task taskDTO, _, caller string) *httptest.ResponseRecorder {
 			rec := httptest.NewRecorder()
 			api.HandleUpdateTaskApiTasksTaskIdPost(rec, taskReq(t, "POST",
 				"/api/tasks/"+task.ID,
 				map[string]any{"title": "corrected " + caller, "description": "corrected body"},
 				caller, "agent"), task.ID)
-			return rec.Code
+			return rec
 		}},
-		{"update_task_description route", func(t *testing.T, api *apiServer, task taskDTO, _, caller string) int {
+		{"update_task_description route", func(t *testing.T, api *apiServer, task taskDTO, _, caller string) *httptest.ResponseRecorder {
 			return writeTaskDescription(t, api, task.ID, caller, "agent",
-				map[string]any{"description": "route description " + caller}).Code
+				map[string]any{"description": "route description " + caller})
 		}},
-		{"update_task_title route", func(t *testing.T, api *apiServer, task taskDTO, _, caller string) int {
+		{"update_task_title route", func(t *testing.T, api *apiServer, task taskDTO, _, caller string) *httptest.ResponseRecorder {
 			return postTaskTitle(t, api, task.ID, caller, "agent",
-				map[string]any{"title": "route title " + caller}).Code
+				map[string]any{"title": "route title " + caller})
 		}},
-		{"add_task_artifact", func(t *testing.T, api *apiServer, task taskDTO, _, caller string) int {
+		{"add_task_artifact", func(t *testing.T, api *apiServer, task taskDTO, _, caller string) *httptest.ResponseRecorder {
 			return addArtifact(t, api, task.ID, map[string]any{
-				"kind": "link", "url": "https://example.invalid/" + caller}, caller, "agent").Code
+				"kind": "link", "url": "https://example.invalid/" + caller}, caller, "agent")
 		}},
-		{"remove_task_artifact", func(t *testing.T, api *apiServer, task taskDTO, _, caller string) int {
+		{"remove_task_artifact", func(t *testing.T, api *apiServer, task taskDTO, _, caller string) *httptest.ResponseRecorder {
 			// Removing needs something to remove, and only a permitted caller can
 			// put it there — so the owner seeds it and the door under test is the
 			// DELETE alone.
@@ -129,20 +131,23 @@ func textDoors() []textDoor {
 			if len(arts) == 0 {
 				t.Fatal("seed artifact did not land")
 			}
-			return removeArtifact(t, api, task.ID, arts[len(arts)-1].ID, caller, "agent").Code
+			return removeArtifact(t, api, task.ID, arts[len(arts)-1].ID, caller, "agent")
 		}},
-		{"update_step_note", func(t *testing.T, api *apiServer, task taskDTO, stepID, caller string) int {
-			return writeStepNote(t, api, task.ID, stepID, caller, "note from "+caller).Code
+		{"update_step_note", func(t *testing.T, api *apiServer, task taskDTO, stepID, caller string) *httptest.ResponseRecorder {
+			return writeStepNote(t, api, task.ID, stepID, caller, "note from "+caller)
 		}},
-		{"patch_step_note", func(t *testing.T, api *apiServer, task taskDTO, stepID, caller string) int {
-			code, _ := patchStepNoteAs(t, api, task.ID, stepID, caller, "agent",
-				map[string]any{"edits": []any{edit("anchor line", "patched by "+caller)}})
-			return code
+		{"patch_step_note", func(t *testing.T, api *apiServer, task taskDTO, stepID, caller string) *httptest.ResponseRecorder {
+			rec := httptest.NewRecorder()
+			api.HandlePatchTaskStepNoteApiTasksTaskIdStepsStepIdNotePatchPost(rec,
+				taskReq(t, "POST", "/api/tasks/"+task.ID+"/steps/"+stepID+"/note/patch",
+					map[string]any{"edits": []any{edit("anchor line", "patched by "+caller)}},
+					caller, "agent"), task.ID, stepID)
+			return rec
 		}},
-		{"restore task_description", func(t *testing.T, api *apiServer, task taskDTO, _, caller string) int {
+		{"restore task_description", func(t *testing.T, api *apiServer, task taskDTO, _, caller string) *httptest.ResponseRecorder {
 			return restoreTaskText(t, api, docKindTaskDescription, task.ID, caller)
 		}},
-		{"restore task_title", func(t *testing.T, api *apiServer, task taskDTO, _, caller string) int {
+		{"restore task_title", func(t *testing.T, api *apiServer, task taskDTO, _, caller string) *httptest.ResponseRecorder {
 			return restoreTaskText(t, api, docKindTaskTitle, task.ID, caller)
 		}},
 	}
@@ -151,7 +156,7 @@ func textDoors() []textDoor {
 // restoreTaskText restores the newest retained revision of one text kind, or
 // fails the test when there is none to restore — an empty history would make
 // the door untestable rather than green.
-func restoreTaskText(t *testing.T, api *apiServer, kind, taskID, caller string) int {
+func restoreTaskText(t *testing.T, api *apiServer, kind, taskID, caller string) *httptest.ResponseRecorder {
 	t.Helper()
 	var rows []historyRow
 	if kind == docKindTaskTitle {
@@ -168,7 +173,7 @@ func restoreTaskText(t *testing.T, api *apiServer, kind, taskID, caller string) 
 		taskReq(t, "POST", "/api/document-history/"+kind+"/"+taskID+"/x/restore",
 			nil, caller, "agent"),
 		kind, taskID, rows[0].Id)
-	return rec.Code
+	return rec
 }
 
 // seedTextHistory makes both restore doors reachable: a revision only exists
@@ -199,8 +204,8 @@ func TestUnassignedTaskAdmitsItsCreatorAtTheTextDoors(t *testing.T) {
 			task := unboundOutsourceTask(t, api, "m-creator")
 			seedStep(t, api, task.ID, "st-1")
 			seedTextHistory(t, api, task.ID)
-			if got := door.call(t, api, task, "st-1", "m-creator"); got != http.StatusOK {
-				t.Fatalf("creator at %s = %d, want 200", door.name, got)
+			if rec := door.call(t, api, task, "st-1", "m-creator"); rec.Code != http.StatusOK {
+				t.Fatalf("creator at %s = %d %s, want 200", door.name, rec.Code, rec.Body.String())
 			}
 		})
 	}
@@ -219,8 +224,8 @@ func TestAssignedTaskShutsItsCreatorOutOfTheTextDoors(t *testing.T) {
 			seedStep(t, api, task.ID, "st-1")
 			seedTextHistory(t, api, task.ID)
 			bindExecutor(t, api, task.ID, "ow-bound")
-			if got := door.call(t, api, task, "st-1", "m-creator"); got != http.StatusForbidden {
-				t.Fatalf("creator at %s after assignment = %d, want 403", door.name, got)
+			if rec := door.call(t, api, task, "st-1", "m-creator"); rec.Code != http.StatusForbidden {
+				t.Fatalf("creator at %s after assignment = %d %s, want 403", door.name, rec.Code, rec.Body.String())
 			}
 		})
 	}
@@ -238,19 +243,15 @@ func TestUnassignedTaskStillRefusesAThirdParty(t *testing.T) {
 			putMemberRow(t, api, "m-stranger", KindAssistant, "")
 			seedStep(t, api, task.ID, "st-1")
 			seedTextHistory(t, api, task.ID)
-			if got := door.call(t, api, task, "st-1", "m-stranger"); got != http.StatusForbidden {
-				t.Fatalf("stranger at %s = %d, want 403", door.name, got)
+			rec := door.call(t, api, task, "st-1", "m-stranger")
+			if rec.Code != http.StatusForbidden ||
+				!strings.Contains(rec.Body.String(), executorGuardRefusal) {
+				t.Fatalf("stranger at %s = %d %s, want 403 %q",
+					door.name, rec.Code, rec.Body.String(), executorGuardRefusal)
 			}
 		})
 	}
 }
-
-// executorGuardRefusal is the sentence every task-driving guard writes when it
-// turns a non-executor away. The shut-door test matches on it because a bare
-// 403 is not evidence: several of these handlers have a SECOND rule that also
-// answers 403, and a cell that accepts any 403 cannot tell the guard under test
-// from the rule behind it.
-const executorGuardRefusal = "caller is not the task's executor"
 
 // TestUnassignedTaskCreatorReachesNoTaskDrivingDoor — the other half of the
 // 射程. Owner opened 改文字類 and named what stays shut: 凍結/priority, 撤票,
