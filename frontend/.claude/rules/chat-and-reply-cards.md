@@ -54,7 +54,7 @@ custom 不讀 hour、minute、day_of_week、day_of_month，也不把自己摘要
 
 ## 聊天與 composer
 
-進房時先在 render 同步 snapshot member.unreadCount，再由 listChat 清 watermark；第一則未讀是對方送給 owner 的未讀訊息中最早的一則，顯示 divider 並保留於本 session。房內新訊息只有在 owner 不在 near-bottom 時顯示浮條；點擊只跳到第一則，必須真的捲到底才清除。
+進房時先在 render 同步 snapshot member.unreadCount，再由明確的 mark-read 清 watermark（listChat 不再有這個副作用，T-48）；第一則未讀是對方送給 owner 的未讀訊息中最早的一則，顯示 divider 並保留於本 session。房內新訊息只有在 owner 不在 near-bottom 時顯示 LINE 式預覽列（寄件者＋一行內容），點擊落在**最新那一則**（T-48 前是落在第一則未見，下面還壓著沒看到的訊息），並在版面穩定後校正落點；必須真的捲到底才清除。不在底部且**沒有**新訊息時顯示回到底部箭頭，兩者不同時出現（箭頭讓位給預覽列，owner rc-72054864ff88）。
 
 ChatArea、ReplyComposer、TaskCard 訊息框都是 textarea，送出決策只由 lib/composerKeys.ts 的 enterShouldSend 提供：桌面 Enter 送出、Shift+Enter 換行；手機 Enter 換行、按鈕送出；IME composing 永不送出。autosize 上限 132px，超出由 textarea 自己捲動。
 
