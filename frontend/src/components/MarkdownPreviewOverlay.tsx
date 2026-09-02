@@ -344,24 +344,39 @@ export function MarkdownPreviewOverlay({
   // documents that trap one screen above (the T-4e95 note on the opener), which
   // is exactly where the independent review found it re-introduced.
   //
-  // 🔴 THE ARROW KEYS WERE ALREADY SPOKEN FOR, and paging does not take them
-  // back. Two claims stand ahead of it:
-  //   - a ZOOMED image (`zoom > 1`): the wrap is a real scroll container by then
-  //     (T-7e68 made the zoom real layout precisely so it would be), and the
-  //     arrows are how a keyboard reaches the edges the zoom pushed out of the
-  //     frame. Stealing them there re-opens the owner report that whole change
-  //     exists to answer: 「可以放大，但無法左右或上下移動」.
-  //   - a TEXT body: it scrolls with the arrow keys too, and this overlay has no
-  //     second way to reach the bottom of a long file.
-  // So the keys page only for an image shown at 100%, where nothing can scroll
-  // and the keys are genuinely free. The BUTTONS stay available in every case —
-  // they are the answer for the two situations above, not a duplicate of the
-  // keyboard.
+  // 🔴 ON AN IMAGE THE ARROWS ALWAYS PAGE — INCLUDING WHILE IT IS ZOOMED, and
+  // that is the OWNER'S call, made against the first implementation
+  // (2026-09-02, `c-521c38a1de77`): 「左右鍵固定就改成切換圖片，現在不是應該可以
+  // 用滑鼠或手機滑到就可以左右移動了嗎？」
+  //
+  // The first version handed the arrows back to the pan whenever `zoom > 1`,
+  // because that is what T-7e68 built them for (「可以放大，但無法左右或上下移
+  // 動」). He overrode it knowing the reason: a zoomed image can still be moved
+  // by dragging it, by the wheel, by the scrollbar and by touch, so the arrows
+  // are not its only handle — while paging had no keyboard at all whenever a
+  // picture happened to be zoomed in.
+  // ⚠️ THE COST HE ACCEPTED, written down so nobody "fixes" it back: a reader
+  // who uses ONLY a keyboard can no longer pan a zoomed image. If that is ever
+  // reopened, it is a new decision, not a regression of this one.
+  //
+  // A TEXT body still keeps them: it scrolls with the arrow keys and this
+  // overlay has no second way to reach the bottom of a long file — no drag, no
+  // wheel-zoom, nothing. That carve-out is not part of the ruling above; the
+  // two chevrons page a text file.
   useEffect(() => {
     if (pager === undefined) return;
-    if (!image || zoom > 1) return;
+    if (!image) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      // ⚠️ A DOCUMENT LISTENER HEARS EVERY KEY, INCLUDING ONE BEING TYPED. This
+      // overlay is deliberately not a focus trap, so Shift+Tab reaches the
+      // controls behind it, and an arrow pressed in a text field is a caret
+      // move, not a page. Measured in real Chromium before this guard: the
+      // caret stayed put and the pager stepped anyway.
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (el?.isContentEditable) return;
       const next = e.key === "ArrowLeft" ? pager.index - 1 : pager.index + 1;
       if (next < 0 || next >= pager.total) return;
       e.preventDefault();
@@ -369,7 +384,7 @@ export function MarkdownPreviewOverlay({
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [pager, image, zoom]);
+  }, [pager, image]);
 
   // Back at 100% the stage fits the frame again, so any pan offset left over
   // from the zoomed view has to go with it — otherwise the recentred image

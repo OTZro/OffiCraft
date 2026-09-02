@@ -130,20 +130,19 @@ describe("MarkdownPreviewOverlay", () => {
     expect(onGo).toHaveBeenLastCalledWith(0);
   });
 
-  it("leaves the arrow keys to the image once it is zoomed past 100%", () => {
+  it("keeps paging from the arrow keys even while the image is zoomed", () => {
+    // The owner's ruling (2026-09-02, `c-521c38a1de77`), made against the first
+    // implementation, which handed the arrows back to the pan above 100%: a
+    // zoomed image can still be moved by drag, wheel, scrollbar and touch, so
+    // the arrows are not its only handle — while paging had no keyboard at all
+    // whenever a picture happened to be zoomed. ⚠️ The cost he accepted, named
+    // here so this is not reverted as a regression: a reader who uses ONLY a
+    // keyboard can no longer pan a zoomed image.
     const onGo = vi.fn();
     const root = renderPaged(onGo);
     fireEvent.click(screen.getByRole("button", { name: "放大" }));
     expect(screen.getByText("125%")).toBeTruthy();
     fireEvent.keyDown(root, { key: "ArrowRight" });
-    fireEvent.keyDown(root, { key: "ArrowLeft" });
-    expect(
-      onGo,
-      "a zoomed image keeps the arrows for panning — paging must not take them",
-    ).not.toHaveBeenCalled();
-    // …and the buttons are still there, because that is what makes the refusal
-    // above affordable.
-    fireEvent.click(screen.getByRole("button", { name: "下一個" }));
     expect(onGo).toHaveBeenCalledWith(2);
   });
 

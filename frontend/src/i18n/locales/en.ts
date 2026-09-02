@@ -772,14 +772,18 @@ export const en: Dict = {
     // chip row into the checkbox dropdown below by T-51 ②.
     gallerySenderFilterLabel: "Filter by uploader",
     gallerySenderAll: "All",
-    // T-51 ②: the chip row became a Jira-style checkbox dropdown. Collapsed it
-    // is one line; the search box lives INSIDE the popover as a shortcut, never
-    // as the only way in — the owner's objection to a search-only design was
-    // 「我怎麼會知道有誰，沒辦法打字」 (you cannot type a name you do not know).
+    // T-51 ②: the chip row became a Jira-style checkbox dropdown, one line
+    // collapsed. There is deliberately NO search box — an early version had one
+    // and the owner removed it (2026-09-02): the whole objection that shaped
+    // this control was 「我怎麼會知道有誰，沒辦法打字」, and the list is sorted by
+    // how much each person sent, so the names worth finding are already on top.
     gallerySenderSelected: (n: number) => `${n} selected`,
-    gallerySenderSearch: "Search uploaders",
-    gallerySenderNoMatch: "No matching uploader",
     gallerySenderClear: "Clear selection",
+    // The empty state WITH a filter on. Distinct from galleryEmptyImages /
+    // galleryEmptyFiles on purpose: those describe the gallery, this one
+    // describes the filter, and saying the first while the second is true tells
+    // the reader their files are gone.
+    galleryEmptyFiltered: "No files from the uploaders you picked",
     galleryClose: "Close gallery",
     galleryPreviewHint: "Preview in a new tab",
     galleryDownloadHint: "Download",

@@ -855,13 +855,16 @@ export const zh = {
     gallerySenderFilterLabel: "依上傳者篩選",
     gallerySenderAll: "全部",
     // T-51 ②:chip 列改成 Jira 式的勾選下拉(owner 逐字:「或是像 jira 一樣,
-    // 你可以打開時,展開一個下拉式選單做勾選就好」)。收起時只有一行;搜尋框在
-    // 浮層裡面,是抄近路用的,不是唯一入口——他明講過「我怎麼會知道有誰,沒辦
-    // 法打字」。
+    // 你可以打開時,展開一個下拉式選單做勾選就好」)。收起時只有一行;**刻意沒有
+    // 搜尋框** —— 早期版本放過一個,owner 2026-09-02 直接說「不需要有搜尋這功能」,
+    // 而這個控制項本來就是為了「我怎麼會知道有誰,沒辦法打字」而生的;名單按件數
+    // 排序,值得找的人已經在上面。
     gallerySenderSelected: (n: number) => `已選 ${n} 位`,
-    gallerySenderSearch: "搜尋上傳者",
-    gallerySenderNoMatch: "沒有符合的上傳者",
     gallerySenderClear: "清除選取",
+    // 有篩選在的空狀態。刻意跟 galleryEmptyImages／galleryEmptyFiles 分開:那兩句
+    // 講的是這個圖庫,這一句講的是這個篩選;篩選在的時候說前者,等於告訴使用者他的
+    // 檔案不見了。
+    galleryEmptyFiltered: "選取的上傳者在這個分頁沒有檔案",
     galleryClose: "關閉檔案庫",
     galleryPreviewHint: "開新分頁預覽",
     galleryDownloadHint: "下載",

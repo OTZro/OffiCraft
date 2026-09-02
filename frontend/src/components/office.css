@@ -1796,16 +1796,6 @@
   background: var(--color-card);
   box-shadow: 0 12px 28px color-mix(in srgb, var(--color-shadow) 40%, transparent);
 }
-.chat__gallery-sender-search {
-  width: 100%;
-  padding: 5px 8px;
-  border: 1px solid color-mix(in srgb, var(--color-overlay) 10%, transparent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--color-overlay) 3%, transparent);
-  color: var(--color-text);
-  font-family: inherit;
-  font-size: 12px;
-}
 /* Fixed height + its own scrollbar: this is what keeps the panel from being
  * pushed around by however many people have ever sent a file. */
 .chat__gallery-sender-options {
@@ -1844,11 +1834,6 @@
   color: var(--color-text-muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
-}
-.chat__gallery-sender-none {
-  padding: 8px 4px;
-  color: var(--color-text-muted);
-  font-size: 12px;
 }
 .chat__gallery-sender-clear {
   align-self: flex-start;

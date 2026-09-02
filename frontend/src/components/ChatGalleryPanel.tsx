@@ -115,8 +115,12 @@ function formatDateTime(ts: number): string {
  * people who have since gone. "Folded into a dropdown" is not "removed from the
  * list".
  *
- * The search box is INSIDE the popover and is a shortcut, never the entrance:
- * the whole list is visible above it without typing a character. */
+ * ⚠️ NO SEARCH BOX. An earlier version put one inside the popover as a
+ * shortcut; the owner removed it outright (2026-09-02, `c-8fa2806cb0e3`:
+ * 「不需要有搜尋這功能」). That is consistent with the objection that shaped this
+ * whole control — 「我怎麼會知道有誰，沒辦法打字」 — and with the ordering below:
+ * sorted by how much each person sent, the people worth finding are at the top,
+ * which is what a search box would have been for. Do not add one back. */
 export function GallerySenderFilter({
   senders,
   selected,
@@ -128,7 +132,6 @@ export function GallerySenderFilter({
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
   const boxRef = useRef<HTMLDivElement>(null);
 
   // Esc closes the POPOVER, not the gallery behind it: this layer nests inside
@@ -145,12 +148,6 @@ export function GallerySenderFilter({
     document.addEventListener("mousedown", onDocClick, true);
     return () => document.removeEventListener("mousedown", onDocClick, true);
   }, [open]);
-
-  const needle = query.trim().toLowerCase();
-  const matches =
-    needle === ""
-      ? senders
-      : senders.filter((s) => s.label.toLowerCase().includes(needle));
 
   const toggle = (id: string) => {
     const next = new Set(selected);
@@ -184,36 +181,22 @@ export function GallerySenderFilter({
           role="dialog"
           aria-label={t.chat.gallerySenderFilterLabel}
         >
-          <input
-            type="search"
-            className="chat__gallery-sender-search"
-            value={query}
-            placeholder={t.chat.gallerySenderSearch}
-            aria-label={t.chat.gallerySenderSearch}
-            onChange={(e) => setQuery(e.target.value)}
-          />
           <div className="chat__gallery-sender-options">
-            {matches.length === 0 ? (
-              <div className="chat__gallery-sender-none">
-                {t.chat.gallerySenderNoMatch}
-              </div>
-            ) : (
-              matches.map((s) => (
-                <label className="chat__gallery-sender-option" key={s.id}>
-                  <input
-                    type="checkbox"
-                    checked={selected.has(s.id)}
-                    onChange={() => toggle(s.id)}
-                  />
-                  <span className="chat__gallery-sender-option-name">
-                    {s.label}
-                  </span>
-                  <span className="chat__gallery-sender-option-count">
-                    {s.count}
-                  </span>
-                </label>
-              ))
-            )}
+            {senders.map((s) => (
+              <label className="chat__gallery-sender-option" key={s.id}>
+                <input
+                  type="checkbox"
+                  checked={selected.has(s.id)}
+                  onChange={() => toggle(s.id)}
+                />
+                <span className="chat__gallery-sender-option-name">
+                  {s.label}
+                </span>
+                <span className="chat__gallery-sender-option-count">
+                  {s.count}
+                </span>
+              </label>
+            ))}
           </div>
           {selected.size > 0 && (
             <button
@@ -280,6 +263,17 @@ export function ChatGalleryPanel({
   // list (deleted, or filtered out), the lookup fails and the overlay closes —
   // the honest outcome, and the only one that cannot show a stale file.
   const [previewKey, setPreviewKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    // A NEW MEMBER IS A NEW GALLERY, so the ticks do not travel. They were made
+    // about one person's uploaders; carried across, they filter rows they were
+    // never about — measured by the independent review: tick 「我」 on member A's
+    // 圖片, switch to member B who has images but none from me, and the panel
+    // says 「還沒有圖片」 about a gallery that is not empty. The refetch prune
+    // below cannot catch it (it only drops ids absent from EVERY row, and 「我」
+    // is in plenty of B's rows — just not B's images).
+    setSenderSelByTab({ images: new Set(), files: new Set() });
+  }, [member.id]);
 
   useEffect(() => {
     let alive = true;
@@ -472,7 +466,18 @@ export function ChatGalleryPanel({
       )}
       {!loaded ? null : shown.length === 0 ? (
         <div className="chat__gallery-empty">
-          {tab === "images" ? t.chat.galleryEmptyImages : t.chat.galleryEmptyFiles}
+          {/* TWO EMPTIES, AND THEY ARE NOT THE SAME SENTENCE. 「還沒有圖片」 is a
+            * statement about the gallery; with a filter on it is a statement
+            * about the filter, and saying the first while the second is true
+            * tells the reader their files are gone. Reachable without a member
+            * switch: a refetch can remove a ticked uploader's images while
+            * their files remain, so the tick survives the prune with nothing
+            * left to show on this tab. */}
+          {senderSel.size > 0
+            ? t.chat.galleryEmptyFiltered
+            : tab === "images"
+              ? t.chat.galleryEmptyImages
+              : t.chat.galleryEmptyFiles}
         </div>
       ) : (
         <div className="chat__gallery-list">

@@ -352,6 +352,34 @@ describe("ChatGalleryPanel", () => {
     expect(itemsIn(container)[0].textContent).toContain("bob.png");
   });
 
+  it("drops the ticks when the panel is pointed at a different member", async () => {
+    // 🔴 A FILTER BELONGS TO THE GALLERY IT WAS MADE IN. Carried across a member
+    // switch it filters rows it was never about: tick 「我」 on A's 圖片, switch
+    // to B who has images but none from me, and the panel says 「還沒有圖片」
+    // about a gallery that is not empty. The refetch prune cannot catch it — it
+    // only drops ids absent from EVERY row, and 「我」 is in plenty of B's.
+    galleryRows = [row("a1", "image/png", "owner", "", 100, "mine.png")];
+    const { container, rerender } = renderPanel();
+    await waitFor(() => expect(itemsIn(container).length).toBe(1));
+    openFilter();
+    tickOption("我");
+    expect(filterToggle().textContent).toContain("已選 1 位");
+
+    galleryRows = [row("b1", "image/png", "m9", "Bea", 100, "bea.png")];
+    rerender(
+      <I18nProvider>
+        <ChatGalleryPanel member={{ ...mkMember(), id: "m-other" }} onClose={() => {}} />
+      </I18nProvider>,
+    );
+    await waitFor(() =>
+      expect(itemsIn(container)[0]?.textContent).toContain("bea.png"),
+    );
+    expect(
+      filterToggle().textContent,
+      "the new member's gallery opens unfiltered",
+    ).toContain("全部");
+  });
+
   it("keeps a departed member in the list so their old files stay reachable", async () => {
     // The server resolves a sender's name at ANY roster status on purpose
     // (api_chat.go: "ANY roster status — dismissed still reads by name").

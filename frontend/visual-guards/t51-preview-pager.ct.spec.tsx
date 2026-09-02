@@ -52,10 +52,16 @@ test("the keyboard still pages after the buttons have been used", async ({
   await expect(counter).toHaveText("1 / 3");
 });
 
-test("a zoomed image keeps the arrow keys for panning", async ({
+test("the arrows page a zoomed image too — the owner's ruling", async ({
   mount,
   page,
 }) => {
+  // 2026-09-02, `c-521c38a1de77`: 「左右鍵固定就改成切換圖片，現在不是應該可以用
+  // 滑鼠或手機滑到就可以左右移動了嗎？」 — made against the first version, which
+  // handed the arrows back to the pan above 100%. A zoomed image is still
+  // movable by drag, wheel, scrollbar and touch; paging had no keyboard at all.
+  // ⚠️ The accepted cost, named so it is not "fixed" back by mistake: a
+  // keyboard-only reader can no longer pan a zoomed image.
   await page.setViewportSize({ width: 1100, height: 760 });
   await mount(<PreviewPagerStory start={1} />);
 
@@ -65,13 +71,5 @@ test("a zoomed image keeps the arrow keys for panning", async ({
   await expect(page.getByText("125%")).toBeVisible();
 
   await page.keyboard.press("ArrowRight");
-  await page.keyboard.press("ArrowLeft");
-  await expect(
-    counter,
-    "zoomed, the arrows belong to the image — paging must not take them",
-  ).toHaveText("2 / 3");
-
-  // …and the buttons still work, which is what makes that refusal affordable.
-  await page.getByRole("button", { name: "下一個" }).click();
   await expect(counter).toHaveText("3 / 3");
 });
