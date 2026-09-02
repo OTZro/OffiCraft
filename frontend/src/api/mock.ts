@@ -2495,6 +2495,21 @@ export const mockApi: Api = {
       row.cost = null;
       row.banked_cost = null;
     }
+    // The figure is rendered from TWO stores here — the monitoring row and, for
+    // an outsource actor, its worker row — so clearing one and not the other
+    // leaves the panel showing the number the reset just destroyed (found by
+    // independent review, T-56). The real server has one figure per actor and
+    // fans a delta on both topics; the mock has to keep its two copies in step
+    // by hand or it stops being a rehearsal of that.
+    const worker = outsourceWorkers.find((w) => w.id === id);
+    if (worker) {
+      worker.cost = null;
+      worker.bankedCost = null;
+      emitTopic("outsource_worker");
+    }
+    // The production route fans a `monitoring` signal so the cockpit refetches.
+    // Without it here the mock reports success and nothing on screen moves.
+    emitTopic("monitoring");
     return { memberId: id, clearedCost, clearedBankedCost };
   },
 
@@ -2509,6 +2524,10 @@ export const mockApi: Api = {
     if (row) {
       row.cost = null;
     }
+    // NO member or worker store is touched — that separation is the ruling this
+    // route exists for. Only the monitoring signal fans, the same one the
+    // production route publishes so the cockpit refetches the card.
+    emitTopic("monitoring");
     return { account, clearedCost };
   },
 

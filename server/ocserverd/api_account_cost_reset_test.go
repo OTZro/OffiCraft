@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 )
 
@@ -116,6 +117,110 @@ func TestAccountSpend_BankingASessionDoesNotMakeTheNextReportCountTwice(t *testi
 		t.Errorf("account = %v, want 6 — the same 6 was reported twice with a bank "+
 			"in between, and 12 means the accumulator lost its baseline when "+
 			"banking removed the live figure", got)
+	}
+}
+
+// A failed write must be RECOVERABLE, not silently swallowed (found by
+// independent review, T-56). Accrual is best-effort on purpose — a bookkeeping
+// failure must not take the monitoring ingest down with it — but "best effort"
+// only means anything if the delta survives to the next report. Advance the
+// baseline before the write succeeds and the failed increment is subtracted from
+// a report that was never credited: gone for good, behind a 200.
+//
+// 🔴 MUTANT: move `entry[accountSpendAccountedKey] = cost` back above the
+// AddAccountSpend call → this goes RED with 4 instead of 9.
+func TestAccountSpend_AFailedWriteIsCarriedIntoTheNextReport(t *testing.T) {
+	// Two servers, ONE telemetry store: the first has a dead write pool (the
+	// failing DB), the second is healthy. That is how a transient failure looks
+	// to the accrual — same actor, same entry, same baseline — without needing a
+	// pool that can be reopened.
+	shared := newMemStore()
+	path := filepath.Join(t.TempDir(), "account-spend-dead.db")
+	wdb, err := openSQLite(path)
+	if err != nil {
+		t.Fatalf("open write pool: %v", err)
+	}
+	if err := runMigrations(wdb); err != nil {
+		t.Fatalf("goose up: %v", err)
+	}
+	rdb, err := openSQLite(path)
+	if err != nil {
+		t.Fatalf("open read pool: %v", err)
+	}
+	t.Cleanup(func() { rdb.Close() })
+	dead := &apiServer{dal: NewDALPools(wdb, rdb), hub: NewHub(),
+		telemetry: shared, gauge: newMemStore()}
+	seedWorker(t, dead, "ow-7", "S7", 0, WorkerStatusActive)
+	if err := wdb.Close(); err != nil {
+		t.Fatalf("close write pool: %v", err)
+	}
+
+	// The report that cannot be banked. The ingest still answers 200 — that is
+	// the deliberate part — but the 5 must not be treated as counted.
+	if rec := doIngestTelemetry(dead, "ow-7", "m-seth-m5",
+		`{"runtime":"claude","account":"seth-m5-claude","cost":5}`); rec.Code != 200 {
+		t.Fatalf("ingest must stay up when bookkeeping fails: %d %s", rec.Code, rec.Body.String())
+	}
+
+	live := costResetServer(t)
+	live.telemetry = shared
+	seedRegisteredMachine(t, live, "m-seth-m5")
+	seedWorker(t, live, "ow-7", "S7", 0, WorkerStatusActive)
+	for _, cost := range []string{"8", "9"} {
+		if rec := doIngestTelemetry(live, "ow-7", "m-seth-m5",
+			`{"runtime":"claude","account":"seth-m5-claude","cost":`+cost+`}`); rec.Code != 200 {
+			t.Fatalf("ingest %s: %d %s", cost, rec.Code, rec.Body.String())
+		}
+	}
+
+	if got := accountCostOf(t, live, "seth-m5-claude"); got != 9.0 {
+		t.Errorf("account = %v, want 9 — the session has spent 9 in total and the "+
+			"one report that failed to bank must come back with the next one. 4 "+
+			"means the baseline moved on a write that never happened, and those 5 "+
+			"are gone with nothing but a stderr line to say so", got)
+	}
+}
+
+// A NEW GENERATION counts from zero, and the waking report is where the server
+// is told so (found by independent review, T-56).
+//
+// Without an explicit boundary the accrual can only GUESS from the numbers, and
+// the guess fails in both directions: a restart whose first report lands at or
+// above the previous session's figure looks like an increase (under-credit), and
+// a session that switched account looks the same as one that carried on — where
+// crediting the whole figure to the new account would invent money already
+// banked against the old one. Waking settles it.
+//
+// 🔴 MUTANT: delete the startAccountSpendSession call from the waking handler →
+// this goes RED, the second account credited 0 instead of 10.
+func TestAccountSpend_AWakingReportStartsANewAccountingRun(t *testing.T) {
+	s := costResetServer(t)
+	seedRegisteredMachine(t, s, "m-seth-m5")
+	seedWorker(t, s, "ow-7", "S7", 0, WorkerStatusActive)
+	if rec := doIngestTelemetry(s, "ow-7", "m-seth-m5",
+		`{"runtime":"claude","account":"first-account","cost":10}`); rec.Code != 200 {
+		t.Fatalf("first ingest: %d %s", rec.Code, rec.Body.String())
+	}
+
+	if rec := reportWaking(t, s, "ow-7", "opus"); rec.Code != 200 {
+		t.Fatalf("waking: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// The new generation's own cumulative figure — the same 10, which without a
+	// boundary is indistinguishable from "no new spend".
+	if rec := doIngestTelemetry(s, "ow-7", "m-seth-m5",
+		`{"runtime":"claude","account":"second-account","cost":10}`); rec.Code != 200 {
+		t.Fatalf("second ingest: %d %s", rec.Code, rec.Body.String())
+	}
+
+	if got := accountCostOf(t, s, "second-account"); got != 10.0 {
+		t.Errorf("second account = %v, want 10 — a session that announced itself "+
+			"counts from zero, so its whole figure is new spend", got)
+	}
+	// And the first account keeps what it was already credited: the boundary
+	// starts a new run, it does not move spend between accounts.
+	if got := accountCostOf(t, s, "first-account"); got != 10.0 {
+		t.Errorf("first account = %v, want 10 untouched", got)
 	}
 }
 

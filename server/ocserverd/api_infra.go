@@ -1056,10 +1056,18 @@ const accountSpendAccountedKey = "cost_accounted"
 // as an absolute would erase the earlier sessions' spend. Pinned end-to-end by
 // TestAccountSpend_ASessionRestartCountsFromZeroRatherThanGoingBackwards.
 //
-// Best-effort: a failed write only logs. The alternative — failing the ingest —
-// would turn a bookkeeping problem into a monitoring outage, and the next
-// report re-reads the same baseline, so a lost write costs one interval's spend
-// rather than corrupting the running figure.
+// 🔴 THE BASELINE ADVANCES ONLY AFTER THE WRITE SUCCEEDS, and that ordering is
+// the difference between "one report was lost" and "that money is gone for
+// good" (found by independent review, T-56). A failed write is best-effort by
+// design — failing the ingest would turn a bookkeeping problem into a monitoring
+// outage — but best-effort only holds if the NEXT report can still see the
+// delta. Advance the baseline first and the failed increment is subtracted from
+// a report that was never credited: permanently missing, with a 200 on the way
+// out and nothing but a stderr line to say so.
+//
+// A NEW SESSION also resets the baseline explicitly, from the waking report —
+// see startAccountSpendSession. The decrease rule below is the fallback for a
+// session that never announced itself.
 func (s *apiServer) accrueAccountSpend(entry map[string]any) {
 	account, _ := entry["account"].(string)
 	if account == "" {
@@ -1074,13 +1082,48 @@ func (s *apiServer) accrueAccountSpend(entry map[string]any) {
 	if seen && cost >= accounted {
 		delta = cost - accounted
 	}
-	entry[accountSpendAccountedKey] = cost
 	if delta <= 0 {
+		// Nothing to credit, so nothing can be lost by moving the mark.
+		entry[accountSpendAccountedKey] = cost
 		return
 	}
 	if err := s.dal.AddAccountSpend(account, delta); err != nil {
+		// Leave the baseline where it was: the next report will carry this
+		// delta again, because its own increase is measured from the last
+		// figure that was actually banked.
 		fmt.Fprintf(os.Stderr, "[account] spend accrual failed for %q: %v\n", account, err)
+		return
 	}
+	entry[accountSpendAccountedKey] = cost
+}
+
+// startAccountSpendSession forgets the accrual baseline because a NEW SESSION is
+// starting: the next cost this actor reports is counted from zero, so its whole
+// figure is new spend rather than an increase over the previous session's.
+//
+// 🔴 WHY AN EXPLICIT BOUNDARY, when accrueAccountSpend already treats a DECREASE
+// as a restart (T-56): that fallback cannot see a restart whose first report
+// happens to land at or above the old figure — a short session followed by a
+// busier one — and it therefore under-credits the difference, silently. It also
+// cannot tell a session that CHANGED ACCOUNT apart from one that carried on: on
+// the wire those two look identical, and crediting the whole figure to the new
+// account would invent money that was already banked against the old one. The
+// waking report is the one place the server is TOLD a generation began, so it is
+// where the question stops being a guess.
+//
+// Best-effort and silent when there is nothing to forget: an actor with no
+// telemetry entry yet has no baseline to clear, which is the same state this
+// produces.
+func (s *apiServer) startAccountSpendSession(actorID string) {
+	entry := s.telemetry.Get(actorID)
+	if entry == nil {
+		return
+	}
+	if _, present := entry[accountSpendAccountedKey]; !present {
+		return
+	}
+	delete(entry, accountSpendAccountedKey)
+	s.telemetry.Set(actorID, entry)
 }
 
 // HandleResetAccountCostApiAccountsCostResetPost — POST /api/accounts/cost/reset,
