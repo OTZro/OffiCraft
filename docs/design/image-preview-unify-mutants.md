@@ -75,6 +75,8 @@ CI 一律綠 —— T-f014 修掉的「同一次點擊有兩個 overlay、其中
 
 - **CSS 抽檔有沒有改到畫面**：靠 162 條 Playwright CT visual guard 在真瀏覽器裡跑過
   （含 `md-preview.ct.spec`、`t-c645-attachment-preview`（縮放 transform、
-  `md-preview__action-label` 在窄寬度的 media query）、`chat-md-preview`、
+  `md-preview__action-label` 在窄寬度的 media query — **該 label 與那條 media
+  query 已於 T-51 ④ 移除**：owner 2026-09-02 要三顆頂列按鈕一律只留圖示，所以那條
+  斷言改成釘「頂列沒有可見文字、每顆仍有可觸及名稱」）、`chat-md-preview`、
   `reply-card-md-preview`、`artifacts-badge`），不是靠 jsdom。
 - **staged 圖片在真瀏覽器裡長什麼樣**：沒有對應的 CT 故事，只有 jsdom 測試。
