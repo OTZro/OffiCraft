@@ -1888,8 +1888,8 @@ export interface paths {
          *     last-read watermark for that conversation
          *     (``domain.chat_read.unread_counts``). Reusing the same receipt the read-✓
          *     badge reads means read/unread can never disagree; clearing is the EXISTING
-         *     chokes (``handle_list_chat`` auto-mark on entering a conversation +
-         *     ``POST /api/chat/mark-read``), no parallel mechanism. It is independent of
+         *     choke (``POST /api/chat/mark-read`` — the ONLY writer since T-48; reading a
+         *     list no longer marks anything), no parallel mechanism. It is independent of
          *     presence — an offline member can be unread.
          */
         get: operations["handle_list_members_api_members_get"];
