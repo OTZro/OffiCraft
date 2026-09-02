@@ -1255,7 +1255,7 @@
             "type": "array"
           },
           "limit": {
-            "description": "How many of the most recent messages to return. It is applied as a plain slice truncation with NO range validation, and the two out-of-range values fail in OPPOSITE directions without either being reported: 0 answers 200 with an EMPTY list (which reads exactly like 'this conversation has nothing in it'), while a NEGATIVE value skips truncation entirely and hands back everything that was fetched. Neither is refused, so a limit computed from arithmetic that slipped to 0 or below silently returns the wrong end of the range. Omit it for the default of 30. \u26a0\ufe0f On the start_id/end_id path this is DIFFERENT: there the limit MUST be 1..200 and anything outside that is a 422 rather than a silent wrong answer. The forgiving behaviour described above is the LEGACY paths only.",
+            "description": "How many of the most recent messages to return. It is applied as a plain truncation with NO range validation — in SQL since T-48 rather than by slicing an already-fetched list, with the semantics below deliberately untouched, and the two out-of-range values fail in OPPOSITE directions without either being reported: 0 answers 200 with an EMPTY list (which reads exactly like 'this conversation has nothing in it'), while a NEGATIVE value skips truncation entirely and hands back everything that was fetched. Neither is refused, so a limit computed from arithmetic that slipped to 0 or below silently returns the wrong end of the range. Omit it for the default of 30. \u26a0\ufe0f On the start_id/end_id path this is DIFFERENT: there the limit MUST be 1..200 and anything outside that is a 422 rather than a silent wrong answer. The forgiving behaviour described above is the LEGACY paths only.",
             "type": "integer"
           },
           "start_id": {
@@ -1263,7 +1263,7 @@
             "type": "string"
           },
           "with": {
-            "description": "The peer whose line to read. It is an in-memory equality filter on each message's sender and recipient, and an id no one carries is NOT an error: the call answers 200 with an EMPTY list, which is byte for byte what a real peer you have never exchanged a message with answers. So an empty result is not evidence the conversation is empty; it is equally evidence you misspelled the peer. Confirm the id against the roster before concluding anything from emptiness - a wrong id and a quiet conversation are indistinguishable here.",
+            "description": "The peer whose line to read. It matches each message's sender and recipient exactly — in SQL since T-48, where it used to read the whole table and filter in memory; the observable answers below are unchanged. An id no one carries is NOT an error: the call answers 200 with an EMPTY list, which is byte for byte what a real peer you have never exchanged a message with answers. So an empty result is not evidence the conversation is empty; it is equally evidence you misspelled the peer. Confirm the id against the roster before concluding anything from emptiness - a wrong id and a quiet conversation are indistinguishable here.",
             "type": "string"
           }
         },
