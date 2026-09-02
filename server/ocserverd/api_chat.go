@@ -790,7 +790,13 @@ func (s *apiServer) servedChatMessageDTO(m ChatMessage) (chatMessageDTO, error) 
 // own FIRST (verified by mutating this function to swallow the error and
 // re-running all six — the four in the table above plus these two: these two
 // still 500, the other four turn 200):
-//   - GET /api/chat?with= — no cursor means a whole-table s.dal.ListChat().
+//   - GET /api/chat?with= — the cursorless page reads and scans every row it
+//     serves (s.dal.ListChatLatest since T-48; it was a whole-table
+//     s.dal.ListChat() when this was measured, and the reachability argument is
+//     the same either way ONLY for a bad row inside the served window. A bad row
+//     OLDER than the window is no longer read by this door at all, which would
+//     make its quote-join branch reachable — if that case is ever worth a
+//     witness row, this is the one to add).
 //   - POST /api/chat echo — the reply_to EXISTENCE gate above calls
 //     ListChatByIDs on that very id before anything is stored, and 500s there.
 //
@@ -1700,10 +1706,13 @@ func resumeChatPackBudget(budget int, generatedAt string) int {
 // 🔴 COST DISCIPLINE — read this before adding anything here. resume_summary is
 // called by EVERY agent on EVERY wake, so a query in this function is paid
 // fleet-wide, forever. In particular this deliberately does NOT reuse the
-// GET /api/members path: that one computes unread counts through a full
-// ListChat() table scan (api_helpers.go unreadCountsForRequest), and hanging
-// the most expensive query in the system off the boot path would multiply it by
-// fleet size. Everything below is one bounded query or in-memory:
+// GET /api/members path: that one computes unread counts through a chat-wide
+// aggregate (api_helpers.go unreadCountsForRequest → DAL.UnreadCountsFor), and
+// hanging a whole-chat_message query off the boot path would multiply it by
+// fleet size. ⚠️ That query is CHEAPER than it was when this note was written —
+// T-48 replaced a full ListChat() table scan + a Go fold with one SQL
+// aggregate — but cheaper is not free, and the reason to keep it off the wake
+// path is unchanged. Everything below is one bounded query or in-memory:
 //   - ONE ListMembersIncludingOutsource (single SELECT over the member table)
 //   - ONE hub.OnlineMembers map (in-memory; NOT one IsOnline call per member)
 //   - observedHost / PresenceState (pure + in-memory)
@@ -2142,12 +2151,10 @@ func (s *apiServer) HandleGetMemberResumeSummaryApiMembersMemberIdResumeSummaryG
 // what the office actually shows). Kept as its own cheap endpoint so the dot can
 // refetch on every "chat" / "chat_read" SSE delta without pulling the roster.
 func (s *apiServer) HandleChatUnreadCountApiChatUnreadCountGet(w http.ResponseWriter, r *http.Request) {
-	actor := currentActor(r)
-	// SQL aggregate, not a whole-table fold in Go — the twin of
-	// unreadCountsForRequest (api_helpers.go). Both call sites must stay on
-	// this one method: leaving either on ListChat() keeps the full-table read
-	// alive while every test stays green.
-	unread, err := s.dal.UnreadCountsFor(actor)
+	// The unread numbers come from the ONE entry point every unread face shares
+	// (api_helpers.go). What is below — the live-conversation filter and the sum
+	// — is this surface's own business and deliberately stays here.
+	unread, err := s.unreadCountsForRequest(r)
 	if err != nil {
 		internalError(w, err)
 		return

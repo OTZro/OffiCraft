@@ -12,7 +12,11 @@ package main
 // a hand-written expectation would only pin what the author already believed.
 
 import (
+	"fmt"
+	"io/fs"
+	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -69,7 +73,7 @@ func seedChatPushdownFixture(t *testing.T, d *DAL) {
 		// equal ts, ids out of insertion order — the (ts, id) tie-break.
 		{ID: "m07", Sender: "m-1", Recipient: "owner", TS: 6},
 		{ID: "m06", Sender: "owner", Recipient: "m-1", TS: 6},
-		{ID: "m08", Sender: "m-2", Recipient: "m-1", TS: 6}, // equal ts, third line
+		{ID: "m08", Sender: "m-2", Recipient: "m-1", TS: 6},   // equal ts, third line
 		{ID: "a99", Sender: "m-1", Recipient: "owner", TS: 7}, // id sorts before m*
 		{ID: "m09", Sender: "m-3", Recipient: "owner", TS: 8},
 		{ID: "m10", Sender: "owner", Recipient: "m-3", TS: 9},
@@ -213,40 +217,6 @@ func TestUnreadCountsForMatchesTheGoFold(t *testing.T) {
 	}
 }
 
-// 🔴 THE "只改一處" GUARD. The unread aggregate had TWO copies of the same
-// whole-table read (unreadCountsForRequest in api_helpers.go and
-// HandleChatUnreadCountApiChatUnreadCountGet in api_chat.go). Porting one and
-// leaving the other keeps the full-table read alive with every behavioural test
-// still green — nothing observable changes. So this reads the SOURCE and pins
-// that neither call site pulls the whole chat table any more.
-func TestBothUnreadCallSitesUseTheSQLAggregate(t *testing.T) {
-	for _, site := range []struct{ file, fn string }{
-		{"api_helpers.go", "func (s *apiServer) unreadCountsForRequest("},
-		{"api_chat.go", "func (s *apiServer) HandleChatUnreadCountApiChatUnreadCountGet("},
-	} {
-		src, err := os.ReadFile(site.file)
-		if err != nil {
-			t.Fatalf("read %s: %v", site.file, err)
-		}
-		start := strings.Index(string(src), site.fn)
-		if start < 0 {
-			t.Fatalf("%s: cannot find %s — the guard has gone stale, fix the anchor", site.file, site.fn)
-		}
-		body := string(src)[start:]
-		if end := strings.Index(body, "\n}\n"); end > 0 {
-			body = body[:end]
-		}
-		if strings.Contains(body, "s.dal.ListChat()") {
-			t.Fatalf("%s: %s still reads the WHOLE chat table (s.dal.ListChat()); "+
-				"both unread call sites must go through s.dal.UnreadCountsFor (T-48)", site.file, site.fn)
-		}
-		if !strings.Contains(body, "UnreadCountsFor(") {
-			t.Fatalf("%s: %s does not call s.dal.UnreadCountsFor — the SQL aggregate "+
-				"must be the ONE way both sites count unread (T-48)", site.file, site.fn)
-		}
-	}
-}
-
 // The same guard for the cursorless chat page: the handler must not pull the
 // whole table to serve at most `limit` rows.
 func TestChatListingDoesNotReadTheWholeTable(t *testing.T) {
@@ -269,5 +239,226 @@ func TestChatListingDoesNotReadTheWholeTable(t *testing.T) {
 	if strings.Contains(body, "s.dal.PutChatRead(") {
 		t.Fatal("HandleListChatApiChatGet writes a read receipt again — GET /api/chat " +
 			"has no watermark side effect (T-48, c-d1eea83e57d1)")
+	}
+}
+
+// ── the outsource unread faces (T-48 follow-up) ──────────────────────────────
+//
+// api_outsource.go carried THREE MORE copies of the same whole-table unread
+// fold — the contractor LIST (which the owner pays on every cockpit open), the
+// single-worker GET, and writeWorkerProjectionWith (the shared response fold
+// behind every owner lifecycle verb: relocate / refocus / stop / restart /
+// model). All three now go through DAL.UnreadCountsFor.
+//
+// Same rule as everywhere else in this file: the oracle is the OLD code, run
+// over the same fixture, per actor — not a hand-written number.
+
+func outsourceUnreadOracle(t *testing.T, d *DAL, actor, workerID string) int {
+	t.Helper()
+	messages, err := d.ListChat()
+	if err != nil {
+		t.Fatalf("ListChat: %v", err)
+	}
+	receipts, err := d.ListChatReads(actor, "")
+	if err != nil {
+		t.Fatalf("ListChatReads: %v", err)
+	}
+	return UnreadCounts(messages, receipts, actor)[workerID]
+}
+
+func TestOutsourceUnreadFacesMatchTheGoFold(t *testing.T) {
+	api := newTasksTestServer(t)
+	api.noOutsource = true
+	workerID := assignOneWorker(t, api)
+	worker, err := api.dal.GetOutsourceWorker(workerID)
+	if err != nil || worker == nil {
+		t.Fatalf("worker %s: %+v (%v)", workerID, worker, err)
+	}
+
+	// Traffic in both directions across three readers, so each actor below sees
+	// a DIFFERENT number and a wrong actor cannot pass by coincidence.
+	for _, m := range []ChatMessage{
+		{ID: "o-1", Sender: workerID, Recipient: wireOwnerID, TS: 2000},
+		{ID: "o-2", Sender: workerID, Recipient: wireOwnerID, TS: 2001},
+		{ID: "o-3", Sender: workerID, Recipient: wireOwnerID, TS: 2002},
+		{ID: "o-4", Sender: wireOwnerID, Recipient: workerID, TS: 2003}, // owner's own send
+		{ID: "o-5", Sender: workerID, Recipient: "mira", TS: 2004},      // a third party's line
+		{ID: "o-6", Sender: "mira", Recipient: wireOwnerID, TS: 2005},   // not this worker
+	} {
+		if err := api.dal.PutChat(m); err != nil {
+			t.Fatalf("put %s: %v", m.ID, err)
+		}
+	}
+	// Owner has read up to o-2; mira has read nothing; the worker itself has a
+	// watermark on a peer that never wrote to it.
+	if _, _, err := api.dal.PutChatRead(ChatRead{
+		ReaderID: wireOwnerID, PeerID: workerID, LastReadTS: 2001,
+	}); err != nil {
+		t.Fatalf("put read: %v", err)
+	}
+	if _, _, err := api.dal.PutChatRead(ChatRead{
+		ReaderID: workerID, PeerID: "nobody", LastReadTS: 9999,
+	}); err != nil {
+		t.Fatalf("put read: %v", err)
+	}
+
+	actors := []string{wireOwnerID, "mira", workerID, "m-front", "never-seen"}
+	distinct := map[int]bool{}
+	for _, actor := range actors {
+		want := outsourceUnreadOracle(t, api.dal, actor, workerID)
+		distinct[want] = true
+
+		// FACE 1 — the contractor list (cockpit's 外包 panel).
+		rows := listWorkersAs(t, api, actor)
+		if len(rows) != 1 {
+			t.Fatalf("actor %s: want one worker row, got %d", actor, len(rows))
+		}
+		if rows[0].UnreadCount != want {
+			t.Fatalf("actor %s: LIST unread_count = %d, the Go fold says %d",
+				actor, rows[0].UnreadCount, want)
+		}
+
+		// FACE 2 — the single-worker detail GET.
+		rec := httptest.NewRecorder()
+		api.HandleGetOutsourceWorkerApiOutsourceWorkersIdGet(rec,
+			taskReq(t, "GET", "/api/outsource-workers/"+workerID, nil, actor, "owner"), workerID)
+		if rec.Code != 200 {
+			t.Fatalf("actor %s: single GET → %d %s", actor, rec.Code, rec.Body.String())
+		}
+		one := decodeBody[outsourceWorkerDTO](t, rec)
+		if one.UnreadCount != want {
+			t.Fatalf("actor %s: single-GET unread_count = %d, the Go fold says %d",
+				actor, one.UnreadCount, want)
+		}
+
+		// FACE 3 — writeWorkerProjectionWith, the shared post-op fold behind
+		// every owner lifecycle verb (relocate / refocus / stop / restart / model).
+		rec = httptest.NewRecorder()
+		api.writeWorkerProjection(rec,
+			taskReq(t, "POST", "/api/outsource-workers/"+workerID+"/stop", nil, actor, "owner"), *worker)
+		if rec.Code != 200 {
+			t.Fatalf("actor %s: projection → %d %s", actor, rec.Code, rec.Body.String())
+		}
+		proj := decodeBody[outsourceWorkerDTO](t, rec)
+		if proj.UnreadCount != want {
+			t.Fatalf("actor %s: post-op projection unread_count = %d, the Go fold says %d",
+				actor, proj.UnreadCount, want)
+		}
+	}
+	// The fixture must actually SEPARATE the actors, or all fifteen comparisons
+	// above are the same number compared to itself.
+	if len(distinct) < 2 {
+		t.Fatalf("fixture does not discriminate between actors: every one saw %v", distinct)
+	}
+	if n := outsourceUnreadOracle(t, api.dal, wireOwnerID, workerID); n != 1 {
+		t.Fatalf("fixture: owner should have exactly 1 unread from the worker (watermark at o-2), got %d", n)
+	}
+}
+
+// 🔴 THE SINGLE-ENTRY GUARD — the one護欄 for the whole unread story.
+//
+// It scans EVERY non-test Go file in the repo and pins two facts:
+//
+//  1. s.dal.UnreadCountsFor is called from EXACTLY ONE place in production code,
+//     and that place is apiServer.unreadCountsForRequest (api_helpers.go).
+//  2. domain.UnreadCounts — the pure whole-stream fold — is called from NOWHERE
+//     in production code. It is the spec the SQL must match, nothing else, and a
+//     call to it IS a full-table read because it takes the entire chat stream as
+//     an argument.
+//
+// (1) is the point and (2) is its back door: a new surface could honour "only
+// one caller of the DAL method" and simply re-fold in Go instead, which is
+// exactly the shape the five original copies had.
+//
+// WHY AN ENTRY POINT RATHER THAN A LIST OF APPROVED SITES: the first version of
+// this guard named the two call sites T-48 was briefed on. Three more already
+// existed in api_outsource.go and it said nothing about them, because a guard
+// that enumerates cannot see what it was not told. One door is checkable; five
+// named sites are a list that goes stale the moment someone adds a sixth.
+//
+// 🔴 WHAT THIS DOES **NOT** SAY: that the surfaces behave alike. They must not.
+// The red dot filters removed members and released workers before summing, the
+// roster binds one number per member, the contractor faces index by worker id.
+// Those differences live in their own handlers on purpose — this guard is about
+// where the ALGORITHM lives, not about what each caller does with the answer.
+func TestUnreadCountsHaveExactlyOneEntryPoint(t *testing.T) {
+	const entryPoint = "func (s *apiServer) unreadCountsForRequest("
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+	var dalCallers, goFolders []string
+	scanned := 0
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "node_modules", "vendor", "dist", "var":
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		scanned++
+		rel, _ := filepath.Rel(root, path)
+		// The enclosing func is tracked so the ONE legal caller can be named by
+		// the function it lives in rather than by a line number that drifts.
+		enclosing := ""
+		for i, line := range strings.Split(string(src), "\n") {
+			if strings.HasPrefix(line, "func ") {
+				enclosing = line
+			}
+			code := line
+			if c := strings.Index(code, "//"); c >= 0 {
+				code = code[:c] // a comment may DISCUSS either call; only code counts
+			}
+			where := fmt.Sprintf("%s:%d: %s", rel, i+1, strings.TrimSpace(line))
+			if strings.Contains(code, "UnreadCountsFor(") &&
+				!strings.Contains(code, "func (d *DAL) UnreadCountsFor(") {
+				if !strings.HasPrefix(enclosing, entryPoint) {
+					dalCallers = append(dalCallers, where)
+				}
+			}
+			if strings.Contains(code, "UnreadCounts(") && !strings.Contains(code, "func UnreadCounts(") {
+				goFolders = append(goFolders, where)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	if scanned < 50 {
+		t.Fatalf("the walk only saw %d production .go files — the root is wrong and this guard proves nothing", scanned)
+	}
+	if len(dalCallers) > 0 {
+		t.Fatalf("unread counting has more than one entry point: these reach s.dal.UnreadCountsFor "+
+			"directly instead of going through apiServer.unreadCountsForRequest (T-48) —\n  %s",
+			strings.Join(dalCallers, "\n  "))
+	}
+	if len(goFolders) > 0 {
+		t.Fatalf("production code still folds unread counts in Go (domain.UnreadCounts takes the WHOLE "+
+			"chat stream, so each of these is a full-table read; go through "+
+			"apiServer.unreadCountsForRequest — T-48):\n  %s", strings.Join(goFolders, "\n  "))
+	}
+	// The scan must actually FIND the legal caller, or an entry point that was
+	// renamed or deleted would leave this test green over nothing at all.
+	helpers, err := os.ReadFile("api_helpers.go")
+	if err != nil {
+		t.Fatalf("read api_helpers.go: %v", err)
+	}
+	if i := strings.Index(string(helpers), entryPoint); i < 0 {
+		t.Fatal("apiServer.unreadCountsForRequest is gone — the entry point this guard names no longer exists")
+	} else if !strings.Contains(string(helpers)[i:i+400], "s.dal.UnreadCountsFor(") {
+		t.Fatal("apiServer.unreadCountsForRequest no longer calls s.dal.UnreadCountsFor — " +
+			"the guard above would now be vacuously green")
 	}
 }
