@@ -344,9 +344,10 @@ func TestBankLiveCost(t *testing.T) {
 	})
 
 	// P7d fold: a worker IS a member row now, so banked_cost lands on the same
-	// row either way — the branch discriminator is the WIRE: the worker branch
-	// writes through PutOutsourceWorker (delta rides the outsource_worker
-	// projection), never putMember, so no member patch naming an ow- id fans.
+	// row either way — both branches call AddMemberBankedCost. The branch
+	// discriminator is the WIRE: the worker branch fans nothing (its changes
+	// ride the outsource_worker projection), so no member patch naming an ow-
+	// id ever goes out.
 	t.Run("outsource actor rides the worker branch, no member patch", func(t *testing.T) {
 		api := newTasksTestServer(t)
 		api.noOutsource = true
@@ -375,10 +376,30 @@ func TestBankLiveCost(t *testing.T) {
 			t.Fatalf("seed member: %v", err)
 		}
 		prior := m.BankedCost // fullMember seeds a non-zero banked figure
+		l, err := api.hub.Connect("m-bank", "")
+		if err != nil {
+			t.Fatalf("connect member SSE: %v", err)
+		}
+		t.Cleanup(func() { api.hub.Disconnect(l) })
 		api.telemetry.Set("m-bank", map[string]any{"cost": 0.75})
 		api.bankLiveCost("m-bank")
 		if got, _ := api.dal.GetMember("m-bank"); got == nil || got.BankedCost != prior+0.75 {
 			t.Fatalf("member bank = %+v, want banked %v", got, prior+0.75)
+		}
+		// The push is the half a single-column migration silently drops: the
+		// member branch stopped writing the whole row (T-14 項目 6), and the
+		// delta the whole-row write used to fan must survive that — the
+		// wind-down / recycle hooks key on a member delta naming self, and this
+		// fold runs on the last-disconnect edge.
+		fanned := false
+		for frame := l.pop(); frame != nil; frame = l.pop() {
+			if strings.Contains(string(frame), `"topic":"member"`) &&
+				strings.Contains(string(frame), "m-bank") {
+				fanned = true
+			}
+		}
+		if !fanned {
+			t.Fatal("banking a member's cost must still fan its member delta")
 		}
 	})
 }

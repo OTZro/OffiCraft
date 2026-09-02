@@ -853,8 +853,9 @@ func (s *apiServer) publishOutsourcePresenceEdge(memberID string) {
 // bankLiveCost is the ONE cost-banking fold for BOTH actor kinds (T-ba6b —
 // owner constitution: 外包＝系統代管的正職員工, so the worker reuses the member
 // mechanism instead of a parallel copy): pop the actor's live telemetry cost
-// and add it to the durable banked_cost — member.banked_cost or
-// outsource_worker.banked_cost, whichever the id resolves to. Callers: the
+// and add it to the durable member.banked_cost of whichever kind the id
+// resolves to (the outsource_worker table was folded into member in 00025, so
+// both kinds are the same column and the same sole writer). Callers: the
 // SSE last-disconnect edge (both kinds ride the same /api/events surface) and
 // every worker kill funnel (respawnWorkerNow / stopWorkerNow — refocus, 換
 // model, relocate, stop, auto-handover), so a kill+respawn no longer zeroes
@@ -876,16 +877,22 @@ func (s *apiServer) bankLiveCost(actorID string) {
 	// on the outsource_worker topic, never as a member patch — pre-fold parity).
 	if m, err := s.dal.GetMember(actorID); err == nil && m != nil && m.Kind != KindOutsource {
 		pop()
-		m.BankedCost += cost
-		if err := s.putMember(*m, actorID); err != nil {
+		if err := s.dal.AddMemberBankedCost(actorID, cost); err != nil {
 			fmt.Fprintf(os.Stderr, "[bank] cost bank failed for member %q: %v\n", actorID, err)
+			return
 		}
+		// The member delta this fold used to get for free from putMember. It
+		// is not decoration: the wind-down / recycle hooks key on a member
+		// delta naming self, and this fold runs ON the last-disconnect edge.
+		m.BankedCost += cost
+		s.publishMemberPatch(*m, actorID)
 		return
 	}
 	if w, err := s.dal.GetOutsourceWorker(actorID); err == nil && w != nil {
 		pop()
-		w.BankedCost += cost
-		if err := s.dal.PutOutsourceWorker(*w); err != nil {
+		// No delta on purpose (pre-fold parity): a worker's changes ride the
+		// outsource_worker projection, never a member patch naming an ow- id.
+		if err := s.dal.AddMemberBankedCost(actorID, cost); err != nil {
 			fmt.Fprintf(os.Stderr, "[bank] cost bank failed for worker %q: %v\n", actorID, err)
 		}
 	}

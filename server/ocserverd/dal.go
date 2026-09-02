@@ -400,7 +400,6 @@ func (d *DAL) PutMember(m Member) error {
 			stopped_since = excluded.stopped_since,
 			refocus_since = excluded.refocus_since,
 			refocus_op = excluded.refocus_op,
-			banked_cost = excluded.banked_cost,
 			last_op = excluded.last_op, last_op_ok = excluded.last_op_ok,
 			last_op_log = excluded.last_op_log,
 			last_op_reason = excluded.last_op_reason,
@@ -418,6 +417,19 @@ func (d *DAL) PutMember(m Member) error {
 			-- survives every other writer — the property the avatar pointer
 			-- and the session anchor each needed their own seam for.
 			forced_stop_at = max(forced_stop_at, excluded.forced_stop_at)
+			-- banked_cost is DELIBERATELY ABSENT from this SET list (T-14
+			-- 項目 6). It is a running TOTAL, and a total is the one thing a
+			-- whole-row writer can never carry safely: every HTTP face that
+			-- writes a member row holds a snapshot read before the banking
+			-- edge, so landing its stale figure here silently REFUNDS spend
+			-- the owner already saw — and the worker half is worse, because
+			-- memberFromWorker rebuilds the row from an OutsourceWorker that
+			-- was read at the same stale moment. The INSERT still carries it
+			-- so a new row starts at whatever it was born with;
+			-- AddMemberBankedCost is the only writer that moves it, and it
+			-- accumulates in SQL so two concurrent banking edges cannot lose
+			-- each other's contribution.
+			--
 			-- handover_noticed_ts is DELIBERATELY ABSENT from this SET list
 			-- (T-6ebc). It is session-scoped state cleared at a session
 			-- boundary, and the boundary runs next to HTTP faces that write
@@ -447,6 +459,32 @@ func (d *DAL) PutMember(m Member) error {
 		linkedTaskID, codename, m.CreatedTS, m.ReleasedTS, m.ActivatedTS,
 		m.AvatarAttachmentID, m.ForcedStopAt, m.HandoverNoticedTS, m.AgentIatFloor,
 	)
+	return err
+}
+
+// AddMemberBankedCost adds delta to ONLY member.banked_cost (T-14 項目 6) — the
+// durable cumulative spend of a staff member OR an outsource worker, since P7d
+// made both a row of the same table (outsource_worker.banked_cost is this
+// column). It is the SOLE writer that moves it: PutMember's upsert carries the
+// column on INSERT but never in its DO UPDATE SET.
+//
+// ACCUMULATES IN SQL, not in Go, for the reason SetMemberAgentIatFloor uses
+// max() in SQL: a read-modify-write in Go loses to whichever caller writes
+// last, and here the loser is money the owner has already been shown. The
+// banking edges are exactly the ones that can overlap — an SSE last-disconnect
+// racing a kill funnel (respawnWorkerNow / stopWorkerNow) on the same actor —
+// so `banked_cost + ?` is what makes the fold loss-free rather than merely
+// exactly-once.
+//
+// It does NOT fan a member delta: the delta is the service layer's job, the
+// same split PutMember documents. bankLiveCost's member branch publishes one;
+// its worker branch deliberately does not (a worker's changes ride the
+// outsource_worker projection).
+//
+// A missing row is a clean no-op (0 rows affected, no error).
+func (d *DAL) AddMemberBankedCost(id string, delta float64) error {
+	_, err := d.wdb.Exec(
+		`UPDATE member SET banked_cost = banked_cost + ? WHERE id = ?`, delta, id)
 	return err
 }
 
