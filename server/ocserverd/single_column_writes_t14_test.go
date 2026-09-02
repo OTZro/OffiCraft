@@ -19,7 +19,11 @@ package main
 // statement would go red on a reflow and stay green on a semantic change — the
 // wrong way round. Migrating the next column is one entry in the table below.
 
-import "testing"
+import (
+	"sort"
+	"strings"
+	"testing"
+)
 
 // singleColumnOwnedFields is the registry the guard iterates. Add the entry in
 // the SAME commit that removes a column from PutMember's SET list.
@@ -230,4 +234,146 @@ func TestAddMemberBankedCostAccumulatesAndIsRowScoped(t *testing.T) {
 	if err := d.AddMemberBankedCost("m-nope", 1); err != nil {
 		t.Fatalf("banking an unknown id must be a silent no-op, got %v", err)
 	}
+}
+
+// notInTheSetListExceptions names the columns that are absent from — or exempt
+// within — PutMember's DO UPDATE SET for reasons that are NOT "a single-column
+// writer owns this", so the completeness guard below must not demand a registry
+// entry for them. Each one is a claim about the statement, so each one says why.
+var notInTheSetListExceptions = map[string]string{
+	// The conflict key. It is what the upsert matches ON; a SET list carrying
+	// it would be meaningless rather than dangerous.
+	"id": "the ON CONFLICT key",
+	// IN the SET list, but as max(forced_stop_at, excluded.forced_stop_at) —
+	// the one entry that is not a plain overwrite. The probe below cannot see
+	// that: it writes a TEXT sentinel, and SQLite orders TEXT above every
+	// number, so max() keeps the sentinel and the column reads as "absent".
+	// Its forward-only property is what protects it, and dal.go says so at
+	// length; a registry entry would assert the wrong invariant.
+	"forced_stop_at": "carried under max(), forward-only — not a plain overwrite",
+}
+
+// TestEveryColumnOutOfTheSetListIsRegistered is the guard on the REGISTRY
+// ITSELF, and it exists because the registry above is hand-maintained.
+//
+// The per-column guard proves that a REGISTERED column stays out of the SET
+// list. It says nothing about the other direction — a column pulled out of the
+// SET list with no entry added here is unguarded, and nothing goes red. That is
+// not hypothetical: avatar_attachment_id sat outside the SET list since T-c826
+// and outside this registry until T-55, so putting it back would have silently
+// re-armed a bug whose blast radius is worse than the usual clobber (the
+// replaced blob is DELETEd, so restoring the old pointer orphans it).
+//
+// It derives the answer rather than restating it. memberColumns is the column
+// list the statement itself binds, and the probe asks the DATABASE which of
+// them a stale whole-row upsert can still move — the same behavioural question
+// the per-column guard asks, and for the same reason: a test that parsed the
+// SQL text would go red on a reflow and stay green on a semantic change.
+//
+// Mutant: delete any entry from singleColumnOwnedFields, or take a column out
+// of PutMember's SET list without adding one, and this test names the column.
+func TestEveryColumnOutOfTheSetListIsRegistered(t *testing.T) {
+	registered := map[string]bool{}
+	for _, f := range singleColumnOwnedFields {
+		registered[f.column] = true
+	}
+
+	var unguarded, stale []string
+	for _, col := range strings.Split(memberColumns, ",") {
+		col = strings.TrimSpace(strings.ReplaceAll(col, "\n", ""))
+		if col == "" {
+			continue
+		}
+		if _, exempt := notInTheSetListExceptions[col]; exempt {
+			if registered[col] {
+				stale = append(stale, col+" (exempt, yet registered)")
+			}
+			continue
+		}
+		if survivesAStaleWholeRowUpsert(t, col) == registered[col] {
+			continue
+		}
+		if registered[col] {
+			// Registered, but the upsert still moves it. The per-column guard
+			// above should already be red; this catches the case where its
+			// entry is the one that is wrong (a stale closure that reads or
+			// stamps the wrong thing).
+			stale = append(stale, col+" (registered, but a stale upsert still overwrites it)")
+		} else {
+			unguarded = append(unguarded, col)
+		}
+	}
+	sort.Strings(unguarded)
+	sort.Strings(stale)
+
+	if len(unguarded) > 0 {
+		t.Fatalf("these columns are NOT in PutMember's DO UPDATE SET, so a stale "+
+			"whole-row upsert can no longer move them — but singleColumnOwnedFields "+
+			"has no entry for them, so nothing would notice if they went back in: %v.\n"+
+			"Add an entry (and bump the count in the guard above), or, if the column "+
+			"is out of the list for some reason OTHER than a single-column writer "+
+			"owning it, name it in notInTheSetListExceptions with the reason.",
+			unguarded)
+	}
+	if len(stale) > 0 {
+		t.Fatalf("singleColumnOwnedFields disagrees with what the database does: %v", stale)
+	}
+}
+
+// probeOverrides gives a LEGAL replacement value for columns whose CHECK
+// constraint refuses the generic sentinel. The probe does not guess: it tries
+// the sentinel, and a constraint failure with no override here fails the test
+// asking for one — so a newly constrained column cannot slip past the guard by
+// being unprobeable. The value only has to DIFFER from what fullMember seeds.
+var probeOverrides = map[string]string{
+	"kind": KindWarden, // CHECK kind IN ('assistant','warden','outsource'); fullMember seeds "assistant"
+}
+
+// survivesAStaleWholeRowUpsert writes a probe value straight into one column,
+// runs a whole-row upsert carrying the row as it was BEFORE that write, and
+// reports whether the probe value is still there.
+//
+// The default probe is TEXT and goes into every column regardless of its
+// declared type: SQLite is dynamically typed, and a non-numeric string keeps its
+// TEXT storage class even under REAL affinity. That is what lets one probe cover
+// the timestamps, the flag and the strings alike — verified in both directions
+// before this guard was written (a column known to be out of the list keeps the
+// probe value; one known to be in it does not).
+func survivesAStaleWholeRowUpsert(t *testing.T, column string) bool {
+	t.Helper()
+	d := newTestDAL(t)
+	const id = "m-setlist-probe"
+	seed := fullMember(id)
+	if err := d.PutMember(seed); err != nil {
+		t.Fatalf("%s: seed: %v", column, err)
+	}
+	probe := "oc-t55-sentinel"
+	// Not parameterised because a column name cannot be: it is taken from
+	// memberColumns, a const in this package, never from anything a caller
+	// supplies.
+	_, err := d.wdb.Exec(`UPDATE member SET `+column+` = ? WHERE id = ?`, probe, id)
+	if err != nil {
+		override, ok := probeOverrides[column]
+		if !ok {
+			t.Fatalf("%s: the probe value was refused (%v), and there is no entry in "+
+				"probeOverrides for this column. Add one naming a LEGAL value that "+
+				"differs from what fullMember seeds — without it this column cannot "+
+				"be probed, and an unprobeable column is an unguarded one.", column, err)
+		}
+		probe = override
+		if _, err := d.wdb.Exec(
+			`UPDATE member SET `+column+` = ? WHERE id = ?`, probe, id); err != nil {
+			t.Fatalf("%s: probe override %q also refused: %v", column, probe, err)
+		}
+	}
+	if err := d.PutMember(seed); err != nil { // the stale whole-row writer
+		t.Fatalf("%s: stale upsert: %v", column, err)
+	}
+	var got any
+	if err := d.rdb.QueryRow(
+		`SELECT `+column+` FROM member WHERE id = ?`, id).Scan(&got); err != nil {
+		t.Fatalf("%s: read back: %v", column, err)
+	}
+	s, _ := got.(string)
+	return s == probe
 }
