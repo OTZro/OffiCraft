@@ -224,8 +224,11 @@ func TestAssignedTaskShutsItsCreatorOutOfTheTextDoors(t *testing.T) {
 			seedStep(t, api, task.ID, "st-1")
 			seedTextHistory(t, api, task.ID)
 			bindExecutor(t, api, task.ID, "ow-bound")
-			if rec := door.call(t, api, task, "st-1", "m-creator"); rec.Code != http.StatusForbidden {
-				t.Fatalf("creator at %s after assignment = %d %s, want 403", door.name, rec.Code, rec.Body.String())
+			rec := door.call(t, api, task, "st-1", "m-creator")
+			if rec.Code != http.StatusForbidden ||
+				!strings.Contains(rec.Body.String(), executorGuardRefusal) {
+				t.Fatalf("creator at %s after assignment = %d %s, want 403 %q",
+					door.name, rec.Code, rec.Body.String(), executorGuardRefusal)
 			}
 		})
 	}
