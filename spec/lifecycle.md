@@ -551,6 +551,9 @@ The server owns desired-state reconciliation; the warden is a stateless executor
 
 Per member: `desired_state` intent (`online | offline | uninstall`; junk-safe parse — any
 unrecognised value MUST be treated as `offline`, fail-safe never-spawn),
+`restart_after_stop` — the SECOND owner intent, split out of `desired_state` (T-14 項目 7,
+owner 2026-08-30 `rc-bc1b029a3aa2`): `desired_state` answers 「下線用多強」 and this answers
+「下線之後要不要起來」. Not on the wire; see §4.3,
 the persisted runtime (`claude | codex`; absent/blank legacy rows fold to `claude`),
 the live `online` fact (**the SSE hub's `is_online` is the single online truth**),
 `refocus_since`, the agent-reported stopped fact, and the selected machine's volatile
@@ -581,7 +584,15 @@ runtime capability report.
 「不要兜底：只有你按強制下線才收它」. The server does not arm a deadline here and never
 decides that time is up.
 
-- ¬online → converged; reset bookkeeping.
+- ¬online → converged; reset bookkeeping. **…and this is where a queued 重啟 is spent**
+  (T-14 項目 7): if `restart_after_stop` is set, THIS edge clears it, flips `desired_state`
+  back to `online` and clears the wind-down anchors, so the same tick takes the §4.3
+  `desired_state=online` arm and STARTs the member. `forced_stop_at` is deliberately kept —
+  it records the session BEFORE this one. A 重啟 verb (重新聚焦 / 改機器 / 換 model) arriving
+  while a stop is in flight (`stopping_since > 0`) is what sets the flag: the stop keeps its
+  rung and its anchors, and only 「起來」 is added — 「沿用強硬下線規則 但是附加上線規則」.
+  A 重啟 verb on a member merely AT REST (no stop in flight) still only saves and answers
+  `held_down` (T-ed79 #4/#14): 「活化 it when you want it to run」.
 - online → the member is `stopping` and the producer dispatches **NOTHING**, indefinitely.
   The agent has been handed the offboard sequence and is working it; a clock here would
   cut off a session that was told there is no countdown.

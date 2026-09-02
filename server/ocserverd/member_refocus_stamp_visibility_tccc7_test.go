@@ -112,13 +112,28 @@ func TestRefocusStampVisibility_NoEntryPointStampsAMemberOnItsWayOffline(t *test
 		rec := httptest.NewRecorder()
 		api.HandleRefocusMemberApiMembersMemberIdRefocusPost(rec, r, "m-ccc7-refocus")
 
-		if rec.Code != http.StatusConflict {
-			t.Fatalf("refocus on a member on its way offline: want 409, got %d %s",
+		// 🔴 THE STATUS CODE MOVED, THE INVARIANT DID NOT (T-14 項目 7). This used
+		// to be a 409: the only spelling the handler had for the owner's intent was
+		// a refocus epoch, the epoch would reach no agent, so the whole verb was
+		// refused. Owner 2026-08-30 (rc-bc1b029a3aa2) split the two intents apart —
+		// 「我只需要在下線後把人帶起來」 — so the verb is now ACCEPTED and records
+		// only 「起來」. What this test is about is unchanged and asserted below:
+		// nothing stamps a refocus epoch on a member on its way offline.
+		if rec.Code != http.StatusOK {
+			t.Fatalf("refocus on a member on its way offline: want 200, got %d %s",
 				rec.Code, rec.Body.String())
 		}
 		m, _ := dal.GetMember("m-ccc7-refocus")
 		if m.RefocusSince != 0 {
 			t.Fatalf("refocus stamped refocus_since=%v anyway", m.RefocusSince)
+		}
+		if !m.RestartAfterStop {
+			t.Fatal("refocus recorded neither an epoch nor a restart intent — the " +
+				"owner's 「起來」 was dropped")
+		}
+		if m.DesiredState != DesiredStateOffline || m.StoppingSince != 9990 {
+			t.Fatalf("the 下線 in flight was altered: desired=%q stopping_since=%v — "+
+				"「沿用強硬下線規則 但是附加上線規則」", m.DesiredState, m.StoppingSince)
 		}
 	})
 

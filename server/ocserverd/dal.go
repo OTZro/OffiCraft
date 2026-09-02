@@ -165,6 +165,27 @@ type Member struct {
 	// force-stopped session looking like a close-out. max() also prevents a stale
 	// snapshot from erasing an existing record.
 	ForcedStopAt float64
+	// RestartAfterStop is the SECOND owner intent, split out of DesiredState
+	// (T-14 項目 7, migrations/00066). DesiredState answers 「下線用多強」; this
+	// answers 「下線之後要不要起來」, and the two are independent:
+	//
+	//	false  nothing is waiting to come back up.
+	//	true   the owner's last action was a 重啟 intent (重新聚焦 / 改機器 /
+	//	       換 model) landing on a member that is already on its way down.
+	//	       The stop in flight is honoured AS IS — a 強制停止 stays a
+	//	       強制停止 — and the member is started again once it has converged
+	//	       offline.
+	//
+	// LAST WRITER WINS, deliberately, and only for this field: every 下線 verb
+	// clears it, every 重啟 verb sets it. The wind-down LADDER above it stays a
+	// ratchet (winddownStageMayAdvanceTo) — the two rules are different because
+	// they answer different questions, which is exactly what one column could
+	// not express.
+	//
+	// Consumed by consumeRestartAfterStop at the converged-offline edge of the
+	// reconcile tick, and cleared in the same write that flips DesiredState back
+	// to online. Not on the wire.
+	RestartAfterStop bool
 	// HandoverNoticedTS is the durable twin of the in-memory handover-notice
 	// claim (T-6ebc, migrations/00058): the session anchor whose one-and-only
 	// advance notice has already been sent, 0 when none has. It holds the ANCHOR
@@ -238,7 +259,8 @@ const memberColumns = `id, name, kind, role_key, runtime, model, actual_model, e
 	waking_since, stopping_since, stopped_since, refocus_since, refocus_op, banked_cost,
 	last_op, last_op_ok, last_op_log, last_op_reason, last_op_at, roster_status,
 	linked_task_id, codename, created_ts, released_ts, activated_ts,
-	avatar_attachment_id, forced_stop_at, handover_noticed_ts, agent_iat_floor`
+	avatar_attachment_id, forced_stop_at, handover_noticed_ts, agent_iat_floor,
+	restart_after_stop`
 
 func scanMember(row interface{ Scan(...any) error }) (Member, error) {
 	var m Member
@@ -253,6 +275,7 @@ func scanMember(row interface{ Scan(...any) error }) (Member, error) {
 		&m.LastOp, &lastOpOK, &m.LastOpLog, &m.LastOpReason, &m.LastOpAt, &m.RosterStatus,
 		&linkedTaskID, &codename, &m.CreatedTS, &m.ReleasedTS, &m.ActivatedTS,
 		&m.AvatarAttachmentID, &m.ForcedStopAt, &m.HandoverNoticedTS, &m.AgentIatFloor,
+		&m.RestartAfterStop,
 	)
 	if err != nil {
 		return Member{}, err

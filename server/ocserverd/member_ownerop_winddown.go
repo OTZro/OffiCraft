@@ -478,3 +478,122 @@ func (s *apiServer) armMemberOwnerOpHandover(m *Member, op string) bool {
 	}
 	return true
 }
+
+// ── 「要不要起來」, split out of desired_state (T-14 項目 7) ──────────────────
+//
+// Owner 2026-08-30, rc-bc1b029a3aa2, verbatim: 「一個重啟的 intention 遇上一個
+// 更強硬的下線規則 他的方式是沿用強硬下線規則 但是附加上線規則」, and
+// 「我們強制下線以後已經不需要退回軟下線，如果我已經到強硬下線的狀態下按下
+// refocus 我只需要在下線後把人帶起來」.
+//
+// 🔴 ONE COLUMN WAS ANSWERING TWO QUESTIONS. desired_state said both HOW HARD
+// the member is being taken down and WHETHER it should be running afterwards,
+// so a 重啟 verb arriving on a member already on its way down had exactly two
+// spellings available, and both were wrong:
+//
+//	重新聚焦 → 409. aRefocusStampWouldReachTheAgent is right about what it
+//	  actually says (a refocus STAMP on a desired-offline row reaches no agent),
+//	  so the handler refused the whole verb — and the owner's "bring it back
+//	  up" was refused with it.
+//	改機器 / 換 model → a clean 200, the value stored, a held_down receipt, and
+//	  nothing else. The owner's intent was recorded as a placement/launch value
+//	  and discarded as an intent.
+//
+// The two questions now have two answers, and they follow DIFFERENT rules,
+// which is why they could never share a column:
+//
+//	要不要起來  LAST WRITER WINS (後蓋前). Every 下線 verb clears it, every
+//	            重啟 verb sets it. That is what makes 強制停止 → 重新聚焦 and
+//	            重新聚焦 → 強制停止 different, which the owner named explicitly.
+//	下線用多強  RATCHET (winddownStageMayAdvanceTo), untouched by this change.
+//	            A 重啟 landing on a 加速停止 still does not hand the member back
+//	            the slower procedure.
+//
+// 活化 remains the ONE thing that cancels a stop outright rather than queueing
+// a start behind it — that exception is deliberate and predates this split.
+
+// aStopIsInFlight is the SCOPE of this whole change, and it is narrow on
+// purpose: the owner's ruling is about a 重啟 verb meeting a 下線 RULE THAT IS
+// RUNNING — 「如果我已經到強硬下線的狀態下按下 refocus 我只需要在下線後把人帶
+// 起來」 — not about a member that has simply been at rest for a week.
+//
+// 🔴 WITHOUT THIS GATE THE CHANGE SWALLOWS A DIFFERENT RULING. T-ed79 #4/#14 is
+// that an owner verb on a member he has stopped SAVES and starts nothing
+// (memberHeldDownReceipt: 「活化 it when you want it to run」), and
+// TestRelocateMember_PlacementOnly pins 改機器 as placement-only against exactly
+// that. A member at rest has no stop in flight, so it never reaches the queue
+// and both rulings stand: a 重啟 during a wind-down brings the member back, a
+// 重啟 on a resting member re-pins and waits for 活化.
+//
+// stopping_since is the anchor every 下線 rung sets (下線 through
+// stopEpochAnchor, 強制停止 directly, 加速停止 by re-stamping), so ONE term
+// covers the whole ladder.
+func aStopIsInFlight(m Member) bool {
+	return m.StoppingSince > 0.0
+}
+
+// stampRestartIntent records 「下線之後把人帶起來」 on a member whose stop is
+// already in flight. It writes ONLY the second intent: the stop, its stage, and
+// its anchors are all left exactly as the 下線 verb set them, which is the
+// owner's 「沿用強硬下線規則 但是附加上線規則」 in one line.
+func stampRestartIntent(m *Member) {
+	m.RestartAfterStop = true
+}
+
+// clearRestartIntent is the other half of 後蓋前, and it is the half that makes
+// the negative control hold: 重新聚焦 → 強制停止 must still end with the member
+// DOWN. Every 下線 verb calls it, so the last thing the owner pressed is the
+// one that decides.
+func clearRestartIntent(m *Member) {
+	m.RestartAfterStop = false
+}
+
+// memberRestartQueuedReceipt is what the owner reads on the row after a 重啟
+// verb landed on a member that was already going down. It replaces
+// memberHeldDownReceipt for exactly this case — that sentence says 「活化 it
+// when you want it to run」, which is now false: nothing more is needed from him.
+func memberRestartQueuedReceipt(op string) string {
+	return spawnReasonHeldDown + ": the " + op + " was saved and this member is " +
+		"still being stopped — the stop in flight is honoured as-is, and it will " +
+		"be started again once it is down"
+}
+
+// consumeRestartAfterStop is the ONE place the queued start is spent: the
+// converged-offline edge of the reconcile tick, which is the first instant the
+// stop the owner asked for is actually finished.
+//
+// 🔴 IT WAITS FOR THE SESSION TO BE GONE, not for a clock and not for a
+// stopped-report. `!s.hub.IsOnline` is the same authority decideDown's first
+// branch ("offline: converged") uses, so "the stop landed" and "the restart
+// fires" can never disagree about the same member — and a 強制停止 whose kill is
+// still in flight is not restarted underneath itself.
+//
+// The anchors it clears are 活化's list minus forced_stop_at: that column is the
+// durable record that the PREVIOUS session was cut off and is deliberately never
+// cleared by a boot (migrations/00057). Clearing stopping_since is what closes
+// the forced epoch, exactly as 活化 does.
+func (s *apiServer) consumeRestartAfterStop(m *Member, now float64) bool {
+	if !m.RestartAfterStop || m.RosterStatus != RosterStatusActive {
+		return false
+	}
+	if m.DesiredState != DesiredStateOffline || s.hub.IsOnline(m.ID) {
+		return false
+	}
+	m.RestartAfterStop = false
+	m.DesiredState = DesiredStateOnline
+	m.StoppingSince = 0.0
+	m.StoppedSince = 0.0
+	m.WakingSince = 0.0
+	m.RefocusSince = 0.0
+	m.RefocusOp = ""
+	stampMemberOpReceipt(m, spawnReasonHeldDown+": the stop the owner asked for has "+
+		"landed — starting this member again, which is what the 重啟 he pressed "+
+		"during the wind-down asked for", now)
+	if err := s.putMember(*m, triggerServer); err != nil {
+		reconcileLog("%s: queued restart-after-stop persist failed: %v", m.ID, err)
+		return false
+	}
+	reconcileLog("%s: stop converged and a 重啟 was queued behind it — desired_state "+
+		"back to online", m.ID)
+	return true
+}
