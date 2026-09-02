@@ -9693,7 +9693,7 @@
             }
           },
           {
-            "description": "Window anchor, INCLUSIVE, walking TOWARDS THE NEWEST: return this message and the ``limit``-1 that follow it, oldest→newest. This is the direction ``before_ts``/``before_id`` cannot express — those only ever walk back, so a caller that jumped to one specific message could not load what came after it. An id no message carries is 404, not an empty page: an empty page is what a real window at the end of the stream returns, and the two must not be indistinguishable. Sending it alongside ``before_ts``/``before_id`` is 422. Sending it with an ``end_id`` that is strictly OLDER than it is 422. On this path ``limit`` must be 1..200 or the call is 422 — the legacy paths keep their own semantics.",
+            "description": "Window anchor, INCLUSIVE, walking TOWARDS THE NEWEST: return this message and the ``limit``-1 that follow it, oldest→newest. This is the direction ``before_ts``/``before_id`` cannot express — those only ever walk back, so a caller that jumped to one specific message could not load what came after it. An id no message carries is 404, not an empty page: an empty page is what a real window at the end of the stream returns, and the two must not be indistinguishable. Sending it alongside ``before_ts``/``before_id`` is 422. Sending it with an ``end_id`` that is strictly OLDER than it is 422. On this path ``limit`` must be 1..200 or the call is 422 — the legacy paths keep their own semantics. This paragraph describes the window when ``start_id`` is given ALONE; when both anchors are given together, the window rule is the one stated under ``end_id``.",
             "in": "query",
             "name": "start_id",
             "required": false,
