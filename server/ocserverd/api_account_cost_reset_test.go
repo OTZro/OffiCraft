@@ -224,6 +224,44 @@ func TestAccountSpend_AWakingReportStartsANewAccountingRun(t *testing.T) {
 	}
 }
 
+// 🔴 ACCEPTED BOUNDARY — recorded here rather than left to be re-discovered
+// (independent review T-56 asked for it to be named). A reporter that never
+// announces waking has only the decrease fallback, so a new generation whose
+// first report lands AT OR ABOVE the previous generation's last one is credited
+// the DIFFERENCE instead of its whole figure. That is an under-count: the
+// account card reads low, permanently, and nothing flags it.
+//
+// It is accepted rather than fixed, because the wire carries no other signal
+// that a generation began. Every OffiCraft member calls report_waking as step 1
+// of its boot sequence, so the gap covers only a reporter outside that contract,
+// and closing it would mean going back to guessing from the numbers — the guess
+// this boundary replaced.
+//
+// So this test PINS THE LOW NUMBER ON PURPOSE. If it ever wants to be 22, a real
+// boundary signal has been added: delete this test, do not loosen it.
+func TestAccountSpend_AReporterThatNeverWakesUnderCountsAndThatIsAccepted(t *testing.T) {
+	s := costResetServer(t)
+	seedRegisteredMachine(t, s, "m-seth-m5")
+	seedWorker(t, s, "ow-7", "S7", 0, WorkerStatusActive)
+
+	report := func(cost string) {
+		t.Helper()
+		if rec := doIngestTelemetry(s, "ow-7", "m-seth-m5",
+			`{"runtime":"claude","account":"no-waking","cost":`+cost+`}`); rec.Code != 200 {
+			t.Fatalf("ingest %s: %d %s", cost, rec.Code, rec.Body.String())
+		}
+	}
+	report("10")
+	// A new generation counting from zero that never said so — and whose first
+	// report happens to exceed the previous generation's last one.
+	report("12")
+
+	if got := accountCostOf(t, s, "no-waking"); got != 12.0 {
+		t.Errorf("account = %v, want 12 — the two generations really spent 22, and "+
+			"the missing 10 IS the accepted boundary this test records", got)
+	}
+}
+
 // The ruling itself: pressing the account button clears the CARD and nothing
 // else. This is the assertion the owner would make by hand.
 func TestResetAccountCost_ClearsTheCardAndLeavesEveryMemberUntouched(t *testing.T) {

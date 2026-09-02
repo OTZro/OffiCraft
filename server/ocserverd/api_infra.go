@@ -1067,7 +1067,8 @@ const accountSpendAccountedKey = "cost_accounted"
 //
 // A NEW SESSION also resets the baseline explicitly, from the waking report —
 // see startAccountSpendSession. The decrease rule below is the fallback for a
-// session that never announced itself.
+// session that never announced itself, and it is a KNOWN, ACCEPTED under-count,
+// not a complete substitute: see the boundary note on startAccountSpendSession.
 func (s *apiServer) accrueAccountSpend(entry map[string]any) {
 	account, _ := entry["account"].(string)
 	if account == "" {
@@ -1110,6 +1111,18 @@ func (s *apiServer) accrueAccountSpend(entry map[string]any) {
 // account would invent money that was already banked against the old one. The
 // waking report is the one place the server is TOLD a generation began, so it is
 // where the question stops being a guess.
+//
+// 🔴 THE RESIDUAL BOUNDARY, ACCEPTED AND NOT CLOSED (named at the request of
+// independent review, T-56): a reporter that never announces waking still has
+// only the decrease fallback, so a generation of its whose first report lands AT
+// OR ABOVE the previous one is credited the difference rather than its whole
+// figure. The account card then reads LOW, permanently, and nothing flags it.
+// This is accepted rather than fixed because the wire carries no other signal
+// that a generation began; every OffiCraft member calls report_waking as step 1
+// of its boot sequence, so the gap covers only a reporter outside that contract,
+// and closing it would mean guessing from the numbers again. Pinned — the low
+// number asserted deliberately — by
+// TestAccountSpend_AReporterThatNeverWakesUnderCountsAndThatIsAccepted.
 //
 // Best-effort and silent when there is nothing to forget: an actor with no
 // telemetry entry yet has no baseline to clear, which is the same state this
