@@ -465,6 +465,22 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			MCPExclude: true,
 		},
 		{
+			Method:  "POST",
+			Path:    "/api/accounts/cost/reset",
+			Handler: w.HandleResetAccountCostApiAccountsCostResetPost,
+			Auth:    authGated,
+			// Same owner-only floor, same reasoning, as the per-actor row
+			// above — and more so: this one destroys several actors' spend in
+			// a single press (owner ruling rc-efae958cef40, option 0).
+			Requires: principalOwner,
+			Summary:  "Reset every actor on one account (owner-only, irreversible, all-or-nothing): clears each actor's durable banked figure AND live telemetry figure.",
+			// The account key rides in the BODY, not the path: a real key is a
+			// compound free string containing '/' and '@', and an encoded
+			// slash that a proxy decodes would silently retarget an
+			// irreversible call. See the spec entry.
+			MCPExclude: true,
+		},
+		{
 			Method:   "POST",
 			Path:     "/api/self/waking",
 			Handler:  w.HandleReportWakingApiSelfWakingPost,

@@ -4,6 +4,7 @@ import { useEscapeLayer } from "../lib/useEscapeLayer";
 import { api } from "../api";
 import { ApiError } from "../api/errors";
 import { formatCost } from "../lib/cost";
+import { ConfirmModal } from "./ConfirmModal";
 import { formatDuration } from "../lib/duration";
 import { useMembers } from "../hooks/useMembers";
 import { useMonitoring } from "../hooks/useMonitoring";
@@ -33,6 +34,13 @@ import { InlineEdit } from "./InlineEdit";
 import { MemberDetailPanel } from "./MemberDetailPanel";
 import { PresenceBadge } from "./PresenceBadge";
 import { CopyIcon, CheckIcon, CloseIcon } from "./icons";
+// The 歸零 pill on the account card is the SAME control as the one on the member
+// panel — same look, same danger colour, same size — so it wears the `mp` block's
+// class rather than a second copy of those rules under `mon`. Importing the
+// sheet here is the repo's convention for borrowing a block (ResumeSummaryCard
+// does the same): relying on some other component happening to have imported it
+// is what makes a style silently disappear when that component is removed.
+import "./member-detail.css";
 import "./monitor.css";
 
 export function MonitorPage() {
@@ -448,6 +456,14 @@ export function MonitorPage() {
                 account={a}
                 onRename={(next) => renameAccount(a.account, next)}
                 onDetail={() => setDetailAccount(a)}
+                // 帳號歸零 (T-53, owner ruling rc-5c5d7c7c6dcd): the account's
+                // own figure, cleared without touching any member. Only the
+                // monitoring refetch is needed — no roster row changed, which
+                // is the whole point of the separation.
+                onResetCost={async () => {
+                  await api.resetAccountCost(a.account);
+                  await refetch();
+                }}
               />
             ))}
           </div>
@@ -1726,18 +1742,44 @@ function OutsourceSessionRow({
 /** One account usage card (Monitor §1). Shape-complete for the warden slice; in
  * M1 accounts is empty so this never renders. Every metric is honest — "—" when
  * the source is null. */
-function AccountCard({
+/** Exported for the CT visual guard (the pill's placement inside the cost line
+ * and the confirm's coverage are real-browser questions). */
+export function AccountCard({
   account,
   onRename,
   onDetail,
+  onResetCost,
 }: {
   account: MonAccountView;
   onRename: (next: string) => void;
   onDetail: () => void;
+  onResetCost: () => Promise<void>;
 }) {
   const { t, msg } = useI18n();
   const dash = t.monitor.dash;
   const overheated = account.sevenDay?.overheated === true;
+  const costText = account.cost != null ? formatCost(account.cost) : dash;
+  // 帳號歸零 is IRREVERSIBLE — nothing is retained server-side and there is no
+  // undo route — so the click never fires it. The confirm is the whole safety
+  // mechanism, exactly as on the member panel.
+  const [costResetOpen, setCostResetOpen] = useState(false);
+  const [costResetPending, setCostResetPending] = useState(false);
+  const [costResetError, setCostResetError] = useState<string | null>(null);
+
+  async function handleCostReset() {
+    setCostResetPending(true);
+    setCostResetError(null);
+    try {
+      await onResetCost();
+      setCostResetOpen(false);
+    } catch {
+      // Keep the modal open and say so: a reset that silently failed looks
+      // exactly like one that worked — the card renders the dash either way.
+      setCostResetError(t.monitor.costResetError);
+    } finally {
+      setCostResetPending(false);
+    }
+  }
 
   return (
     <div className="mon-acct">
@@ -1774,10 +1816,39 @@ function AccountCard({
           </button>
         </div>
         <div className="mon-acct__cost">
-          {t.monitor.estimate}{" "}
-          {account.cost != null ? formatCost(account.cost) : dash}
+          {t.monitor.estimate} {costText}
+          <button
+            type="button"
+            className="mp-cost-reset mon-acct__reset"
+            data-testid="mon-acct-cost-reset"
+            // Nothing accumulated ⇒ nothing to destroy. The condition is the
+            // SAME one the figure renders the dash for, so the button and the
+            // value can never disagree.
+            disabled={costResetPending || account.cost == null}
+            title={t.monitor.costResetHint}
+            onClick={() => setCostResetOpen(true)}
+          >
+            {t.monitor.costReset}
+          </button>
         </div>
       </div>
+      {costResetOpen && (
+        <ConfirmModal
+          testId="mon-acct-cost-reset-confirm"
+          confirmTestId="mon-acct-cost-reset-confirm-btn"
+          body={msg.accountCostResetConfirmBody(costText)}
+          error={costResetError}
+          cancelLabel={t.common.cancel}
+          confirmLabel={t.monitor.costResetConfirm}
+          busy={costResetPending}
+          danger
+          onCancel={() => {
+            setCostResetOpen(false);
+            setCostResetError(null);
+          }}
+          onConfirm={() => void handleCostReset()}
+        />
+      )}
 
       <UsageBar
         label={t.monitor.fiveHour}

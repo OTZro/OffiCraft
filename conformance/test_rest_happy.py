@@ -210,6 +210,20 @@ def _check_cost_reset_receipt(_ctx: HCtx, r: httpx.Response) -> None:
     assert data["cleared_banked_cost"] is None, data
 
 
+def _check_account_cost_reset_receipt(_ctx: HCtx, r: httpx.Response) -> None:
+    """Nobody has ever reported under a scratch account tag, so the receipt
+    honestly says NOTHING WAS DESTROYED — null rather than 0. Two contracts ride
+    on that: null means "there was nothing to clear" while 0 would read as "zero
+    was cleared" (the same null semantics as CostResetDTO), and an unknown tag is
+    a SUCCESS rather than a 404, because an account is a free telemetry string
+    with no roster row — "no such account" and "that account has nothing to
+    clear" are the same state. Without the second, the owner's second press —
+    the likely one, having just cleared it — would look like an error."""
+    data = r.json()
+    assert data["account"], data
+    assert data.get("cleared_cost") is None, data
+
+
 def _check_version(_ctx: HCtx, r: httpx.Response) -> None:
     data = r.json()
     assert data["version"] and data["catalog_hash"], data
@@ -1164,6 +1178,10 @@ HAPPY: dict[str, Happy] = {
     "POST /api/members/{member_id}/cost/reset": Happy(
         path=lambda ctx: f"/api/members/{ctx.fresh_member()}/cost/reset",
         check=_check_cost_reset_receipt,
+    ),
+    "POST /api/accounts/cost/reset": Happy(
+        body={"account": "conf-happy-untouched-account"},
+        check=_check_account_cost_reset_receipt,
     ),
     "DELETE /api/members/{member_id}": Happy(
         path=lambda ctx: f"/api/members/{ctx.fresh_member()}",

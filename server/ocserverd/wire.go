@@ -663,6 +663,18 @@ type costResetDTO struct {
 	ClearedBankedCost *float64 `json:"cleared_banked_cost"`
 }
 
+// accountCostResetDTO is the receipt of POST /api/accounts/cost/reset: the
+// ACCOUNT's own accumulated spend as it stood immediately before the write
+// (owner ruling rc-5c5d7c7c6dcd 「分開：帳號卡自己一份數字，清它不動成員」).
+//
+// Nothing about any member appears here because nothing about any member
+// changed. Null means there was nothing to clear — not that zero was cleared —
+// mirroring costResetDTO and the read side so a client keeps one rule.
+type accountCostResetDTO struct {
+	Account     string   `json:"account"`
+	ClearedCost *float64 `json:"cleared_cost"`
+}
+
 type monitoringMachineDTO struct {
 	Machine     string   `json:"machine"`
 	DisplayName string   `json:"display_name"`

@@ -233,16 +233,17 @@ func TestResetCost_ReleasedWorkerCanBeReset(t *testing.T) {
 	}
 }
 
-// The outcome the ruling actually asked for, asserted where the owner sees it:
-// the ACCOUNT CARD, not the individual rows. Resetting every actor an account
-// carries — a live staff member, a live worker AND a released one — must drive
-// that account's total to ABSENT, not to a small residue.
+// 🔴 THE SEPARATION, asserted from the actor side. Owner ruling rc-5c5d7c7c6dcd
+// (2026-09-02) split the two figures: the account card is its own accumulator,
+// so clearing actors one by one does NOT bring it down.
 //
-// This is the test that would have caught the shipped-and-wrong version: every
-// per-actor assertion above passed while the account card still showed a figure,
-// because the released worker was refused and its spend deliberately stays in
-// the fold (TestGetMonitoring_ReleasedWorkerSpendStaysInTheAccount).
-func TestResetCost_ClearingEveryActorEmptiesTheAccountCard(t *testing.T) {
+// This test used to assert the OPPOSITE — that clearing every actor drove the
+// account card to absent — under the earlier ruling rc-1344cc76a24a. The owner
+// then asked for「帳號上面的清除可以跟 agent 上面的清除分開」, which makes the old
+// assertion false by decision rather than by accident. It is kept, inverted,
+// because the pair of resets touching each other is exactly the regression the
+// ruling forbids, and nothing else would notice.
+func TestResetCost_ClearingActorsLeavesTheAccountCardAlone(t *testing.T) {
 	s := costResetServer(t)
 	seedRegisteredMachine(t, s, "m-seth-m5")
 	m := fullMember("seth")
@@ -258,13 +259,11 @@ func TestResetCost_ClearingEveryActorEmptiesTheAccountCard(t *testing.T) {
 			t.Fatalf("ingest %s: %d %s", id, rec.Code, rec.Body.String())
 		}
 	}
-
-	// Premise: the card really does carry a figure first, so "absent" below
-	// cannot pass because the fixture was empty all along.
 	before := accountRow(t, monitoringOf(t, doGetMonitoring(s,
 		map[string]any{"sub": "owner", "scope": "owner"})), "seth-m5-claude")
-	if before["cost"] == nil {
-		t.Fatal("fixture is not discriminating — the account card shows nothing to clear")
+	if before["cost"] != 4.5 {
+		t.Fatalf("fixture premise: account = %v, want 4.5 (three actors reporting "+
+			"1.5 each)", before["cost"])
 	}
 
 	for _, id := range []string{"seth", "ow-live", "ow-gone"} {
@@ -273,10 +272,17 @@ func TestResetCost_ClearingEveryActorEmptiesTheAccountCard(t *testing.T) {
 
 	after := accountRow(t, monitoringOf(t, doGetMonitoring(s,
 		map[string]any{"sub": "owner", "scope": "owner"})), "seth-m5-claude")
-	if after["cost"] != nil {
-		t.Errorf("account cost = %v, want absent — 「帳號卡才會真的歸零」 is the "+
-			"outcome the ruling asked for, and a residue here means some actor's "+
-			"spend is still unreachable", after["cost"])
+	if after["cost"] != 4.5 {
+		t.Errorf("account cost = %v, want 4.5 untouched — clearing members must "+
+			"leave the account card alone (rc-5c5d7c7c6dcd). A drop here means the "+
+			"two buttons the owner asked to separate are joined again", after["cost"])
+	}
+	// And the actors really were cleared, so the assertion above cannot pass
+	// because the resets did nothing at all.
+	for _, id := range []string{"seth", "ow-live", "ow-gone"} {
+		if v, present := liveCostOf(s, id); present {
+			t.Errorf("%s live cost still %v — the per-actor reset did not run", id, v)
+		}
 	}
 }
 

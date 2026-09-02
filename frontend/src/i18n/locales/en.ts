@@ -1248,6 +1248,15 @@ export const en: Dict = {
     renamePlaceholder: "Enter display name",
     renameError: "Rename failed",
     accountsEmpty: "No account usage data yet",
+    // 帳號歸零 (T-53, owner ruling rc-5c5d7c7c6dcd) — the ACCOUNT's own figure,
+    // cleared without touching any member's.
+    costReset: "Reset",
+    costResetHint: "Reset this account's accumulated spend to zero. No member's figure is touched. This cannot be undone.",
+    costResetConfirm: "Reset to zero",
+    costResetError: "Reset failed — the figure was not cleared.",
+    costResetConfirmBodyLead: "This resets the account's accumulated ",
+    costResetConfirmBodyTail:
+      " to zero and starts counting again from 0. No member's own figure is touched. The figure is not kept anywhere else, so it cannot be recovered.",
     estimate: "est.",
     fiveHour: "5-hour window",
     sevenDay: "7-day window",

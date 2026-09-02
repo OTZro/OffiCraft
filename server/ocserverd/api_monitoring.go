@@ -724,6 +724,12 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 	// fail-closed rules that keep the pairing true across the whole sequence of
 	// reports, not just the happy path.
 	applyAccountReport(entry, body.Account, body.AccountLabel, runtime)
+	// The account's own accumulator is fed HERE and nowhere else, because this
+	// is the one moment new spend becomes visible (T-53, owner ruling
+	// rc-5c5d7c7c6dcd). It runs AFTER applyAccountReport so the increase is
+	// credited to the account this report actually proved, never to a pairing
+	// the report has just retired.
+	s.accrueAccountSpend(entry)
 	entry["ts"] = nowSecs()
 	s.telemetry.Set(agentID, entry)
 	s.stampReportedLaunchFacts(agentID,
@@ -1588,21 +1594,34 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 				}
 			}
 		}
-		if cost, isNum := entry["cost"].(float64); isNum {
-			acctCost[account] += cost
-			acctHasCost[account] = true
-		}
-		// One banked balance per ACTOR. Members and workers are disjoint at the
-		// SQL level — ListMembers is `WHERE kind != 'outsource'`, ListOutsourceWorkers
-		// is `WHERE kind = 'outsource'`, over the SAME member table — so no row
-		// can project into `actors` twice and no balance can be added twice.
-		// A key held by both a member and a worker therefore sums two DISTINCT
-		// balances. Do not take this paragraph's word for it: the arithmetic is
-		// pinned end-to-end by
-		// TestGetMonitoring_SharedAccountSumsMemberAndWorkerExactlyOnce, which
-		// goes red on both a missing worker and a double-counted one.
-		if a.banked != 0 {
-			acctCost[account] += a.banked
+	}
+	// 🔴 THE ACCOUNT FIGURE IS NO LONGER A FOLD OVER THESE ACTORS (T-53, owner
+	// ruling rc-5c5d7c7c6dcd, 2026-09-02「分開：帳號卡自己一份數字，清它不動成員」).
+	// It is the account's OWN accumulator, fed at ingest by the increase each
+	// report brings and zeroed only by POST /api/accounts/cost/reset.
+	//
+	// The loop above therefore no longer adds live+banked per actor. That sum
+	// was what made the two figures inseparable: the owner asked to clear the
+	// account card without clearing the members it happened to contain, and a
+	// derived number cannot be cleared without clearing what it derives from.
+	//
+	// Two consequences that are DELIBERATE, not drift:
+	//   · the account card no longer equals the sum of the members shown under
+	//     it — the owner ruled with that sentence in front of him;
+	//   · an actor leaving (a member hard-deleted, a per-actor reset) does NOT
+	//     pull the account figure down. Money already spent is a historical
+	//     fact, the same reasoning that keeps a released worker's spend on the
+	//     card. It is also what makes the accumulator immune to the silent
+	//     under-reporting a cleared-watermark design would have had (see
+	//     migration 00069).
+	accountSpend, err := s.dal.ListAccountSpend()
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	for account, spent := range accountSpend {
+		if spent > 0 {
+			acctCost[account] = spent
 			acctHasCost[account] = true
 		}
 	}
@@ -1618,6 +1637,13 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		accountKeys[account] = true
 	}
 	for account := range acctCost {
+		accountKeys[account] = true
+	}
+	// A known account keeps its card after being zeroed, even when nothing is
+	// reporting under it right now: the row exists because spend was once
+	// reported there, and dropping the card would read as "that account is
+	// gone" rather than "it is back to zero".
+	for account := range accountSpend {
 		accountKeys[account] = true
 	}
 	// The account overview is global owner observability, not a member-account

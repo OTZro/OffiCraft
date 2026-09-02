@@ -85,6 +85,7 @@ import type {
   ThemeWriteReceipt,
   ThemeDeleteResult,
   SseConnectionState,
+  AccountCostResetReceipt,
   CostResetReceipt,
 } from "./adapter";
 import type {
@@ -2495,6 +2496,20 @@ export const mockApi: Api = {
       row.banked_cost = null;
     }
     return { memberId: id, clearedCost, clearedBankedCost };
+  },
+
+  async resetAccountCost(account: string): Promise<AccountCostResetReceipt> {
+    // 帳號歸零 (mirror handle_reset_account_cost): zero the ACCOUNT's own
+    // accumulated figure and touch NO member — the separation owner ruling
+    // rc-5c5d7c7c6dcd asked for. The account row is where the cockpit reads it,
+    // so the mutation lands there and the session rows are left alone.
+    // An account nobody reports under clears nothing and honestly answers null.
+    const row = wireMonitoring.accounts.find((a) => a.account === account);
+    const clearedCost = row?.cost ?? null;
+    if (row) {
+      row.cost = null;
+    }
+    return { account, clearedCost };
   },
 
   async forceStopMember(id: string): Promise<void> {

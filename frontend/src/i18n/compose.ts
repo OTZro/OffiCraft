@@ -114,6 +114,7 @@ export interface Messages {
    * the dash) rather than a number: the panel has it, and a second formatting
    * site is a second place for the rounding rule to drift. */
   costResetConfirmBody: (amount: string) => string;
+  accountCostResetConfirmBody: (amount: string) => string;
   // ── settings ──
   themeImportSkipped: (count: number, sample: string[]) => string;
   themeDeleteConfirm: (name: string) => string;
@@ -413,6 +414,12 @@ export function makeMessages(t: Dict, language: Lang): Messages {
       `${mach.deleteConfirmBodyLead}${name}${mach.deleteConfirmBodyTail}`,
     costResetConfirmBody: (amount) =>
       `${t.mp.costResetConfirmBodyLead}${amount}${t.mp.costResetConfirmBodyTail}`,
+    // The ACCOUNT's own figure (T-53, owner ruling rc-5c5d7c7c6dcd). Its own
+    // pair of strings rather than the member one with a different noun: this
+    // sentence has to say that no member figure is touched, which is the whole
+    // difference the owner asked for and the thing he checks before pressing.
+    accountCostResetConfirmBody: (amount) =>
+      `${t.monitor.costResetConfirmBodyLead}${amount}${t.monitor.costResetConfirmBodyTail}`,
 
     // `sample` is the SHORT head of the skipped set, never the whole thing; the
     // count carries the rest and the trailing marker says it was cut.

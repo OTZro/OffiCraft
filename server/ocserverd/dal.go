@@ -367,6 +367,79 @@ func (d *DAL) GetMember(id string) (*Member, error) {
 // the only update seams for that independently-owned pointer. This prevents a
 // stale lifecycle/model snapshot from erasing a newer avatar and orphaning its
 // blob. The INSERT still accepts the field for migrations/tests/new rows.
+// ── account spend (T-53, owner ruling rc-5c5d7c7c6dcd) ───────────────────────
+//
+// The ACCOUNT's own accumulated spend, the number the cockpit's account card
+// shows since that ruling. It is deliberately NOT a fold over the actors on the
+// account: the owner asked for the account figure and the per-member figure to
+// be clearable independently, and a derived number cannot be cleared without
+// clearing what it derives from. See migration 00069 for why an accumulator
+// rather than a cleared watermark.
+
+// AddAccountSpend adds newly reported spend to one account's accumulator,
+// creating the row on first sight. Called from the telemetry ingest — the one
+// place new spend becomes visible — and from nowhere else.
+func (d *DAL) AddAccountSpend(account string, delta float64) error {
+	if account == "" || delta <= 0 {
+		return nil
+	}
+	_, err := d.wdb.Exec(`INSERT INTO account_spend (account, accumulated)
+		VALUES (?, ?)
+		ON CONFLICT(account) DO UPDATE SET accumulated = accumulated + excluded.accumulated`,
+		account, delta)
+	return err
+}
+
+// ListAccountSpend reads every account's accumulator in one query — the read
+// side folds thousands of actors but only ever a handful of accounts, so the
+// monitoring handler takes the whole map rather than a query per account.
+func (d *DAL) ListAccountSpend() (map[string]float64, error) {
+	rows, err := d.rdb.Query(`SELECT account, accumulated FROM account_spend`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]float64{}
+	for rows.Next() {
+		var account string
+		var accumulated float64
+		if err := rows.Scan(&account, &accumulated); err != nil {
+			return nil, err
+		}
+		out[account] = accumulated
+	}
+	return out, rows.Err()
+}
+
+// ZeroAccountSpend sets one account's accumulator to 0 and answers with what it
+// held — the receipt, and the last moment that figure exists anywhere (no
+// per-charge ledger backs it). A row that does not exist answers 0: an account
+// nobody has reported under and an account already at zero are the same state,
+// and neither is an error.
+//
+// Read and write in ONE transaction so the figure reported as destroyed is
+// exactly the figure that was destroyed, rather than one a concurrent report
+// had already moved.
+func (d *DAL) ZeroAccountSpend(account string) (float64, error) {
+	var had float64
+	err := d.inTx(func(tx *sql.Tx) error {
+		switch err := tx.QueryRow(`SELECT accumulated FROM account_spend WHERE account = ?`,
+			account).Scan(&had); {
+		case err == sql.ErrNoRows:
+			had = 0
+			return nil
+		case err != nil:
+			return err
+		}
+		_, err := tx.Exec(`UPDATE account_spend SET accumulated = 0 WHERE account = ?`, account)
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	return had, nil
+}
+
 func (d *DAL) PutMember(m Member) error {
 	var lastOpOK any
 	if m.LastOpOK != nil {

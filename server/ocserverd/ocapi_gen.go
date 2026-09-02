@@ -296,6 +296,25 @@ func (e WebhookEndpointDTOPlatform) Valid() bool {
 	}
 }
 
+// AccountCostResetDTO Receipt of an account cost reset (`POST /api/accounts/cost/reset`, owner-gated): the account's accumulated spend as it stood immediately BEFORE the write.
+//
+// 🔴 It carries the PRE-reset figure on purpose, for the same reason the per-actor receipt does: nothing else holds the discarded number, so this response is the LAST MOMENT it exists. It is a receipt, NOT an undo — nothing is retained and no route puts it back.
+//
+// Null in `cleared_cost` means there was nothing to clear (an account at zero, or one nobody has reported under) — NOT that zero was cleared, mirroring `CostResetDTO` and the read side so a client keeps one rule. Nothing about any MEMBER appears here because nothing about any member changed: this route touches the account's own accumulator alone.
+type AccountCostResetDTO struct {
+	// Account The account tag this receipt is for — echoed back so a caller that fired several resets can tell them apart.
+	Account string `json:"account"`
+
+	// ClearedCost The account's accumulated spend as it stood BEFORE the write, i.e. the figure this call destroyed. Null when there was nothing to clear.
+	ClearedCost *float64 `json:"cleared_cost,omitempty"`
+}
+
+// AccountCostResetRequestDTO Which account to zero (`POST /api/accounts/cost/reset`). The key is the STABLE account tag the monitoring surface groups on — the same string the account card is keyed by, `<identifier>/<org uuid>` or a bare identifier — carried in the body rather than the path because it is a compound free string containing `/` and `@`; see the route description.
+type AccountCostResetRequestDTO struct {
+	// Account The stable account tag to zero. Blank → 422. A tag nobody has reported under is not an error: 200 with `cleared_cost` null.
+	Account string `json:"account"`
+}
+
 // AgentContextDTO Echo of a stored gauge entry (“POST /api/agent/context“ response).
 type AgentContextDTO struct {
 	AgentId string `json:"agent_id"`
@@ -3520,6 +3539,9 @@ type HandleInstallScriptInstallShGetParams struct {
 	Code  *string `form:"code,omitempty" json:"code,omitempty"`
 }
 
+// HandleResetAccountCostApiAccountsCostResetPostJSONRequestBody defines body for HandleResetAccountCostApiAccountsCostResetPost for application/json ContentType.
+type HandleResetAccountCostApiAccountsCostResetPostJSONRequestBody = AccountCostResetRequestDTO
+
 // HandleUpdateAccountApiAccountsAccountIdPatchJSONRequestBody defines body for HandleUpdateAccountApiAccountsAccountIdPatch for application/json ContentType.
 type HandleUpdateAccountApiAccountsAccountIdPatchJSONRequestBody = AliasUpdateDTO
 
@@ -3782,6 +3804,9 @@ func (t *HandleListReplyCardsApiReplyCardsGet200JSONResponseBody) UnmarshalJSON(
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// Reset one account's own accumulated spend to zero (owner-only, irreversible). Touches no member or worker figure.
+	// (POST /api/accounts/cost/reset)
+	HandleResetAccountCostApiAccountsCostResetPost(w http.ResponseWriter, r *http.Request)
 	// Set an account's display name (id = stable tag). Blank name → 422.
 	// (PATCH /api/accounts/{account_id})
 	HandleUpdateAccountApiAccountsAccountIdPatch(w http.ResponseWriter, r *http.Request, accountId string)
@@ -4318,6 +4343,20 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// HandleResetAccountCostApiAccountsCostResetPost operation middleware
+func (siw *ServerInterfaceWrapper) HandleResetAccountCostApiAccountsCostResetPost(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleResetAccountCostApiAccountsCostResetPost(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // HandleUpdateAccountApiAccountsAccountIdPatch operation middleware
 func (siw *ServerInterfaceWrapper) HandleUpdateAccountApiAccountsAccountIdPatch(w http.ResponseWriter, r *http.Request) {
@@ -8503,6 +8542,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 		ErrorHandlerFunc:   options.ErrorHandlerFunc,
 	}
 
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/accounts/cost/reset", wrapper.HandleResetAccountCostApiAccountsCostResetPost)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/accounts/{account_id}", wrapper.HandleUpdateAccountApiAccountsAccountIdPatch)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/agent/binary", wrapper.HandleAgentBinaryApiAgentBinaryGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/agent/context", wrapper.HandleIngestAgentContextApiAgentContextPost)

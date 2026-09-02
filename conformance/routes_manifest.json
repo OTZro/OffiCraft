@@ -241,6 +241,13 @@
     "auth": "gated",
     "mcp_tool": null,
     "method": "POST",
+    "path": "/api/accounts/cost/reset",
+    "requires": "owner"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": null,
+    "method": "POST",
     "path": "/api/members/{member_id}/cost/reset",
     "requires": "owner"
   },

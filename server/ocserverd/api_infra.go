@@ -1018,6 +1018,114 @@ func (s *apiServer) HandleResetCostApiMembersMemberIdCostResetPost(w http.Respon
 	})
 }
 
+// accountSpendAccountedKey is the accumulator's own high-water mark on the
+// telemetry entry: the reported cost figure that has ALREADY been credited to
+// the account.
+//
+// 🔴 IT IS A SEPARATE KEY FROM "cost" ON PURPOSE, for two reasons and neither
+// is tidiness. First, "cost" is overwritten IN PLACE by the ingest before the
+// accrual runs, so by then the previous figure is simply gone — the baseline has
+// to be recorded somewhere of its own or there is no baseline at all. Second,
+// bankLiveCost DELETES "cost" at the end of a session (it moves the figure into
+// the actor's durable column); a baseline living there would vanish with it, and
+// the first report after a reconnect would read as a brand-new session and
+// credit its whole cumulative figure a SECOND time — a double-count this code
+// would have MANUFACTURED, on top of the reconnect bias the ticket already
+// documents and leaves alone. So banking must NOT clear this key: doing so turns
+// TestAccountSpend_BankingASessionDoesNotMakeTheNextReportCountTwice red (6
+// becomes 12), which is exactly what it is there for.
+const accountSpendAccountedKey = "cost_accounted"
+
+// accrueAccountSpend credits the NEW spend in one telemetry report to the
+// account it was reported under (T-53, owner ruling rc-5c5d7c7c6dcd
+// 「分開：帳號卡自己一份數字，清它不動成員」).
+//
+// It is called from the telemetry ingest and from nowhere else, because a
+// report arriving is the only moment new spend becomes visible. It never reads
+// or writes any ACTOR figure: that separation is the ruling.
+//
+// 🔴 HOW "THE NEW PART" IS COMPUTED, which is the whole correctness of this
+// function. An agent reports its session's CUMULATIVE cost, so the increase is
+// this report minus the last one credited. A report LOWER than the last is not
+// a refund and not a mistake — it is a NEW SESSION counting from zero — so its
+// whole value is new spend, and the baseline restarts there. The three
+// plausible-looking alternatives are all wrong in ways nothing would flag:
+// skipping a decrease loses everything the new session spends until it passes
+// the old figure; adding the difference makes the account figure go DOWN, which
+// is the silent-lie shape this design exists to avoid; and treating the report
+// as an absolute would erase the earlier sessions' spend. Pinned end-to-end by
+// TestAccountSpend_ASessionRestartCountsFromZeroRatherThanGoingBackwards.
+//
+// Best-effort: a failed write only logs. The alternative — failing the ingest —
+// would turn a bookkeeping problem into a monitoring outage, and the next
+// report re-reads the same baseline, so a lost write costs one interval's spend
+// rather than corrupting the running figure.
+func (s *apiServer) accrueAccountSpend(entry map[string]any) {
+	account, _ := entry["account"].(string)
+	if account == "" {
+		return
+	}
+	cost, ok := entry["cost"].(float64)
+	if !ok {
+		return
+	}
+	accounted, seen := entry[accountSpendAccountedKey].(float64)
+	delta := cost
+	if seen && cost >= accounted {
+		delta = cost - accounted
+	}
+	entry[accountSpendAccountedKey] = cost
+	if delta <= 0 {
+		return
+	}
+	if err := s.dal.AddAccountSpend(account, delta); err != nil {
+		fmt.Fprintf(os.Stderr, "[account] spend accrual failed for %q: %v\n", account, err)
+	}
+}
+
+// HandleResetAccountCostApiAccountsCostResetPost — POST /api/accounts/cost/reset,
+// the cockpit's 帳號歸零 button (owner ruling rc-5c5d7c7c6dcd, 2026-09-02).
+//
+// 🔴 IT TOUCHES NO ACTOR, and that is the entire point of the ruling: the owner
+// asked for the account figure and the per-member figure to be clearable
+// independently, because what he watches is spend per account. Pressing this
+// leaves every member's and worker's 估計$ exactly as it was.
+//
+// IRREVERSIBLE: no snapshot, no undo route, and no per-charge ledger behind the
+// accumulator, so the response is a receipt of the figure as it stood
+// immediately before the write — the last moment it exists anywhere.
+//
+// An unknown account tag is NOT a 404. An account is a free telemetry string
+// with no roster row, so 「沒有這個帳號」 and 「這個帳號沒東西可清」 are the same
+// state: 200, cleared_cost null. That also makes the second press honest rather
+// than an error, and the second press is the likely one.
+func (s *apiServer) HandleResetAccountCostApiAccountsCostResetPost(w http.ResponseWriter, r *http.Request) {
+	var body AccountCostResetRequestDTO
+	if !decodeJSONBody(w, r, &body) {
+		return
+	}
+	account := trimString(body.Account)
+	if account == "" {
+		writeError(w, http.StatusUnprocessableEntity, "account cannot be blank")
+		return
+	}
+	had, err := s.dal.ZeroAccountSpend(account)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	// The cockpit's account card is folded from the monitoring read, so the
+	// signal is what makes the zero appear without a manual refresh.
+	s.publishMonitoringSignal(account, requestTrigger(r))
+	writeJSON(w, http.StatusOK, accountCostResetDTO{
+		Account: account,
+		// nonZeroCost, so "there was nothing to clear" reads as absent rather
+		// than as "zero was cleared" — the same null semantics as the per-actor
+		// receipt and as the read side.
+		ClearedCost: nonZeroCost(had),
+	})
+}
+
 // nonZeroCost mirrors foldActorRuntime's rule for the banked figure: 0 is not
 // put on the wire. On this receipt that reads as "there was nothing banked to
 // clear" rather than "zero was cleared", and it keeps the reset's two fields

@@ -1313,6 +1313,15 @@ export const zh = {
     renameError: "改名失敗",
     // §1 account cards
     accountsEmpty: "尚無帳號用量資料",
+    // 帳號歸零 (T-53, owner ruling rc-5c5d7c7c6dcd) — the ACCOUNT's own figure,
+    // cleared without touching any member's.
+    costReset: "歸零",
+    costResetHint: "把這個帳號的累計花費歸零。不會動到底下任何成員的數字。按下去救不回來。",
+    costResetConfirm: "確定歸零",
+    costResetError: "歸零失敗，數字沒有被清掉。",
+    costResetConfirmBodyLead: "這會把這個帳號累計的 ",
+    costResetConfirmBodyTail:
+      " 歸零，從 0 重新開始累積。底下成員各自的數字不會被動到。這個數字沒有留在任何其他地方，清掉就回不來了。",
     estimate: "估計",
     fiveHour: "5 小時窗",
     sevenDay: "7 天窗",

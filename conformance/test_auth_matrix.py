@@ -671,6 +671,17 @@ MATRIX: dict[str, Route] = {
         requires="owner",
         path=_member_path("/api/members/{member_id}/cost/reset"),
     ),
+    "POST /api/accounts/cost/reset": Route(
+        # Same OWNER floor as the per-actor reset above. It clears the ACCOUNT's
+        # own figure and no member's (owner ruling rc-5c5d7c7c6dcd), but the
+        # floor is the same for the same reason: destroying the owner's spend
+        # record is not something an agent does on his behalf. The body names a
+        # tag nobody has reported under, so the positive faces clear nothing —
+        # this row pins WHO MAY PRESS IT, not what it clears (that is
+        # test_rest_happy's row and the Go tests).
+        requires="owner",
+        body={"account": "conf-authz-untouched-account"},
+    ),
     "POST /api/members/{member_id}/accelerated-stop": Route(
         # positive faces: 409 — the fresh target has no live session, and
         # 加速停止 is an ESCALATION of a wind-down that is already open. That

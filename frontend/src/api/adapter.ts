@@ -1536,6 +1536,20 @@ export type CostResetReceipt = {
   clearedBankedCost: number | null;
 };
 
+/**
+ * What an ACCOUNT 歸零 destroyed: the account's OWN accumulated spend as it
+ * stood immediately before the write.
+ *
+ * Nothing about any member appears here because nothing about any member
+ * changed — the account figure and the per-member figures are cleared
+ * independently (owner ruling rc-5c5d7c7c6dcd). Null means there was nothing to
+ * clear, NOT that zero was cleared, the same rule the read side uses.
+ */
+export type AccountCostResetReceipt = {
+  account: string;
+  clearedCost: number | null;
+};
+
 export type SseConnectionState = "idle" | "connecting" | "live" | "unauthorized";
 
 export interface SseDelta {
@@ -1633,8 +1647,10 @@ export interface Api {
   /**
    * 成本歸零: POST /api/members/{id}/cost/reset → clear ONE actor's estimated
    * spend, both halves at once (the durable banked figure AND the live
-   * telemetry figure). Serves staff and live outsource workers alike; a
-   * released worker is a 404.
+   * telemetry figure). Serves staff and outsource workers alike, a RELEASED
+   * worker included (owner ruling rc-1344cc76a24a: an account total only reaches
+   * absent if the spend of the people who already left can be cleared too).
+   * Only an id that resolves to nobody is a 404.
    *
    * 🔴 IRREVERSIBLE (owner ruling rc-7dea0deefa63). Nothing is retained and
    * there is no undo route — call it behind a confirm, never optimistically.
@@ -1647,6 +1663,24 @@ export interface Api {
    * to the dash on its own; the caller refetches.
    */
   resetMemberCost(id: string): Promise<CostResetReceipt>;
+  /**
+   * 帳號歸零: POST /api/accounts/cost/reset → set ONE account's own accumulated
+   * spend back to 0 (owner ruling rc-5c5d7c7c6dcd「分開：帳號卡自己一份數字，清它
+   * 不動成員」).
+   *
+   * 🔴 It touches NO member or worker figure. Since that ruling the account card
+   * is not a fold over the actors on the account — it is an accumulator of its
+   * own, fed by the increase each telemetry report brings — so this clears the
+   * card and leaves every 估計$ underneath it exactly where it was.
+   *
+   * IRREVERSIBLE: nothing is retained and there is no undo route, so call it
+   * behind a confirm. Resolves with a RECEIPT of the figure destroyed, which is
+   * the last moment it exists; null means there was nothing to clear. An account
+   * nobody has reported under is not an error — the same 200 with null — so a
+   * second press reads as honest rather than broken. Refetch monitoring after
+   * it: the card is folded from that read.
+   */
+  resetAccountCost(account: string): Promise<AccountCostResetReceipt>;
   /**
    * 加速停止 (accelerated stop): POST /api/members/{id}/accelerated-stop → put a
    * wind-down that is ALREADY OPEN on the server's stop.accelerated_grace_secs
