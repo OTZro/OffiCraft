@@ -3,7 +3,7 @@
 // 等我回覆 reply cards, B3's inline chat card) stages uploads identically:
 // same size/count caps, same paste/pick funnels, same preview shape.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useI18n } from "../i18n";
 
 // Client-side size guards — mirror the backend (handlers): an image/*
@@ -15,7 +15,7 @@ const CHAT_FILE_MAX_BYTES = 100 * 1024 * 1024;
 // _CHAT_ATTACHMENTS_MAX_COUNT (a safety default, not a product decision). Over
 // the cap → the extra files are refused with a visible notice; the ones that
 // fit stay staged.
-const CHAT_MAX_ATTACHMENTS = 10;
+export const CHAT_MAX_ATTACHMENTS = 10;
 
 /** `accept` for the file picker: images plus common office/doc/text/archive
  * types (an allow-anything wildcard is avoided — an explicit list is
@@ -56,6 +56,49 @@ export function formatAttachmentSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** WHOSE staging this is — REQUIRED and FIRST, because the answer decides
+ * whether a FileReader completion is still allowed to land in the composer it
+ * was picked in (T-48, R9-1).
+ *
+ * 🔴 THIS HOOK HAS NO `await`, AND THAT IS EXACTLY WHY IT NEEDED A GUARD.
+ * `stageFile` hands the file to `FileReader` and returns; the commit happens
+ * later, inside `reader.onload`. Reading a 100 MB drop or a large pasted
+ * screenshot takes SECONDS, and the surface that picked it can be gone by
+ * then. In `ChatArea` "gone" does not mean unmounted — `OfficePage` mounts it
+ * WITHOUT a `key`, so a conversation switch only swaps props and this hook's
+ * `pendingAttachments` survives it. The measured result of having no guard:
+ * a file picked in A appeared in B's composer, was persisted into B's DRAFT,
+ * lit B's send button, and vanished from A. That is not a stale frame; it
+ * hands a file to somebody who was never meant to receive it.
+ *
+ * Two shapes, because there are genuinely two kinds of caller:
+ *
+ * * `"remounts-per-conversation"` — the caller is mounted under a `key` that
+ *   changes with the thing it belongs to (`TaskCard` under `key={task.id}`,
+ *   `ReplyComposer` under `key={card.id}` / `key={m.id}`), so a switch
+ *   UNMOUNTS it and this state dies with it. Nothing can cross. Say so out
+ *   loud rather than passing nothing: a caller that later loses its key has to
+ *   come back here and change this literal.
+ * * `{ token, stashLate }` — the caller OUTLIVES the conversation. `token` is
+ *   its visit token (the `useKeyedRecord` record, whose identity changes on
+ *   every entry INCLUDING A→B→A, T-48 R6-1); `stashLate` is where a file that
+ *   finished reading after that visit ended must go instead. */
+export type AttachmentStagingVisit =
+  | "remounts-per-conversation"
+  | {
+      token: object;
+      /** A file whose read landed after its visit ended. Put it back in the
+       * room it was picked for and return `true`; return `false` to hand it
+       * back to the live composer (which is what the ONE caller does when the
+       * later visit is to the SAME peer — the room on screen IS the file's
+       * room, so staging it there is right).
+       *
+       * ⚠️ §3 rule 4's counter-example, second instance: the COMMIT must be
+       * blocked, the SAVE must not. A bare `return` would silently destroy the
+       * file — a pasted screenshot may exist nowhere else. */
+      stashLate: (attachment: PendingAttachment) => boolean;
+    };
+
 export interface AttachmentStaging {
   pendingAttachments: PendingAttachment[];
   /** Transient rejection reason (too large / too many); null when none. */
@@ -76,8 +119,17 @@ export interface AttachmentStaging {
   restoreAttachments: (snapshot: PendingAttachment[]) => void;
 }
 
-export function useAttachmentStaging(): AttachmentStaging {
+export function useAttachmentStaging(
+  visit: AttachmentStagingVisit,
+): AttachmentStaging {
   const { t } = useI18n();
+  // The visit mirror — same shape as `ChatArea`'s `visitRef` and
+  // `useQuotedMessageOverlay`'s: written during render, read by the deferred
+  // callback to ask "is the visit that picked this file still the one on
+  // screen?". `null` for a keyed caller, which therefore never goes stale.
+  const visitTokenRef = useRef<object | null>(null);
+  visitTokenRef.current =
+    visit === "remounts-per-conversation" ? null : visit.token;
   const [pendingAttachments, setPendingAttachments] = useState<
     PendingAttachment[]
   >([]);
@@ -90,6 +142,12 @@ export function useAttachmentStaging(): AttachmentStaging {
   // functional setState because FileReader completions land asynchronously —
   // checking a stale snapshot would race a multi-file batch past the cap.
   function stageFile(file: File) {
+    // Captured at PICK time, not at read time: both the visit this file was
+    // picked in and the "put it back" callback belong to the room the owner was
+    // looking at when they chose it.
+    const firedFor = visitTokenRef.current;
+    const stashLate =
+      visit === "remounts-per-conversation" ? null : visit.stashLate;
     const reader = new FileReader();
     reader.onload = () => {
       const dataUri = typeof reader.result === "string" ? reader.result : "";
@@ -98,7 +156,13 @@ export function useAttachmentStaging(): AttachmentStaging {
       const isImage = mime.startsWith("image/");
       const size = estimateDataUriBytes(dataUri);
       const limit = isImage ? CHAT_IMAGE_MAX_BYTES : CHAT_FILE_MAX_BYTES;
+      const stale = visitTokenRef.current !== firedFor;
       if (size > limit) {
+        // A stale rejection is dropped rather than shown: 「檔案太大」 in a room
+        // where nobody picked a file is a sentence about somebody else's
+        // action. There is nowhere honest to put it — the draft store holds
+        // attachments, not notices — so it is lost with the file it describes.
+        if (stale) return;
         setAttachError(
           isImage
             ? t.chat.imageTooLarge
@@ -106,25 +170,29 @@ export function useAttachmentStaging(): AttachmentStaging {
         );
         return;
       }
+      const attachment: PendingAttachment = {
+        key: `pa-${++pendingAttachmentSeq}`,
+        // A pasted screenshot has no filename — leave it empty and let the
+        // backend default it; a picked file keeps its real name.
+        filename: file.name || "",
+        dataUri,
+        mime,
+        size,
+        isImage,
+      };
+      // 🔴 THE COMMIT GUARD (T-48, R9-1, §3 rule 4). This file was picked in a
+      // visit that has ended: it must not be staged into whoever is on screen
+      // now, must not reach that room's draft, and must not light that room's
+      // send button. It is handed back to the room it was picked for instead —
+      // blocking the commit is not a licence to destroy the file.
+      if (stale && stashLate?.(attachment)) return;
       setPendingAttachments((prev) => {
         if (prev.length >= CHAT_MAX_ATTACHMENTS) {
           setAttachError(t.chat.attachTooMany(CHAT_MAX_ATTACHMENTS));
           return prev;
         }
         setAttachError(null);
-        return [
-          ...prev,
-          {
-            key: `pa-${++pendingAttachmentSeq}`,
-            dataUri,
-            // A pasted screenshot has no filename — leave it empty and let the
-            // backend default it; a picked file keeps its real name.
-            filename: file.name || "",
-            mime,
-            size,
-            isImage,
-          },
-        ];
+        return [...prev, attachment];
       });
     };
     reader.readAsDataURL(file);

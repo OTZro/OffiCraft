@@ -753,7 +753,11 @@ export function TaskCard({
     onPickFile,
     removeAttachment,
     clearAttachments,
-  } = useAttachmentStaging();
+  } = useAttachmentStaging(
+    // Mounted under a key that changes with the card/task it belongs to, so a
+    // switch UNMOUNTS this surface and nothing can outlive it (T-48, R9-1).
+    "remounts-per-conversation",
+  );
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canSend =
     !sending &&

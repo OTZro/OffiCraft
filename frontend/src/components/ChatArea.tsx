@@ -20,6 +20,7 @@ import { useOwnerDisplayName } from "../hooks/useOwnerName";
 import { formatDayLabel, splitByDay } from "../lib/dateFormat";
 import {
   ATTACH_ACCEPT,
+  CHAT_MAX_ATTACHMENTS,
   useAttachmentStaging,
 } from "../hooks/useAttachmentStaging";
 import { useWindowActive } from "../hooks/useWindowActive";
@@ -544,6 +545,12 @@ export function ChatArea({
   // The staged attachments (pasted images AND/OR picked/dropped files), held
   // until the message is sent — the SHARED staging state machine
   // (useAttachmentStaging: size/count caps, paste/pick funnels, previews).
+  // 🔴 R9-1: this component is NOT remounted on a conversation switch, so a
+  // FileReader started in A can complete while B is on screen. `memberIdRef`
+  // answers "who is on screen NOW" for that late callback; `session` answers
+  // "which visit picked the file".
+  const memberIdRef = useRef(member.id);
+  memberIdRef.current = member.id;
   const {
     pendingAttachments,
     attachError,
@@ -553,7 +560,35 @@ export function ChatArea({
     removeAttachment,
     clearAttachments,
     restoreAttachments,
-  } = useAttachmentStaging();
+  } = useAttachmentStaging({
+    token: session,
+    stashLate: (attachment) => {
+      // Captured at PICK time: the peer whose composer the owner dropped this
+      // file into.
+      const stagePeer = member.id;
+      // A LATER VISIT TO THE SAME PEER is not a wrong room. The visit token
+      // changed (A→B→A mints a fresh record), but the composer on screen is
+      // that file's composer, so it is staged normally — the guard blocks a
+      // cross-ROOM commit, and this is §5.2's question ("whose file is this?")
+      // answered with a string, deliberately.
+      if (stagePeer === memberIdRef.current) return false;
+      // Otherwise it goes back to the room it was picked for, the same way
+      // `submit()`'s failure branch saves to `sendPeer` BEFORE its guard
+      // (§3 rule 4's counter-example). The draft is what the composer restores
+      // from on the next entry, so the file is waiting there.
+      const saved = getChatDraft(stagePeer);
+      const kept = saved?.attachments ?? [];
+      // The count cap is the staging machine's rule; honour it here too rather
+      // than growing a draft the composer would refuse to accept back.
+      if (kept.length >= CHAT_MAX_ATTACHMENTS) return true;
+      saveChatDraft(stagePeer, {
+        text: saved?.text ?? "",
+        attachments: [...kept, attachment],
+        replyTo: saved?.replyTo,
+      });
+      return true;
+    },
+  });
   // What the in-cockpit full-view overlay is showing (null = closed). THREE
   // ways in, one surface: a stored ATTACHMENT (T-a1c4 — the overlay fetches the
   // blob, offers 下載 and a share link, so it carries the blob's id), an
@@ -582,7 +617,18 @@ export function ChatArea({
   // The hook is called below, once `nameOf` exists — it titles the overlay with
   // the roster-aware name this window already resolves.
   // M2-3 file & image gallery panel (header icon toggles it).
-  const [galleryOpen, setGalleryOpen] = useState(false);
+  //
+  // 🔴 PER VISIT, NOT PER OVERLAY (T-48, R9-2). §2.4 used to exempt this
+  // alongside `mdPreview` on the grounds that "the overlay covers the page, so
+  // the switch gesture is blocked". That is true of `.md-preview`
+  // (`position: fixed; inset: 0` + a backdrop) and FALSE of this one:
+  // `.chat__gallery` is `position: absolute; right: 0; width: min(340px, 100%)`
+  // — a side panel inside the chat column with no backdrop, and the roster is
+  // fully clickable beside it. Measured: open A's gallery, click B in the
+  // roster, and the header says Bruno while the panel still shows A's files
+  // labelled with A's sender name. Closing on a switch also remounts the panel,
+  // so its `entries` / `loaded` / `previewKey` start clean for the new room.
+  const [galleryOpen, setGalleryOpen] = useKeyedState(session, false);
   // The attachment whose share link was just copied (transient 「已複製」
   // feedback on that one button; null = none).
   // Inter-agent (agent↔agent) groups that the owner has EXPANDED (keyed by the

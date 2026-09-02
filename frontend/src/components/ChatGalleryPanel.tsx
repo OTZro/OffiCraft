@@ -273,6 +273,11 @@ export function ChatGalleryPanel({
     // below cannot catch it (it only drops ids absent from EVERY row, and 「我」
     // is in plenty of B's rows — just not B's images).
     setSenderSelByTab({ images: new Set(), files: new Set() });
+    // T-48 R9-2: the open PREVIEW belongs to the same gallery. A key minted for
+    // one member's row still resolves against the rows on screen until the new
+    // member's fetch replaces them, so without this the previous member's image
+    // stays open over the new member's gallery.
+    setPreviewKey(null);
   }, [member.id]);
 
   useEffect(() => {

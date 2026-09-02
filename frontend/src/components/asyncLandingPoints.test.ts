@@ -1,0 +1,212 @@
+// Every ASYNC LANDING POINT reachable from ChatArea must be on this list, with
+// a verdict. It is a census, not a correctness proof — it cannot tell a guarded
+// commit from an unguarded one. What it does is make the POPULATION
+// self-maintaining, which is the thing that failed eleven times.
+//
+// 🔴 WHY THIS FILE EXISTS (T-48, R9-3). The stale-visit family had, by the
+// ninth review, produced eleven instances. The criterion for finding them was
+// fixed twice and the table format once, and it still missed:
+//
+//   * R7-1 (`useChat.loadAround`), R8-1 (`useChat.refetch`) and R9-1
+//     (`useAttachmentStaging`) were each named in the inventory BEFORE they
+//     were found, classified as safe, and therefore never looked at again;
+//   * §5.1 told the next reader to re-derive the population by grepping for the
+//     EXISTING guards (`convRef.current !== conv` / `visitRef.current !==`).
+//     That start point can only ever find paths that already have a guard. A
+//     path with no guard at all, in a file neither `useChat.ts` nor
+//     `ChatArea.tsx`, scores zero hits and passes silently. R9-1 was exactly
+//     that, and it passed eight reviews that way;
+//   * the newest table column — "how many `await`s between the guard and the
+//     commit" — cannot describe R9-1 either. That path has NO `await`. It is a
+//     `FileReader.onload` callback, and a reader filling in the column by its
+//     definition writes `0` and ticks the box.
+//
+// So the criterion here is NOT `await`. It is: **from the moment this callback
+// is queued to the moment it commits, can the screen have changed
+// conversations?** `await` is one syntax for that gap. `setTimeout`,
+// `requestAnimationFrame`, `queueMicrotask`, an event listener, a
+// Resize/IntersectionObserver, an SSE handler and `FileReader.onload` are
+// others, and every one of them is scanned below.
+//
+// HOW IT ENUMERATES. The file set is WALKED, not typed in: it starts at
+// `ChatArea.tsx` and follows relative imports transitively through
+// `src/components`, `src/hooks` and `src/lib`. A new hook that ChatArea starts
+// calling joins the population by itself — nobody has to remember to add it.
+// Each (file, kind) pair carries a COUNT, so adding a second `setTimeout` to a
+// file that already had one still reddens this test.
+//
+// 🔴 WHAT IT DOES NOT DO. It cannot check that a landing point is correctly
+// guarded — that is what §5.1's per-commit-point table and the S-series mutants
+// are for. A verdict below is a human's claim, and a wrong claim goes green
+// here (three of them did). Its whole job is to guarantee that the claim EXISTS
+// and is re-examined whenever the code under it moves.
+//
+// The boundary is written down rather than assumed: `src/api` and `src/i18n`
+// are excluded from the walk. They hold no per-conversation React state — the
+// transport layer's `await`s land in `useChat`/`ChatArea` callbacks, which ARE
+// in scope — and including `api/http.ts` would put 126 unrelated `await`s under
+// a count that churns on every new endpoint. Disagree by deleting the filter.
+
+import { describe, it, expect } from "vitest";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+
+const SRC = resolve(__dirname, "..");
+const ENTRY = join(SRC, "components", "ChatArea.tsx");
+const IN_SCOPE = /\/src\/(components|hooks|lib)\//;
+
+/** The shapes that put a gap between "queued" and "commits". */
+const KINDS: ReadonlyArray<readonly [string, RegExp]> = [
+  ["await", /\bawait\b/],
+  [".then/.catch/.finally", /\.(then|catch|finally)\s*\(/],
+  ["setTimeout/setInterval", /\bset(Timeout|Interval)\s*\(/],
+  ["queueMicrotask", /\bqueueMicrotask\s*\(/],
+  ["requestAnimationFrame", /\brequestAnimationFrame\s*\(/],
+  ["addEventListener", /\baddEventListener\s*\(/],
+  ["Observer", /\bnew (Resize|Intersection|Mutation)Observer\b/],
+  ["FileReader/Image handler", /\bnew FileReader\b|\.(onload|onerror|onloadend)\s*=/],
+  ["JSX onLoad/onError", /\bon(Load|Error)=\{/],
+  ["subscribe", /\bsubscribe[A-Za-z]*\s*\(/],
+];
+
+/** file → kind → count, each with the verdict its author signed.
+ *
+ * A verdict answers ONE question: when this callback commits, can the screen be
+ * showing a different conversation than the one that queued it — and if so,
+ * what stops the write from landing in the wrong room? */
+const REGISTRY: ReadonlyArray<{
+  file: string;
+  kind: string;
+  count: number;
+  verdict: string;
+}> = [
+  // ─── Mounted under `key={m.id}` — a conversation switch UNMOUNTS them ───
+  // ⚠️ The key is the ONLY thing saving these: none of them carries a visit
+  // guard of its own. Hoisting any of them above the keyed row reopens R9-1's
+  // shape (§2.4's child-component warning).
+  { file: "components/AttachmentStrip.tsx", kind: ".then/.catch/.finally", count: 2, verdict: "share-link copy; keyed row, and the id is globally unique" },
+  { file: "components/AttachmentStrip.tsx", kind: "setTimeout/setInterval", count: 1, verdict: "the 已複製 flash; keyed row, cleared on unmount" },
+  { file: "components/ChatReplyCard.tsx", kind: "await", count: 4, verdict: "refetch / doAnswer / doReanswer; keyed row" },
+  { file: "components/ChatReplyCard.tsx", kind: ".then/.catch/.finally", count: 2, verdict: "the same three calls' arms; keyed row, unmounted by the switch" },
+  { file: "components/ChatReplyCard.tsx", kind: "subscribe", count: 1, verdict: "card SSE; unsubscribed in the effect cleanup" },
+  { file: "components/ReplyCardBody.tsx", kind: "await", count: 2, verdict: "answer submit; keyed row / keyed card" },
+  { file: "components/ReplyComposer.tsx", kind: "await", count: 1, verdict: "send; keyed row / keyed card, and its staging declares \"remounts-per-conversation\"" },
+
+  // ─── ChatArea itself — NOT remounted on a switch (OfficePage passes no key) ──
+  { file: "components/ChatArea.tsx", kind: "await", count: 2, verdict: "submit(); guarded by `visitRef.current !== sendVisit` before every setter, with the draft SAVE deliberately before it (§3 rule 4)" },
+  { file: "components/ChatArea.tsx", kind: ".then/.catch/.finally", count: 3, verdict: "loadAround + the wake button's two arms; `visitRef.current !== firedFor` is the first line of each (S7, P1)" },
+  { file: "components/ChatArea.tsx", kind: "setTimeout/setInterval", count: 2, verdict: "highlight clear + centring settle; both write through `useKeyedState` setters and are cleared in the effect cleanup" },
+  { file: "components/ChatArea.tsx", kind: "Observer", count: 1, verdict: "centring ResizeObserver; disconnected in the same cleanup" },
+  { file: "hooks/useChat.ts", kind: "await", count: 17, verdict: "every commit point has `convRef.current !== conv` immediately before it (§5.1; S2/S5/S6/S8/S9/S10)" },
+  { file: "hooks/useChat.ts", kind: ".then/.catch/.finally", count: 2, verdict: "load()'s arms; the effect's own `alive` flag, re-asked after every await" },
+  { file: "hooks/useChat.ts", kind: "addEventListener", count: 2, verdict: "focus / visibilitychange; removed in the same effect's cleanup, deps [withId, refetchReads, conv]" },
+  { file: "hooks/useChat.ts", kind: "subscribe", count: 1, verdict: "the SSE delta sink; unsubscribed in the same cleanup" },
+  { file: "hooks/useQuotedMessageOverlay.tsx", kind: "await", count: 1, verdict: "open(); `visitRef.current !== firedFor` on both arms, visit token REQUIRED by the type (S11)" },
+  { file: "hooks/useAttachmentStaging.ts", kind: "FileReader/Image handler", count: 2, verdict: "🔴 R9-1 lived here with ZERO guard and no `await` to hint at one. Now: the commit is guarded on the visit token, and a late file is handed back to the room that picked it (S12/S13/S14)" },
+
+  // ─── Rendered by ChatArea without a key — they survive a switch ───
+  { file: "components/ChatGalleryPanel.tsx", kind: ".then/.catch/.finally", count: 2, verdict: "gallery fetch; `alive` + deps [member.id]. Since R9-2 the panel also closes on a switch, so it remounts per visit" },
+  { file: "components/ChatGalleryPanel.tsx", kind: "addEventListener", count: 1, verdict: "Escape layer; removed on unmount" },
+  { file: "components/ChatGalleryPanel.tsx", kind: "subscribe", count: 1, verdict: "gallery SSE; unsubscribed on unmount" },
+  { file: "components/Avatar.tsx", kind: "JSX onLoad/onError", count: 1, verdict: "<img onError>; records the URL that failed, which can never match the next room's avatar, and the [personal, theme] effect clears it" },
+  { file: "components/MarkdownPreviewOverlay.tsx", kind: "await", count: 1, verdict: "⚠️ share-link copy, unguarded — see the ⚠️ below" },
+  { file: "components/MarkdownPreviewOverlay.tsx", kind: ".then/.catch/.finally", count: 5, verdict: "⚠️ blob fetch + copy, unguarded — see the ⚠️ below" },
+  { file: "components/MarkdownPreviewOverlay.tsx", kind: "setTimeout/setInterval", count: 2, verdict: "⚠️ the 已複製 flash timers, unguarded — see the ⚠️ below" },
+  { file: "components/MarkdownPreviewOverlay.tsx", kind: "addEventListener", count: 13, verdict: "⚠️ keydown pager, wheel/touch/gesture zoom, resize, pointermove — see the ⚠️ below" },
+  { file: "components/MarkdownPreviewOverlay.tsx", kind: "JSX onLoad/onError", count: 1, verdict: "<img onLoad> sizing; writes only this overlay's own layout" },
+  // ⚠️ THE `mdPreview` EXEMPTION, AND ITS PRECONDITION (R9-4). `.md-preview` is
+  // `position: fixed; inset: 0` WITH a backdrop, so while it is open the roster
+  // cannot be clicked and these writers cannot be outlived by a switch. The
+  // precondition that exemption rests on is NOT "it covers the screen" — it is
+  // "EVERY gesture that can change the peer is blocked by it". This site routes
+  // on the hash, so the browser's back/forward buttons and a notification link
+  // change `member` without touching the overlay. Nobody has driven that path
+  // (it needs a hash-routing integration test). Add a new way to change peer
+  // and this exemption is what you have just broken.
+
+  // ─── Global / conversation-independent ───
+  { file: "hooks/sharedServerSettings.ts", kind: "addEventListener", count: 2, verdict: "storage + auth invalidation; global, not per conversation" },
+  { file: "hooks/useIsMobile.ts", kind: "addEventListener", count: 1, verdict: "matchMedia breakpoint; global" },
+  { file: "hooks/useWindowActive.ts", kind: "addEventListener", count: 3, verdict: "focus/blur/visibility; global" },
+  { file: "hooks/useOwnerName.tsx", kind: ".then/.catch/.finally", count: 4, verdict: "the owner's own nickname; global, one provider" },
+  { file: "hooks/useWorkerCodenames.ts", kind: ".then/.catch/.finally", count: 2, verdict: "module-level cache keyed by globally-unique `ow-` ids; setTick only asks for a repaint" },
+  { file: "lib/deltaSink.ts", kind: "queueMicrotask", count: 1, verdict: "one coalescing decision per burst; the sink is torn down with its subscription" },
+  { file: "lib/escapeLayers.ts", kind: "addEventListener", count: 1, verdict: "the shared Escape stack; layers deregister on unmount" },
+  { file: "lib/hashRoute.ts", kind: "addEventListener", count: 1, verdict: "hashchange; it is the thing that CHANGES the visit, not something that outlives one" },
+  { file: "lib/hashRoute.ts", kind: "subscribe", count: 1, verdict: "route subscribers; same" },
+  { file: "lib/scrollToLatest.ts", kind: "setTimeout/setInterval", count: 1, verdict: "settle timer; writes scrollTop on an element handed in by the caller, and the caller clears it" },
+  { file: "lib/scrollToLatest.ts", kind: "Observer", count: 1, verdict: "ResizeObserver on that same element; disconnected by the same caller" },
+  { file: "lib/shareLink.ts", kind: "await", count: 2, verdict: "returns a value to its caller; commits nothing itself" },
+  { file: "lib/sharedSnapshot.ts", kind: ".then/.catch/.finally", count: 1, verdict: "single-flight settings snapshot; global generation, not per conversation" },
+];
+
+function walkFromChatArea(): string[] {
+  const resolveSpec = (fromFile: string, spec: string): string | null => {
+    if (!spec.startsWith(".")) return null;
+    const base = join(dirname(fromFile), spec);
+    for (const c of [base, `${base}.ts`, `${base}.tsx`, join(base, "index.ts"), join(base, "index.tsx")]) {
+      if (existsSync(c) && !/\.(css|json|svg)$/.test(c)) return c;
+    }
+    return null;
+  };
+  const seen = new Set<string>();
+  const queue = [ENTRY];
+  while (queue.length > 0) {
+    const file = queue.shift() as string;
+    if (seen.has(file)) continue;
+    seen.add(file);
+    for (const m of readFileSync(file, "utf8").matchAll(/from\s+"([^"]+)"/g)) {
+      const r = resolveSpec(file, m[1]);
+      if (r && !r.includes(".test.") && IN_SCOPE.test(r)) queue.push(r);
+    }
+  }
+  return [...seen].sort();
+}
+
+function scan(): Map<string, number> {
+  const found = new Map<string, number>();
+  for (const file of walkFromChatArea()) {
+    const lines = readFileSync(file, "utf8").split("\n");
+    for (const [kind, re] of KINDS) {
+      let n = 0;
+      for (const line of lines) {
+        const t = line.trim();
+        // Prose about a landing point is not a landing point.
+        if (t.startsWith("//") || t.startsWith("*")) continue;
+        if (re.test(line)) n++;
+      }
+      if (n > 0) found.set(`${file.slice(SRC.length + 1)} | ${kind}`, n);
+    }
+  }
+  return found;
+}
+
+describe("async landing points reachable from ChatArea", () => {
+  it("are all on the register, with the count they have today", () => {
+    const found = scan();
+    const registered = new Map(
+      REGISTRY.map((r) => [`${r.file} | ${r.kind}`, r.count]),
+    );
+    const asRows = (m: Map<string, number>) =>
+      [...m].map(([k, n]) => `${k} | ${n}`).sort();
+    // One comparison, both directions: a NEW landing point with no verdict, a
+    // count that grew, and a register row describing code that no longer exists
+    // all read out of the same diff.
+    expect(asRows(found)).toEqual(asRows(registered));
+  });
+
+  it("carry a verdict each — an entry with nothing said about it is not an entry", () => {
+    expect(REGISTRY.filter((r) => r.verdict.trim().length < 20)).toEqual([]);
+  });
+
+  it("start from a file set that is walked, not typed in", () => {
+    // The bug this guards: §5.1 used to tell the next reader to derive the
+    // population by grepping for the guards that already exist, which can only
+    // find paths that already have one. The walk starts at ChatArea and follows
+    // imports, so a hook it newly calls is in the population before anybody
+    // remembers to say so.
+    const files = walkFromChatArea();
+    expect(files).toContain(join(SRC, "hooks", "useAttachmentStaging.ts"));
+    expect(files.length).toBeGreaterThan(30);
+  });
+});

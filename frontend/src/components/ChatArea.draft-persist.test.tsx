@@ -11,12 +11,13 @@
 // survives an unmount/remount but NOT a full page reload — the owner's scenario
 // is跳頁, not reload. These tests drive the unmount/remount path directly.
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { act, render, fireEvent, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { ChatArea } from "./ChatArea";
 import type { Member } from "../types";
 import type { ChatMessage } from "../api/adapter";
+import { getChatDraft, resetChatDrafts } from "../lib/chatDraftStore";
 
 let messages: ChatMessage[] = [];
 const send = vi.fn(() => Promise.resolve());
@@ -71,10 +72,38 @@ function pngFile(name: string): File {
   });
 }
 
+/** A FileReader whose completion the test decides. The real one lands on a
+ * macrotask whose timing is the FILE'S SIZE — seconds for a 100 MB drop — which
+ * is exactly the window R9-1 lives in; holding `onload` in hand is how a test
+ * gets to stand inside it. */
+class HeldFileReader {
+  static held: HeldFileReader[] = [];
+  onload: (() => void) | null = null;
+  result: string | null = null;
+  private file: File | null = null;
+  readAsDataURL(file: File) {
+    this.file = file;
+    HeldFileReader.held.push(this);
+  }
+  /** Land this read now, carrying a data URI the size guard will accept. */
+  land() {
+    this.result = `data:${this.file?.type ?? ""};base64,AAAA`;
+    this.onload?.();
+  }
+}
+
 const input = (c: HTMLElement) =>
   c.querySelector(".chat__input") as HTMLTextAreaElement;
 const previewCount = (c: HTMLElement) =>
   c.querySelectorAll(".chat__preview-thumb, .chat__preview-file").length;
+const sendDisabled = (c: HTMLElement) =>
+  (c.querySelector(".chat__send") as HTMLButtonElement).disabled;
+const pick = (c: HTMLElement, file: File) =>
+  fireEvent.change(c.querySelector(".chat__file-input") as HTMLInputElement, {
+    target: { files: [file] },
+  });
+const draftNames = (peerId: string) =>
+  (getChatDraft(peerId)?.attachments ?? []).map((a) => a.filename);
 
 describe("ChatArea draft survival", () => {
   const m1 = mkMember("m1", "Mira");
@@ -139,6 +168,76 @@ describe("ChatArea draft survival", () => {
 
     const backToM1 = renderChat(m1);
     expect(input(backToM1.container).value).toBe("給 Mira 的草稿");
+  });
+
+  describe("a file whose read lands after the visit that picked it ended", () => {
+    const m2 = mkMember("m2", "Kye");
+
+    beforeEach(() => {
+      resetChatDrafts();
+      HeldFileReader.held = [];
+      vi.stubGlobal("FileReader", HeldFileReader);
+    });
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("never reaches the other peer's composer, draft or send button", async () => {
+      const view = renderChat(m1);
+      pick(view.container, pngFile("a-secret.png"));
+      expect(HeldFileReader.held).toHaveLength(1);
+
+      // The owner moves to Kye while the read is still in flight.
+      view.rerender(
+        <I18nProvider>
+          <ChatArea member={m2} />
+        </I18nProvider>,
+      );
+      expect(previewCount(view.container)).toBe(0);
+      expect(sendDisabled(view.container)).toBe(true);
+
+      act(() => HeldFileReader.held[0].land());
+
+      // The leak first: Kye's room must be untouched by a file nobody staged
+      // there — not on screen, not in his draft, and not lighting his send
+      // button (one typed line + Enter would have sent it to him).
+      expect(previewCount(view.container)).toBe(0);
+      expect(draftNames("m2")).toEqual([]);
+      expect(sendDisabled(view.container)).toBe(true);
+      // And blocking the commit did not destroy the file: it went to the room
+      // it was picked for.
+      expect(draftNames("m1")).toEqual(["a-secret.png"]);
+
+      // And it is waiting where the owner put it when they come back.
+      view.rerender(
+        <I18nProvider>
+          <ChatArea member={m1} />
+        </I18nProvider>,
+      );
+      await waitFor(() => expect(previewCount(view.container)).toBe(1));
+    });
+
+    it("still stages into the composer when the later visit is the same peer", async () => {
+      const view = renderChat(m1);
+      pick(view.container, pngFile("for-mira.png"));
+
+      // A→B→A: a fresh visit token, but the room on screen IS the file's room.
+      view.rerender(
+        <I18nProvider>
+          <ChatArea member={m2} />
+        </I18nProvider>,
+      );
+      view.rerender(
+        <I18nProvider>
+          <ChatArea member={m1} />
+        </I18nProvider>,
+      );
+      act(() => HeldFileReader.held[0].land());
+
+      await waitFor(() => expect(previewCount(view.container)).toBe(1));
+      expect(sendDisabled(view.container)).toBe(false);
+      expect(draftNames("m2")).toEqual([]);
+    });
   });
 
   it("does NOT let the compose seed clobber a restored non-empty draft", () => {
