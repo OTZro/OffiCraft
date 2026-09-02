@@ -767,10 +767,23 @@ export const en: Dict = {
     galleryTabFiles: "Files",
     galleryEmptyImages: "No images yet",
     galleryEmptyFiles: "No files yet",
-    // M2 batch 18: uploader filter chips (options derived from the actual
-    // attachment senders, stacking with the Images/Files tabs).
+    // M2 batch 18: the uploader filter (options derived from the actual
+    // attachment senders, stacking with the Images/Files tabs). Reshaped from a
+    // chip row into the checkbox dropdown below by T-51 ②.
     gallerySenderFilterLabel: "Filter by uploader",
     gallerySenderAll: "All",
+    // T-51 ②: the chip row became a Jira-style checkbox dropdown, one line
+    // collapsed. There is deliberately NO search box — an early version had one
+    // and the owner removed it (2026-09-02): the whole objection that shaped
+    // this control was 「我怎麼會知道有誰，沒辦法打字」, and the list is sorted by
+    // how much each person sent, so the names worth finding are already on top.
+    gallerySenderSelected: (n: number) => `${n} selected`,
+    gallerySenderClear: "Clear selection",
+    // The empty state WITH a filter on. Distinct from galleryEmptyImages /
+    // galleryEmptyFiles on purpose: those describe the gallery, this one
+    // describes the filter, and saying the first while the second is true tells
+    // the reader their files are gone.
+    galleryEmptyFiltered: "No files from the uploaders you picked",
     galleryClose: "Close gallery",
     galleryPreviewHint: "Preview in a new tab",
     galleryDownloadHint: "Download",
@@ -799,6 +812,11 @@ export const en: Dict = {
       openInNewTab: "Open in a new tab",
       newTabStaticNote:
         "The new tab only shows the file as it is — buttons and boxes on it will not respond.",
+      // T-51 ① — the two paging chevrons. They are the ONLY control for a
+      // zoomed image or a text file, where the arrow keys stay with the pan and
+      // the scroll, so the accessible name has to stand on its own.
+      previous: "Previous item",
+      next: "Next item",
       zoomControls: "Zoom image",
       zoomIn: "Zoom in",
       zoomOut: "Zoom out",

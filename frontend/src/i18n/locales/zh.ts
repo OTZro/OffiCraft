@@ -850,10 +850,21 @@ export const zh = {
     galleryTabFiles: "檔案",
     galleryEmptyImages: "還沒有圖片",
     galleryEmptyFiles: "還沒有檔案",
-    // M2 批次 18:上傳者篩選 chip 列(選項由實際附件的寄件者動態生成,
-    // 與圖片/檔案分頁疊加生效)。
+    // M2 批次 18:上傳者篩選(選項由實際附件的寄件者動態生成,與圖片/檔案分頁
+    // 疊加生效)。T-51 ② 把它從 chip 列改成下面那個勾選下拉。
     gallerySenderFilterLabel: "依上傳者篩選",
     gallerySenderAll: "全部",
+    // T-51 ②:chip 列改成 Jira 式的勾選下拉(owner 逐字:「或是像 jira 一樣,
+    // 你可以打開時,展開一個下拉式選單做勾選就好」)。收起時只有一行;**刻意沒有
+    // 搜尋框** —— 早期版本放過一個,owner 2026-09-02 直接說「不需要有搜尋這功能」,
+    // 而這個控制項本來就是為了「我怎麼會知道有誰,沒辦法打字」而生的;名單按件數
+    // 排序,值得找的人已經在上面。
+    gallerySenderSelected: (n: number) => `已選 ${n} 位`,
+    gallerySenderClear: "清除選取",
+    // 有篩選在的空狀態。刻意跟 galleryEmptyImages／galleryEmptyFiles 分開:那兩句
+    // 講的是這個圖庫,這一句講的是這個篩選;篩選在的時候說前者,等於告訴使用者他的
+    // 檔案不見了。
+    galleryEmptyFiltered: "選取的上傳者在這個分頁沒有檔案",
     galleryClose: "關閉檔案庫",
     galleryPreviewHint: "開新分頁預覽",
     galleryDownloadHint: "下載",
@@ -878,6 +889,11 @@ export const zh = {
       // 什麼」，不是背後的機制。
       openInNewTab: "在新頁面顯示",
       newTabStaticNote: "新頁面只會照原樣顯示，上面的按鈕和輸入格不會有反應。",
+      // T-51 ① — the two paging chevrons. They are the ONLY control for a
+      // zoomed image or a text file, where the arrow keys stay with the pan and
+      // the scroll, so the accessible name has to stand on its own.
+      previous: "上一個",
+      next: "下一個",
       zoomControls: "縮放圖片",
       zoomIn: "放大",
       zoomOut: "縮小",
