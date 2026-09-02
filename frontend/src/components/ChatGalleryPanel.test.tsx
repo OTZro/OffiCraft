@@ -279,6 +279,24 @@ describe("ChatGalleryPanel", () => {
     expect(container.textContent).not.toContain("mira.png");
   });
 
+  it("orders uploaders by how many files they sent, so the long tail sinks", async () => {
+    // 🔴 Order is what makes a list of a hundred people usable: unordered, the
+    // dropdown is the chip row's problem in a smaller box. Ties keep row order
+    // (newest first), so among equals the most recent uploader stays on top.
+    galleryRows = [
+      row("a5", "image/png", "m1", "One", 500, "one.png"),
+      row("a4", "image/png", "m2", "Three", 400, "three-a.png"),
+      row("a3", "image/png", "m2", "Three", 300, "three-b.png"),
+      row("a2", "image/png", "m2", "Three", 200, "three-c.png"),
+      row("a1", "image/png", "m3", "Two", 100, "two-a.png"),
+      row("a0", "image/png", "m3", "Two", 50, "two-b.png"),
+    ];
+    const { container } = renderPanel();
+    await waitFor(() => expect(itemsIn(container).length).toBe(6));
+    openFilter();
+    expect(optionLabels()).toEqual(["Three", "Two", "One"]);
+  });
+
   it("offers no uploader whose only files are on the other tab", async () => {
     galleryRows = [
       row("a2", "image/png", "m1", "Mira", 200, "mira.png"),
