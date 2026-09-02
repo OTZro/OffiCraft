@@ -39,6 +39,7 @@ import type {
 import type {
   Api,
   ChatCursor,
+  ChatAnchor,
   ChatMessage,
   ChatReplyQuote,
   ChatReadReceipt,
@@ -2850,8 +2851,8 @@ export const mockApi: Api = {
     // rows, most recently updated first), and an overview computed FROM those
     // two lists — never a separately-fabricated count, so it cannot drift from
     // what the lists actually carry (same honesty contract the real endpoint's
-    // shared assembly gives). READ-ONLY: unlike listChat, this never advances a
-    // read watermark.
+    // shared assembly gives). READ-ONLY: this never advances a read watermark —
+    // true of every read door here since T-48, listChat included.
     //
     // The T-1b09 studio-floor blocks (roster / machines) ARE mocked now, and
     // so are their roster_chars / machines_chars sizes — see below. They used
@@ -3132,6 +3133,42 @@ export const mockApi: Api = {
     return msgs.map(mockServedChatMessage);
   },
 
+  async listChatWindow(
+    withId: string,
+    anchor: ChatAnchor,
+    limit: number,
+  ): Promise<ChatMessage[]> {
+    // Mock twin of the T-48 anchor window (`?start_id=` / `?end_id=`). Same
+    // total order the BE pages by, both ends INCLUSIVE, answered oldest→newest.
+    //
+    // THROWS on an id this conversation does not carry, matching the server's
+    // 404 — an unknown anchor must never look like "a real window that happens
+    // to be empty", which is the exact confusion the whole feature exists to
+    // remove.
+    const msgs = chatLog
+      .filter((m) => m.from === withId || m.to === withId)
+      .sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    const indexOf = (id: string) => {
+      const i = msgs.findIndex((m) => m.id === id);
+      if (i < 0) throw new Error(`no message carries id ${id}`);
+      return i;
+    };
+    let lo = 0;
+    let hi = msgs.length - 1;
+    if (anchor.startId !== undefined) lo = indexOf(anchor.startId);
+    if (anchor.endId !== undefined) hi = indexOf(anchor.endId);
+    if (lo > hi) throw new Error("start_id is newer than end_id");
+    let window = msgs.slice(lo, hi + 1);
+    // Truncate at the START (older) end when both anchors are given — the
+    // window stays anchored on `end_id`. With only `start_id` the anchor is the
+    // OLD end, so the cap keeps the FIRST `limit`.
+    window =
+      anchor.endId !== undefined
+        ? window.slice(-limit)
+        : window.slice(0, limit);
+    return window.map(mockServedChatMessage);
+  },
+
   async getChatMessage(id: string): Promise<ChatMessage> {
     // Mock twin of GET /api/chat?ids=<id> — ONE named message in full, no
     // read-watermark side effect. Caller-blind, exactly like the server: the
@@ -3152,8 +3189,9 @@ export const mockApi: Api = {
     // attachments of EVERY logged message the member participates in
     // (owner↔member both directions + inter-agent threads), newest→oldest,
     // each row carrying the sender id + the roster-resolved display name
-    // ("" for the owner — the UI renders its own 「我」 label). READ-ONLY:
-    // unlike listChat this never advances a read watermark. HONEST: derived
+    // ("" for the owner — the UI renders its own 「我」 label). READ-ONLY: this
+    // never advances a read watermark, as no read door here has since T-48.
+    // HONEST: derived
     // solely from real logged messages — never a fabricated entry.
     const involved = chatLog
       .filter((m) => m.from === withId || m.to === withId)

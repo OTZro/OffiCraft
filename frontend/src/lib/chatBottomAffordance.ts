@@ -16,13 +16,23 @@
 export type ChatBottomAffordance = "preview" | "arrow" | "none";
 
 export function chatBottomAffordance(state: {
-  /** Is the NEWEST message row inside the scroll viewport right now? */
+  /** Is the LAST LOADED message row inside the scroll viewport right now? This
+   * is a pure geometric fact about the DOM — it does NOT know whether that row
+   * is the newest message in the conversation. */
   latestInView: boolean;
   /** Is there an unseen inbound message waiting in the preview strip? */
   hasNewMsgPreview: boolean;
+  /** 🔴 T-48 ③: is the loaded thread an ANCHOR WINDOW with more stream below
+   * it (useChat's `hasNewer`)? A jump to an old message loads a window from the
+   * middle of the history, and scrolling to the bottom of THAT lands on a row
+   * that is not remotely the newest one. Without this input `latestInView`
+   * alone answers "the last row I can see is the last row I loaded", which was
+   * the same question only while the thread was always the live tail — and the
+   * arrow would vanish exactly where the owner most needs it. */
+  windowHasNewer: boolean;
 }): ChatBottomAffordance {
   // The preview wins whenever it exists: it says everything the arrow says AND
   // who wrote what, and clicking it goes to the same place.
   if (state.hasNewMsgPreview) return "preview";
-  return state.latestInView ? "none" : "arrow";
+  return state.latestInView && !state.windowHasNewer ? "none" : "arrow";
 }

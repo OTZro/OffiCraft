@@ -59,6 +59,7 @@ import type { ThemeBundle } from "../lib/themeBundle";
 import type {
   Api,
   ChatCursor,
+  ChatAnchor,
   ChatMessage,
   ChatReadReceipt,
   ChatAttachmentInput,
@@ -1313,6 +1314,38 @@ export const httpApi: Api = {
             limit,
             before_ts: before?.beforeTs,
             before_id: before?.beforeId,
+          },
+        },
+      }),
+    );
+    return wire.map(toChatMessage);
+  },
+
+  async listChatWindow(
+    withId: string,
+    anchor: ChatAnchor,
+    limit: number,
+  ): Promise<ChatMessage[]> {
+    // GET /api/chat?with=<id>&limit=<n>[&start_id=][&end_id=] ->
+    // ChatMessageDTO[], oldest→newest, both anchors INCLUSIVE. The undefined
+    // half is dropped by the client's serializer, so sending one end alone is
+    // one parameter on the wire, not an empty one.
+    //
+    // `limit` is REQUIRED here and is bounded 1..200 server-side on this path
+    // (422 outside it) — unlike the legacy paths, which keep their own
+    // "omitted = the recent window, -1 = everything" semantics. There is no
+    // sensible "the whole history" reading of an anchor window, so the
+    // signature does not offer one.
+    //
+    // READ-ONLY, like every read door on this route since T-48.
+    const wire = unwrap(
+      await client.GET("/api/chat", {
+        params: {
+          query: {
+            with: withId,
+            limit,
+            start_id: anchor.startId,
+            end_id: anchor.endId,
           },
         },
       }),

@@ -187,5 +187,46 @@ describe("mock adapter scrollback cursor parity (T-bf82)", () => {
     // that is the write T-48 removed, here and on the server.
     await mockApi.listChat("mira");
     expect((await miraUnread()).unreadCount).toBe(2);
+
+    // …nor the anchor window behind 跳到原訊息, which is a read door like the
+    // rest of them.
+    await mockApi.listChatWindow("mira", { endId: "t-mira-2000" }, 30);
+    expect((await miraUnread()).unreadCount).toBe(2);
+  });
+
+  it("the anchor window walks BOTH ways from one id, both ends inclusive, and refuses an id it does not carry", async () => {
+    for (const ts of [1000, 2000, 3000, 4000])
+      inbound("mira", MOCK_OWNER_ID, ts);
+
+    // `end_id` — the anchor and what precedes it.
+    expect(
+      (await mockApi.listChatWindow("mira", { endId: "t-mira-3000" }, 30)).map(
+        (m) => m.id,
+      ),
+    ).toEqual(["t-mira-1000", "t-mira-2000", "t-mira-3000"]);
+    // `start_id` — the anchor and what follows it. This is the direction the
+    // keyset cursor cannot express at all.
+    expect(
+      (
+        await mockApi.listChatWindow("mira", { startId: "t-mira-3000" }, 30)
+      ).map((m) => m.id),
+    ).toEqual(["t-mira-3000", "t-mira-4000"]);
+    // A window wider than `limit` is truncated at the START (older) end — the
+    // window stays anchored on `end_id`.
+    expect(
+      (
+        await mockApi.listChatWindow(
+          "mira",
+          { startId: "t-mira-1000", endId: "t-mira-4000" },
+          2,
+        )
+      ).map((m) => m.id),
+    ).toEqual(["t-mira-3000", "t-mira-4000"]);
+    // 🔴 An unknown anchor REJECTS. An empty array is what a real window at the
+    // end of the stream returns, and "no such message" must never be dressed as
+    // one — that confusion is the entire defect 跳到原訊息 had.
+    await expect(
+      mockApi.listChatWindow("mira", { endId: "t-nope" }, 30),
+    ).rejects.toThrow();
   });
 });

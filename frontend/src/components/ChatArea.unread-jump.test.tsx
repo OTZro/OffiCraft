@@ -21,14 +21,16 @@
 //   ③ B3 跳到原訊息 (jumpToMsgId): entering with a message target locates it
 //      (center scroll + transient highlight) and OWNS the entry positioning
 //      (no divider/bottom scroll fights it); one-shot — a later refetch never
-//      re-scrolls; a target outside the loaded window falls back to bottom.
+//      re-scrolls; a target outside the loaded window is FETCHED as an anchor
+//      window (T-48 ③) and only a target that genuinely cannot be located
+//      falls back to the bottom.
 //
 // jsdom cannot really scroll, so scrollIntoView is stubbed to record its
 // element + args, and the viewport geometry (scrollHeight/clientHeight/
 // scrollTop) is defined per test to drive the near-bottom detection.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent } from "@testing-library/react";
+import { render, fireEvent, act } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { ChatArea } from "./ChatArea";
 import type { Member } from "../types";
@@ -40,6 +42,16 @@ import type { ChatMessage } from "../api/adapter";
 let messages: ChatMessage[] = [];
 let messagesPeer = "b";
 const markRead = vi.fn(() => Promise.resolve());
+// ③ T-48: the anchor-window fetch behind 跳到原訊息. `loadAroundResult` is what
+// the fetch reports back — true once the target really is in the thread, false
+// when the id names nothing or the request failed.
+const loadAround = vi.fn(async (_id: string) => loadAroundResult);
+let loadAroundResult = true;
+// ③ T-48: the thread is an ANCHOR WINDOW with live messages below it (useChat's
+// `hasNewer`), and the way back to the tail.
+let hasNewer = false;
+const resetToLatest = vi.fn(async () => {});
+const loadNewer = vi.fn(async () => {});
 vi.mock("../hooks/useChat", () => ({
   useChat: () => ({
     messages,
@@ -47,6 +59,10 @@ vi.mock("../hooks/useChat", () => ({
     peerLastReadTs: 0,
     send: vi.fn(() => Promise.resolve()),
     markRead,
+    loadAround,
+    hasNewer,
+    resetToLatest,
+    loadNewer,
   }),
 }));
 
@@ -125,6 +141,11 @@ function setScrollGeometry(
 beforeEach(() => {
   localStorage.clear();
   markRead.mockClear();
+  loadAround.mockClear();
+  loadAroundResult = true;
+  resetToLatest.mockClear();
+  loadNewer.mockClear();
+  hasNewer = false;
   scrollCalls = [];
   Element.prototype.scrollIntoView = function (
     this: Element,
@@ -709,10 +730,114 @@ describe("③ jump-to-origin (跳到原訊息, B3)", () => {
     ).toBe(false);
   });
 
-  it("a target outside the loaded window falls back to the bottom (honest miss)", () => {
+  it("scrolling to the bottom of an anchor window pages FORWARDS — the mirror of the top-of-thread pull", () => {
+    // 「向上向下滑再另打 API 去撈」: the jump fetches two pages and no more, and
+    // the owner walks out of the window in whichever direction they scroll.
+    hasNewer = true;
+    messages = [mkMsg("a1", "b", "owner", 100), mkMsg("a2", "b", "owner", 101)];
+    const { container } = renderChat(0);
+    const list = container.querySelector(".chat__messages")!;
+    setScrollGeometry(list, {
+      scrollHeight: 1000,
+      clientHeight: 300,
+      scrollTop: 700,
+    });
+    fireEvent.scroll(list);
+
+    expect(loadNewer).toHaveBeenCalled();
+  });
+
+  it("the arrow is still there at the BOTTOM of an anchor window, and clicking it FETCHES the live tail", () => {
+    // 🔴 The half of the jump nobody sees coming. After landing on an old
+    // message the thread is a window from the middle of the history, so
+    // "the last row on screen" and "the newest message" stop being the same
+    // row. An arrow that only scrolls would move the viewport and leave the
+    // owner still in the past — the same lie in a new place.
+    hasNewer = true;
+    messages = [mkMsg("a1", "b", "owner", 100), mkMsg("a2", "b", "owner", 101)];
+    const { container } = renderChat(0);
+    const list = container.querySelector(".chat__messages")!;
+    // Geometry says the viewport IS at the bottom — of the loaded window.
+    setScrollGeometry(list, {
+      scrollHeight: 200,
+      clientHeight: 200,
+      scrollTop: 0,
+    });
+    fireEvent.scroll(list);
+
+    const arrow = container.querySelector(
+      "[data-testid='chat-jump-latest']",
+    ) as HTMLButtonElement;
+    expect(arrow).not.toBeNull();
+    scrollCalls = [];
+    fireEvent.click(arrow);
+
+    expect(resetToLatest).toHaveBeenCalledTimes(1);
+    // …and it does NOT settle on the last loaded row, which is not the newest.
+    expect(
+      scrollCalls.some((c) => c.el.getAttribute("data-msg-id") === "a2"),
+    ).toBe(false);
+  });
+
+  it("a target outside the loaded window is FETCHED, and the jump lands on it once the window arrives", async () => {
+    // 🔴 THE DEFECT THIS TICKET EXISTS FOR. The thread opens on the newest 30
+    // rows; a target older than that was never in the DOM, so the jump scrolled
+    // to the bottom — pixel-identical to a jump that succeeded on a recent
+    // message. Now the window around the id is fetched (useChat.loadAround,
+    // `?end_id=` + `?start_id=`), and the landing happens on the row itself.
+    messages = [mkMsg("c1", "b", "owner", 1000)];
+    const { container, rerender } = renderChat(0, "c-ancient");
+
+    expect(loadAround).toHaveBeenCalledWith("c-ancient");
+    // NOT the bottom, and NOT a fake highlight: while the fetch is in flight
+    // the jump has simply not happened yet.
+    expect(
+      scrollCalls.some((c) => c.el.classList.contains("chat__scroll-anchor")),
+    ).toBe(false);
+
+    // The anchor window lands — this is what useChat's setThread does.
+    messages = [
+      mkMsg("c-ancient", "b", "owner", 10),
+      mkMsg("c-after", "b", "owner", 11),
+    ];
+    await act(async () => {
+      rerender(
+        <I18nProvider>
+          <ChatArea
+            member={mkMember(0)}
+            members={[mkMember(0)]}
+            jumpToMsgId="c-ancient"
+          />
+          ,
+        </I18nProvider>,
+      );
+    });
+
+    const jump = scrollCalls.find(
+      (c) => c.el.getAttribute("data-msg-id") === "c-ancient",
+    );
+    expect(jump).toBeTruthy();
+    expect(jump!.args).toEqual({ block: "center" });
+    expect(
+      container
+        .querySelector('[data-msg-id="c-ancient"]')!
+        .classList.contains("chat__msg--located"),
+    ).toBe(true);
+    // ONE fetch for one target, however many times the thread re-renders.
+    expect(loadAround).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the bottom only when the target really cannot be located", async () => {
+    // The fetch is the difference between "not loaded yet" and "not there".
+    // Only the second one may land at the bottom.
+    loadAroundResult = false;
     messages = [mkMsg("c1", "b", "owner", 1000)];
     const { container } = renderChat(0, "c-ancient");
+    await act(async () => {
+      await Promise.resolve();
+    });
 
+    expect(loadAround).toHaveBeenCalledWith("c-ancient");
     expect(
       scrollCalls.some((c) => c.el.classList.contains("chat__scroll-anchor")),
     ).toBe(true);

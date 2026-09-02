@@ -165,6 +165,33 @@ interface UseChat {
   // window", and rendering it beside a known hole turns a narrow truth into a
   // claim of completeness that is false.
   gapSuspected: boolean;
+  // 🔴 THE LOADED WINDOW IS NOT THE LIVE TAIL (T-48 ③). True while the thread
+  // holds an ANCHOR window fetched around some older message — there is more
+  // stream BELOW what is loaded. Everything that means "the newest message is
+  // on screen" must consult this: the viewport can be scrolled to the very
+  // bottom of a historical window and still be nowhere near the newest row.
+  hasNewer: boolean;
+  // Load ONE page FORWARDS from the newest loaded row (`?start_id=`, the
+  // mirror image of loadOlder) and APPEND it. Concurrency-locked, read-only,
+  // no-op unless `hasNewer`. A page shorter than one window means the live tail
+  // has been reached → `hasNewer` flips false and the ordinary newest-window
+  // refresh takes over again.
+  loadNewer: () => Promise<void>;
+  // Fetch the window AROUND one message id and make it the thread, so a jump
+  // can land on a message that was never loaded. Two requests — the page
+  // ending at the target (context above) and the page starting at it (context
+  // below) — never the whole history.
+  //
+  // Resolves TRUE when the target really is in the thread afterwards and FALSE
+  // when it is not (the id names nothing, or a request failed). The caller must
+  // branch on it: the defect this replaces was a miss that drew the same pixels
+  // as a hit.
+  loadAround: (msgId: string) => Promise<boolean>;
+  // Leave an anchor window and go back to the LIVE newest window, REPLACING the
+  // thread. The historical rows are dropped rather than spliced onto the tail:
+  // the range between them is genuinely unloaded, and pretending otherwise is
+  // the T-b0bb hole with a friendlier name.
+  resetToLatest: () => Promise<void>;
 }
 
 // Topics that mutate the chat thread → trigger a refetch. "chat_read" advances a
@@ -215,6 +242,20 @@ interface Thread {
   // branch for why an empty page there is a contradiction and never an ending).
   // Nothing in this file gives up quietly.
   gapSuspected: boolean;
+  // 🔴 THIS THREAD IS AN ANCHOR WINDOW, NOT THE LIVE TAIL (T-48 ③). Set when
+  // `loadAround` lands a window whose newer half came back FULL (so the stream
+  // continues below it), cleared the moment a forward page comes back short or
+  // `resetToLatest` replaces the thread.
+  //
+  // ⚠️ IT ALSO GATES `load()`. A newest-window page cannot be merged into a
+  // historical window: the range between the two is unloaded, `pageJoinsThread`
+  // correctly says so, and `backfillSeam` would then spend up to
+  // MAX_BACKFILL_PAGES round-trips failing to close a seam that is not a defect
+  // at all — and end by raising `gapSuspected`, i.e. telling the owner messages
+  // were LOST when in truth they were merely not fetched yet. So while this is
+  // true the periodic/SSE load is skipped, and the forward walk (`loadNewer`)
+  // or the arrow (`resetToLatest`) is what brings the thread back to the tail.
+  hasNewer: boolean;
 }
 
 /** Does a newest-window `latest` page JOIN onto what we already hold, or is
@@ -337,6 +378,7 @@ function mergeLatestPage(
       messages: latest,
       hasMore: latest.length >= CHAT_PAGE_SIZE,
       gapSuspected: gap,
+      hasNewer: prev.hasNewer,
     };
   }
   const pageIds = new Set(latest.map((m) => m.id));
@@ -350,6 +392,7 @@ function mergeLatestPage(
     messages: [...older, ...fill, ...latest],
     hasMore: prev.hasMore,
     gapSuspected: gap,
+    hasNewer: prev.hasNewer,
   };
 }
 
@@ -359,6 +402,7 @@ export function useChat(withId: string): UseChat {
     messages: [],
     hasMore: true,
     gapSuspected: false,
+    hasNewer: false,
   }));
   const [peerLastReadTs, setPeerLastReadTs] = useState(0);
   // Live mirror of `thread` for the async loadOlder (a state read inside an
@@ -368,6 +412,7 @@ export function useChat(withId: string): UseChat {
   const threadRef = useRef(thread);
   threadRef.current = thread;
   const loadingOlderRef = useRef(false);
+  const loadingNewerRef = useRef(false);
   // 🔴 LOAD GENERATIONS (T-b0bb, review B2). Before the backfill, a load was
   // "fetch → setThread" with ZERO awaits in between, so two overlapping loads
   // could only interleave if the network answered out of order. The backfill
@@ -457,12 +502,53 @@ export function useChat(withId: string): UseChat {
     }
   }, [withId]);
 
+  // Leave an anchor window and REPLACE the thread with the live newest window.
+  //
+  // 🔴 REPLACE, NOT MERGE, AND THAT IS THE HONEST CHOICE. An anchor window sits
+  // somewhere in the past; between its newest row and the live tail is a range
+  // NOBODY has fetched. Concatenating the two would draw them as adjacent, and
+  // a thread that lies about being contiguous is the whole T-b0bb defect. The
+  // dropped rows are not lost: `loadOlder`'s cursor walks straight back into
+  // them, exactly as it does after any reload.
+  //
+  // `gapSuspected` is carried over rather than cleared — it is sticky for the
+  // life of the conversation view on purpose (see Thread.gapSuspected).
+  const resetToLatest = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
+    try {
+      const next = await api.listChat(withId);
+      if (seq < committedSeqRef.current) return;
+      committedSeqRef.current = seq;
+      setThread((prev) =>
+        prev.peer !== withId
+          ? prev
+          : {
+              peer: withId,
+              messages: next,
+              hasMore: next.length >= CHAT_PAGE_SIZE,
+              gapSuspected: prev.gapSuspected,
+              hasNewer: false,
+            },
+      );
+    } catch (e) {
+      console.warn("useChat: resetToLatest failed", e);
+    }
+  }, [withId]);
+
   const refetch = useCallback(async () => {
-    // Post-send refetch: sending is a user action in the foreground, so the
-    // marking listChat is honest here (the owner is looking at what they sent).
-    // MERGE the newest page (id-dedupe, history kept in front) — never
-    // replace, or the loaded scrollback would vanish under the owner.
-    // Takes a generation ticket like load() does — see loadSeqRef.
+    // Post-send refetch. MERGE the newest page (id-dedupe, history kept in
+    // front) — never replace, or the loaded scrollback would vanish under the
+    // owner. Takes a generation ticket like load() does — see loadSeqRef.
+    //
+    // SENDING RETURNS TO THE LIVE TAIL (T-48 ③). While the thread is an anchor
+    // window the message we just sent is BEYOND it, so a merge would drop it on
+    // the floor and the composer's own line would never appear. Nothing else
+    // can honestly be done with a newest page here — see resetToLatest.
+    if (threadRef.current.peer === withId && threadRef.current.hasNewer) {
+      await resetToLatest();
+      await refetchReads();
+      return;
+    }
     const seq = ++loadSeqRef.current;
     const next = await api.listChat(withId);
     // T-b0bb: close the seam BEFORE merging (see backfillSeam). threadRef is
@@ -500,10 +586,23 @@ export function useChat(withId: string): UseChat {
       if (prev.peer !== withId) return prev;
       return mergeLatestPage(prev, next, fill, gap);
     });
-    // listChat itself marks the owner's read watermark server-side; pull the
-    // peer's watermark alongside so the badges reconcile.
+    // ⚠️ THIS PULL NO LONGER HAS A CAUSE, AND SAYING SO IS THE POINT (T-48).
+    // It used to read: "listChat itself marks the owner's read watermark
+    // server-side; pull the peer's watermark alongside so the badges
+    // reconcile." That reason died with the side effect — GET /api/chat writes
+    // nothing now, and a POST of OUR OWN message cannot move the PEER's
+    // watermark either, so no part of a send can change the value this fetches.
+    //
+    // What it is instead, checked rather than guessed: an unconditional refresh
+    // on a moment when the owner is demonstrably looking. It is a safety net
+    // for a `chat_read` delta that went missing WITHOUT the connection
+    // dropping (a drop is already covered — `es.onopen` → resyncAll). No test
+    // pins it (nothing asserts a receipts pull after a send) and nothing
+    // observable depends on it; it costs one GET per sent message. It is kept
+    // rather than deleted because removing it is a behaviour change with no
+    // guard of its own, not because a reason was found for it.
     await refetchReads();
-  }, [withId, refetchReads]);
+  }, [withId, refetchReads, resetToLatest]);
 
   useEffect(() => {
     let alive = true;
@@ -520,7 +619,13 @@ export function useChat(withId: string): UseChat {
     // never on a stale thread. No-op on first mount (already empty).
     // hasMore resets optimistic-true; the first landed page derives it
     // honestly (mergeLatestPage's empty-thread arm).
-    setThread({ peer: withId, messages: [], hasMore: true, gapSuspected: false });
+    setThread({
+      peer: withId,
+      messages: [],
+      hasMore: true,
+      gapSuspected: false,
+      hasNewer: false,
+    });
     setPeerLastReadTs(0);
 
     // ONE load path (initial + SSE + refocus), and since T-48 ONE door: the
@@ -529,6 +634,16 @@ export function useChat(withId: string): UseChat {
     // swallow a rejection into a phantom-empty thread — log it (a 401 is
     // already handled at the http layer, which bounces to login).
     const load = () => {
+      // 🔴 AN ANCHOR WINDOW IS NOT REFRESHED BY A NEWEST PAGE (T-48 ③). See
+      // Thread.hasNewer: merging the live tail into a historical window creates
+      // a seam the T-b0bb machinery would spend six round-trips failing to
+      // close, and would then report as LOST messages. The peer guard matters —
+      // on a conversation switch `threadRef` is still the PREVIOUS peer's
+      // thread for this tick, and that peer's anchor must not silence the new
+      // conversation's first load.
+      if (threadRef.current.peer === withId && threadRef.current.hasNewer) {
+        return;
+      }
       // The generation ticket is taken at FIRE time, so a load that started
       // later always outranks one that started earlier, however long each of
       // them spends in the backfill. See loadSeqRef.
@@ -574,6 +689,7 @@ export function useChat(withId: string): UseChat {
                   messages: next,
                   hasMore: next.length >= CHAT_PAGE_SIZE,
                   gapSuspected: false,
+                  hasNewer: false,
                 },
           );
         })
@@ -598,13 +714,16 @@ export function useChat(withId: string): UseChat {
     // SSE: reconcile the thread by refetching on the relevant topics — but only
     // when the delta is about THIS conversation.
     //
-    // 🔴 THE SELF-DRIVE (T-8115). `load()` takes the marking `GET /api/chat?with=`
-    // whenever the owner is looking, and that read is a DURABLE WRITE: the server
-    // advances the watermark and fans a `chat_read` delta straight back at this
-    // client, which re-runs the roster / office-total / worker fan-out. So a
-    // `load()` fired for a delta about a DIFFERENT conversation does not merely
-    // waste a request — it manufactures a second event round out of nothing, and
-    // one arrives for every chat line anywhere in the company. Deltas name their
+    // 🔴 THE SELF-DRIVE (T-8115), AND WHY THE GATE OUTLIVED ITS CAUSE.
+    // `load()` USED TO take a `GET /api/chat?with=` that was a DURABLE WRITE:
+    // the server advanced the watermark and fanned a `chat_read` delta straight
+    // back at this client, which re-ran the roster / office-total / worker
+    // fan-out — so a `load()` fired for a delta about a DIFFERENT conversation
+    // manufactured a second event round out of nothing, once per chat line
+    // anywhere in the company. T-48 removed that write, so the load is now
+    // "merely" a wasted request; the gate stays because a request nobody asked
+    // for is still one, and because the write it used to trigger has only moved
+    // (ChatArea's mark-read fans the same echo). Deltas name their
     // participants (spec §2.2 payloads), so the gate is exact rather than
     // heuristic; a delta that names nobody (a resync, or a transport that carries
     // no delta) still loads, because then it really might be about us.
@@ -723,6 +842,7 @@ export function useChat(withId: string): UseChat {
         return {
           peer: prev.peer,
           gapSuspected: prev.gapSuspected,
+          hasNewer: prev.hasNewer,
           messages: [...older, ...prev.messages],
           // A short page = the history is exhausted (keyset paging makes this
           // exact; an exactly-full last page just costs one empty follow-up).
@@ -735,6 +855,105 @@ export function useChat(withId: string): UseChat {
       loadingOlderRef.current = false;
     }
   }, [withId]);
+
+  // The MIRROR IMAGE of loadOlder, and the direction the old API could not
+  // express at all: page FORWARDS from the newest loaded row with `?start_id=`.
+  // The anchor is inclusive, so a full page carries CHAT_PAGE_SIZE-1 new rows
+  // plus the row we already hold; the duplicate is dropped on merge and the
+  // page LENGTH (not the merged count) is what decides whether more remains.
+  const loadNewer = useCallback(async () => {
+    const cur = threadRef.current;
+    if (cur.peer !== withId || cur.messages.length === 0 || !cur.hasNewer)
+      return;
+    if (loadingNewerRef.current) return;
+    loadingNewerRef.current = true;
+    try {
+      const newest = cur.messages[cur.messages.length - 1];
+      const page = await api.listChatWindow(
+        withId,
+        { startId: newest.id },
+        CHAT_PAGE_SIZE,
+      );
+      setThread((prev) => {
+        if (prev.peer !== withId) return prev;
+        const have = new Set(prev.messages.map((m) => m.id));
+        const fresh = page.filter((m) => !have.has(m.id));
+        return {
+          ...prev,
+          messages: [...prev.messages, ...fresh],
+          // A SHORT page means this window reached the live tail — the thread
+          // is the newest window again and the ordinary refresh may resume.
+          hasNewer: page.length >= CHAT_PAGE_SIZE,
+        };
+      });
+    } catch (e) {
+      console.warn("useChat: loadNewer failed", e);
+    } finally {
+      loadingNewerRef.current = false;
+    }
+  }, [withId]);
+
+  // 🔴 THE JUMP THAT CANNOT MISS SILENTLY (T-48 ③). Two windows around one
+  // message id — `end_id` for the context ABOVE it, `start_id` for the context
+  // BELOW — and the target is in BOTH (the anchors are inclusive), so a
+  // successful pair always contains it. Neither call pulls the whole history:
+  // the cost of landing on a message from two years ago is two pages.
+  //
+  // Why two requests and not the three the proposal sketched ("fetch the row,
+  // then a page each way"): the row comes back inside both windows already, and
+  // an id no message carries is a 404 on either of them — so the separate
+  // "does it exist" request answers a question these two have answered before
+  // it could be asked.
+  //
+  // Returns whether the target really is in the thread now. The caller MUST
+  // branch on it: the defect being fixed here was a miss (target older than the
+  // loaded window) that landed the reader at the bottom, pixel-identical to a
+  // hit on a recent message.
+  const loadAround = useCallback(
+    async (msgId: string): Promise<boolean> => {
+      const seq = ++loadSeqRef.current;
+      let older: ChatMessage[];
+      let newer: ChatMessage[];
+      try {
+        [older, newer] = await Promise.all([
+          api.listChatWindow(withId, { endId: msgId }, CHAT_PAGE_SIZE),
+          api.listChatWindow(withId, { startId: msgId }, CHAT_PAGE_SIZE),
+        ]);
+      } catch (e) {
+        // An unknown id is a 404 here, NOT an empty page — the server refuses
+        // to make "no such message" look like "a window that happens to be
+        // empty". Either way the caller is told, and told the truth.
+        console.warn("useChat: loadAround failed", e);
+        return false;
+      }
+      if (seq < committedSeqRef.current) return false;
+      const byId = new Map<string, ChatMessage>();
+      for (const m of [...older, ...newer]) byId.set(m.id, m);
+      const window = [...byId.values()].sort(cmpStreamOrder);
+      // Defensive: a server that answered both calls without carrying the
+      // anchor would be a contract break, and adopting that window would put
+      // the reader somewhere with no way to tell. Refuse instead.
+      if (!window.some((m) => m.id === msgId)) return false;
+      committedSeqRef.current = seq;
+      setThread((prev) =>
+        prev.peer !== withId
+          ? prev
+          : {
+              peer: withId,
+              messages: window,
+              // A full older page means history may continue above it; a full
+              // newer page means the live tail is below it (see Thread.hasNewer).
+              // Both are self-correcting: the next page each way says otherwise
+              // by coming back short.
+              hasMore: older.length >= CHAT_PAGE_SIZE,
+              gapSuspected: prev.gapSuspected,
+              hasNewer: newer.length >= CHAT_PAGE_SIZE,
+            },
+      );
+      return true;
+    },
+    [withId],
+  );
 
   const markRead = useCallback(
     async (lastReadTs: number) => {
@@ -757,5 +976,9 @@ export function useChat(withId: string): UseChat {
     hasMore: thread.hasMore,
     loadOlder,
     gapSuspected: thread.gapSuspected,
+    hasNewer: thread.hasNewer,
+    loadNewer,
+    loadAround,
+    resetToLatest,
   };
 }

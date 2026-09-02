@@ -282,6 +282,10 @@ export function ChatArea({
     hasMore,
     loadOlder,
     gapSuspected,
+    hasNewer,
+    loadNewer,
+    loadAround,
+    resetToLatest,
   } = useChat(member.id);
 
   // Released-worker codenames: an ow- participant that is NOT in the live
@@ -575,6 +579,12 @@ export function ChatArea({
   // refetch must never re-scroll) and the transient highlight on the located
   // row (cleared after the flash).
   const jumpConsumedRef = useRef<string | null>(null);
+  // The target this component has ALREADY spent an anchor-window fetch on
+  // (T-48 ③). Separate from `jumpConsumedRef` on purpose: the fetch is what
+  // makes the jump possible, so it happens BEFORE the jump is consumed, and
+  // this ref is what stops the effect firing a second pair of requests on every
+  // re-render while the first pair is still in flight.
+  const jumpFetchedRef = useRef<string | null>(null);
   const [highlightMsgId, setHighlightMsgId] = useState<string | null>(null);
   // T-e987 compose seed: the seed value already applied (one-shot per distinct
   // value, reset on a peer switch so the same taskNo can seed another peer).
@@ -594,6 +604,7 @@ export function ChatArea({
     unreadRunOpenRef.current = false;
     entryScrollPendingRef.current = false;
     jumpConsumedRef.current = null;
+    jumpFetchedRef.current = null;
     seedConsumedRef.current = null;
     prependAnchorRef.current = null;
     setFirstUnreadId(null);
@@ -740,6 +751,17 @@ export function ChatArea({
     }
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
     const nowNearBottom = distance <= NEAR_BOTTOM_PX;
+    // Near the BOTTOM of an ANCHOR WINDOW → pull one page FORWARDS (T-48 ③).
+    // The exact mirror of the top branch above, and the reason the jump can
+    // afford to fetch only two pages: the owner walks out of the window in the
+    // direction they are already scrolling, one page at a time, instead of the
+    // jump having to guess how much history to drag along. No scroll
+    // compensation is needed here — an append grows the box BELOW the viewport,
+    // so the row being read does not move. `hasNewer` flips false when the walk
+    // reaches the live tail, and the ordinary newest-window refresh resumes.
+    if (nowNearBottom && hasNewer) {
+      void loadNewer();
+    }
     // ① The arrow's condition, and it is a DIFFERENT question from
     // `nowNearBottom`: auto-follow may forgive 80px, but the owner asked for
     // the arrow whenever the newest message is not in the viewport. The newest
@@ -838,16 +860,55 @@ export function ChatArea({
     if (!jumpToMsgId) return;
     if (messagesPeer !== member.id || messages.length === 0) return;
     if (jumpConsumedRef.current === jumpToMsgId) return;
-    jumpConsumedRef.current = jumpToMsgId;
-    // The jump owns the initial viewport — mark entry positioning done.
-    initialPositionedRef.current = true;
-    prevIdsRef.current = new Set(messages.map((m) => m.id));
     // Raw interpolation matches the chip-jump selector above — message ids
     // are server-minted (`c-<hex>`), never arbitrary strings.
     const el = messagesRef.current?.querySelector(
       `[data-msg-id="${jumpToMsgId}"]`,
     );
-    if (el) {
+    // 🔴 A TARGET OUTSIDE THE LOADED WINDOW IS NOW FETCHED, NOT GUESSED AT
+    // (T-48 ③, owner: 「跳到原訊息…都可以正確定位到該訊息」). This branch used
+    // to be `endRef.scrollIntoView()` — the thread opened at the bottom and
+    // NOTHING said the target had not been found, which is indistinguishable
+    // from a successful jump to a recent message. `loadAround` pages OUTWARDS
+    // from the id (one window each way, never the whole history); when it
+    // lands, `messages` changes and this effect runs again with the row in the
+    // DOM. The one-shot latch is NOT consumed yet — consuming it here would
+    // eat the jump the fetch is about to make possible.
+    if (!el) {
+      if (jumpFetchedRef.current !== jumpToMsgId) {
+        jumpFetchedRef.current = jumpToMsgId;
+        // The jump owns the viewport FROM THE MOMENT IT STARTS FETCHING, not
+        // from the moment it lands. Without these three the thread spends the
+        // in-flight window doing its ordinary entry positioning — landing at
+        // the bottom, i.e. the exact wrong place, and then being scrolled again
+        // when the anchor window arrives. Registering the current ids as
+        // already-seen also keeps that in-flight commit from mistaking the
+        // thread it is replacing for a burst of new arrivals.
+        initialPositionedRef.current = true;
+        prevIdsRef.current = new Set(messages.map((m) => m.id));
+        nearBottomRef.current = false;
+        void loadAround(jumpToMsgId).then((found) => {
+          if (found) return;
+          // Genuinely unreachable (the id names nothing, or the request
+          // failed). Fall back to the bottom — the thread still opens — and
+          // say so where a developer can see it. ⚠️ It is NOT said in the UI:
+          // a user-visible notice needs a new i18n key, and message keys are
+          // regenerated into a server/ file that this change may not touch.
+          console.warn(
+            `ChatArea: jump target ${jumpToMsgId} could not be located`,
+          );
+          jumpConsumedRef.current = jumpToMsgId;
+          nearBottomRef.current = true;
+          endRef.current?.scrollIntoView();
+        });
+      }
+      return;
+    }
+    jumpConsumedRef.current = jumpToMsgId;
+    // The jump owns the initial viewport — mark entry positioning done.
+    initialPositionedRef.current = true;
+    prevIdsRef.current = new Set(messages.map((m) => m.id));
+    {
       el.scrollIntoView({ block: "center" });
       // Located mid-thread → not at the bottom; a later arrival must not yank.
       nearBottomRef.current = false;
@@ -872,10 +933,8 @@ export function ChatArea({
           ro.disconnect();
         };
       }
-    } else {
-      endRef.current?.scrollIntoView();
     }
-  }, [jumpToMsgId, messages, messagesPeer, member.id]);
+  }, [jumpToMsgId, messages, messagesPeer, member.id, loadAround]);
 
   // The jump highlight is a transient flash — clear it after the CSS pulse so
   // the row returns to the normal thread look.
@@ -1012,17 +1071,45 @@ export function ChatArea({
   // images above the target decode to their real height after this frame and
   // shove the row straight back out of view.
   const jumpSettleRef = useRef<(() => void) | null>(null);
+  // Set when the jump had to FETCH the live tail first (T-48 ③) — consumed by
+  // the effect below once the replacement thread has rendered.
+  const pendingLatestScrollRef = useRef(false);
   function jumpToLatest() {
     const el = messagesRef.current;
     if (!el) return;
-    jumpSettleRef.current?.();
-    jumpSettleRef.current = scrollToLatest(el);
     // The strip's message is exactly what we are going to look at.
     setNewMsgPreview(null);
     setLatestInView(true);
     nearBottomRef.current = true;
     unreadRunOpenRef.current = false;
+    // 🔴 SCROLLING IS NOT ENOUGH WHEN THE THREAD IS AN ANCHOR WINDOW (T-48 ③).
+    // `scrollToLatest` lands on the last row IN THE DOM; after a jump to an old
+    // message that row is nowhere near the newest one, so the arrow would move
+    // the viewport and leave the owner still in the past — a fresh instance of
+    // exactly the lie this ticket exists to remove. Fetch the live window first
+    // and scroll when it lands.
+    if (hasNewer) {
+      pendingLatestScrollRef.current = true;
+      void resetToLatest();
+      return;
+    }
+    jumpSettleRef.current?.();
+    jumpSettleRef.current = scrollToLatest(el);
   }
+  // Declared AFTER the scroll-position reactor above so it runs last in the
+  // commit: the reactor's own at-bottom auto-follow does a plain
+  // `scrollIntoView`, and this replaces it with the settling landing.
+  useEffect(() => {
+    if (!pendingLatestScrollRef.current) return;
+    if (messagesPeer !== member.id || messages.length === 0) return;
+    pendingLatestScrollRef.current = false;
+    const el = messagesRef.current;
+    if (!el) return;
+    jumpSettleRef.current?.();
+    jumpSettleRef.current = scrollToLatest(el);
+    setLatestInView(true);
+    nearBottomRef.current = true;
+  }, [messages, messagesPeer, member.id]);
   // A pending correction must not outlive the conversation it was aiming at.
   useEffect(() => () => jumpSettleRef.current?.(), []);
 
@@ -1033,6 +1120,7 @@ export function ChatArea({
   const bottomAffordance = chatBottomAffordance({
     latestInView,
     hasNewMsgPreview: newMsgPreview !== null,
+    windowHasNewer: hasNewer,
   });
 
   // OWNER read receipt: entering the conversation (or a new message landing while
