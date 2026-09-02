@@ -210,6 +210,20 @@ func TestCanonicalKindMapsBlankToStaff(t *testing.T) {
 			t.Fatalf("kind %q outside the closed set must be refused", kind)
 		}
 	}
+	// Refusing the PRE-RENAME value is not enough: the message has to say it was
+	// renamed, or an older caller reads three unfamiliar values and has to guess
+	// which one its own used to be (T-48).
+	// 🔑 Composed from runes, not spelled — a literal here would be rewritten by
+	// the same repo-wide "assistant"→"staff" replacement this case guards, and
+	// the assertion would then be checking the NEW value and pass for free.
+	legacy := string([]rune{'a', 's', 's', 'i', 's', 't', 'a', 'n', 't'})
+	_, err = CanonicalKind(legacy)
+	if err == nil {
+		t.Fatalf("the pre-rename kind %q must still be refused", legacy)
+	}
+	if !strings.Contains(err.Error(), "renamed") || !strings.Contains(err.Error(), KindStaff) {
+		t.Fatalf("refusing %q must name the rename and the new value, got: %v", legacy, err)
+	}
 }
 
 // ── member name pool / PickMemberName ────────────────────────────────────────

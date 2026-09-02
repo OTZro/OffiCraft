@@ -160,8 +160,12 @@ func TestChatWindowWalksBothDirectionsInclusively(t *testing.T) {
 			[]string{"c-2", "c-3", "c-4"}},
 		{"the same id at both ends is a window of one", "with=m-1&start_id=c-3&end_id=c-3&limit=30",
 			[]string{"c-3"}},
-		{"a window wider than limit keeps the start_id end", "with=m-1&start_id=c-2&end_id=c-6&limit=2",
-			[]string{"c-2", "c-3"}},
+		// Spec's ONLY sentence on the both-anchors case: "a window wider than 200
+		// rows is truncated from the `start_id` end" ⇒ the END anchor survives and
+		// the OLDER rows are the ones dropped. Reading the start_id paragraph as a
+		// rule for this case is the mistake this row exists to prevent.
+		{"a window wider than limit is truncated at the start_id end", "with=m-1&start_id=c-2&end_id=c-6&limit=2",
+			[]string{"c-5", "c-6"}},
 		{"a window running off the newest end is short, not an error", "with=m-1&start_id=c-5&limit=30",
 			[]string{"c-5", "c-6"}},
 		{"the participant filter still applies inside the window", "with=m-1&start_id=c-1&limit=30",

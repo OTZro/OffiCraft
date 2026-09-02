@@ -705,11 +705,16 @@ func (a chatAnchor) newerThan(b chatAnchor) bool {
 //   - end only    — the anchor and the limit-1 messages BEFORE it. Descending
 //     LIMIT then reversed: the far (oldest) end is what gets cut, which is the
 //     same walk listChatBefore does, only inclusive of the anchor.
-//   - both        — one bounded window, still anchored at start: ascending
-//     LIMIT, so an over-wide window keeps start_id and loses rows at the end_id
-//     side. `start_id` promises "this message and the limit-1 that follow it"
-//     in so many words, and a truncation that dropped the anchor would break
-//     the INCLUSIVE guarantee the parameter is named for.
+//   - both        — one bounded window, anchored at END: descending LIMIT then
+//     reversed, so an over-wide window keeps end_id and loses rows at the
+//     start_id (older) side. This is spec's own wording — "a window wider than
+//     200 rows is truncated from the `start_id` end" — and that sentence is the
+//     ONLY place the both-anchors case is specified. The `start_id` paragraph
+//     ("this message and the limit-1 that follow it") describes the start-only
+//     window and says nothing about this case; reading it as a rule for both
+//     was the mistake, and spec now carries a pointer saying so.
+//     🔑 Either truncation falsifies one anchor's INCLUSIVE label. Spec already
+//     chose which one; this code does not get to re-choose.
 //
 // A window with no anchor at all is not this function's business — the handler
 // only reaches here once at least one was sent, and the anchorless request is
@@ -742,8 +747,10 @@ func (d *DAL) listChatWindow(participant, caller string, start, end *chatAnchor,
 		query += ` AND (sender = ? OR recipient = ?)`
 		args = append(args, caller, caller)
 	}
-	// start present ⇒ walk forwards from it; end-only ⇒ walk backwards from it.
-	descending := start == nil
+	// end present ⇒ anchor there and walk backwards (descending LIMIT, then
+	// reversed) so truncation eats the start_id/older side, which is what spec
+	// specifies for the both-anchors case. start-only ⇒ walk forwards.
+	descending := end != nil
 	if descending {
 		query += ` ORDER BY ts DESC, id DESC LIMIT ?`
 	} else {

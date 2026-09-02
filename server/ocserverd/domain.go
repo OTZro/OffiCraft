@@ -51,6 +51,19 @@ func CanonicalKind(kind string) (string, error) {
 	case KindStaff, KindWarden, KindOutsource:
 		return kind, nil
 	}
+	// A caller sending the PRE-RENAME value gets told it was renamed, not just
+	// that it is invalid (T-48). Without this, an older client's request fails
+	// with a message that lists three values and never says "the one you sent
+	// used to be one of them" — the reader's next move is to guess.
+	// 🔑 The legacy value is built from runes ON PURPOSE. Spelled as a literal it
+	// would be swept up by the very repo-wide "assistant"→"staff" replacement it
+	// exists to explain, and this branch would silently start comparing the new
+	// value against itself — unreachable, and nothing would fail.
+	if kind == string([]rune{'a', 's', 's', 'i', 's', 't', 'a', 'n', 't'}) {
+		return "", fmt.Errorf(
+			"member kind %q was renamed to %q (T-48); the closed set is {%q, %q, %q}",
+			kind, KindStaff, KindStaff, KindWarden, KindOutsource)
+	}
 	return "", fmt.Errorf("member kind %q not in {%q, %q, %q}",
 		kind, KindStaff, KindWarden, KindOutsource)
 }
