@@ -1073,11 +1073,28 @@ func drainChat(client httpClient, cfg Config, seen *chatSeen, out io.Writer, sil
 // showed. So each sender gets its own high-water mark, computed from that
 // sender's own lines only.
 //
-// WHAT IT DELIBERATELY DOES NOT COVER: lines dropped by chatBacklogPrintCap.
-// They were counted and announced but their bodies never reached the session,
-// so no receipt is filed for them; the sender's next message carries the
-// watermark past them. A message the wire sent without a usable ts is skipped
-// for the same reason — there is no watermark to report.
+// 🔴 THE CAP CORNER — and the earlier version of this comment got it WRONG, so
+// read it carefully (caught by the T-48 independent review).
+//
+// chatBacklogPrintCap drops the OLDEST lines and prints the newest. A receipt is
+// a WATERMARK, not a per-message acknowledgement: it says "everything at or
+// below this ts is read". So for a sender who still has a SURVIVING printed
+// line, the dropped older ones are swept in by that same receipt — marked read
+// although their bodies never reached the session. This comment used to claim
+// the opposite ("no receipt is filed for them; the sender's next message carries
+// the watermark past them"), which is only true of the narrower case below.
+//
+// It is a real hole in this ticket's premise (printed, therefore read) and it is
+// LEFT AS IS rather than quietly patched: reporting the oldest printed ts
+// instead would leave the newest printed lines unread and re-print them forever.
+// The drain does announce the gap — it prints a 略過 N 則 line naming the count
+// and telling the reader to fetch them with get_chat.
+// Pinned by TestDrainChat_BacklogCap_SweepsDroppedOlderLinesOfASurvivingSender.
+//
+// The case that really files nothing is a sender ALL of whose lines were
+// dropped: no surviving line, no entry in the map, no receipt. A message the
+// wire sent without a usable ts is skipped for the same reason — there is no
+// watermark to report.
 // markReadPath is the read-receipt endpoint (POST): body {peer, last_read_ts},
 // reader = the verified JWT sub, watermark monotonic (a stale report is a
 // no-op 200).

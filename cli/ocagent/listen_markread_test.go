@@ -224,6 +224,57 @@ func TestDrainChat_MultipleSenders_EachMarkedToItsOwnWatermark(t *testing.T) {
 	}
 }
 
+// 🔴 THE CAP CORNER, PINNED BECAUSE THE COMMENT ABOVE reportChatRead USED TO GET
+// IT WRONG (found by the T-48 independent review).
+//
+// chatBacklogPrintCap drops the OLDEST lines and prints the newest. The receipt
+// is a WATERMARK — "everything at or below this ts is read" — so for a sender
+// who still has a surviving printed line, THE DROPPED OLDER ONES ARE SWEPT IN
+// TOO. They are marked read although their bodies never reached the session.
+//
+// That is a genuine hole in this ticket's premise ("printed, therefore read"),
+// and it is pinned rather than quietly fixed because the alternative — reporting
+// the OLDEST printed line's ts — would leave the newest printed lines unread and
+// re-print them forever. The user is told: the drain prints a 略過 N 則 line.
+//
+// The one case that really files nothing is a sender ALL of whose lines were
+// dropped: no surviving line, no entry, no receipt.
+func TestDrainChat_BacklogCap_SweepsDroppedOlderLinesOfASurvivingSender(t *testing.T) {
+	now := float64(time.Now().Unix())
+	msgs := make([]string, 0, chatBacklogPrintCap+6)
+	// alice speaks only at the very start ⇒ every one of her lines is dropped.
+	msgs = append(msgs, tsMsg("a-old", "alice", "kyle", now-500))
+	// bob's oldest line is dropped too, but he also has the newest line of all.
+	msgs = append(msgs, tsMsg("b-old", "bob", "kyle", now-499))
+	for i := 0; i < chatBacklogPrintCap; i++ {
+		msgs = append(msgs, tsMsg(fmt.Sprintf("b-%d", i), "bob", "kyle", now-float64(100-i)))
+	}
+	srv := newMarkReadServer(t, "["+strings.Join(msgs, ",")+"]")
+	var out bytes.Buffer
+
+	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), loadChatSeen(""), &out, false)
+
+	if !strings.Contains(out.String(), "略過") {
+		t.Fatalf("a drain over the cap must announce what it skipped; got:\n%s", out.String())
+	}
+	calls := srv.snapshot()
+	if len(calls) != 1 || calls[0].Peer != "bob" {
+		t.Fatalf("receipts = %+v, want exactly one for bob — alice had every line "+
+			"dropped, so she has no surviving line and must get no receipt at all", calls)
+	}
+	// The pin: bob's watermark is his NEWEST printed line, which is strictly
+	// above his dropped one ⇒ the dropped line is covered by it.
+	wantTS := now - float64(100-(chatBacklogPrintCap-1))
+	if calls[0].LastReadTS != wantTS {
+		t.Fatalf("bob's watermark = %v, want %v (his newest printed line)", calls[0].LastReadTS, wantTS)
+	}
+	if calls[0].LastReadTS <= now-499 {
+		t.Fatalf("watermark %v does not cover bob's dropped line at %v — if this ever "+
+			"becomes true the comment above reportChatRead must change with it",
+			calls[0].LastReadTS, now-499)
+	}
+}
+
 // A sender whose message carries no usable ts has no watermark to report, so it
 // is skipped rather than reported as 0 (which would be a silent no-op anyway).
 func TestDrainChat_MessageWithoutTs_FilesNoReceipt(t *testing.T) {
