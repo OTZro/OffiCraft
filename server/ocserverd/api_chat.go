@@ -997,27 +997,29 @@ func (s *apiServer) serveChatByIDs(w http.ResponseWriter, r *http.Request, ids [
 	writeJSON(w, http.StatusOK, out)
 }
 
-// requestedChatWindow reads the T-48 window anchors OFF THE QUERY STRING rather
-// than out of the generated params struct.
+// requestedChatWindow reads the T-48 window anchors off the GENERATED params.
 //
-// 🔴 WHY NOT params.StartId: ocapi_gen.go is generated from spec/openapi.json
-// and guarded by `make drift-ocapi`, which regenerates and diffs. The spec
-// carrying these two parameters lands on its own branch (t-48/spec-chat-api);
-// hand-adding the fields here would make that gate red for a file this branch
-// is not allowed to own. Reading the query is byte-equivalent to what the
-// generated binder does for an optional string — every caller reaches this
-// handler through ServerInterfaceWrapper, which parses this same URL — so when
-// the spec branch merges this can switch to params.StartId/params.EndId with no
-// behaviour change.
+// It used to read r.URL.Query() directly, because the spec carrying these two
+// parameters lived on its own branch and hand-adding the generated fields would
+// have made the drift gate red for a file this branch does not own. That branch
+// has merged, so the generated fields exist and this reads them.
 //
 // PRESENCE, not emptiness, selects the window path: `?start_id=` sent blank is
 // SENT, and is refused as an id no message carries. Dropping a blank anchor
 // back onto the legacy path would answer a malformed window request with a full
 // unbounded listing and no word said — the exact silent-fallback shape this
 // ticket exists to remove.
-func requestedChatWindow(r *http.Request) (startID string, hasStart bool, endID string, hasEnd bool) {
-	q := r.URL.Query()
-	return q.Get("start_id"), q.Has("start_id"), q.Get("end_id"), q.Has("end_id")
+// 🔑 That distinction survives the swap, and it was MEASURED, not assumed: the
+// generated binder yields a pointer to "" for `?start_id=` and nil when the
+// parameter is absent, so a nil check is exactly the old q.Has().
+func requestedChatWindow(params HandleListChatApiChatGetParams) (startID string, hasStart bool, endID string, hasEnd bool) {
+	if params.StartId != nil {
+		startID, hasStart = *params.StartId, true
+	}
+	if params.EndId != nil {
+		endID, hasEnd = *params.EndId, true
+	}
+	return startID, hasStart, endID, hasEnd
 }
 
 // chatWindowRequest is one window read, already stripped of the transport.
@@ -1186,7 +1188,7 @@ func (s *apiServer) HandleListChatApiChatGet(w http.ResponseWriter, r *http.Requ
 	if params.Limit != nil {
 		limit = *params.Limit
 	}
-	if startID, hasStart, endID, hasEnd := requestedChatWindow(r); hasStart || hasEnd {
+	if startID, hasStart, endID, hasEnd := requestedChatWindow(params); hasStart || hasEnd {
 		s.serveChatWindow(w, r, chatWindowRequest{
 			with:       with,
 			callerOnly: callerOnly,
