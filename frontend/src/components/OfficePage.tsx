@@ -267,7 +267,7 @@ export function OfficePage() {
           isReleasedWorkerId
             ? t.office.outsource.releasedTitle
             : t.office.chatUnavailableTitle,
-          isReleasedWorkerId ? "outsource" : "assistant",
+          isReleasedWorkerId ? "outsource" : "staff",
         )
       : undefined;
   const rosterDetail = detailId
