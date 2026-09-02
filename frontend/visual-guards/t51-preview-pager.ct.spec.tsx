@@ -1,0 +1,106 @@
+// HOTSPOT — 用了翻頁按鈕之後鍵盤就翻不動了 (T-51 ①).
+//
+// The bug this guard exists for was found by review, not by the suite, and it
+// is invisible to jsdom by construction:
+//
+//   the paging keys were bound as a React `onKeyDown` on the overlay's portal
+//   root, so they only fired while focus was still inside the overlay — and the
+//   surest way to lose that focus is to USE the feature. Stepping to the last
+//   item disables the very button under the pointer, and a real browser BLURS a
+//   focused element when it is disabled (to `<body>`, outside the portal). The
+//   keyboard then went dead until the reader reached for the mouse.
+//
+// jsdom does NOT blur on disable, so the unit tests are green either way; this
+// file is the only thing that can tell the two bindings apart. The same trap is
+// documented one screen above the change that re-introduced it — see the T-4e95
+// note about a caller that disabled its own button and broke the focus restore.
+//
+// MUTANT (verified red): move the handler back onto the root element as
+// `onKeyDown` → assertion (2) fails, because focus is on `<body>` by then.
+import { test, expect } from "@playwright/experimental-ct-react";
+import { PreviewPagerStory } from "./stories/PreviewPagerStory";
+
+test("the keyboard still pages after the buttons have been used", async ({
+  mount,
+  page,
+}) => {
+  await page.setViewportSize({ width: 1100, height: 760 });
+  await mount(<PreviewPagerStory />);
+
+  const counter = page.locator(".md-preview__pager-count");
+  const next = page.getByRole("button", { name: "下一個" });
+  await expect(counter).toHaveText("1 / 3");
+
+  // (1) The buttons walk to the end, and the last step disables the control the
+  // pointer is on — the real blur happens here.
+  await next.click();
+  await expect(counter).toHaveText("2 / 3");
+  await next.click();
+  await expect(counter).toHaveText("3 / 3");
+  await expect(next).toBeDisabled();
+
+  // (2) CORE red→green: the keyboard is still alive. Bound to the overlay root,
+  // this key went nowhere — `document.activeElement` is `<body>` after the
+  // disable, and the root never sees it.
+  expect(
+    await page.evaluate(() => document.activeElement?.tagName ?? ""),
+    "the disable really did drop focus out of the overlay (else this guard proves nothing)",
+  ).toBe("BODY");
+  await page.keyboard.press("ArrowLeft");
+  await expect(counter).toHaveText("2 / 3");
+  await page.keyboard.press("ArrowLeft");
+  await expect(counter).toHaveText("1 / 3");
+});
+
+test("the arrows page a zoomed image too — the owner's ruling", async ({
+  mount,
+  page,
+}) => {
+  // 2026-09-02, `c-521c38a1de77`: 「左右鍵固定就改成切換圖片，現在不是應該可以用
+  // 滑鼠或手機滑到就可以左右移動了嗎？」 — made against the first version, which
+  // handed the arrows back to the pan above 100%. A zoomed image is still
+  // movable by drag, wheel, scrollbar and touch; paging had no keyboard at all.
+  // ⚠️ The accepted cost, named so it is not "fixed" back by mistake: a
+  // keyboard-only reader can no longer pan a zoomed image.
+  await page.setViewportSize({ width: 1100, height: 760 });
+  await mount(<PreviewPagerStory start={1} />);
+
+  const counter = page.locator(".md-preview__pager-count");
+  await expect(counter).toHaveText("2 / 3");
+  await page.getByRole("button", { name: "放大" }).click();
+  await expect(page.getByText("125%")).toBeVisible();
+
+  await page.keyboard.press("ArrowRight");
+  await expect(counter).toHaveText("3 / 3");
+});
+
+test("an arrow typed into a field behind the overlay moves the caret, not the page", async ({
+  mount,
+  page,
+}) => {
+  // Found in real Chromium by the independent review (I2): the document-level
+  // listener hears EVERY key. The overlay is deliberately not a focus trap, so
+  // a field behind it is reachable — and before the guard, an arrow pressed in
+  // it left the caret where it was and stepped the pager instead.
+  // jsdom cannot see this: `document.activeElement` and `selectionStart` are
+  // simulated there, and the pager fires regardless.
+  await page.setViewportSize({ width: 1100, height: 760 });
+  await mount(<PreviewPagerStory withBackgroundInput />);
+
+  const counter = page.locator(".md-preview__pager-count");
+  await expect(counter).toHaveText("1 / 3");
+
+  const field = page.getByLabel("background field");
+  await field.focus();
+  await field.evaluate((el: HTMLInputElement) => el.setSelectionRange(0, 0));
+  await page.keyboard.press("ArrowRight");
+
+  await expect(
+    counter,
+    "the page must not step while a field has the key",
+  ).toHaveText("1 / 3");
+  expect(
+    await field.evaluate((el: HTMLInputElement) => el.selectionStart),
+    "the caret is what should have moved",
+  ).toBe(1);
+});
