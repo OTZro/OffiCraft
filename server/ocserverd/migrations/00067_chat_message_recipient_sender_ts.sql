@@ -1,0 +1,48 @@
+-- +goose Up
+-- T-48: one composite index so the UNREAD COUNT stops scanning the chat table.
+--
+-- owner ruling 2026-09-02 (rc-6b67aa1a331c, option 1: 「放進這包，現在就加這個複合
+-- 索引（接受多一支 migration）」) — chosen AGAINST the proposer's own
+-- recommendation of "另開票, measure on real data first". So the numbers below
+-- are SYNTHETIC and he took them knowing that; see the caveats at the bottom.
+--
+-- Measured by the T-48 contractor on a 48,153-row synthetic chat_message:
+--
+--   query            | today (ts index only) | this index
+--   -----------------+-----------------------+------------
+--   scrollback       | 0.014 ms              | 0.014 ms   (unchanged)
+--   unread count     | 9.24 ms               | 3.47 ms    (2.7x)
+--
+-- The plan line becomes `SEARCH m USING COVERING INDEX` and the
+-- `USE TEMP B-TREE FOR GROUP BY` disappears: the three columns cover everything
+-- the unread query reads, so it never returns to the table.
+--
+-- 🔴 WHY THIS SHAPE AND NOT THE OBVIOUS ONES. Two cheaper-looking arrangements
+-- were measured and BOTH made scrollback 250-500x slower while barely moving
+-- the unread count:
+--
+--   two single-column indexes  | scrollback 7.1 ms | unread 10.1 ms
+--   (sender,ts) + (recipient,ts)| scrollback 3.9 ms | unread 10.2 ms
+--
+-- Scrollback is untouched by THIS index only because its query cannot use it at
+-- all, so the planner keeps choosing idx_chat_message_ts. That is a property of
+-- the current scrollback query, not a promise about future ones.
+--
+-- ⚠️ An earlier generation recorded "adding an index makes scrollback 23x
+-- slower" as a property OF INDEXES. It is not: that measurement was of the
+-- single-column arrangement above. Do not cite it against a composite index.
+--
+-- ⚠️ WHAT NOBODY HAS MEASURED (owner was told, and accepted):
+--   · real data — every number here is synthetic
+--   · the write-side cost (every INSERT into chat_message now maintains a
+--     second index) and the disk it takes
+--   · this index is shaped for ONE query. Reword that query and the covering
+--     property can vanish silently — nothing here will say so.
+CREATE INDEX idx_chat_message_recipient_sender_ts
+    ON chat_message (recipient, sender, ts);
+
+-- +goose Down
+-- Additive and losslessly reversible: an index carries no data of its own, so
+-- dropping it restores the previous plans exactly. Unlike 00065, nothing here
+-- is lossy — rolling back costs only the speed.
+DROP INDEX IF EXISTS idx_chat_message_recipient_sender_ts;
