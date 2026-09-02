@@ -35,12 +35,19 @@ package main
 //	   → RED: the whole T-14 set, AND the matrix's bucket accounting
 //	     ("fell into no bucket"), which is how that accounting is known not to
 //	     be a comment that merely restates the loop.
-//	D  swap memberRestartQueuedReceipt → memberHeldDownReceipt in both gates
-//	   → RED: TestUpdateMemberOnAHeldDownMemberLeavesAReceipt only. The relocate
-//	     face stayed GREEN and that is a real finding, recorded there: relocate
-//	     runs the event-driven reconcile before returning, so on an already-
-//	     converged member consumeRestartAfterStop overwrites the queued receipt
-//	     in the same request.
+//	D  swap memberRestartQueuedReceipt → memberHeldDownReceipt at ONE call site
+//	   at a time. Production has three (model, relocate, refocus) and each is
+//	   now pinned by a test that reads the sentence back verbatim:
+//	   → RED per site: TestUpdateMemberOnAHeldDownMemberLeavesAReceipt,
+//	     TestRelocateAHeldDownMemberLeavesAReceipt,
+//	     TestRefocusStampVisibility_NoEntryPointStampsAMemberOnItsWayOffline.
+//	     Two of those three were GREEN under their own mutant until the
+//	     relocate row was given a live session and the refocus subtest was made
+//	     to assert the sentence instead of only RestartAfterStop.
+//	   🔴 The relocate face can only be read on a stop STILL LANDING: the
+//	     handler runs the event-driven reconcile before returning, so on an
+//	     already-converged member consumeRestartAfterStop spends the intent and
+//	     overwrites the queued receipt inside the same request.
 
 import (
 	"fmt"
