@@ -178,7 +178,7 @@ func TestMemberOwnerOp_OfflineTakesEffectImmediately(t *testing.T) {
 // before its first 活化 — so what stays pinned here is that editing such a
 // member's model must not boot it. The converged-stop half is pinned by
 // TestRelocateAndModelChangeAfterAStopBringTheMemberBackUp.
-func TestMemberOwnerOp_StoppedMemberIsNotRevived(t *testing.T) {
+func TestMemberOwnerOp_NeverActivatedNewHireIsNotRevived(t *testing.T) {
 	s := newReconcileTestServer(t)
 	putWarden(t, s, "mach-a")
 

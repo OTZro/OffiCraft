@@ -94,11 +94,11 @@ func TestUpdateMemberOnAHeldDownMemberLeavesAReceipt(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("update: %d %s", rec.Code, rec.Body.String())
 	}
-	if got := reasonOf(t, s, "m-stopped"); strings.Contains(got, askForActivate) ||
-		!strings.Contains(got, "started again once it is down") {
-		t.Errorf("last_op_reason = %q, want memberRestartQueuedReceipt: 換 model on a "+
+	if got, want := reasonOf(t, s, "m-stopped"), memberRestartQueuedReceipt(memberOpModel); got != want {
+		t.Errorf("the PATCH /api/members/{id} receipt call site (api_members.go, the "+
+			"memberOpModel gate) wrote last_op_reason = %q, want %q: 換 model on a "+
 			"stopped member is the 重啟, so the owner is told it will come back up "+
-			"rather than to 活化 it", got)
+			"rather than to 活化 it", got, want)
 	}
 }
 
@@ -150,6 +150,28 @@ func TestRelocateAHeldDownMemberLeavesAReceipt(t *testing.T) {
 	if got := reasonOf(t, s, "m-stoppedmove"); strings.Contains(got, askForActivate) {
 		t.Errorf("last_op_reason = %q still tells the owner to 活化. Since T-14 項目 7 "+
 			"改機器 on a stopped member IS the 重啟 — nothing more is needed from him", got)
+	}
+
+	// …and the row the queued sentence is actually READ on: a stop still
+	// landing. The converged row above has its receipt overwritten by
+	// consumeRestartAfterStop inside the same request, so it can only ever pin
+	// the clause; with a live session the intent is not spendable yet and the
+	// relocate call site's own sentence survives to be observed verbatim.
+	// Without this row that call site is pinned by nothing.
+	stoppedMember(t, s, "m-stoplanding")
+	connectOnlineMachine(t, s, "m-stoplanding", "mach-a")
+	rec = httptest.NewRecorder()
+	s.HandleRelocateMemberApiMembersMemberIdRelocatePost(rec,
+		taskReq(t, "POST", "/api/members/m-stoplanding/relocate",
+			map[string]any{"machine_id": "mach-b"}, wireOwnerID, "owner"), "m-stoplanding")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("relocate: %d %s", rec.Code, rec.Body.String())
+	}
+	if got, want := reasonOf(t, s, "m-stoplanding"), memberRestartQueuedReceipt(memberOpRelocate); got != want {
+		t.Errorf("the POST /api/members/{id}/relocate receipt call site (api_members.go, "+
+			"the memberOpRelocate gate) wrote last_op_reason = %q, want %q: the stop is "+
+			"still landing, so the owner is told it is honoured as-is and the member "+
+			"comes back up — not to 活化 it himself", got, want)
 	}
 }
 

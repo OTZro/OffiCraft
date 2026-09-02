@@ -50,7 +50,7 @@ package main
 //
 // The fourth stamp site (armMemberOwnerOpHandover, the owner-verb funnel)
 // guards on DesiredState directly and is pinned by
-// TestMemberOwnerOp_StoppedMemberIsNotRevived; not repeated here.
+// TestMemberOwnerOp_NeverActivatedNewHireIsNotRevived; not repeated here.
 
 import (
 	"context"
@@ -130,6 +130,15 @@ func TestRefocusStampVisibility_NoEntryPointStampsAMemberOnItsWayOffline(t *test
 		if !m.RestartAfterStop {
 			t.Fatal("refocus recorded neither an epoch nor a restart intent — the " +
 				"owner's 「起來」 was dropped")
+		}
+		// The flag is what the SERVER acts on; this sentence is what the OWNER
+		// reads, and it is the one that tells him not to press 活化. Asserting
+		// only the flag leaves this call site free to write the opposite
+		// instruction.
+		if got, want := m.LastOpReason, memberRestartQueuedReceipt(refocusOpRefocus); got != want {
+			t.Fatalf("the POST /api/members/{id}/refocus receipt call site "+
+				"(api_members.go, the refocusOpRefocus gate) wrote last_op_reason = %q, "+
+				"want %q", got, want)
 		}
 		if m.DesiredState != DesiredStateOffline || m.StoppingSince != 9990 {
 			t.Fatalf("the 下線 in flight was altered: desired=%q stopping_since=%v — "+

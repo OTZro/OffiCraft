@@ -26,7 +26,7 @@ package main
 //	B  aStopWasEverAskedFor → true (drop the never-活化 protection)
 //	   → RED: TestRelocateMember_PlacementOnly,
 //	     TestRelocateMember_OfflineRelocateIsNotPending,
-//	     TestMemberOwnerOp_StoppedMemberIsNotRevived,
+//	     TestMemberOwnerOp_NeverActivatedNewHireIsNotRevived,
 //	     TestUpdateMemberOnAHeldDownMemberLeavesAReceipt,
 //	     TestRelocateAHeldDownMemberLeavesAReceipt. The last three were GREEN
 //	     under this mutant until their fixtures were made to say which row shape
