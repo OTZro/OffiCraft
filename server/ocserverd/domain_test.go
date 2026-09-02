@@ -15,7 +15,7 @@ import (
 )
 
 func presenceMember(mutate func(*Member)) Member {
-	m := Member{ID: "mira", Kind: KindAssistant}
+	m := Member{ID: "mira", Kind: KindStaff}
 	if mutate != nil {
 		mutate(&m)
 	}
@@ -192,20 +192,20 @@ func TestCanonicalHostFoldsOnlyLegacyAlias(t *testing.T) {
 
 // ── CanonicalKind ────────────────────────────────────────────────────────────
 
-func TestCanonicalKindMapsBlankToAssistant(t *testing.T) {
+func TestCanonicalKindMapsBlankToStaff(t *testing.T) {
 	// The Python bare hire writes kind="" — the Go closed set folds it to the
 	// default colleague kind.
 	got, err := CanonicalKind("")
-	if err != nil || got != KindAssistant {
-		t.Fatalf("blank kind must fold to assistant, got (%q, %v)", got, err)
+	if err != nil || got != KindStaff {
+		t.Fatalf("blank kind must fold to staff, got (%q, %v)", got, err)
 	}
-	for _, kind := range []string{KindAssistant, KindWarden, KindOutsource} {
+	for _, kind := range []string{KindStaff, KindWarden, KindOutsource} {
 		got, err := CanonicalKind(kind)
 		if err != nil || got != kind {
 			t.Fatalf("closed-set kind %q must pass through, got (%q, %v)", kind, got, err)
 		}
 	}
-	for _, kind := range []string{"robot", "Assistant", "WARDEN", "Outsource"} {
+	for _, kind := range []string{"robot", "Staff", "WARDEN", "Outsource", "assistant"} {
 		if _, err := CanonicalKind(kind); err == nil {
 			t.Fatalf("kind %q outside the closed set must be refused", kind)
 		}
@@ -267,12 +267,12 @@ func TestPickMemberNameExhaustedPoolFallsBackToSuffix(t *testing.T) {
 // ── entity invariants ────────────────────────────────────────────────────────
 
 func TestValidateMember(t *testing.T) {
-	for _, kind := range []string{KindAssistant, KindWarden, KindOutsource} {
+	for _, kind := range []string{KindStaff, KindWarden, KindOutsource} {
 		if err := ValidateMember(Member{ID: "mira", Kind: kind}); err != nil {
 			t.Fatalf("valid %s member refused: %v", kind, err)
 		}
 	}
-	if err := ValidateMember(Member{Kind: KindAssistant}); err == nil {
+	if err := ValidateMember(Member{Kind: KindStaff}); err == nil {
 		t.Fatal("blank id must be refused")
 	}
 	if err := ValidateMember(Member{ID: "m-1", Kind: ""}); err == nil {

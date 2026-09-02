@@ -93,7 +93,7 @@ func NewDALPools(w, r *sql.DB) *DAL {
 type Member struct {
 	ID          string
 	Name        string
-	Kind        string // closed set: "assistant" | "warden" | "outsource" (schema CHECK)
+	Kind        string // closed set: "staff" | "warden" | "outsource" (schema CHECK)
 	RoleKey     string
 	Runtime     string
 	Model       string

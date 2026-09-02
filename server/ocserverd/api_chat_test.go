@@ -564,7 +564,7 @@ func TestPostChatRecipientKinds(t *testing.T) {
 	for _, m := range []Member{
 		{ID: "ow-active", Kind: KindOutsource, RosterStatus: RosterStatusActive},
 		{ID: "mach-warden", Kind: KindWarden, RosterStatus: RosterStatusActive},
-		{ID: "m-removed", Kind: KindAssistant, RosterStatus: RosterStatusRemoved},
+		{ID: "m-removed", Kind: KindStaff, RosterStatus: RosterStatusRemoved},
 		{ID: "ow-removed", Kind: KindOutsource, RosterStatus: RosterStatusRemoved},
 	} {
 		if err := s.dal.PutMember(m); err != nil {

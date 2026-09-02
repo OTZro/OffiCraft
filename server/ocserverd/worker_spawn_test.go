@@ -338,7 +338,7 @@ func TestWorkerBootContextIsTheStaffFoldMinusThePersona(t *testing.T) {
 func TestWorkerBootContextIsInvariantToTheTaskAndItsManual(t *testing.T) {
 	s := newWorkerTestServer(t)
 	if err := s.dal.PutMember(Member{
-		ID: "m-pred", Name: "Ken", Kind: KindAssistant, RosterStatus: RosterStatusActive,
+		ID: "m-pred", Name: "Ken", Kind: KindStaff, RosterStatus: RosterStatusActive,
 	}); err != nil {
 		t.Fatalf("put predecessor: %v", err)
 	}

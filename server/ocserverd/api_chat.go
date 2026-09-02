@@ -320,7 +320,7 @@ func (s *apiServer) resolveChatRecipient(id string) (string, error) {
 		return "", err
 	}
 	if m == nil || m.RosterStatus != RosterStatusActive ||
-		(m.Kind != KindAssistant && m.Kind != KindOutsource) {
+		(m.Kind != KindStaff && m.Kind != KindOutsource) {
 		return "", errNotFound
 	}
 	return id, nil

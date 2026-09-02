@@ -36,7 +36,7 @@
 - 頁籤列之上還有一條 `ConnectionBanner`：**唯一一個會承認「座艙已經收不到東西」的地方**。
   下面每一頁都是 delta 驅動的，斷線與「今天很安靜」畫出來一模一樣；串流健康時它不渲染任何東西。
 
-開箱時的名冊只有 **Mira**（`kind=assistant`，角色 key 是 admin 角色）一位成員；
+開箱時的名冊只有 **Mira**（`kind=staff`，角色 key 是 admin 角色）一位成員；
 機器清單另有一台 **「伺服器這一台」**（`m-server-self` warden，永遠在、不可刪）。見 `server/ocserverd/dbseed.go`。
 
 ---

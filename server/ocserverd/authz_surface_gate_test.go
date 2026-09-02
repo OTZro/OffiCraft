@@ -93,7 +93,7 @@ var authzIdents = map[string]bool{
 	"principalOwner": true, "principalAdminAgent": true,
 	"principalAgent": true, "principalMachine": true,
 	"adminRoleKey": true, "machineKind": true,
-	"KindAssistant": true, "KindOutsource": true,
+	"KindStaff": true, "KindOutsource": true,
 	"KindWarden": true, "KindHuman": true,
 	// comparing an id against the owner's wire id IS a privilege test.
 	"wireOwnerID": true,

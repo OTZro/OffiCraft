@@ -217,7 +217,7 @@ const MOCK_WIRE_MEMBERS: WireMember[] = [
   {
     id: "mira",
     name: "Mira",
-    kind: "assistant", // mirror the real seed (dal/seed.py: Mira kind="assistant")
+    kind: "staff", // mirror the real seed (dbseed.go: Mira kind=KindStaff)
     role_key: "assistant",
     role_name: "",
     runtime: "claude",
@@ -300,7 +300,7 @@ const MOCK_WIRE_MEMBERS: WireMember[] = [
   // this row is what keeps a future re-narrowing from being silent here.
   //
   // The office roster, the task assignee picker and the reassign dialog all
-  // filter `kind === "assistant"`, so this row changes no panel — it changes
+  // filter `kind === "staff"`, so this row changes no panel — it changes
   // what the DATA looks like, which is the point.
   {
     id: "ow-7d8ad859dd9b",

@@ -48,7 +48,7 @@ const member: Member = {
   lifecycle: "online",
   model: "opus",
   effort: "medium",
-  kind: "assistant",
+  kind: "staff",
   desiredMachineId: "",
   machine: null,
   account: null,

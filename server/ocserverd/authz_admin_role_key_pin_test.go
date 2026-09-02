@@ -7,7 +7,7 @@ package main
 // grants admin_agent capability (authz.go: adminRoleKey). The two are different
 // axes that happen to spell themselves the same way today:
 //
-//	domain.go  KindAssistant = "assistant"   ← the kind axis, being renamed
+//	domain.go  KindStaff     = "staff"       ← the kind axis, already renamed
 //	authz.go   adminRoleKey  = "assistant"   ← the authorization axis, MUST NOT move
 //
 // A repo-wide substitution of that literal — the obvious way to do a rename this
@@ -48,7 +48,7 @@ func TestAdminRoleKeyIsPinnedAgainstTheKindRename(t *testing.T) {
 // the constant, so the guard still bites if someone keeps the literal but
 // rewires classifyMember onto the kind axis instead.
 func TestAdminClassificationSurvivesOnRoleKeyAlone(t *testing.T) {
-	admin := &Member{ID: "m-admin", Kind: KindAssistant, RoleKey: wantAdminRoleKey()}
+	admin := &Member{ID: "m-admin", Kind: KindStaff, RoleKey: wantAdminRoleKey()}
 	if got := classifyMember(admin); got != principalAdminAgent {
 		t.Fatalf("a member whose role_key is the admin role key classified as %q, want %q "+
 			"— the admin boundary has moved off role_key", got, principalAdminAgent)
@@ -56,7 +56,7 @@ func TestAdminClassificationSurvivesOnRoleKeyAlone(t *testing.T) {
 
 	// The kind axis must NOT confer admin on its own. This is the assertion that
 	// fails if someone "helpfully" makes classifyMember look at Kind.
-	plain := &Member{ID: "m-plain", Kind: KindAssistant, RoleKey: "r-25debddcf5dd"}
+	plain := &Member{ID: "m-plain", Kind: KindStaff, RoleKey: "r-25debddcf5dd"}
 	if got := classifyMember(plain); got != principalAgent {
 		t.Fatalf("a member with a non-admin role_key classified as %q, want %q "+
 			"— kind must not grant admin", got, principalAgent)

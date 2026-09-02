@@ -134,7 +134,7 @@ export function OfficePage() {
   // "warden", the telemetry collector) belong to the monitoring/machine view,
   // never the office roster (Seth once mistook a warden row for an intruder).
   const roster = members
-    .filter((m) => m.kind === "assistant")
+    .filter((m) => m.kind === "staff")
     // 助理(seed assistant 角色)置頂;其餘接在後面。sort 穩定 → 各組內維持
     // ListMembers 已排好的字母序(不必再排一次名字)。
     .sort(
@@ -654,7 +654,7 @@ export function OfficePage() {
                 // The live worker list, so an ow- sender `members` did not
                 // resolve still gets the codename the left rail shows. Note
                 // `members` is the UNFILTERED roster (not `roster`, which is
-                // kind==='assistant' only), and GET /api/members does carry
+                // kind==='staff' only), and GET /api/members does carry
                 // kind='outsource' rows — so this list is a fallback, not the
                 // only outsource label source. Released workers are in
                 // neither; ChatArea's useWorkerCodenames covers those.

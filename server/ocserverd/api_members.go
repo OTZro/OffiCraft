@@ -663,7 +663,7 @@ func (s *apiServer) HandleHireMemberApiMembersPost(w http.ResponseWriter, r *htt
 		}
 	}
 	// The Go kind is a CLOSED set: the Python bare hire's kind="" folds to
-	// "assistant" at this ingest seam (CanonicalKind — owner-approved mapping);
+	// "staff" at this ingest seam (CanonicalKind — owner-approved mapping);
 	// a kind outside the closed set is refused.
 	kind, err := CanonicalKind(strOrEmpty(body.Kind))
 	if err != nil {

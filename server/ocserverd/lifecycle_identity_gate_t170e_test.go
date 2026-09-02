@@ -80,7 +80,7 @@ package main
 //     stage 3 parity test stayed GREEN on both, which is the division of labour
 //     working, and is why this file had to exist.
 //   - adding a fresh kind branch inside an existing handler
-//     (`m.Kind != KindAssistant` in sseStopGateRefusal) → gate (1) RED, quoting
+//     (`m.Kind != KindStaff` in sseStopGateRefusal) → gate (1) RED, quoting
 //     the file, the function and the expression.
 //   - narrowing a listed formality to staff via a new AppliesTo → the stage 3
 //     parity test RED, by pass name and again on the 外包 fixture.
@@ -203,7 +203,7 @@ import (
 // set from the package's own const declarations and fails if one is not listed,
 // so a NEW member kind cannot be added without entering this scan.
 var identityKindIdents = map[string]bool{
-	"KindAssistant":         true,
+	"KindStaff":             true,
 	"KindWarden":            true,
 	"KindOutsource":         true,
 	"machineKind":           true,
@@ -553,14 +553,14 @@ var identityGateLedger = map[string]string{
 		"the same refusal at the mint site — a warden token has no exp claim at all, " +
 		"so handing one to a non-machine row would be a permanent credential for an " +
 		"agent. Machine-vs-person axis.",
-	"domain.go :: ValidateMember :: m.Kind != KindAssistant": "" +
+	"domain.go :: ValidateMember :: m.Kind != KindStaff": "" +
 		"the closed-set validation itself (schema CHECK mirror): kind must be one of " +
 		"the three. Not a behavioural gate — this is the definition of the vocabulary " +
 		"the rest of this ledger is written in.",
 	"domain.go :: ValidateMember :: m.Kind != KindOutsource": "" +
-		"second arm of the same closed-set validation; see the KindAssistant arm.",
+		"second arm of the same closed-set validation; see the KindStaff arm.",
 	"domain.go :: ValidateMember :: m.Kind != KindWarden": "" +
-		"third arm of the same closed-set validation; see the KindAssistant arm.",
+		"third arm of the same closed-set validation; see the KindStaff arm.",
 
 	// ── roster resolution: which face may see which population ─────────────
 	"api_helpers.go :: resolveMember :: m.Kind == KindOutsource": "" +
@@ -636,7 +636,7 @@ var identityGateLedger = map[string]string{
 		"TASK, which only an outsource row has (LinkedTaskID). A staff member has no " +
 		"such link, so there is nothing to write back — an absence of data, not a " +
 		"withheld formality.",
-	"member_ownerop_winddown.go :: memberHasStateToFlush :: m.Kind != KindAssistant": "" +
+	"member_ownerop_winddown.go :: memberHasStateToFlush :: m.Kind != KindStaff": "" +
 		"staff-only by construction, and the function's own comment says why for both " +
 		"excluded kinds: a warden runs no ocagent and would never read the marker, and " +
 		"an outsource row has its own funnel (respawnWorkerForOwnerOp) and does not reach " +
@@ -653,7 +653,7 @@ var identityGateLedger = map[string]string{
 		"storage funnels — the divergence is the WRITE path, not the decision.",
 	"reconcile.go :: tokenExpiryOf :: m.Kind == KindWarden": "" +
 		"🔴 THE FIXED BUG, kept in the ledger as the worked example. This gate used to " +
-		"read `Kind != KindAssistant`, which swept outsource in with warden while the " +
+		"read `Kind != KindStaff`, which swept outsource in with warden while the " +
 		"comment justified only the warden half — an exemption wider than its own " +
 		"reason, and one of the two historical 外包-missing-a-formality failures. It now " +
 		"names the ONE exempt kind (a warden's token is minted without an exp claim, so " +
@@ -732,7 +732,7 @@ var identityGateLedger = map[string]string{
 		"banked is identical; only the topic differs.",
 
 	// ── chat / roster projection ────────────────────────────────────────────
-	"api_chat.go :: resolveChatRecipient :: m.Kind != KindAssistant": "" +
+	"api_chat.go :: resolveChatRecipient :: m.Kind != KindStaff": "" +
 		"a chat recipient must be a person — staff or worker, explicitly BOTH. Written " +
 		"as a two-arm test rather than `!= KindWarden` so that a fourth kind does not " +
 		"silently become addressable; the pairing is what makes 外包＝正職 true here.",
@@ -862,10 +862,10 @@ var identityGateLedger = map[string]string{
 	"api_machines.go :: HandleOnboardMachineApiMachinesPost :: Kind: machineKind": "" +
 		"onboarding a machine mints its warden member row. The one place a warden row " +
 		"is created outside the seed.",
-	"api_roles.go :: HandleCreateRoleApiRolesPost :: Kind: KindAssistant": "" +
+	"api_roles.go :: HandleCreateRoleApiRolesPost :: Kind: KindStaff": "" +
 		"role creation names the kind its members will be hired as; roles are a staff " +
 		"concept (a worker's shape comes from its task manual instead).",
-	"dbseed.go :: seedOutOfBox :: Kind: KindAssistant": "" +
+	"dbseed.go :: seedOutOfBox :: Kind: KindStaff": "" +
 		"the out-of-box seed's first colleague. Fixture data, listed because the scan " +
 		"must not be tuned to skip the places rows are born.",
 	"dbseed.go :: seedOutOfBox :: Kind: KindWarden": "" +

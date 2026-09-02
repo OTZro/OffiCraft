@@ -47,14 +47,14 @@ async function ownerToken(request) {
   return token;
 }
 
-// Hire a fresh roster member (kind=assistant so it surfaces on the office
+// Hire a fresh roster member (kind=staff so it surfaces on the office
 // roster). Returns the full MemberDTO. Each spec hires its OWN members (specs
 // run in parallel workers against the one shared isolated server — never
 // mutate another spec's fixtures, and never dismiss the seed `mira`).
 async function hireMember(request, token, name) {
   const res = await request.post(`${BASE}/api/members`, {
     headers: authHeaders(token),
-    data: { name, kind: 'assistant' },
+    data: { name, kind: 'staff' },
   });
   expect(res.status(), `hiring member "${name}" must succeed`).toBe(200);
   return res.json();

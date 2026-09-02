@@ -54,7 +54,7 @@ func TestLifecycleRosterPasses_TheReachOfEveryFormalityIsDeclaredByName(t *testi
 	api := newTasksTestServer(t)
 	api.noOutsource = true
 
-	staff := Member{ID: "m-reach", Kind: KindAssistant, RosterStatus: RosterStatusActive}
+	staff := Member{ID: "m-reach", Kind: KindStaff, RosterStatus: RosterStatusActive}
 	warden := Member{ID: "mach-reach", Kind: KindWarden, RosterStatus: RosterStatusActive}
 	worker := Member{ID: "ow-reach", Kind: KindOutsource, RosterStatus: RosterStatusActive}
 
@@ -228,9 +228,9 @@ func TestLifecyclePolicy_TheEntryFilterIsOneQuestionWithTwoAnswers(t *testing.T)
 		m    Member
 		want bool
 	}{
-		{"staff, on the roster", active(Member{Kind: KindAssistant,
+		{"staff, on the roster", active(Member{Kind: KindStaff,
 			DesiredState: DesiredStateOnline}), true},
-		{"staff, soft-removed", Member{Kind: KindAssistant,
+		{"staff, soft-removed", Member{Kind: KindStaff,
 			RosterStatus: RosterStatusRemoved, DesiredState: DesiredStateOnline}, false},
 		{"warden, plain", active(Member{Kind: KindWarden,
 			DesiredState: DesiredStateOnline}), false},

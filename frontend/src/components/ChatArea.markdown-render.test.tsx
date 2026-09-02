@@ -46,7 +46,7 @@ function mkMember(id = "b", name = "Beto"): Member {
     lifecycle: "online",
     model: "opus",
     effort: "medium",
-    kind: "assistant",
+    kind: "staff",
     desiredMachineId: "",
     machine: null,
     account: null,

@@ -67,7 +67,7 @@ function makeMember(lifecycle: MemberLifecycle): Member {
     lifecycle,
     model: "opus",
     effort: "medium",
-    kind: "assistant",
+    kind: "staff",
     desiredMachineId: "",
     machine: null,
     account: null,

@@ -33,7 +33,7 @@ function mkMember(lifecycle: Member["lifecycle"]): Member {
     lifecycle,
     model: "opus",
     effort: "medium",
-    kind: "assistant",
+    kind: "staff",
     desiredMachineId: "",
     machine: null,
     account: null,
