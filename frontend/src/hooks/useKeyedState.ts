@@ -48,9 +48,13 @@ import { useCallback, useRef, useState } from "react";
  * ⚠️ What this does NOT cover, and must stay a human decision: whether a given
  * piece of state is per-conversation at all. A per-COMPONENT state that used
  * this hook would be wrongly wiped on every switch, and a per-conversation one
- * declared with plain `useState` still leaks across. See latch-inventory §2.4
- * for the current census of `ChatArea`'s React state and why each one is where
- * it is.
+ * declared with plain `useState` still leaks across.
+ *
+ * That census is no longer a hand-written list (T-48, R11-12): every
+ * state/ref declaration in `ChatArea` is walked out of the source by
+ * `components/crossVisitState.test.ts`, which reads which hook each one uses
+ * and makes every non-keyed one carry a written reason. latch-inventory §2.4
+ * is prose about the same set, and prose cannot go red.
  */
 export function useKeyedState<T>(
   visit: object,

@@ -120,10 +120,18 @@ const REGISTRY: ReadonlyArray<{
   { file: "components/ChatGalleryPanel.tsx", kind: "addEventListener", count: 1, verdict: "Escape layer; removed on unmount" },
   { file: "components/ChatGalleryPanel.tsx", kind: "subscribe", count: 1, verdict: "gallery SSE; unsubscribed on unmount" },
   { file: "components/Avatar.tsx", kind: "JSX onLoad/onError", count: 1, verdict: "<img onError>; records the URL that failed, which can never match the next room's avatar, and the [personal, theme] effect clears it" },
-  { file: "components/MarkdownPreviewOverlay.tsx", kind: "await", count: 1, verdict: "share-link copy; the overlay is keyed on the visit (R10-1) so it cannot outlive the room that opened it" },
-  { file: "components/MarkdownPreviewOverlay.tsx", kind: ".then/.catch/.finally", count: 5, verdict: "blob fetch + copy; writes only this overlay's own state, and the overlay dies with the visit (R10-1)" },
-  { file: "components/MarkdownPreviewOverlay.tsx", kind: "setTimeout/setInterval", count: 2, verdict: "the 已複製 flash timers; write only this overlay's own state, and the overlay dies with the visit (R10-1)" },
-  { file: "components/MarkdownPreviewOverlay.tsx", kind: "addEventListener", count: 13, verdict: "keydown pager, wheel/touch/gesture zoom, resize, pointermove; all removed on unmount, and the overlay unmounts with the visit (R10-1)" },
+  // ⚠️ WHO UNMOUNTS THIS OVERLAY — four mount points, two owners, and the
+  // eleventh review caught this line claiming one of them for all four (R11-10).
+  // `ChatArea` mounts it three times from `mdPreview`, which IS keyed on the
+  // visit (R10-1). `AttachmentStrip` mounts it a fourth time from its own
+  // `preview`, and a strip is not inside a visit at all — two of its three call
+  // sites are a reply card and the task-artifacts popover. That one is bounded
+  // instead by the list it renders: the preview is looked up in `attachments`
+  // every render, so it cannot survive the list it was opened from (R11-1).
+  { file: "components/MarkdownPreviewOverlay.tsx", kind: "await", count: 1, verdict: "share-link copy; writes only this overlay's own state, and the overlay dies with whatever opened it (see the four mount points below)" },
+  { file: "components/MarkdownPreviewOverlay.tsx", kind: ".then/.catch/.finally", count: 5, verdict: "blob fetch + copy; writes only this overlay's own state, and the overlay dies with whatever opened it" },
+  { file: "components/MarkdownPreviewOverlay.tsx", kind: "setTimeout/setInterval", count: 2, verdict: "the 已複製 flash timers; write only this overlay's own state, and the overlay dies with whatever opened it" },
+  { file: "components/MarkdownPreviewOverlay.tsx", kind: "addEventListener", count: 13, verdict: "keydown pager, wheel/touch/gesture zoom, resize, pointermove; all removed on unmount, and the overlay unmounts with whatever opened it" },
   { file: "components/MarkdownPreviewOverlay.tsx", kind: "JSX onLoad/onError", count: 1, verdict: "<img onLoad> sizing; writes only this overlay's own layout" },
   // 🔴 THE `mdPreview` EXEMPTION IS GONE, AND ITS EPITAPH IS THE POINT (R10-1).
   // Those five rows used to point at an exemption reading: `.md-preview` is
@@ -243,8 +251,22 @@ describe("async landing points reachable from ChatArea", () => {
     // of the comparison above agree. So the list's LENGTH is pinned too, and
     // growing it is deliberate work: the number below moves only with a new row
     // and the verdicts it drags in.
-    expect(KINDS.length).toBe(11);
-    expect(KINDS.map(([k]) => k)).toContain("other async primitive");
+    // The whole LIST, not its length: swapping one shape out for another keeps
+    // the count at 11 and every file that only landed through the deleted shape
+    // quietly leaves the population (R11-11).
+    expect(KINDS.map(([k]) => k)).toEqual([
+      "await",
+      ".then/.catch/.finally",
+      "setTimeout/setInterval",
+      "queueMicrotask",
+      "requestAnimationFrame",
+      "addEventListener",
+      "Observer",
+      "FileReader/Image handler",
+      "JSX onLoad/onError",
+      "subscribe",
+      "other async primitive",
+    ]);
   });
 
   it("start from a file set that is walked, not typed in", () => {

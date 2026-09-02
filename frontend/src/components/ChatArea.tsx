@@ -20,6 +20,7 @@ import { useOwnerDisplayName } from "../hooks/useOwnerName";
 import { formatDayLabel, splitByDay } from "../lib/dateFormat";
 import {
   ATTACH_ACCEPT,
+  CHAT_MAX_ATTACHMENTS,
   useAttachmentStaging,
 } from "../hooks/useAttachmentStaging";
 import type { PendingAttachment } from "../hooks/useAttachmentStaging";
@@ -230,6 +231,11 @@ type ChatSession = {
   pendingLatestScroll: boolean;
 };
 
+/** The empty thread rendered while `messages` still belongs to the room the
+ * owner has just left (see `shownMessages`). Module-level so the identity is
+ * stable across renders. */
+const NO_MESSAGES: ChatMessage[] = [];
+
 function freshChatSession(unreadCount: number): ChatSession {
   return {
     initialUnread: unreadCount,
@@ -266,8 +272,23 @@ function freshChatSession(unreadCount: number): ChatSession {
  * file that has already been read is not a candidate to refuse, it is data
  * somebody is holding. So the draft is allowed over the cap and the owner sees
  * every file waiting when they come back, with the over-cap ones there to
- * remove. Sending over the cap is refused by the server, visibly (§3 rule 4:
- * blocking a commit is never a licence to destroy the file). */
+ * remove (§3 rule 4: blocking a commit is never a licence to destroy the file).
+ *
+ * ⚠️ WHAT MAKES THAT SAFE IS THE COMPOSER, NOT THE SERVER (T-48, R11-3). This
+ * comment used to say the over-cap send "is refused by the server, visibly".
+ * The server does refuse it (400) — but this app has no toast, no error row for
+ * a failed send and no `unhandledrejection` reporter, so the refusal reaches
+ * nobody: the send button stayed lit and every press did nothing, forever.
+ * The composer now refuses the SEND itself, with the same 「最多 N 個檔案」
+ * notice staging uses — see `overAttachmentCap` below.
+ *
+ * 🔴 AND THE DRAFT IS NOT THE ONLY PLACE IT HAS TO REACH (T-48, R11-2). A room
+ * the owner has come BACK to already has a live composer, and that composer
+ * restored its draft when it mounted — before this file existed. Writing only
+ * to the draft left the file invisible AND doomed: the persist effect below
+ * saves the composer's own (file-less) list on the next keystroke, over the
+ * top. So the arrival is also announced to whichever composer is showing that
+ * room right now. */
 function keepAttachmentsWithTheirRoom(
   peer: string,
   arriving: PendingAttachment[],
@@ -275,13 +296,29 @@ function keepAttachmentsWithTheirRoom(
   const saved = getChatDraft(peer);
   const kept = saved?.attachments ?? [];
   const fresh = arriving.filter((a) => !kept.some((k) => k.key === a.key));
-  if (fresh.length === 0) return;
-  saveChatDraft(peer, {
-    text: saved?.text ?? "",
-    attachments: [...kept, ...fresh],
-    replyTo: saved?.replyTo,
-  });
+  if (fresh.length > 0) {
+    saveChatDraft(peer, {
+      text: saved?.text ?? "",
+      attachments: [...kept, ...fresh],
+      replyTo: saved?.replyTo,
+    });
+  }
+  // Announced whether or not the draft write happened: the draft may already
+  // hold the row while the composer on screen does not (it mounted, restored,
+  // and the row was written after). `adoptAttachments` dedups by key.
+  liveComposers.get(peer)?.(arriving);
 }
+
+/** The composer that is showing a given room RIGHT NOW, if one is mounted —
+ * keyed by peer id, at most one entry per room because only one `ChatArea`
+ * exists at a time. This is the half `chatDraftStore` cannot be: the store is
+ * where a file WAITS, and a composer that has already read it is not going to
+ * read it again. Registration is the mounted composer's own doing (the effect
+ * in `ChatArea` below), so nothing here has to be told when a room is left. */
+const liveComposers = new Map<
+  string,
+  (arriving: PendingAttachment[]) => void
+>();
 
 export function ChatArea({
   member,
@@ -473,6 +510,24 @@ export function ChatArea({
     // viewport, the highlight and the miss notice are this component's business.
   } = useChat(member.id, jumpToMsgId);
 
+  // 🔴 ANOTHER ROOM'S THREAD IS NEVER PAINTED UNDER THIS ROOM'S HEADER (T-48,
+  // R11-1). `useChat` swaps `messages` and `messagesPeer` TOGETHER, but one
+  // commit AFTER `member` changes — this component is not remounted on a
+  // switch, so there is a committed, paintable frame in which the header, the
+  // roster selection and the composer are all B while the message list is
+  // still A's. Every EFFECT below already refuses to act on that frame
+  // (`messagesPeer !== member.id` guards the entry positioning, the scroll
+  // reactor, the mark-read and the scrollback); the RENDER did not, so A's
+  // message bodies, A's quote rows and — the tenth review's finding — an open
+  // document preview belonging to A's file chip were all drawn under B's name.
+  //
+  // The switch already flashes an empty thread one commit later (useChat's
+  // reset), so refusing to draw here shows nothing that was not about to be
+  // shown anyway. The guard is a render-time derivation rather than a rule at
+  // each of the dozen places that read a message, so a new reader of `messages`
+  // cannot forget it.
+  const shownMessages = messagesPeer === member.id ? messages : NO_MESSAGES;
+
   // Released-worker codenames: an ow- participant that is NOT in the live
   // `workers` list (task closed → dropped off) still has a codename on the
   // per-id read — resolve it lazily so the label never degrades to the raw id.
@@ -594,17 +649,24 @@ export function ChatArea({
     onPickFile,
     removeAttachment,
     clearAttachments,
+    adoptAttachments,
     restoreAttachments,
   } = useAttachmentStaging(member.id, keepAttachmentsWithTheirRoom);
-  // What the in-cockpit full-view overlay is showing (null = closed). THREE
-  // ways in, one surface: a stored ATTACHMENT (T-a1c4 — the overlay fetches the
-  // blob, offers 下載 and a share link, so it carries the blob's id), an
-  // incoming MESSAGE body (the corner 放大閱讀 button — the text is already in
-  // hand, so there is nothing to fetch, download or share), or a STAGED image
-  // still sitting in the composer (T-f014 — the bytes are in hand as a data:
-  // URI, so 下載 is honest but no blob id exists to share). The kind is carried
-  // explicitly so no branch has to be guessed from which field happens to be
-  // set.
+  // What the in-cockpit full-view overlay is showing (null = closed). TWO ways
+  // in, one surface: an incoming MESSAGE body (the corner 放大閱讀 button — the
+  // text is already in hand, so there is nothing to fetch, download or share),
+  // or a STAGED image still sitting in the composer (T-f014 — the bytes are in
+  // hand as a data: URI, so 下載 is honest but no blob id exists to share). The
+  // kind is carried explicitly so no branch has to be guessed from which field
+  // happens to be set.
+  //
+  // ⚠️ THERE USED TO BE A THIRD, `kind: "attachment"` (a STORED blob), and it
+  // had no caller (T-48, R11-1). A stored attachment's chip is rendered by
+  // `AttachmentStrip`, which mounts its OWN `MarkdownPreviewOverlay` — so the
+  // branch was dead code that read like the live path, and the tenth review's
+  // measurement of a leaking document preview was filed against this state
+  // while the overlay it measured was the strip's. Deleted rather than left as
+  // documentation of an intention.
   // 🔴 PER VISIT (T-48, R10-1 — the twelfth instance of this family). This was
   // left as a plain `useState` when its twin `galleryOpen` was keyed, on the
   // written premise that `.md-preview`'s full-screen backdrop blocks every
@@ -620,12 +682,6 @@ export function ChatArea({
   // inside `MarkdownPreviewOverlay` structurally safe: the overlay itself cannot
   // outlive the visit, so none of its writers can either.
   const [mdPreview, setMdPreview] = useKeyedState<
-    | {
-        kind: "attachment";
-        title: string;
-        url: string;
-        attachmentId: string;
-      }
     | { kind: "message"; title: string; source: string }
     | { kind: "staged-image"; title: string; imageSrc: string }
     | null
@@ -655,7 +711,20 @@ export function ChatArea({
   // Inter-agent (agent↔agent) groups that the owner has EXPANDED (keyed by the
   // group's first-message id). Collapsed is the default — a group is expanded
   // only once its id lands here, so the owner opts in per block.
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
+  //
+  // 🔴 PER VISIT (T-48, R11-9). This was the last plain `useState` in this
+  // component that outlived a conversation switch with nothing said about it —
+  // not a keyed slot, not adopted by the switch block below, not even a line of
+  // comment claiming it was deliberate. It holds MESSAGE IDS OF OTHER ROOMS,
+  // and `groupExpanded` asks `has(m.id)` of whatever is on screen now, so the
+  // only thing standing between it and a wrongly-expanded block is that message
+  // ids happen to be globally unique. That is a property of today's data, not a
+  // property of this structure — and the set never shrinks, so it only ever
+  // gets more chances to collide. Keying it costs one thing, honestly: a block
+  // opened in A is collapsed again on the way back to A, which is what every
+  // other per-conversation view state here already does.
+  const [expandedGroups, setExpandedGroups] = useKeyedState<Set<string>>(
+    session,
     () => new Set(),
   );
   // Expanded 判定 is membership-based (T-bf82 收折 × 分頁): a group counts as
@@ -701,8 +770,21 @@ export function ChatArea({
   // Phone viewport → Enter inserts a newline instead of sending (no physical
   // keyboard, so Shift+Enter is impossible); sending is via the send button.
   const isMobile = useIsMobile();
+  // 🔴 OVER THE COUNT CAP THE COMPOSER REFUSES THE SEND ITSELF (T-48, R11-3).
+  // A draft is allowed to hold more than CHAT_MAX_ATTACHMENTS — that is R10-3's
+  // fix, and files waiting in a draft are somebody's data, not a rule to
+  // enforce. Sending them is a different act, and it is the one the cap is
+  // about. The server refuses an over-cap send with a 400, but this app has no
+  // toast, no error row behind `submit()`'s catch and no global rejection
+  // reporter, so the refusal was invisible: the send button stayed lit and
+  // every press did nothing at all, with no hint that two files had to go.
+  // Refusing here is the same notice staging already raises, on the surface the
+  // owner is looking at, BEFORE a message can be lost to a silent 400.
+  const overAttachmentCap = pendingAttachments.length > CHAT_MAX_ATTACHMENTS;
   // A message may carry text and/or attachments — sendable when EITHER present.
-  const canSend = draft.trim().length > 0 || pendingAttachments.length > 0;
+  const canSend =
+    (draft.trim().length > 0 || pendingAttachments.length > 0) &&
+    !overAttachmentCap;
 
   // The composer is a multi-line textarea (desktop: Enter sends, Shift+Enter
   // breaks a line; mobile: Enter breaks a line — see onKeyDown). Auto-grow to
@@ -870,6 +952,36 @@ export function ChatArea({
       replyTo: replyToId ?? undefined,
     });
   }, [member.id, draft, pendingAttachments, replyToId]);
+
+  // 🔴 A FILE CAN FINISH READING WHILE NO COMPOSER EXISTS FOR ITS ROOM, AND THE
+  // ONE THAT EXISTS NEXT HAS ALREADY READ THE DRAFT (T-48, R11-2). Pick a big
+  // file in A, leave the page, come back to A: the previous `ChatArea` is gone,
+  // so its staging hook hands the finished read to `keepAttachmentsWithTheirRoom`
+  // — which files it in A's draft. But THIS instance restored A's draft when it
+  // mounted, seconds earlier and empty, and nothing re-reads a draft after that.
+  // The file was therefore invisible here and doomed: the persist effect above
+  // writes this composer's own list back over A's draft on the next keystroke.
+  // Measured before this: the file was in the draft, absent from the screen, and
+  // gone from both after one keypress.
+  //
+  // So the store is where a file WAITS and this registry is how it ARRIVES. The
+  // callback is looked up through a ref because it is redeclared every render
+  // while the registration is per-room; `adoptAttachments` appends and dedups by
+  // key, so an arrival that the mount-time restore already covered is a no-op.
+  const adoptRef = useRef(adoptAttachments);
+  adoptRef.current = adoptAttachments;
+  useEffect(() => {
+    const adopt = (arriving: PendingAttachment[]) => adoptRef.current(arriving);
+    liveComposers.set(member.id, adopt);
+    return () => {
+      // Identity-checked: on a switch the NEW room's registration may already
+      // have replaced this entry, and deleting by key alone would unregister a
+      // composer that is very much alive.
+      if (liveComposers.get(member.id) === adopt) {
+        liveComposers.delete(member.id);
+      }
+    };
+  }, [member.id]);
 
   // T-e987 compose seed: prefill the composer once with "[<taskNo>] " when the
   // 任務卡 label routes here, but only into an EMPTY draft (never overwrite
@@ -2191,7 +2303,7 @@ export function ChatArea({
       )}
 
       <div className="chat__body">
-        {messages.length > 0 ? (
+        {shownMessages.length > 0 ? (
           <>
             <div
               className="chat__messages"
@@ -2232,7 +2344,7 @@ export function ChatArea({
                * through, and the group's end pushes it off naturally (no JS
                * scroll tracking). The label is judged against the render
                * clock; per-message times keep their existing hh:mm format. */}
-              {splitByDay(messages).map((day) => {
+              {splitByDay(shownMessages).map((day) => {
                 const dayLabel = formatDayLabel(
                   day.dayTs,
                   Date.now() / 1000,
@@ -2430,7 +2542,12 @@ export function ChatArea({
             {(pendingAttachments.length > 0 || attachError) && (
               <ComposerAttachmentPreview
                 pendingAttachments={pendingAttachments}
-                attachError={attachError}
+                attachError={
+                  attachError ??
+                  (overAttachmentCap
+                    ? t.chat.attachTooMany(CHAT_MAX_ATTACHMENTS)
+                    : null)
+                }
                 onRemove={removeAttachment}
                 onOpenImage={(att) =>
                   setMdPreview({
@@ -2572,20 +2689,12 @@ export function ChatArea({
         )}
       </footer>
 
-      {/* The ONE full-view overlay (T-a1c4, T-f014) — in-cockpit render, shared
-       * with the task artifact popover. A stored attachment rides the blob url +
-       * its id (the overlay fetches it and keeps its 下載 and share links); a
-       * 放大閱讀 message rides the body text this component already holds; a
-       * staged composer image rides its data: URI. */}
+      {/* The full-view overlay this component opens (T-f014) — a 放大閱讀
+       * message rides the body text this component already holds; a staged
+       * composer image rides its data: URI. A STORED attachment is not here:
+       * its chip is rendered by `AttachmentStrip`, which owns that overlay. */}
       {mdPreview &&
-        (mdPreview.kind === "attachment" ? (
-          <MarkdownPreviewOverlay
-            title={mdPreview.title}
-            url={mdPreview.url}
-            attachmentId={mdPreview.attachmentId}
-            onClose={() => setMdPreview(null)}
-          />
-        ) : mdPreview.kind === "staged-image" ? (
+        (mdPreview.kind === "staged-image" ? (
           <MarkdownPreviewOverlay
             title={mdPreview.title}
             imageSrc={mdPreview.imageSrc}

@@ -217,6 +217,31 @@ describe("ChatArea draft survival", () => {
       await waitFor(() => expect(previewCount(view.container)).toBe(1));
     });
 
+    it("reaches the composer that is showing its room again after a 跳頁", async () => {
+      // 🔴 R11-2. R10-4 taught the unmount path to file the file in its room's
+      // DRAFT, which is right — and enough only while nobody comes back. A
+      // returning composer reads the draft ONCE, on mount, and by then the read
+      // had not landed: the file was in the draft, absent from the screen, and
+      // then destroyed by the persist effect writing this composer's own
+      // (file-less) list over the top on the very next keystroke.
+      const first = renderChat(m1);
+      pick(first.container, pngFile("late.png"));
+      expect(HeldFileReader.held).toHaveLength(1);
+
+      // 跳頁 and back to the SAME room, all before the read finishes.
+      first.unmount();
+      const back = renderChat(m1);
+      act(() => HeldFileReader.held[0].land());
+
+      await waitFor(() => expect(previewCount(back.container)).toBe(1));
+      expect(draftNames("m1")).toEqual(["late.png"]);
+
+      // The keystroke that used to be the file's last moment.
+      fireEvent.change(input(back.container), { target: { value: "一" } });
+      await waitFor(() => expect(draftNames("m1")).toEqual(["late.png"]));
+      expect(previewCount(back.container)).toBe(1);
+    });
+
     it("still stages into the composer when the later visit is the same peer", async () => {
       const view = renderChat(m1);
       pick(view.container, pngFile("for-mira.png"));

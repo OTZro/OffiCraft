@@ -294,6 +294,34 @@ describe("useChat load routing (active vs background)", () => {
     ).toBe(100);
   });
 
+  it("水位不會因為 receipt 這次沒回來就退回去", async () => {
+    // 🔴 T-48 R11-7 — `mergePeerRead` 取較大值,不只救回同一個 peer 晚到的真值,
+    // 也讓水位在這一趟造訪內不可下降。這是刻意的:水位講的是「已經發生過的事」,
+    // 讀過不會變成沒讀過,所以「這次沒查到 receipt」從來不是反證。真實來源是
+    // 一次不完整的 200,或 receipt 被硬刪(`DeleteChatReadsInvolving`)。
+    // 單調只在造訪內成立:下次進房會重新跟伺服器要。
+    h.listChat.mockResolvedValue([mkMsg("c1", "owner", "b", 1000)]);
+    h.listChatReads
+      .mockImplementationOnce(async () => [
+        { readerId: "b", peerId: OWNER_ID, lastReadTs: 5000 },
+      ])
+      .mockImplementation(async () => []);
+
+    const { result } = renderHook(() => useChat("b"));
+    await waitFor(() =>
+      expect(result.current.peerLastRead.tsFor("b")).toBe(5000),
+    );
+
+    await act(async () => {
+      h.sseHandler?.("chat_read");
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    expect(
+      result.current.peerLastRead.tsFor("b"),
+      "receipt 消失不准把已讀勾熄掉",
+    ).toBe(5000);
+  });
+
   it("a send whose POST FAILED still rejects — the caller must be able to tell", async () => {
     h.listChat.mockResolvedValueOnce([]); // the initial load
     h.postChat.mockRejectedValueOnce(new Error("server said no"));

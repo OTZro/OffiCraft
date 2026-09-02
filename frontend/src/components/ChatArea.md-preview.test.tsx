@@ -24,10 +24,10 @@ vi.mock("../hooks/useChat", () => ({
   }),
 }));
 
-function mkMember(): Member {
+function mkMember(id = "m1", name = "Mira"): Member {
   return {
-    id: "m1",
-    name: "Mira",
+    id,
+    name,
     role: "assistant",
     status: "online",
     lifecycle: "online",
@@ -40,7 +40,7 @@ function mkMember(): Member {
     contextPct: null,
     estimatedCost: null,
     bankedCost: null,
-    tmuxSession: "member-m1",
+    tmuxSession: `member-${id}`,
     refocusSince: null,
     lastOp: "",
     lastOpOk: null,
@@ -105,6 +105,49 @@ describe("chat .md preview action (T-a1c4 / T-7bc2)", () => {
     // Preview and download are separate: the overlay carries its own 下載 link.
     const dl = document.body.querySelector("a.md-preview__download") as HTMLAnchorElement;
     expect(dl.getAttribute("download")).toBe("design.md");
+  });
+
+  it("closes when the chip's own message list is no longer the one on screen", async () => {
+    // 🔴 R10-1 / R11-1 — the leak the tenth review MEASURED, on the overlay that
+    // actually opens it. `ChatArea` is not remounted on a conversation switch
+    // and `useChat` swaps its thread one commit later, so there is a paintable
+    // frame with Bruno's header over Alice's messages; the file chip's overlay
+    // (AttachmentStrip's own state, NOT ChatArea.mdPreview) sat on top of it
+    // still showing Alice's filename and Alice's content.
+    //
+    // What closes it is that this room no longer PAINTS another room's messages
+    // (`shownMessages`), which takes the whole row — chip, overlay and all —
+    // with it. The strip's own fix (looking the open preview up in the list it
+    // renders, rather than remembering the object) does NOT catch this case and
+    // is not what this test measures: the list handed to the strip is the same
+    // list. It is pinned separately in AttachmentStrip.test.tsx.
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      text: async () => "# 機密",
+    })) as unknown as typeof fetch;
+    messages = [
+      msgWith([
+        { id: "a-md", url: "/api/chat/attachment/a-md", filename: "A的機密.md", mime: "text/markdown", isImage: false },
+      ]),
+    ];
+    const { container, rerender } = render(
+      <I18nProvider>
+        <ChatArea member={mkMember()} />
+      </I18nProvider>,
+    );
+    fireEvent.click(container.querySelector("button.chat__msg-file")!);
+    await waitFor(() =>
+      expect(document.body.querySelector(".md-preview")).toBeTruthy(),
+    );
+
+    // The switch commit: member is Bruno, useChat still holds Mira's thread.
+    rerender(
+      <I18nProvider>
+        <ChatArea member={mkMember("m2", "Bruno")} />
+      </I18nProvider>,
+    );
+    expect(document.body.querySelector(".md-preview")).toBeNull();
+    expect(document.body.textContent).not.toContain("A的機密.md");
   });
 
   it("carries a 複製分享連結 button that mints THIS attachment's share link", async () => {

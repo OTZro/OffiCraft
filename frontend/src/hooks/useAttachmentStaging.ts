@@ -87,8 +87,10 @@ export function formatAttachmentSize(bytes: number): string {
  *
  * A caller mounted under a key that changes with the thing it belongs to
  * (`TaskCard` under `key={task.id}`, `ReplyComposer` under `key={card.id}`)
- * has exactly one target for its whole life and passes the literal
- * `STAGING_TARGET_PER_MOUNT`, which says so out loud. */
+ * has exactly one target for its whole life and passes this constant, which
+ * says so out loud. Both of those call sites import it — the sentence above
+ * was written while they still spelled the literal out, and R11-8 caught the
+ * claim before the code caught up. */
 export const STAGING_TARGET_PER_MOUNT = "remounts-per-conversation";
 
 /** Where a file that landed for a room OTHER than the one on screen is handed
@@ -99,9 +101,13 @@ export const STAGING_TARGET_PER_MOUNT = "remounts-per-conversation";
  * composer restores from on the next entry.
  *
  * ⚠️ §3 rule 4's counter-example, second instance: the COMMIT must be blocked,
- * the SAVE must not. Omitting this callback is legal (a per-mount caller can
- * never produce a foreign landing) and then a foreign file is KEPT in state,
- * still invisible — never silently dropped. */
+ * the SAVE must not. Omitting this callback is legal for a per-mount caller,
+ * which cannot produce a foreign landing while it is alive — but it is NOT
+ * free (R11-8). On a CONVERSATION SWITCH the file is merely KEPT in state,
+ * invisible; on an UNMOUNT there is no state left to keep it in and the file
+ * is dropped, silently. `TaskCard` and `ReplyComposer` both accept that: they
+ * are torn down with the thing they stage for, so a landing after their
+ * unmount has no surface left to return to either. */
 export type KeepElsewhere = (
   target: string,
   attachments: PendingAttachment[],
@@ -126,6 +132,14 @@ export interface AttachmentStaging {
   /** Clear THIS target's staged files (and the visible error). Another room's
    * pending landing is not this room's to throw away. */
   clearAttachments: () => void;
+  /** A file that finished reading while NO composer was mounted for its room,
+   * arriving at the composer that is showing that room now (T-48, R11-2).
+   * APPENDED, never replacing, and deduped by `key` — the mount-time draft
+   * restore may already hold the same row. The rows keep the target they were
+   * stamped with at pick time; if the owner has moved on again by the time
+   * this lands, they are simply invisible and the handoff effect above files
+   * them back into their own draft. */
+  adoptAttachments: (arriving: PendingAttachment[]) => void;
   /** Send-failure restore: put a snapshot back UNLESS the user already staged
    * new content while the send was in flight (never clobber fresh work). The
    * snapshot is re-stamped with the CURRENT target — it comes out of that
@@ -133,6 +147,26 @@ export interface AttachmentStaging {
   restoreAttachments: (snapshot: PendingAttachment[]) => void;
 }
 
+/** 🔴 THE TYPE ASKS THE QUESTION BACK (T-48, R11-8). `target: string` alone
+ * compiles for every caller and every mistake: pass a task id where a peer id
+ * belongs and the files cross rooms, which is this family's whole shape. The
+ * two overloads put the choice back where the caller must answer it —
+ *
+ *   · a surface that is REMOUNTED with the thing it stages for says exactly
+ *     that, by passing `STAGING_TARGET_PER_MOUNT` and nothing else;
+ *   · a surface that OUTLIVES the thing it stages for (a `ChatArea` that is
+ *     swapped between peers without remounting) must name its target AND say
+ *     where a file that lands too late is to be kept.
+ *
+ * Forgetting `keepElsewhere` on the second kind is now a compile error rather
+ * than a file destroyed at run time by an unmount nobody was watching for. */
+export function useAttachmentStaging(
+  target: typeof STAGING_TARGET_PER_MOUNT,
+): AttachmentStaging;
+export function useAttachmentStaging(
+  target: string,
+  keepElsewhere: KeepElsewhere,
+): AttachmentStaging;
 export function useAttachmentStaging(
   target: string,
   keepElsewhere?: KeepElsewhere,
@@ -286,7 +320,22 @@ export function useAttachmentStaging(
 
   function clearAttachments() {
     setStaged((prev) => prev.filter((a) => a.target !== targetRef.current));
-    setAttachError(null);
+    // 🔴 THIS ROOM'S NOTICE, THE SAME WAY IT CLEARS THIS ROOM'S FILES (T-48,
+    // R11-4). This used to be an unconditional `setAttachError(null)`, and the
+    // conversation-switch block in `ChatArea` calls it on every switch — so a
+    // notice stamped for the room the owner had LEFT was wiped before that
+    // room could ever show it. Stamping the message with its room only means
+    // something if the message survives long enough to reach it.
+    setAttachError((prev) =>
+      prev && prev.target !== targetRef.current ? prev : null,
+    );
+  }
+
+  function adoptAttachments(arriving: PendingAttachment[]) {
+    setStaged((prev) => {
+      const fresh = arriving.filter((a) => !prev.some((p) => p.key === a.key));
+      return fresh.length === 0 ? prev : [...prev, ...fresh];
+    });
   }
 
   function restoreAttachments(snapshot: PendingAttachment[]) {
@@ -308,6 +357,7 @@ export function useAttachmentStaging(
     onPickFile,
     removeAttachment,
     clearAttachments,
+    adoptAttachments,
     restoreAttachments,
   };
 }

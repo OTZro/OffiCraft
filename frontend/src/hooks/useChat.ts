@@ -229,7 +229,23 @@ export interface PeerLastRead {
   tsFor(peer: string): number;
 }
 
-/** The one rule for writing a watermark, so no caller carries it. */
+/** The one rule for writing a watermark, so no caller carries it.
+ *
+ * 🔴 IT HAS A THIRD CONSEQUENCE, AND IT IS DELIBERATE (T-48, R11-7). "Keep the
+ * larger" does not only rescue a late-but-true value from the same peer: it
+ * makes a watermark UNABLE TO FALL for as long as this room is on screen. The
+ * caller passes `ts: 0` whenever `listChatReads` comes back without a receipt
+ * row, and before this function that zero turned the 已讀 ticks off. It should
+ * not. A watermark is a claim about something that ALREADY HAPPENED — the peer
+ * read up to here — and reading cannot be undone, so "no row this time" is
+ * never evidence against a row we have already seen. Its realistic causes are a
+ * partial 200 and a hard receipt delete (`DeleteChatReadsInvolving`, which takes
+ * the messages with it), and in neither case is "un-tick what the owner already
+ * saw" the honest answer.
+ *
+ * The cost is bounded on purpose: this state is per-conversation, so the
+ * watermark is rebuilt from the server on the next entry to the room. Monotonic
+ * within a visit, never across one. */
 export function mergePeerRead(
   prev: { peer: string; ts: number },
   next: { peer: string; ts: number },

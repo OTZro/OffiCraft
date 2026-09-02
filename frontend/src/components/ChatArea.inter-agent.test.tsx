@@ -121,6 +121,36 @@ describe("ChatArea inter-agent thread", () => {
     expect(names).toContain("Beto → Alma");
   });
 
+  it("collapses an expanded run again when the room is re-entered", () => {
+    // 🔴 T-48 R11-9. The expanded set held MESSAGE IDS OF OTHER ROOMS and
+    // survived every conversation switch untouched, growing forever, with
+    // nothing but the global uniqueness of message ids between it and a block
+    // that opens itself in a room nobody opened it in. It is per-visit now,
+    // like every other view state here.
+    messages = [
+      { id: "c1", from: "a", to: "b", body: "hey Beto", ts: 1000, attachments: [], replyCardId: null },
+      { id: "c2", from: "b", to: "a", body: "hi Alma", ts: 1001, attachments: [], replyCardId: null },
+    ];
+    const { container, rerender } = renderChat();
+    fireEvent.click(container.querySelector(".chat__inter-toggle") as HTMLElement);
+    expect(container.querySelectorAll(".chat__msg-bubble").length).toBe(2);
+
+    const kye = mkMember("k", "Kye");
+    for (const who of [kye, beto]) {
+      rerender(
+        <I18nProvider>
+          <ChatArea member={who} members={[beto, alma, kye]} workers={[workerX1]} />
+        </I18nProvider>,
+      );
+    }
+    expect(container.querySelectorAll(".chat__msg-bubble").length).toBe(0);
+    expect(
+      container
+        .querySelector(".chat__inter-toggle")
+        ?.getAttribute("aria-expanded"),
+    ).toBe("false");
+  });
+
   it("labels a message to the owner with the plain sender name (no arrow)", () => {
     messages = [
       { id: "c1", from: "b", to: "owner", body: "done", ts: 1000, attachments: [], replyCardId: null },
