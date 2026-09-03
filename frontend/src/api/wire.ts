@@ -186,6 +186,16 @@ export type WireTaskReassign = components["schemas"]["TaskReassignDTO"];
  * M2 reply card is bound). */
 export type WireTaskStep = components["schemas"]["TaskStepDTO"];
 
+/** Mirrors `TaskStepDetailDTO` (`GET /api/tasks/{task_id}/steps/{step_id}` /
+ * MCP `get_task_step`, T-66): ONE step in full, note text included.
+ *
+ * 🔴 It exists because `WireTaskStep` no longer carries `note` at all. The task
+ * view reports each step's note SIZE (`note_size_chars`) and nothing else, so
+ * the cockpit draws the 備註 entry from that number and fetches the text only
+ * when someone opens it. `detail_level` is `"full"` here and `"summary"` on the
+ * task, which is how a reader tells the two apart. */
+export type WireTaskStepDetail = components["schemas"]["TaskStepDetailDTO"];
+
 /** Mirrors `TaskArtifactDTO` (T-3dc5): one pinned deliverable on a task's
  * artifact set. `kind` is file|image|link; file/image carry the blob serve
  * `url` + `mime`/`filename`/`is_image` (from the shared chat_attachment store),

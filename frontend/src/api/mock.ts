@@ -72,6 +72,7 @@ import type {
   OutsourceWorkerView,
   TaskTypeView,
   TaskCountView,
+  TaskStepDetailView,
   TaskManualSummaryView,
   TaskManualView,
   TaskManualPatch,
@@ -3588,6 +3589,40 @@ export const mockApi: Api = {
       // Full task carries the resolved set; count kept == length (server parity).
       artifacts: task.artifacts ?? [],
       artifactCount: (task.artifacts ?? []).length,
+    };
+  },
+
+  async getTaskStep(taskId: string, stepId: string): Promise<TaskStepDetailView> {
+    // Mirrors GET /api/tasks/{task_id}/steps/{step_id} (T-66): ONE step, note
+    // text included, and NOTHING of the task.
+    //
+    // 🔴 A step that is not on the named task is a NOT-FOUND here too, not the
+    // other task's step. The server answers 404 for it, and a mock that happily
+    // resolved a step id against the whole store would let a cockpit bug that
+    // mixes task and step ids look correct in mock mode and 404 only in front
+    // of a real server.
+    //
+    // The mock task fixtures carry no step notes (they never have), so `note`
+    // is "" and `noteSizeChars` 0 — which is why no 備註 entry renders in mock
+    // mode. That is the honest projection of the fixtures, not a stub: a mock
+    // that invented note text would make the fetch-on-open path look exercised
+    // when the fixtures say there is nothing to open.
+    const task = findTask(taskId);
+    const step = task.steps.find((s) => s.id === stepId);
+    if (!step) {
+      throw mockApiError(
+        `http 404 for /api/tasks/${taskId}/steps/${stepId}`,
+        404,
+        `step '${stepId}' not found`
+      );
+    }
+    return {
+      ...structuredClone(step),
+      replyCardStatus: mockReplyCardStatusOf(step.replyCardId || null),
+      detailLevel: "full",
+      note: "",
+      noteSizeChars: 0,
+      noteCapChars: 4000,
     };
   },
 

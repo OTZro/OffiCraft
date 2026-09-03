@@ -64,6 +64,11 @@ function wireTask(over: Partial<WireTask>): WireTask {
     handoff_task_id: "",
     // T-6020: who froze the task ("" = not frozen). Same always-present shape.
     frozen_by: "",
+    // T-66: the task read DESCRIBES ITSELF — always "summary"/false, because
+    // get_task no longer carries the step notes. Always-present on the wire,
+    // so the complete-wire-object helper carries it like the rest.
+    detail_level: "summary",
+    notes_included: false,
     ...over,
   };
 }
@@ -92,6 +97,10 @@ function wireListItem(over: Partial<WireTaskListItem>): WireTaskListItem {
     progress_done: 0,
     progress_total: 0,
     artifact_count: 0,
+    // The light list's current-node pair ("" = no plan / all done). Always
+    // present on the wire, so this complete-object helper carries it.
+    current_step_id: "",
+    current_step_name: "",
     ...over,
   };
 }

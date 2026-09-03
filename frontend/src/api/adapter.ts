@@ -387,19 +387,40 @@ export interface TaskStepView {
    * waiting step's reason. OPTIONAL so hand-built fixtures stay valid (the
    * replyCardStatus precedent); the mapper always sets it. */
   waitingReason?: string;
-  /** The step's free-text working note — what it got to and what comes next
-   * (T-cc3e). The field the handover SOP means by "把還在進行中的工作寫回 task
-   * step note"; unlike `waitingReason` it is bound to no status, so it carries
-   * progress at whatever moment a handover lands. OPTIONAL so hand-built
-   * fixtures stay valid (the replyCardStatus precedent); the mapper always
-   * sets it. */
-  note?: string;
+  /** How many characters of working note this step has ON THE SERVER (T-66).
+   *
+   * 🔴 THE NOTE TEXT IS NOT ON THIS VIEW MODEL, and that is the whole shape of
+   * the ticket (owner rc-4c8065fb30a5:「整個拿掉…座艙改成點開才抓」). The task
+   * read no longer carries it, so this number is what the card has to work
+   * from: `> 0` draws the 備註 entry, `0` draws nothing because the step
+   * genuinely has none. The text arrives from `getTaskStep` when someone opens
+   * it. A component that wants to SHOW a note and finds only this number is
+   * being told, correctly, to go and fetch it.
+   *
+   * OPTIONAL so hand-built fixtures stay valid (the replyCardStatus
+   * precedent); the mapper always sets it. */
+  noteSizeChars?: number;
   /** Non-empty ⇒ this leaf runs inside a parallel stage (同時進行 · N 項並行);
    * consecutive steps sharing the group render as one parallel block. */
   parallelGroup: string;
   orderIdx: number;
   startedTs: number;
   finishedTs: number;
+}
+
+/** ONE step in FULL (T-66) — what `getTaskStep` answers, and the only place the
+ * cockpit ever holds a step note's text. Everything a `TaskStepView` carries,
+ * plus the `note` itself and the two size numbers.
+ *
+ * `detailLevel` is carried across from the wire rather than dropped: it is the
+ * payload's own statement that this is the whole step, the mirror of the task
+ * view's `"summary"`. Keeping it means a caller that somehow received the wrong
+ * projection can say so instead of silently rendering a blank note. */
+export interface TaskStepDetailView extends TaskStepView {
+  detailLevel: string;
+  note: string;
+  noteSizeChars: number;
+  noteCapChars: number;
 }
 
 /**
@@ -1962,6 +1983,20 @@ export interface Api {
    * updatedTs moves while expanded) to hydrate the workflow timeline.
    */
   getTask(id: string): Promise<TaskView>;
+  /**
+   * Fetch ONE step in full (`GET /api/tasks/{task_id}/steps/{step_id}`, T-66) —
+   * the only read that carries a step's working-note TEXT.
+   *
+   * 🔴 It exists because `getTask` stopped carrying it. The task read reports
+   * each step's `noteSizeChars` and nothing else, so the 任務卡 draws the 備註
+   * entry from that number and calls this ONLY when the reader opens one —
+   * owner rc-4c8065fb30a5:「座艙改成點開才抓」. Do not call it per step while
+   * rendering a timeline; that is the cost the split removed.
+   *
+   * A step id that belongs to a different task is a 404 (ApiError), not another
+   * task's step.
+   */
+  getTaskStep(taskId: string, stepId: string): Promise<TaskStepDetailView>;
   /** The task counts behind the nav badge (`GET /api/tasks/count`) — a cheap
    * dedicated endpoint so the badge can refetch on every "task" SSE delta
    * without pulling the list. `open` = non-terminal (the badge). `total` = every

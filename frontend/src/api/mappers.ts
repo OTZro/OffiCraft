@@ -88,6 +88,7 @@ import type {
   WireTaskListItem,
   WireTaskDepRef,
   WireTaskStep,
+  WireTaskStepDetail,
   WireTaskArtifact,
   WireOutsourceWorker,
   WireTaskManual,
@@ -113,6 +114,7 @@ import type {
   TaskView,
   TaskDepRefView,
   TaskStepView,
+  TaskStepDetailView,
   TaskArtifactView,
   OutsourceWorkerView,
   TaskTypeView,
@@ -471,9 +473,14 @@ export function toTaskStep(w: WireTaskStep): TaskStepView {
     // One-line reason while the step sits in waiting_external; "" otherwise
     // (T-9ca5). Honest passthrough.
     waitingReason: w.waiting_reason ?? "",
-    // The step's working note (T-cc3e) — bound to no status, unlike
-    // waitingReason above. Honest passthrough.
-    note: w.note ?? "",
+    // 🔴 The note TEXT is not here, and it is not here on the WIRE either
+    // (T-66, owner rc-4c8065fb30a5). What the task view carries is its SIZE,
+    // and that number is the whole basis of the cockpit's 備註 entry: > 0 means
+    // there is something to open, 0 means the step genuinely has none. The text
+    // is fetched on open through `getTaskStep`. Honest passthrough of an
+    // additive-optional wire field, so an old payload reads as 0 rather than
+    // fabricating an entry.
+    noteSizeChars: w.note_size_chars ?? 0,
     // Read-time join the server computes (`reply_card_status`): the bound card's
     // live status for the card-bearing step, "" otherwise. Closed set only, else
     // honest null.
@@ -487,6 +494,21 @@ export function toTaskStep(w: WireTaskStep): TaskStepView {
     orderIdx: w.order_idx,
     startedTs: w.started_ts ?? 0,
     finishedTs: w.finished_ts ?? 0,
+  };
+}
+
+/** Map one wire SINGLE step → `TaskStepDetailView` (T-66) — the response of
+ * `get_task_step`, the only read that serves a step note's text. Honest
+ * passthrough; `detailLevel` is carried across rather than dropped, because it
+ * is the payload's own statement that this is the full step and not the task
+ * view's summary row. */
+export function toTaskStepDetail(w: WireTaskStepDetail): TaskStepDetailView {
+  return {
+    ...toTaskStep(w),
+    detailLevel: w.detail_level,
+    note: w.note,
+    noteSizeChars: w.note_size_chars,
+    noteCapChars: w.note_cap_chars,
   };
 }
 

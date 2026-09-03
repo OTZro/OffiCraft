@@ -84,6 +84,7 @@ import type {
   OutsourceWorkerView,
   TaskTypeView,
   TaskCountView,
+  TaskStepDetailView,
   TaskManualSummaryView,
   TaskManualView,
   TaskManualPatch,
@@ -135,6 +136,7 @@ import {
   toServerSettings,
   toTask,
   toTaskListItem,
+  toTaskStepDetail,
   toOutsourceWorker,
   toTaskType,
   toTaskManual,
@@ -1654,6 +1656,20 @@ export const httpApi: Api = {
       }),
     );
     return toTask(wire);
+  },
+
+  async getTaskStep(taskId: string, stepId: string): Promise<TaskStepDetailView> {
+    // GET /api/tasks/{task_id}/steps/{step_id} -> TaskStepDetailDTO (T-66).
+    // The ONE read that carries a step note's text: getTask reports each step's
+    // note_size_chars and stopped carrying the note itself, so the card opens
+    // this on demand. A step that belongs to another task 404s through the
+    // client middleware as an ApiError.
+    const wire = unwrap(
+      await client.GET("/api/tasks/{task_id}/steps/{step_id}", {
+        params: { path: { task_id: taskId, step_id: stepId } },
+      }),
+    );
+    return toTaskStepDetail(wire);
   },
 
   async getTaskCount(): Promise<TaskCountView> {
