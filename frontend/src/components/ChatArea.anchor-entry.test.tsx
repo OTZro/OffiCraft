@@ -86,6 +86,14 @@ const CARD: ReplyCard = {
   task: null,
 };
 
+// 🔴 走廊那第 4 通不是同一拍發出來的:第 3 通落地 → 重新評估的 effect → 第 4 通,
+// 中間隔著一次 commit。@testing-library 的 `waitFor` 預設只等 1 秒,而 CI 上整個
+// 前端單元套件是併著跑的 —— 這一條在 macos runner 上等到 1.2 秒才放棄,拿到 3。
+// 本機單跑五次全綠、整個 components 區(253 支)也全綠,所以那是等太短,不是走廊
+// 停了。⚠️ 但兩者從輸出上長得一模一樣,所以這裡放寬的是**等待時間,不是斷言**:
+// 仍然要求剛好 4 通。真的停了的話,它照樣紅。
+const CORRIDOR_WAIT = { timeout: 5000 } as const;
+
 /** One WAITING 請示卡 row, spliced into `peer`'s stream at `ts`. */
 function seedWaitingCard(peer: string, id: string, cardId: string, ts: number) {
   log.push({
@@ -588,7 +596,7 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
     });
     box.scrollTop = box.scrollHeight - CH;
     fireEvent.scroll(box);
-    await waitFor(() => expect(windowCalls.length).toBe(4));
+    await waitFor(() => expect(windowCalls.length).toBe(4), CORRIDOR_WAIT);
 
     // 跳到 a80 —— 進房那一頁就載進來的一列,還在 DOM 裡。
     expect(container.querySelector('[data-msg-id="a80"]')).not.toBeNull();
@@ -638,7 +646,7 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
     });
     box.scrollTop = box.scrollHeight - CH;
     fireEvent.scroll(box);
-    await waitFor(() => expect(windowCalls.length).toBe(4));
+    await waitFor(() => expect(windowCalls.length).toBe(4), CORRIDOR_WAIT);
 
     // 活尾巴那一頁按在空中 —— 這就是「回到最新已經按下去、但還沒落地」的那一格。
     holdPlain = () => {};
@@ -698,7 +706,7 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
     // 人捲到底 —— 走廊從這裡起跑,而且從此不再有任何人為的捲動。
     box.scrollTop = box.scrollHeight - CH;
     fireEvent.scroll(box);
-    await waitFor(() => expect(windowCalls.length).toBe(4));
+    await waitFor(() => expect(windowCalls.length).toBe(4), CORRIDOR_WAIT);
 
     // 第一頁已經貼在視窗下方 ⇒ 人離底部一個螢幕以上(補不回來的那一格)。
     // 此刻上方長高 2400,而 `scrollTop` 一動也不動。
@@ -756,7 +764,7 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
     // 人捲到底 —— 走廊從這裡起跑,而且從此不再有任何人為的捲動。
     box.scrollTop = box.scrollHeight - CH;
     fireEvent.scroll(box);
-    await waitFor(() => expect(windowCalls.length).toBe(4));
+    await waitFor(() => expect(windowCalls.length).toBe(4), CORRIDOR_WAIT);
 
     // 第一頁已經貼在視窗下方 ⇒ 人離底部一個螢幕以上。此刻上方縮掉 240px,
     // anchoring 把 `scrollTop` 往回拉同樣的 240px。
