@@ -2726,6 +2726,18 @@ type SettingsUpdateDTO struct {
 	UpdaterReceiveBeta *bool   `json:"updater_receive_beta,omitempty"`
 }
 
+// SigningKeyDTO ONE signing key, as the outside is allowed to see it: which key it is, when it was made, and whether it is the one signing. There is deliberately no field that could carry key material — not the key, not a fingerprint, not a hash prefix — so "did this leak the key" is answered by the shape of the type rather than by remembering to strip a field at each call site.
+type SigningKeyDTO struct {
+	CreatedTs float64 `json:"created_ts"`
+	IsSigning bool    `json:"is_signing"`
+	KeyId     string  `json:"key_id"`
+}
+
+// SigningKeysDTO The whole signing-key ring, oldest first. Every mutating call answers with the FULL ring rather than with just what changed, so the settings page never has to re-fetch to learn the truth after acting.
+type SigningKeysDTO struct {
+	Keys []SigningKeyDTO `json:"keys"`
+}
+
 // TaskArtifactDTO One pinned deliverable on a task's artifact set (T-3dc5). “kind“ is the closed set file|image|link. FILE/IMAGE artifacts reference the shared chat_attachment blob store: “attachment_id“ is the blob id, “url“ is its serve path (“/api/chat/attachment/{attachment_id}“), and “filename“/“mime“/“is_image“ echo the blob metadata (resolved read-time; empty when the blob is gone). LINK artifacts carry a bare external “url“ (a PR link) with “attachment_id“/“mime“/“filename“ empty and “is_image“ false. “label“ is the display name (a link's title, or a filename override); “created_by“ is the verified token sub of the registrar.
 type TaskArtifactDTO struct {
 	AttachmentId *string  `json:"attachment_id,omitempty"`
@@ -3837,6 +3849,15 @@ type ServerInterface interface {
 	// First-run: set the owner password (one-shot claim token gate).
 	// (POST /api/auth/set-password)
 	HandleSetPasswordApiAuthSetPasswordPost(w http.ResponseWriter, r *http.Request)
+	// List the signing keys: id, when it was made, which one signs.
+	// (GET /api/auth/signing-keys)
+	HandleSigningKeysApiAuthSigningKeysGet(w http.ResponseWriter, r *http.Request)
+	// Mint a new signing key and hand signing over to it; the old one stays, verifying.
+	// (POST /api/auth/signing-keys/rotate)
+	HandleSigningKeyRotateApiAuthSigningKeysRotatePost(w http.ResponseWriter, r *http.Request)
+	// Remove a retired key, revoking everything it signed. Refuses the signing key.
+	// (POST /api/auth/signing-keys/{key_id}/remove)
+	HandleSigningKeyRemoveApiAuthSigningKeysKeyIdRemovePost(w http.ResponseWriter, r *http.Request, keyId string)
 	// First-run probe: has the owner password been set?
 	// (GET /api/auth/status)
 	HandleAuthStatusApiAuthStatusGet(w http.ResponseWriter, r *http.Request)
@@ -4501,6 +4522,60 @@ func (siw *ServerInterfaceWrapper) HandleSetPasswordApiAuthSetPasswordPost(w htt
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.HandleSetPasswordApiAuthSetPasswordPost(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleSigningKeysApiAuthSigningKeysGet operation middleware
+func (siw *ServerInterfaceWrapper) HandleSigningKeysApiAuthSigningKeysGet(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleSigningKeysApiAuthSigningKeysGet(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleSigningKeyRotateApiAuthSigningKeysRotatePost operation middleware
+func (siw *ServerInterfaceWrapper) HandleSigningKeyRotateApiAuthSigningKeysRotatePost(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleSigningKeyRotateApiAuthSigningKeysRotatePost(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleSigningKeyRemoveApiAuthSigningKeysKeyIdRemovePost operation middleware
+func (siw *ServerInterfaceWrapper) HandleSigningKeyRemoveApiAuthSigningKeysKeyIdRemovePost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "key_id" -------------
+	var keyId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "key_id", r.PathValue("key_id"), &keyId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "key_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleSigningKeyRemoveApiAuthSigningKeysKeyIdRemovePost(w, r, keyId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -8553,6 +8628,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/auth/mfa/enroll", wrapper.HandleMfaEnrollApiAuthMfaEnrollPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/auth/mfa/offer", wrapper.HandleMfaOfferApiAuthMfaOfferPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/auth/set-password", wrapper.HandleSetPasswordApiAuthSetPasswordPost)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/auth/signing-keys", wrapper.HandleSigningKeysApiAuthSigningKeysGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/auth/signing-keys/rotate", wrapper.HandleSigningKeyRotateApiAuthSigningKeysRotatePost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/auth/signing-keys/{key_id}/remove", wrapper.HandleSigningKeyRemoveApiAuthSigningKeysKeyIdRemovePost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/auth/status", wrapper.HandleAuthStatusApiAuthStatusGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/backup-health", wrapper.HandleGetBackupHealthApiBackupHealthGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/boot-docs/{kind}/{key}", wrapper.HandleGetBootDocApiBootDocsKindKeyGet)

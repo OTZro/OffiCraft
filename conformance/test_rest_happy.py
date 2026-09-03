@@ -237,6 +237,86 @@ def _check_login(_ctx: HCtx, r: httpx.Response) -> None:
     assert data["token"] and data["token_type"] == "bearer", data
 
 
+def _check_signing_keys(_ctx: HCtx, r: httpx.Response) -> None:
+    """The ring as the outside may see it: ids, creation times, exactly one
+    signer — and NOTHING that could be key material.
+
+    The leak check is deliberately structural rather than a list of field names
+    to forbid: it walks every key object and asserts its key set is exactly the
+    three documented fields, so a future field carrying a fingerprint, a hash
+    prefix or the key itself reddens here without anyone having predicted its
+    name. (Why it matters: on an install predating the ring the signing key IS
+    SHA-256 over the owner password, so publishing any digest of it is an
+    offline dictionary attack on that password.)"""
+    data = r.json()
+    keys = data["keys"]
+    assert keys, data
+    assert sum(1 for k in keys if k["is_signing"]) == 1, data
+    for k in keys:
+        assert set(k) == {"key_id", "created_ts", "is_signing"}, k
+        assert isinstance(k["key_id"], str) and k["key_id"], k
+        assert isinstance(k["created_ts"], (int, float)), k
+
+
+def _check_signing_key_rotated(ctx: HCtx, r: httpx.Response) -> None:
+    """A rotation puts a BRAND-NEW key in charge: after the call the ring holds
+    at least two keys and the one signing is the newest by ``created_ts``.
+
+    ⚠️ What this row does NOT prove is that the rotation dropped nothing — that
+    needs a reading taken BEFORE the call, which a response-only check cannot
+    take. It is pinned where a before/after IS available:
+    TestT62_RotationTakesEffectWithoutRestart and
+    TestT62_RetiredKeyVerifiesButNeverSigns
+    (server/ocserverd/keyring_rotation_t62_test.go), which mint a token under the
+    outgoing key and require it to keep passing the live gate afterwards. Saying
+    so here rather than writing a check that cannot see it: a subset assertion
+    against a ring re-read after the fact would pass no matter what the route
+    did."""
+    _check_signing_keys(ctx, r)
+    keys = r.json()["keys"]
+    assert len(keys) >= 2, keys
+    signing = [k for k in keys if k["is_signing"]][0]
+    assert signing["created_ts"] == max(k["created_ts"] for k in keys), keys
+    assert signing["created_ts"] > 0, signing
+
+
+def _happy_signing_key_remove_path(ctx: HCtx) -> str:
+    """Aim the removal at a key that signed NOTHING anyone is holding.
+
+    Rotate twice: the key created by the first rotation signs only between the
+    two calls, and this harness mints no credential in that window. Removing THAT
+    key is the route's full semantics with none of the poisoning — removing the
+    ORIGINAL key would revoke the very token this request authenticates with,
+    and every row after it.
+
+    If the ring cannot produce such a key the row fails rather than silently
+    aiming somewhere harmless: a removal probe that never removes anything is
+    the failure mode this file exists to prevent."""
+    hdr = _auth(ctx.owner_token)
+    before = {
+        k["key_id"]
+        for k in ctx.client.get("/api/auth/signing-keys", headers=hdr).json()["keys"]
+    }
+    ctx.client.post("/api/auth/signing-keys/rotate", headers=hdr)
+    mid = [
+        k
+        for k in ctx.client.get("/api/auth/signing-keys", headers=hdr).json()["keys"]
+        if k["key_id"] not in before
+    ]
+    assert len(mid) == 1, mid
+    ctx.client.post("/api/auth/signing-keys/rotate", headers=hdr)
+    return f"/api/auth/signing-keys/{mid[0]['key_id']}/remove"
+
+
+def _check_signing_key_removed(ctx: HCtx, r: httpx.Response) -> None:
+    """The removed key is gone from the ring the call answers with, and the ring
+    still has a signer (a removal that left the server unable to mint would be a
+    far worse outcome than a refused one)."""
+    _check_signing_keys(ctx, r)
+    removed = r.request.url.path.split("/")[-2]
+    assert removed not in {k["key_id"] for k in r.json()["keys"]}, (removed, r.json())
+
+
 def _happy_mfa_enroll_path(ctx: HCtx) -> str:
     """Seed the ship-dark flag so enrol answers 200 rather than 403. Inert:
     offering the factor arms nothing, so no later login fixture needs a code."""
@@ -1040,6 +1120,12 @@ HAPPY: dict[str, Happy] = {
     # inert on its own — offering the factor arms nothing.
     "POST /api/auth/mfa/offer": Happy(
         body=lambda _ctx: {"offered": True}, check=_check_mfa_offer
+    ),
+    "GET /api/auth/signing-keys": Happy(check=_check_signing_keys),
+    "POST /api/auth/signing-keys/rotate": Happy(check=_check_signing_key_rotated),
+    "POST /api/auth/signing-keys/{key_id}/remove": Happy(
+        path=_happy_signing_key_remove_path,
+        check=_check_signing_key_removed,
     ),
     "POST /api/auth/mfa/enroll": Happy(
         path=_happy_mfa_enroll_path, check=_check_mfa_enroll

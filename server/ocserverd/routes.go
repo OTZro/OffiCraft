@@ -225,6 +225,39 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Summary:    "Arm the second factor by proving a code from the pending secret.",
 			MCPExclude: true,
 		},
+		// ── Signing-key ring (T-62) ──────────────────────────────────────────
+		// principalOwner + MCPExclude for the same reason the password and
+		// second-factor rows above are: these routes govern the key that
+		// authenticates EVERY caller, the calling agent included. An
+		// admin_agent that could reach them could rotate the key that governs
+		// it, or remove the key its own credential is signed under.
+		{
+			Method:     "GET",
+			Path:       "/api/auth/signing-keys",
+			Handler:    w.HandleSigningKeysApiAuthSigningKeysGet,
+			Auth:       authGated,
+			Requires:   principalOwner,
+			Summary:    "List the signing keys: id, when it was made, which one signs.",
+			MCPExclude: true,
+		},
+		{
+			Method:     "POST",
+			Path:       "/api/auth/signing-keys/rotate",
+			Handler:    w.HandleSigningKeyRotateApiAuthSigningKeysRotatePost,
+			Auth:       authGated,
+			Requires:   principalOwner,
+			Summary:    "Mint a new signing key and hand signing over to it; the old one stays, verifying.",
+			MCPExclude: true,
+		},
+		{
+			Method:     "POST",
+			Path:       "/api/auth/signing-keys/{key_id}/remove",
+			Handler:    w.HandleSigningKeyRemoveApiAuthSigningKeysKeyIdRemovePost,
+			Auth:       authGated,
+			Requires:   principalOwner,
+			Summary:    "Remove a retired key, revoking everything it signed. Refuses the signing key.",
+			MCPExclude: true,
+		},
 		{
 			Method:     "POST",
 			Path:       "/api/auth/mfa/disable",

@@ -2124,6 +2124,26 @@
         "additionalProperties": false,
         "type": "object"
       },
+      "SigningKeyDTO": {
+        "description": "ONE signing key, as the outside is allowed to see it: which key it is, when it was made, and whether it is the one signing. There is deliberately no field that could carry key material \u2014 not the key, not a fingerprint, not a hash prefix \u2014 so \"did this leak the key\" is answered by the shape of the type rather than by remembering to strip a field at each call site.",
+        "properties": {
+          "created_ts": {"type": "number", "format": "double"},
+          "is_signing": {"type": "boolean"},
+          "key_id": {"type": "string"}
+        },
+        "required": ["key_id", "created_ts", "is_signing"],
+        "title": "SigningKeyDTO",
+        "type": "object"
+      },
+      "SigningKeysDTO": {
+        "description": "The whole signing-key ring, oldest first. Every mutating call answers with the FULL ring rather than with just what changed, so the settings page never has to re-fetch to learn the truth after acting.",
+        "properties": {
+          "keys": {"items": {"$ref": "#/components/schemas/SigningKeyDTO"}, "type": "array"}
+        },
+        "required": ["keys"],
+        "title": "SigningKeysDTO",
+        "type": "object"
+      },
       "MfaActivateDTO": {
         "description": "Prove a pending TOTP enrolment and ARM the second factor (`POST /api/auth/mfa/activate`, owner-gated). The code must verify against the secret `…/mfa/enroll` handed out; on success that secret becomes the ACTIVE one and the second factor is armed from the next login onward. A wrong code or password leaves the pending secret in place so the owner can simply try again.\n\n🔴 `password` IS REQUIRED, and the owner token alone is deliberately not enough. Arming a factor is as destructive as removing one: an attacker holding only a stolen owner token could otherwise enrol a secret THEY control and activate it, after which the real owner's password yields 401 and they cannot disable it (that needs a live code from the attacker's authenticator) — a transient token theft turned into a durable lockout recoverable only from a host shell. The same reasoning that makes `…/mfa/disable` demand both factors applies symmetrically to arming.",
         "properties": {
@@ -9198,6 +9218,170 @@
           }
         },
         "summary": "First-run probe: has the owner password been set?",
+        "x-mcp": {
+          "include": false
+        }
+      }
+    },
+    "/api/auth/signing-keys": {
+      "get": {
+        "description": "List the server's HS256 signing keys (owner-gated).\n\nEvery key in the ring VERIFIES tokens; exactly one of them SIGNS new ones. This is what the settings page renders: how many keys exist, when each was created, and which one is signing.\n\n\ud83d\udd34 NO KEY MATERIAL, AND NOT EVEN A HASH OF IT, EVER APPEARS HERE. `key_id` is drawn from crypto/rand and stored; it is not a function of the key. A hash-derived identifier would be harmless for a random key and a password oracle for a migrated one, whose key IS `SHA-256` over the owner password (`deriveSecretFromPassword`) \u2014 publishing any digest of it would hand out an offline dictionary attack on that password.\n\n`created_ts` is `0` for the key an install has been using since before the ring existed: its creation time was never recorded, and clients MUST render that as unknown rather than as the epoch.",
+        "operationId": "handle_signing_keys_api_auth_signing_keys_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SigningKeysDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Validation error (unified error envelope)."
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Client error (unified error envelope)."
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Server error (unified error envelope)."
+          }
+        },
+        "summary": "List the signing keys: id, when it was made, which one signs.",
+        "x-mcp": {
+          "include": false
+        }
+      }
+    },
+    "/api/auth/signing-keys/rotate": {
+      "post": {
+        "description": "Mint a new signing key and put it in charge of signing (owner-gated).\n\nThis is the transition, not a cut-over. The outgoing key STAYS in the ring and keeps verifying, so every token already in circulation \u2014 and every attachment share link \u2014 goes on working; it simply never signs again. Tokens minted from this point carry the new key.\n\nIt takes effect on the NEXT REQUEST: the ring is shared by pointer with the HTTP gate, so no restart and no redeploy is involved. (Within one process \u2014 a second server on the same database keeps its old ring until it restarts.)\n\nNothing is revoked here. Revocation is the separate, human-timed `\u2026/{key_id}/remove`.",
+        "operationId": "handle_signing_key_rotate_api_auth_signing_keys_rotate_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SigningKeysDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Validation error (unified error envelope)."
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Client error (unified error envelope)."
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Server error (unified error envelope)."
+          }
+        },
+        "summary": "Mint a new signing key and hand signing over to it; the old one stays, verifying.",
+        "x-mcp": {
+          "include": false
+        }
+      }
+    },
+    "/api/auth/signing-keys/{key_id}/remove": {
+      "post": {
+        "description": "Remove a retired signing key \u2014 THIS is the revocation, and it has no undo (owner-gated).\n\nThe moment this returns, every token signed by that key is refused, and every attachment share link produced under it stops working: a share `?sig=` is an HMAC under a key derived from the signing key, so it is governed by the ring too (owner ruling, card rc-cf9c27c07442). There is no grace period and holders are not notified \u2014 which is why the timing is a person's decision and never a timer's.\n\n\u26a0\ufe0f Warden credentials carry NO `exp`, so \"wait for the old tokens to expire\" is not a strategy for them: they are valid until their key leaves the ring. The question to answer before calling this is whether every machine has reconnected, not how many days have passed.\n\nThe key that is currently SIGNING cannot be removed (409) \u2014 rotate first, then remove the one that stepped down. An unknown `key_id` is a 404.",
+        "operationId": "handle_signing_key_remove_api_auth_signing_keys_key_id_remove_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {"type": "string"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SigningKeysDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Validation error (unified error envelope)."
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Client error (unified error envelope)."
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Server error (unified error envelope)."
+          }
+        },
+        "summary": "Remove a retired key, revoking everything it signed. Refuses the signing key.",
         "x-mcp": {
           "include": false
         }
