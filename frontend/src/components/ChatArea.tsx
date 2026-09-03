@@ -247,10 +247,24 @@ type ChatSession = {
    * anchor that yields nothing — is `useChat`'s, for the reason written beside
    * the effect.
    *
-   * ONE writer, ONE reader, and that is the whole of it since T-48 deleted the
-   * jump's re-center observer: the observer used to read this flag as a bypass
-   * ("the reader walked away, stop re-centring"), and landing a new anchor had
-   * to clear it again. Neither exists now. */
+   * 🔴 AND IT IS CLEARED BY EVERY HAND-OVER OF THE VIEWPORT, NOT ONLY BY THE
+   * SCROLL THAT ENDS IT (T-48, independent review F-A). This paragraph used to
+   * say the opposite — that the scroll handler was the only writer, because the
+   * re-centre observer that also read the flag had been deleted — and that was
+   * a description of a BUG, not of a design. An arm survives the walk it was
+   * started for: the reader scrolls to the bottom, the walk runs to the live
+   * tail, and `forwardWalkArmed` is still true with nothing left to stop it.
+   * While the continuation effect still had a geometry gate, a stale arm ran
+   * into that gate and halted; `8af92bca` removed the gate, so a stale arm
+   * became a corridor that departs on its own. Reproduced, same room and same
+   * instance: jump → scroll to the bottom → jump again to an OLDER message, and
+   * the second anchor window walks itself back to the live tail with the reader
+   * not having touched anything (rows 200 / 8 window requests against 40 / 2).
+   * Worse, the second jump leaves `session.nearBottom` false, so every page the
+   * walk fetches for itself takes the reactor's 「有新訊息到了」 branch — the
+   * preview strip announces a message a hundred rows back and the unread
+   * divider re-anchors on it. So: a jump that starts fetching, and 回到最新,
+   * both end the previous walk. See `endForwardWalk`. */
   forwardWalkArmed: boolean;
   /** The scrollTop the last scroll event was measured at — the ONLY way to tell
    * a reader who moved from a box that grew under one who did not (T-48).
@@ -258,6 +272,17 @@ type ChatSession = {
    * `scrollTop` alone: the same 「離底部很遠」 reading means opposite things
    * depending on which of the two moved, and only this remembers which. */
   lastScrollTop: number;
+  /** The scrollHeight measured alongside it, and it is the other half of the
+   * same question (T-48, independent review F-C). A DECREASE in `scrollTop` is
+   * not proof the reader moved: when content ABOVE the viewport gets shorter —
+   * a card collapsing from waiting to answered, any reflow — the browser's
+   * scroll anchoring pulls `scrollTop` back to keep the reader's row still, and
+   * fires a scroll event that is textually identical to 「人往回捲」. The walk
+   * would then stop with no spinner and no end marker: the same silent stall
+   * `8af92bca` treats, arriving from the other side. Remembering the height
+   * separates them — a pull-back is a fall in `scrollTop` MATCHED by a fall in
+   * `scrollHeight`; a reader's scroll is not. */
+  lastScrollHeight: number;
 };
 
 function freshChatSession(unreadCount: number): ChatSession {
@@ -277,6 +302,7 @@ function freshChatSession(unreadCount: number): ChatSession {
     pendingLatestScroll: false,
     forwardWalkArmed: false,
     lastScrollTop: 0,
+    lastScrollHeight: 0,
   };
 }
 
@@ -874,6 +900,9 @@ export function ChatArea({
     session.prependAnchor = null;
     for (let i = 0; i < idx; i++) session.prevIds.add(messages[i].id);
     const el = messagesRef.current;
+    // Direction, for the walk's stop (F-C): a prepend only ever GROWS the box
+    // above the reader, so this write raises `scrollTop`. It can never be
+    // mistaken for 「人往回捲」, and so needs no `lastScrollTop` fix-up.
     if (el) el.scrollTop = anchor.top + (el.scrollHeight - anchor.height);
     // The one-shot entry positioning (session.initialPositioned) already ran for
     // this conversation — a prepend must never re-run it, and it doesn't:
@@ -883,6 +912,18 @@ export function ChatArea({
   // Threshold (px) within which the viewport counts as "at the bottom" for
   // auto-follow and the read watermark.
   const NEAR_BOTTOM_PX = 80;
+  // 🔴 THE ARM BELONGS TO ONE JOURNEY (T-48, F-A). Whoever takes the viewport
+  // away from the walk ends it, because after that hand-over `forwardWalkArmed`
+  // no longer names anything the reader asked for — and the continuation effect
+  // has no geometry left to trip over. The re-measured `lastScrollTop` /
+  // `lastScrollHeight` go with it so the next scroll event is compared against
+  // where the viewport actually IS, not against the old journey's last reading.
+  function endForwardWalk() {
+    session.forwardWalkArmed = false;
+    const el = messagesRef.current;
+    session.lastScrollTop = el?.scrollTop ?? 0;
+    session.lastScrollHeight = el?.scrollHeight ?? 0;
+  }
   function onMessagesScroll() {
     const el = messagesRef.current;
     if (!el) return;
@@ -899,10 +940,31 @@ export function ChatArea({
     // viewport UP; an appended page moves the BOTTOM DOWN and the reader not at
     // all. Measuring that as "they left" is what killed the walk on CI — see
     // the continuation effect below.
-    if (session.forwardWalkArmed && el.scrollTop < session.lastScrollTop - 1) {
+    //
+    // 🟠 AND A FALL IN `scrollTop` IS NOT BY ITSELF THE READER (F-C). Two other
+    // things produce one, and both used to stop the walk silently:
+    //   • content ABOVE the viewport getting shorter — the browser's scroll
+    //     anchoring pulls `scrollTop` back to hold the reader's row still, and
+    //     the fall in `scrollHeight` MATCHES it, so `movedUp - shrank` is ~0;
+    //   • elastic overscroll at the bottom (iOS/macOS), where `scrollTop`
+    //     settles back down while the viewport never leaves the bottom — which
+    //     is why the reader's stop also has to be away from the bottom.
+    // `nowNearBottom` appears here as a CONFIRMATION of a fall that already
+    // happened, never as the signal itself; the distance that `8af92bca`
+    // removed was being asked about an append, which moves no `scrollTop` at
+    // all and so cannot reach this branch.
+    const movedUp = session.lastScrollTop - el.scrollTop;
+    const shrank = session.lastScrollHeight - el.scrollHeight;
+    if (
+      session.forwardWalkArmed &&
+      movedUp > 1 &&
+      movedUp - shrank > 1 &&
+      !nowNearBottom
+    ) {
       session.forwardWalkArmed = false;
     }
     session.lastScrollTop = el.scrollTop;
+    session.lastScrollHeight = el.scrollHeight;
     // Near the BOTTOM of an ANCHOR WINDOW → pull one page FORWARDS (T-48 ③).
     // The exact mirror of the top branch above, and the reason the jump can
     // afford to fetch only two pages: the owner walks out of the window in the
@@ -1106,6 +1168,10 @@ export function ChatArea({
     if (!el) {
       if (session.jumpFetched !== jumpToMsgId) {
         session.jumpFetched = jumpToMsgId;
+        // A walk armed for the PREVIOUS journey must not survive into this one
+        // (F-A): the anchor window about to land flips `hasNewer` back to true,
+        // and a leftover arm would depart on it without the reader.
+        endForwardWalk();
         // The jump owns the viewport FROM THE MOMENT IT STARTS FETCHING, not
         // from the moment it lands. Without these three the thread spends the
         // in-flight window doing its ordinary entry positioning — landing at
@@ -1188,6 +1254,11 @@ export function ChatArea({
     }
     session.jumpConsumed = jumpToMsgId;
     setJumpNotice(null);
+    // Same hand-over as the fetching branch above (F-A) — this one moves the
+    // viewport with `scrollIntoView` instead of waiting for a window, which is
+    // also the reason `lastScrollTop` may be re-read here rather than left at
+    // the pre-jump value.
+    endForwardWalk();
     // The jump owns the initial viewport — mark entry positioning done.
     session.initialPositioned = true;
     session.prevIds = new Set(messages.map((m) => m.id));
@@ -1226,6 +1297,16 @@ export function ChatArea({
   // the bottom, else (scrolled up) arm the ① new-message chip on the first
   // fresh inbound message.
   useEffect(() => {
+    // 🔴 THE HEIGHT THE WALK'S STOP COMPARES AGAINST IS THE ONE THIS COMMIT
+    // LEFT BEHIND (T-48, F-C) — not the one the last SCROLL EVENT saw. A page
+    // is appended without producing any scroll event, so a `lastScrollHeight`
+    // written only in the scroll handler is stale by however many pages the
+    // walk has fetched, and the growth it missed then masks the shrink it is
+    // supposed to detect: measured — the reflow test stopped the walk anyway.
+    // Recorded here because a REFLOW is not a commit, so the last commit's
+    // height is exactly the "before" the next scroll event needs.
+    const box = messagesRef.current;
+    if (box) session.lastScrollHeight = box.scrollHeight;
     if (messages.length === 0) return;
     if (!session.initialPositioned) {
       session.initialPositioned = true;
@@ -1255,6 +1336,8 @@ export function ChatArea({
     const fresh = messages.filter((m) => !prev.has(m.id));
     session.prevIds = new Set(messages.map((m) => m.id));
     if (session.nearBottom) {
+      // Direction (F-C): auto-follow scrolls DOWN to the sentinel, i.e. raises
+      // `scrollTop`. The walk's stop only ever reads a FALL.
       endRef.current?.scrollIntoView();
       // Following the bottom = everything is being seen; any strip up is stale
       // (e.g. the owner just sent a reply, which force-follows), the newest
@@ -1315,6 +1398,8 @@ export function ChatArea({
       box.querySelector(`[data-msg-id="${firstUnreadId}"]`);
     // The divider is the actual unread boundary.  Keeping older context above
     // it can push the first unread row outside a compact chat viewport.
+    // Direction (F-C): entry positioning only — `entryScrollPending` is set on
+    // the first commit of a conversation, before any walk can have been armed.
     divider?.scrollIntoView({ block: "start" });
     const distance = box.scrollHeight - box.scrollTop - box.clientHeight;
     session.nearBottom = distance <= NEAR_BOTTOM_PX;
@@ -1352,6 +1437,12 @@ export function ChatArea({
     // is now taken from the layout below, after the landing, and nowhere else.
     session.nearBottom = true;
     session.unreadRunOpen = false;
+    // 回到最新 IS the end of the walk, however it gets there (F-A): the `hasNewer`
+    // branch below replaces the thread with the live tail, and the other branch
+    // scrolls to a tail that is already in hand. Either way the corridor the
+    // reader armed has arrived, and the arm must not outlive it into whatever
+    // anchor window comes next.
+    endForwardWalk();
     // 🔴 THE ARROW / THE PREVIEW STRIP ENDS AN IN-FLIGHT JUMP (T-48). Both mean
     // "take me to the newest message", said by the owner, and they are the one
     // thing allowed to overtake the anchor fetch. Spending the jump latch here
@@ -1371,6 +1462,9 @@ export function ChatArea({
       void resetToLatest();
       return;
     }
+    // Direction (F-C): `scrollToLatest` moves to the LAST row, i.e. raises
+    // `scrollTop` — and `endForwardWalk` above has already ended the walk, so
+    // there is nothing left for this scroll to be misread by.
     scrollToLatest(el);
     setLatestInView(isLatestRowInView(el));
   }
