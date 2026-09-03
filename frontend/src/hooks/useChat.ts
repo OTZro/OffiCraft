@@ -816,6 +816,19 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     // room's header. That frame is the whole of R11-1, and deleting it is what
     // the `key` did.
     //
+    // 🔴 THERE IS NO SUCH CALLER TODAY, AND THAT IS WRITTEN DOWN RATHER THAN
+    // LEFT TO BE REDISCOVERED (T-48, R14-3.3). `OfficePage`'s three `<ChatArea>`
+    // branches all pass `key={x.id}` with the same `x` they pass as `member`,
+    // so `key` IS `withId` and a room change is always a remount: nothing in
+    // the product reaches this path. What it costs is one extra `setThread` per
+    // mount, into a thread that is already empty. It stays because the shape it
+    // catches is a shape somebody can go back to — drop the key, or mount this
+    // hook from a surface that has no key of its own, and the convergence is
+    // here waiting rather than being re-derived after the next report of a
+    // room's messages under another room's header. `useChat.test.ts`'s "converges
+    // on the new peer when a live instance is handed a different withId" is the
+    // property, and it is a real one whether or not anything exercises it today.
+    //
     // hasMore resets optimistic-true; the first landed page derives it honestly
     // (mergeLatestPage's empty-thread arm).
     setThread({
