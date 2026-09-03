@@ -44,11 +44,26 @@
 // same colour of red. This repo already has a home for a rule that reads source
 // text — the `lint-*` family in `bin/ci.sh` — and this is one of those.
 //
-// The boundary is written down rather than assumed: `src/api` and `src/i18n` are
-// excluded from the walk. They hold no per-conversation React state — the
-// transport layer's `await`s land in `useChat`/`ChatArea` callbacks, which ARE
-// in scope — and including `api/http.ts` would put 126 unrelated `await`s under
-// a count that churns on every new endpoint. Disagree by deleting the filter.
+// The boundary is written down rather than assumed, and since R16 D-3 there are
+// TWO of them because there are two questions:
+//
+//   * the ASYNC-LANDING census excludes `src/api` and `src/i18n`. They hold no
+//     per-conversation React state — the transport layer's `await`s land in
+//     `useChat`/`ChatArea` callbacks, which ARE in scope — and including
+//     `api/http.ts` would put 126 unrelated `await`s under a count that churns
+//     on every new endpoint.
+//   * the MODULE-STATE census includes `src/api`, because that reason is about
+//     await COUNTS and says nothing about whether one room's value can reach
+//     another. `api/http.ts` already holds eight module-level mutable values and
+//     an SSE transport is the likeliest home for a per-room cache; the
+//     sixteenth review put one there and the census exited 0. `src/i18n` stays
+//     out of both, and that one IS just inherited — measured, it declares no
+//     top-level `let`/`var` and no unregistrable container, so walking it adds
+//     no row either way. It is left out because the async half needs it out, not
+//     because the state half has an argument; move it in the day i18n grows
+//     something writable.
+//
+// Disagree by editing ASYNC_SCOPE / STATE_SCOPE.
 //
 // 🔴 IT CARRIES TWO MORE CENSUSES, BECAUSE IT ALREADY WALKS THE GRAPH (T-48,
 // R14-3.1 / R14-1.6). Both are the same shape of question — "is this claim still
@@ -72,7 +87,8 @@
 //
 // Run: `npm run lint:async-landing` (also wired into bin/ci.sh).
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import ts from "typescript";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -84,12 +100,37 @@ const SRC = process.env.ASYNC_LANDING_SRC
   ? resolve(process.env.ASYNC_LANDING_SRC)
   : resolve(dirname(fileURLToPath(import.meta.url)), "..", "src");
 const ENTRY = join(SRC, "components", "ChatArea.tsx");
-// In scope = under `src/components`, `src/hooks` or `src/lib`, expressed
-// RELATIVE to the scanned root so the selftest's temp copy is scanned the same
-// way the real tree is (a root-absolute pattern silently matched nothing there,
-// which would have made every sabotage below "pass").
-const inScope = (file) =>
-  /^(components|hooks|lib)[\\/]/.test(file.slice(SRC.length + 1));
+const rel = (file) => file.slice(SRC.length + 1).split("\\").join("/");
+
+// 🔴 TWO POPULATIONS, TWO BOUNDARIES, WRITTEN DOWN SEPARATELY (T-48, R16 D-3).
+// There used to be one `inScope`, excluding `src/api`, and the reason recorded
+// for the exclusion was about AWAIT COUNTS: `api/http.ts` holds 126 unrelated
+// `await`s whose count would churn on every new endpoint. That reason is sound
+// for the async-landing census and it does NOT transfer to the module-state
+// census, which asks a completely different question — can a value written in
+// one room be read in another? `api/http.ts` already holds eight module-level
+// mutable values (`sseSource`, `sseState`, `sseRetryTimer`, `sseSubscribers`…)
+// and an SSE transport is the single likeliest home for a per-room cache. The
+// sixteenth review put `const lastSeenPerRoom = new Map<string, string>();`
+// there and the census exited 0. So the state census walks `src/api` too, and
+// the await census does not.
+//
+// Expressed RELATIVE to the scanned root so the selftest's temp copy is scanned
+// the same way the real tree is (a root-absolute pattern silently matched
+// nothing there, which would have made every sabotage below "pass").
+const ASYNC_SCOPE = /^(components|hooks|lib)\//;
+const STATE_SCOPE = /^(components|hooks|lib|api)\//;
+
+// 🔴 THE ONE FILE THE STATE CENSUS SKIPS, AND WHY IT IS A NAME AND NOT A GLOB.
+// `api/mock.ts` is the mock BACKEND — thirty-five module-level tables that stand
+// in for the server's database while `VITE_USE_MOCK` is on. Every one of them is
+// shared across every room, on purpose, because that is what a server is; asking
+// "what keys it" of `chatLog` has no useful answer, and thirty-five rows saying
+// so would bury the twenty-five that matter. It is excluded BY NAME so that
+// `api/http.ts` — the real transport, and the likeliest home for a per-room
+// cache — stays in, and so that adding a second mock file is a deliberate edit
+// here rather than something a directory glob absorbs in silence.
+const STATE_SKIP = /^api\/mock\.ts$/;
 
 /** The shapes that put a gap between "queued" and "commits". */
 const KINDS = [
@@ -220,7 +261,7 @@ const REGISTRY = [
   { file: "lib/sharedSnapshot.ts", kind: ".then/.catch/.finally", count: 1, verdict: "single-flight settings snapshot; global generation, not per conversation" },
 ];
 
-/** MODULE-LEVEL MUTABLE STATE, across the whole walk (T-48, R14-3.1).
+/** MODULE-LEVEL MUTABLE STATE, across the whole walk (T-48, R14-3.1 / R16 D-3).
  *
  * A module-level table outlives every mount, so it is the one place a value can
  * still cross from one conversation into another now that `key={peerId}` takes
@@ -230,21 +271,44 @@ const REGISTRY = [
  * the store) is the shape this exists to catch coming back, under any name and
  * in any file the chat surface imports.
  *
- * WHAT COUNTS AS STATE: a top-level `let`/`var`, and a top-level
- * `new Map/Set/WeakMap/WeakSet()` constructed EMPTY — something written to
- * later. A container built FROM a constant (`new Set(THEME_TOKENS)`) is a
- * lookup table, not state, and is deliberately not registered; construct one
- * empty and it joins the census. */
+ * WHAT COUNTS AS STATE is decided by the AST, not by a line pattern — see
+ * `scanModuleState` for the three clauses and, more importantly, for the shapes
+ * that still get past them. The regex this replaced was anchored on
+ * `(\s*)\s*;?\s*$`, so an end-of-line comment walked through the exact shape
+ * the census advertised catching, and array/object literals were not in its
+ * grammar at all — which is why `escapeLayers.ts`'s `layers` sat in the walk,
+ * beside a registered sibling, unseen.
+ *
+ * 🔴 THE POPULATION INCLUDES `src/api` (R16 D-3). It did not, by inheritance
+ * from the async census's exclusion — and that exclusion's stated reason is
+ * about await COUNTS, which says nothing about whether one room's value can
+ * reach another. The eight rows below from `api/http.ts` are the answer to
+ * that: the SSE transport is exactly where a per-room cache would be put. */
 const MODULE_STATE = [
+  { file: "api/http.ts", name: "sseSubscribers", verdict: "the set of delta sinks on the ONE app-wide EventSource; a subscriber is a callback that its own hook removes on unmount, and no room's data is stored here — only who to hand a delta to" },
+  { file: "api/http.ts", name: "sseSource", verdict: "the single live EventSource, or null; a connection is not per conversation and holds no room's value" },
+  { file: "api/http.ts", name: "sseVisibilityHandler", verdict: "the one visibilitychange listener paired with that connection, kept so it can be removed again; global" },
+  { file: "api/http.ts", name: "sseState", verdict: "the connection's own state machine (idle/connecting/open/…); describes the socket, not any room" },
+  { file: "api/http.ts", name: "sseStateSubscribers", verdict: "repaint callbacks for that connection banner; each unsubscribes on unmount, and the value delivered is the socket's state" },
+  { file: "api/http.ts", name: "sseRetryTimer", verdict: "the reconnect backoff timer handle; one connection, one timer, no room in it" },
+  { file: "api/http.ts", name: "sseRetryAttempt", verdict: "the backoff index for that timer; a counter, not a value any room can read back" },
+  { file: "api/http.ts", name: "sseGapPending", verdict: "one boolean saying a resync is owed after a dropped connection; it triggers a refetch in every mounted hook rather than carrying data itself" },
+  { file: "api/errorCodes.ts", name: "ERROR_CODE_VOCABULARY", verdict: "the closed error-code vocabulary, built once from the checked-in spec JSON and only ever asked `.has(…)`; a lookup table, identical for every room" },
   { file: "hooks/useAttachmentStaging.ts", name: "pendingAttachmentSeq", verdict: "a monotonic key mint for staged rows; carries no per-conversation meaning and is never read back" },
+  { file: "hooks/useAttachmentStaging.ts", name: "NO_ROWS", verdict: "the one empty list handed to a caller with no peer, so `useSyncExternalStore` sees a stable snapshot; never written to, and a peerless composer has no room to leak into" },
   { file: "hooks/useWorkerCodenames.ts", name: "cache", verdict: "keyed by the globally-unique `ow-` worker id, which names one worker in every room alike" },
   { file: "hooks/useWorkerCodenames.ts", name: "inflight", verdict: "the same `ow-` ids, de-duplicating requests; not per conversation" },
   { file: "hooks/useWorkerCodenames.ts", name: "listeners", verdict: "repaint callbacks for that global cache; each unsubscribes on unmount" },
   { file: "lib/chatDraftStore.ts", name: "drafts", verdict: "keyed by PEER — the one table that survives a room switch on purpose, because a draft is what the owner has composed and not yet sent" },
   { file: "lib/chatDraftStore.ts", name: "attachErrors", verdict: "keyed by PEER, and dropped when the office page unmounts (R14-2.1) so a refusal cannot outlive the surface that raised it" },
   { file: "lib/chatDraftStore.ts", name: "listeners", verdict: "keyed by PEER; a write notifies only that room's subscribers" },
+  { file: "lib/escapeLayers.ts", name: "layers", verdict: "🔴 REGISTERED BY R16 D-3, having been in the walk and invisible to the regex census the whole time. The Esc stack: one entry per dismissible surface, pushed by that surface's effect and spliced out by the same effect's cleanup. Not keyed at all and deliberately so — the owner of a key press is decided by DOM CONTAINMENT at dispatch time, not by any id — and it holds callbacks, never a room's data, so a stale entry is impossible rather than merely unlikely (a forced unmount still runs the cleanup, which is the only release path)" },
   { file: "lib/escapeLayers.ts", name: "listening", verdict: "one boolean saying whether the shared keydown listener is attached; layers deregister on unmount" },
   { file: "lib/sharedSnapshot.ts", name: "registry", verdict: "the set of global settings snapshots to reset on auth change; global by definition, not per conversation" },
+  { file: "lib/themeBundleCore.ts", name: "THEME_TOKEN_SET", verdict: "a closed allowlist built once from the generated THEME_COLOR_TOKENS and only ever asked `.has(…)`; a lookup table, identical for every room" },
+  { file: "lib/themeBundleCore.ts", name: "THEME_FONT_TOKEN_SET", verdict: "the same, over THEME_FONT_TOKENS; read-only membership, no room in it" },
+  { file: "lib/themeBundleCore.ts", name: "SAFE_FONT_STACK_SET", verdict: "the same, over SAFE_FONT_FAMILIES' stacks; the font-injection allowlist, read-only" },
+  { file: "lib/themeWording.ts", name: "MESSAGE_KEY_SET", verdict: "a closed allowlist built once from the generated MESSAGE_KEYS and only ever asked `.has(…)`; a lookup table, identical for every room" },
 ];
 
 /** The ONE caller `useQuotedMessageOverlay` is allowed to have (T-48, R14-1.6).
@@ -256,59 +320,359 @@ const MODULE_STATE = [
  * formality. */
 const QUOTED_OVERLAY_CALLERS = ["components/ChatArea.tsx"];
 
-function walkFromChatArea() {
-  const resolveSpec = (fromFile, spec) => {
-    if (!spec.startsWith(".")) return null;
-    const base = join(dirname(fromFile), spec);
-    for (const c of [
-      base,
-      `${base}.ts`,
-      `${base}.tsx`,
-      join(base, "index.ts"),
-      join(base, "index.tsx"),
-    ]) {
-      if (existsSync(c) && !/\.(css|json|svg)$/.test(c)) return c;
-    }
-    return null;
-  };
+// ── THE AST LAYER (T-48, R16 D-3) ────────────────────────────────────────────
+// The module-state and caller censuses used to be REGEXES over lines, and the
+// sixteenth review walked through both of them five different ways: an
+// end-of-line comment defeated the `\(\s*\)\s*;?\s*$` anchor on the very shape
+// the census advertised; array and object literals were not in the grammar at
+// all; a renamed import (`import { X as Y }`) defeated the caller substring;
+// and a line break before `(` did too. Every one of those is a LEXICAL accident
+// — the parser has no such accidents, and `typescript` is already a dependency
+// of this repo. So both censuses now read the syntax tree.
+//
+// 🔴 WHAT THIS DOES AND DOES NOT BUY. It closes the whole class of "same
+// meaning, different spelling": comments, whitespace, line breaks, type
+// arguments, `as const`, renamed and namespaced imports, re-exports. It does
+// NOT make the rule below omniscient — see the note on scanModuleState for the
+// shapes that still get through and why the boundary is where it is.
+const astCache = new Map();
+function ast(file) {
+  let a = astCache.get(file);
+  if (!a) {
+    a = ts.createSourceFile(
+      file,
+      readFileSync(file, "utf8"),
+      ts.ScriptTarget.Latest,
+      /* setParentNodes */ true,
+      /\.tsx$/.test(file) ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+    );
+    astCache.set(file, a);
+  }
+  return a;
+}
+
+function eachNode(node, fn) {
+  fn(node);
+  ts.forEachChild(node, (c) => eachNode(c, fn));
+}
+
+const resolveSpec = (fromFile, spec) => {
+  if (!spec.startsWith(".")) return null;
+  const base = join(dirname(fromFile), spec);
+  for (const c of [
+    base,
+    `${base}.ts`,
+    `${base}.tsx`,
+    join(base, "index.ts"),
+    join(base, "index.tsx"),
+  ]) {
+    // `existsSync` alone matched the DIRECTORY `./foo` for `import "./foo"`,
+    // which only ever stayed harmless because the scope filter dropped it
+    // before anything tried to read it (R16 D-3).
+    if (existsSync(c) && statSync(c).isFile() && !/\.(css|json|svg)$/.test(c)) return c;
+  }
+  return null;
+};
+
+/** Path aliases the walk cannot follow. `resolveSpec` returns null for anything
+ * not starting with `.`, which is correct for `react` and wrong for `@/lib/x`.
+ * No alias is configured today, so the walk is complete — but the day someone
+ * adds one, files would drop out of the population SILENTLY, which is the exact
+ * failure mode (R10-5 B1/B2/B3) this census has already been bitten by twice.
+ * A loud stop is the cheap half of the fix; teaching `resolveSpec` the mapping
+ * is the other half, and it belongs to whoever adds the alias. */
+function unfollowableAliases() {
+  const tsconfig = join(dirname(SRC), "tsconfig.json");
+  if (!existsSync(tsconfig)) return [];
+  const { config } = ts.parseConfigFileTextToJson(
+    tsconfig,
+    readFileSync(tsconfig, "utf8"),
+  );
+  const co = config?.compilerOptions ?? {};
+  const names = Object.keys(co.paths ?? {});
+  if (co.baseUrl !== undefined) names.push(`baseUrl: ${co.baseUrl}`);
+  return names;
+}
+
+/** Every module `file` imports, in EVERY syntax — static, `export … from`,
+ * side-effect, dynamic `import()`, `require()`. `ts.preProcessFile` is the
+ * compiler's own answer to this question, so a syntax nobody here thought of is
+ * still found. */
+function importedSpecs(file) {
+  return ts
+    .preProcessFile(readFileSync(file, "utf8"), true, true)
+    .importedFiles.map((r) => r.fileName);
+}
+
+/** The population: everything reachable from ChatArea through `scope`. */
+function walkFromChatArea(scope) {
   const seen = new Set();
   const queue = [ENTRY];
   while (queue.length > 0) {
     const file = queue.shift();
     if (seen.has(file)) continue;
     seen.add(file);
-    // 🔴 EVERY IMPORT SYNTAX, NOT JUST THE PRETTY ONE (R10-5 B1/B2/B3). The walk
-    // used to match `from "…"` only, so a side-effect import (`import "./x"`), a
-    // single-quoted specifier and a dynamic `import("./x")` each dropped a file
-    // out of the population SILENTLY.
-    for (const m of readFileSync(file, "utf8").matchAll(
-      /(?:\bfrom|\bimport)\s*\(?\s*['"]([^'"]+)['"]/g,
-    )) {
-      const r = resolveSpec(file, m[1]);
-      if (r && !r.includes(".test.") && inScope(r)) queue.push(r);
+    for (const spec of importedSpecs(file)) {
+      const r = resolveSpec(file, spec);
+      if (r && !r.includes(".test.") && scope.test(rel(r))) queue.push(r);
     }
   }
   return [...seen].sort();
 }
 
-/** Top-level mutable state declared in `file`. Top level = column 0: the same
- * cheap, deliberate reading `chatDraftStore.test.ts` used, and nesting a table
- * inside a function makes it per-call rather than per-module anyway. */
-function scanModuleState(file) {
-  const names = [];
-  for (const line of readFileSync(file, "utf8").split("\n")) {
-    if (/^\s*(\/\/|\*|\/\*)/.test(line)) continue;
-    const mutable = line.match(/^(?:export\s+)?(?:let|var)\s+([A-Za-z_$][\w$]*)/);
-    if (mutable) {
-      names.push(mutable[1]);
-      continue;
+// ── MODULE-LEVEL MUTABLE STATE, BY AST ───────────────────────────────────────
+const MUTATING_METHODS = new Set([
+  "set", "add", "delete", "clear", "push", "pop", "shift", "unshift",
+  "splice", "sort", "reverse", "fill", "copyWithin",
+]);
+const CONTAINER_CTORS = new Set(["Map", "Set", "WeakMap", "WeakSet", "Array", "Object"]);
+
+const unwrap = (e) => {
+  while (
+    e &&
+    (ts.isAsExpression(e) ||
+      ts.isParenthesizedExpression(e) ||
+      ts.isSatisfiesExpression(e) ||
+      ts.isTypeAssertionExpression(e) ||
+      ts.isNonNullExpression(e))
+  ) {
+    e = e.expression;
+  }
+  return e;
+};
+
+const rootIdentifier = (e) => {
+  while (ts.isPropertyAccessExpression(e) || ts.isElementAccessExpression(e)) {
+    e = e.expression;
+  }
+  return ts.isIdentifier(e) ? e.text : null;
+};
+
+/** Every identifier WRITTEN THROUGH anywhere in the population: `x.set(…)`,
+ * `x.push(…)`, `x[k] = …`, `x.k += …`, `delete x[k]`. By NAME rather than by
+ * binding, deliberately: an exported table mutated by its importer must count,
+ * and over-approximating (two files, same name) only ever adds a row to the
+ * register — it can never hide one. */
+function mutatedNames(files) {
+  const out = new Set();
+  for (const file of files) {
+    eachNode(ast(file), (n) => {
+      if (
+        ts.isCallExpression(n) &&
+        ts.isPropertyAccessExpression(n.expression) &&
+        MUTATING_METHODS.has(n.expression.name.text) &&
+        ts.isIdentifier(n.expression.expression)
+      ) {
+        out.add(n.expression.expression.text);
+      }
+      if (
+        ts.isBinaryExpression(n) &&
+        n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+        n.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
+        !ts.isIdentifier(n.left)
+      ) {
+        const r = rootIdentifier(n.left);
+        if (r) out.add(r);
+      }
+      if (ts.isDeleteExpression(n)) {
+        const r = rootIdentifier(n.expression);
+        if (r) out.add(r);
+      }
+    });
+  }
+  return out;
+}
+
+/** Top-level consts across the population, for resolving `new Set(TOKENS)`. */
+function topLevelInitializers(files) {
+  const out = new Map();
+  for (const file of files) {
+    for (const st of ast(file).statements) {
+      if (!ts.isVariableStatement(st)) continue;
+      for (const d of st.declarationList.declarations) {
+        if (ts.isIdentifier(d.name)) out.set(d.name.text, d.initializer);
+      }
     }
-    const container = line.match(
-      /^(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*(?::[^=]*)?=\s*new (?:Map|Set|WeakMap|WeakSet)\b.*\(\s*\)\s*;?\s*$/,
-    );
-    if (container) names.push(container[1]);
+  }
+  return out;
+}
+
+/** Is this initializer STATICALLY, VISIBLY non-empty — i.e. does the file make
+ * it obvious that the container is a fixed lookup table rather than something
+ * to be filled in later? Only a literal with elements, or an identifier that
+ * resolves to one, qualifies. Anything clever (`new Map(Object.entries({}))`,
+ * a spread, a call) does NOT, and falls to the state side: the default is
+ * "register it and say what keys it", not "assume it is a constant". */
+function provablyNonEmpty(init, consts, depth = 0) {
+  const e = unwrap(init);
+  if (!e || depth > 2) return false;
+  if (ts.isArrayLiteralExpression(e)) {
+    return e.elements.length > 0 && e.elements.every((x) => !ts.isSpreadElement(x));
+  }
+  if (ts.isObjectLiteralExpression(e)) {
+    return e.properties.length > 0 && e.properties.every((x) => !ts.isSpreadAssignment(x));
+  }
+  if (ts.isIdentifier(e) && consts.has(e.text)) {
+    return provablyNonEmpty(consts.get(e.text), consts, depth + 1);
+  }
+  return false;
+}
+
+const containerArgs = (init) => {
+  const e = unwrap(init);
+  if (!e) return null;
+  if (ts.isArrayLiteralExpression(e) || ts.isObjectLiteralExpression(e)) return [e];
+  if (
+    ts.isNewExpression(e) &&
+    ts.isIdentifier(e.expression) &&
+    CONTAINER_CTORS.has(e.expression.text)
+  ) {
+    return [...(e.arguments ?? [])];
+  }
+  return null;
+};
+
+/** Top-level mutable state declared in `file`, by AST.
+ *
+ * 🔴 THE RULE, AND ITS CEILING (T-48, R16 D-3). A binding is module state when:
+ *
+ *   1. it is a top-level `let`/`var` — it can be reassigned, full stop; or
+ *   2. it is a top-level `const` that is WRITTEN THROUGH somewhere in the
+ *      population (`.set`/`.push`/`x[k] =`/`delete x[k]`); or
+ *   3. it is a top-level `const` bound to a mutable container (array literal,
+ *      object literal, `new Map/Set/WeakMap/WeakSet/Array/Object`) that is not
+ *      provably non-empty at construction.
+ *
+ * Clause 2 is the load-bearing one and it is SOUND for the question asked: a
+ * container that is never written to after module init cannot carry a value
+ * from one room to another — every room sees exactly what the module literally
+ * put there at load time. It is also what finally sees
+ * `const layers: Layer[] = []` in `escapeLayers.ts`, an instance that was
+ * sitting in the walk, next to a sibling that WAS registered, for the whole life
+ * of the regex version. Clause 3 is a cheap extra that catches a table declared
+ * before it is wired up — an empty container is a promise to write to it — which
+ * is the shape the sixteenth review's mutants took.
+ *
+ * WHAT STILL GETS THROUGH, said plainly rather than discovered later: a table
+ * obtained from a factory and never touched syntactically here
+ * (`const t = makeStore();` then `t` handed to something that fills it), a class
+ * static field, a module-level regex's `lastIndex`, and state stashed on an
+ * imported object. Those are not closed by adding a fourth clause of the same
+ * kind — the honest boundary is "declared here, or written through here", and
+ * anything outside it is a REVIEW's job, not this script's. */
+function scanModuleState(file, mutated, consts) {
+  const names = [];
+  for (const st of ast(file).statements) {
+    if (!ts.isVariableStatement(st)) continue;
+    const isConst = (st.declarationList.flags & ts.NodeFlags.Const) !== 0;
+    for (const d of st.declarationList.declarations) {
+      if (!ts.isIdentifier(d.name)) continue;
+      if (!isConst || mutated.has(d.name.text)) {
+        names.push(d.name.text);
+        continue;
+      }
+      const args = containerArgs(d.initializer);
+      if (args && !(args.length > 0 && args.every((a) => provablyNonEmpty(a, consts)))) {
+        names.push(d.name.text);
+      }
+    }
   }
   return names;
+}
+
+// ── useQuotedMessageOverlay's CALLERS, BY AST ────────────────────────────────
+const OVERLAY_FILE = join(SRC, "hooks", "useQuotedMessageOverlay.tsx");
+const OVERLAY_EXPORT = "useQuotedMessageOverlay";
+
+/** For every file: the local names that ARE the hook, and the namespace
+ * bindings through which it can be reached. Renames (`import { X as Y }`),
+ * namespace imports (`import * as Q`) and re-export chains (`export { X as Y }
+ * from "…"`, `export * from "…"`) all resolve here, because two of the three
+ * were ways past the old substring match and the third only worked by accident.
+ * A fixpoint, because a re-export chain can be any length. */
+function overlayBindings(files) {
+  const exportedAs = new Map([[OVERLAY_FILE, new Set([OVERLAY_EXPORT])]]);
+  const locals = new Map();
+  const namespaces = new Map();
+  const get = (m, k) => {
+    let v = m.get(k);
+    if (!v) m.set(k, (v = new Set()));
+    return v;
+  };
+  for (let pass = 0; pass <= files.length + 1; pass += 1) {
+    let grew = false;
+    const note = (set, name) => {
+      if (!set.has(name)) {
+        set.add(name);
+        grew = true;
+      }
+    };
+    for (const file of files) {
+      for (const st of ast(file).statements) {
+        const spec = st.moduleSpecifier;
+        const target =
+          spec && ts.isStringLiteral(spec) ? resolveSpec(file, spec.text) : null;
+        if (ts.isImportDeclaration(st) && target) {
+          const b = st.importClause?.namedBindings;
+          if (b && ts.isNamespaceImport(b)) {
+            note(get(namespaces, file), `${b.name.text} ${target}`);
+          }
+          if (b && ts.isNamedImports(b)) {
+            for (const el of b.elements) {
+              const source = (el.propertyName ?? el.name).text;
+              if (exportedAs.get(target)?.has(source)) note(get(locals, file), el.name.text);
+            }
+          }
+        }
+        if (ts.isExportDeclaration(st)) {
+          if (target && !st.exportClause) {
+            for (const n of exportedAs.get(target) ?? []) note(get(exportedAs, file), n);
+          }
+          if (st.exportClause && ts.isNamedExports(st.exportClause)) {
+            for (const el of st.exportClause.elements) {
+              const source = (el.propertyName ?? el.name).text;
+              const known = target
+                ? exportedAs.get(target)?.has(source)
+                : locals.get(file)?.has(source) ||
+                  (file === OVERLAY_FILE && source === OVERLAY_EXPORT);
+              if (known) note(get(exportedAs, file), el.name.text);
+            }
+          }
+        }
+      }
+    }
+    if (!grew) break;
+  }
+  return { locals, namespaces, exportedAs };
+}
+
+function overlayCallers(files) {
+  const { locals, namespaces, exportedAs } = overlayBindings(files);
+  const callers = [];
+  for (const file of files) {
+    if (file === OVERLAY_FILE) continue;
+    const local = locals.get(file) ?? new Set();
+    const ns = [...(namespaces.get(file) ?? [])].map((s) => s.split(" "));
+    let hit = false;
+    eachNode(ast(file), (n) => {
+      if (!ts.isCallExpression(n)) return;
+      const callee = unwrap(n.expression);
+      if (ts.isIdentifier(callee) && local.has(callee.text)) hit = true;
+      if (
+        ts.isPropertyAccessExpression(callee) &&
+        ts.isIdentifier(callee.expression) &&
+        ns.some(
+          ([alias, target]) =>
+            alias === callee.expression.text &&
+            exportedAs.get(target)?.has(callee.name.text),
+        )
+      ) {
+        hit = true;
+      }
+    });
+    if (hit) callers.push(rel(file));
+  }
+  return callers.sort();
 }
 
 /** Every source file under the scanned root — NOT just the walk. A new caller of
@@ -367,8 +731,20 @@ for (const r of REGISTRY) {
   }
 }
 
-// 3. The population is WALKED, not typed in.
-const files = walkFromChatArea();
+// 3. The population is WALKED, not typed in. Two walks, two boundaries: the
+//    async census keeps `src/api` out (126 unrelated `await`s), the state census
+//    does not (an SSE transport is where a per-room cache would land).
+const files = walkFromChatArea(ASYNC_SCOPE);
+const stateFiles = walkFromChatArea(STATE_SCOPE).filter((f) => !STATE_SKIP.test(rel(f)));
+
+// 3b. A path alias the walk cannot follow drops files SILENTLY, which is how a
+//     population census dies. There is no alias today; if one appears, stop.
+const aliases = unfollowableAliases();
+if (aliases.length > 0) {
+  problems.push(
+    `tsconfig declares module path aliases the walk cannot resolve (${aliases.join(", ")}).\n  resolveSpec follows RELATIVE specifiers only, so any file imported through an alias silently leaves the population — teach resolveSpec the mapping before using it.`,
+  );
+}
 if (!files.includes(join(SRC, "hooks", "useAttachmentStaging.ts"))) {
   problems.push(
     "the walk no longer reaches hooks/useAttachmentStaging.ts — it is derived from ChatArea's imports, and R9-1 lived in a file nobody had typed in",
@@ -405,10 +781,12 @@ if (stale.length > 0) {
 //    that outlives every mount is the only place left for one room's value to
 //    reach another; an unregistered one is an unanswered question about which
 //    room it belongs to.
+const mutated = mutatedNames(stateFiles);
+const consts = topLevelInitializers(stateFiles);
 const foundState = [];
-for (const file of files) {
-  for (const name of scanModuleState(file)) {
-    foundState.push(`${file.slice(SRC.length + 1)} | ${name}`);
+for (const file of stateFiles) {
+  for (const name of scanModuleState(file, mutated, consts)) {
+    foundState.push(`${rel(file)} | ${name}`);
   }
 }
 const regState = MODULE_STATE.map((r) => `${r.file} | ${r.name}`);
@@ -432,22 +810,10 @@ if (goneState.length > 0) {
 
 // 6. The quoted-message overlay's caller list, over the WHOLE tree. Its state
 //    is protected by its caller's key and by nothing else.
-const overlayCallers = [];
-for (const file of allSourceFiles(SRC)) {
-  const rel = file.slice(SRC.length + 1).split("\\").join("/");
-  if (rel === "hooks/useQuotedMessageOverlay.tsx") continue;
-  const code = readFileSync(file, "utf8")
-    .split("\n")
-    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
-    .join("\n");
-  if (code.includes("useQuotedMessageOverlay(")) overlayCallers.push(rel);
-}
-overlayCallers.sort();
-if (
-  JSON.stringify(overlayCallers) !== JSON.stringify([...QUOTED_OVERLAY_CALLERS].sort())
-) {
+const callers = overlayCallers(allSourceFiles(SRC));
+if (JSON.stringify(callers) !== JSON.stringify([...QUOTED_OVERLAY_CALLERS].sort())) {
   problems.push(
-    `useQuotedMessageOverlay's callers changed:\n    calling:    ${overlayCallers.join(", ") || "(nobody)"}\n    registered: ${QUOTED_OVERLAY_CALLERS.join(", ")}\n  The overlay keeps NO room stamp of its own — it relies on its caller being unmounted by a room switch. A caller keyed on anything but the peer paints one room's message over another (R8-3).`,
+    `useQuotedMessageOverlay's callers changed:\n    calling:    ${callers.join(", ") || "(nobody)"}\n    registered: ${QUOTED_OVERLAY_CALLERS.join(", ")}\n  The overlay keeps NO room stamp of its own — it relies on its caller being unmounted by a room switch. A caller keyed on anything but the peer paints one room's message over another (R8-3).`,
   );
 }
 
@@ -464,5 +830,5 @@ if (problems.length > 0) {
 }
 
 console.log(
-  `[async-landing] ok — ${files.length} files walked from ChatArea, ${found.size} (file, shape) pairs and ${foundState.length} module-level state declarations on the register, ${overlayCallers.length} quoted-overlay caller(s)`,
+  `[async-landing] ok — ${files.length} files walked from ChatArea (${stateFiles.length} incl. src/api for the state census), ${found.size} (file, shape) pairs and ${foundState.length} module-level state declarations on the register, ${callers.length} quoted-overlay caller(s)`,
 );

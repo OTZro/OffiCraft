@@ -35,14 +35,17 @@ afterAll(() => {
 /** Run the guard over a fresh copy of the real sources, after `sabotage` has had
  *  its way with them. Returns the exit code and the combined output. */
 function run(
-  sabotage?: (edit: (rel: string, f: (code: string) => string) => void) => void,
+  sabotage?: (
+    edit: (rel: string, f: (code: string) => string) => void,
+    src: string,
+  ) => void,
 ) {
   const src = mkdtempSync(join(root, "src-"));
   cpSync(REAL_SRC, src, { recursive: true });
   sabotage?.((rel, f) => {
     const file = join(src, rel);
     writeFileSync(file, f(readFileSync(file, "utf8")));
-  });
+  }, src);
   try {
     const stdout = execFileSync("node", [SCRIPT], {
       encoding: "utf8",
@@ -130,6 +133,73 @@ describe("check-async-landing-points", () => {
     expect(out).toContain("lib/chatDraftStore.ts | drafts");
   });
 
+  // 🔴 THE FIVE WAYS ROUND THE OLD REGEX CENSUS (T-48, R16 D-3). Every case
+  // below was measured GREEN by the sixteenth review against the regex version
+  // and is red here because both censuses now read the AST. They are kept as
+  // separate cases rather than folded together because each one is a different
+  // author writing the same table in the spelling that came naturally.
+  describe.each([
+    ["an array-literal table", "const liveComposers: { peerId: string; repaint: () => void }[] = [];"],
+    ["an object-literal table", "const liveComposers: Record<string, () => void> = {};"],
+    ["a Map seeded from an expression", "const liveComposers = new Map<string, () => void>(Object.entries({}));"],
+    ["the registered shape with a trailing comment", "const liveComposers = new Map<string, () => void>(); // per-room repaint table"],
+  ])("a second per-room table written as %s", (_name, decl) => {
+    it("reddens", () => {
+      const { code, out } = run((edit) =>
+        edit(CHAT_AREA, (code) =>
+          code.replace("export function ChatArea({", `${decl}\nexport function ChatArea({`),
+        ),
+      );
+      expect(code, out).not.toBe(0);
+      expect(out).toContain("components/ChatArea.tsx | liveComposers");
+    });
+  });
+
+  it("reddens on a per-room table in src/api, which the state census walks and the await census does not (R16 D-3)", () => {
+    // The api exclusion was inherited from the AWAIT census, whose reason is
+    // about counting 126 unrelated awaits. That reason says nothing about
+    // whether one room's value can reach another, and an SSE transport is the
+    // likeliest place for a per-room cache to be put.
+    const { code, out } = run((edit) =>
+      edit("api/http.ts", (code) =>
+        code.replace(
+          "let sseSource",
+          'const lastSeenPerRoom = new Map<string, string>();\nlet sseSource',
+        ),
+      ),
+    );
+    expect(code, out).not.toBe(0);
+    expect(out).toContain("api/http.ts | lastSeenPerRoom");
+  });
+
+  it("reddens when a registered module-level array is renamed, so escapeLayers' Esc stack cannot quietly leave the register (R16 D-3)", () => {
+    // `const layers: Layer[] = []` was module-level mutable state sitting in the
+    // walk, beside a sibling (`let listening`) that WAS registered, and the
+    // regex census could not see an array literal at all.
+    const { code, out } = run((edit) =>
+      edit("lib/escapeLayers.ts", (code) =>
+        code.replace(/\blayers\b/g, "layerStack"),
+      ),
+    );
+    expect(code, out).not.toBe(0);
+    expect(out).toContain("lib/escapeLayers.ts | layers");
+  });
+
+  it("reddens when a path alias the walk cannot resolve is configured (R16 D-3)", () => {
+    // `resolveSpec` returns null for every non-relative specifier. That is right
+    // for `react` and wrong for `@/lib/x`: files imported through an alias would
+    // leave the population in silence, which is the failure this census has
+    // already been bitten by twice.
+    const { code, out } = run((_edit, src) => {
+      writeFileSync(
+        join(src, "..", "tsconfig.json"),
+        JSON.stringify({ compilerOptions: { paths: { "@/*": ["./src/*"] } } }),
+      );
+    });
+    expect(code, out).not.toBe(0);
+    expect(out).toContain("path aliases the walk cannot resolve");
+  });
+
   it("reddens when a SECOND component calls useQuotedMessageOverlay (R14-1.6)", () => {
     // The overlay carries no room stamp of its own: it relies on ChatArea being
     // unmounted by a room switch. A caller keyed on a card id is not.
@@ -144,6 +214,57 @@ describe("check-async-landing-points", () => {
     expect(code, out).not.toBe(0);
     expect(out).toContain("useQuotedMessageOverlay's callers changed");
     expect(out).toContain("components/ReplyComposer.tsx");
+  });
+
+  // The caller census was a SUBSTRING match on `useQuotedMessageOverlay(`, so a
+  // rename or a line break walked straight past it (R16 D-3). Each spelling
+  // below is the same second caller.
+  describe.each([
+    [
+      "a renamed import",
+      'import { useQuotedMessageOverlay as useOverlay } from "../hooks/useQuotedMessageOverlay";\nconst _q = () => useOverlay((id: string) => id);',
+    ],
+    [
+      "a line break before the argument list",
+      'import { useQuotedMessageOverlay } from "../hooks/useQuotedMessageOverlay";\nconst _q = () => useQuotedMessageOverlay\n  ((id: string) => id);',
+    ],
+    [
+      "a namespace import",
+      'import * as Q from "../hooks/useQuotedMessageOverlay";\nconst _q = () => Q.useQuotedMessageOverlay((id: string) => id);',
+    ],
+  ])("a second caller reached through %s", (_name, snippet) => {
+    it("reddens", () => {
+      const { code, out } = run((edit) =>
+        edit("components/ReplyComposer.tsx", (code) =>
+          code.replace(
+            'import { useI18n } from "../i18n";',
+            `import { useI18n } from "../i18n";\n${snippet}`,
+          ),
+        ),
+      );
+      expect(code, out).not.toBe(0);
+      expect(out).toContain("useQuotedMessageOverlay's callers changed");
+      expect(out).toContain("components/ReplyComposer.tsx");
+    });
+  });
+
+  it("reddens when a second caller reaches the hook through a renamed re-export barrel", () => {
+    // A re-export chain is the one indirection a per-file import scan misses;
+    // the binding resolution below is a fixpoint for exactly this reason.
+    const { code, out } = run((edit, src) => {
+      writeFileSync(
+        join(src, "hooks", "overlayBarrel.ts"),
+        'export { useQuotedMessageOverlay as useOverlay } from "./useQuotedMessageOverlay";\n',
+      );
+      edit("components/ReplyComposer.tsx", (code) =>
+        code.replace(
+          'import { useI18n } from "../i18n";',
+          'import { useI18n } from "../i18n";\nimport { useOverlay } from "../hooks/overlayBarrel";\nconst _q = () => useOverlay((id: string) => id);',
+        ),
+      );
+    });
+    expect(code, out).not.toBe(0);
+    expect(out).toContain("useQuotedMessageOverlay's callers changed");
   });
 
   it("reddens when a file drops out of the WALK (R10-5 B1/B2/B3)", () => {
