@@ -505,6 +505,22 @@ var identityGateExpectedCount = map[string]int{
 // 還是不是未完成狀態」. Anything else is either a different axis (machine vs
 // person, task-executor vs member), a genuine wire/storage projection, or a
 // divergence that needs a ruling. Say which, in the reason.
+// 🔴 A NAMED DEBT: THIS LEDGER HAS NO "EVERY ENTRY IS STILL SCANNED" TOOTH.
+// An entry whose predicate later moves or is rewritten stays here, silently, and
+// the ledger starts overstating what it covers — with nothing red to say so.
+// This is not hypothetical: on 2026-09-03 a T-60 refactor lifted
+// `a.Kind != ArtifactKindLink` out of newTaskArtifactDTO into the shared
+// artifactBlobFacts helper, and that entry went stale THE MOMENT the refactor
+// landed. No test failed on the staleness itself.
+//
+// 🔑 The lesson worth carrying: AN ORDINARY REFACTOR IS ENOUGH TO MAKE A
+// REGISTRATION LIE — nobody has to do anything wrong. So this is a matter of
+// when, not whether.
+//
+// The tooth already exists next door and can be copied verbatim:
+// nonCallerKindPredicates in authz_surface_gate_test.go is held by
+// TestNonCallerKindRegistryEntriesStillExist, which fails when a registered
+// predicate is no longer found by the scan.
 var identityGateLedger = map[string]string{
 
 	// ── the ONE slot the 正職／外包 difference is allowed to live in ──────────
