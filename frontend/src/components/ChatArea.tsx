@@ -1,10 +1,12 @@
 import {
   Fragment,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { useI18n } from "../i18n";
 import type { Member, MemberActivateResult } from "../types";
@@ -16,6 +18,7 @@ import { autosizeTextarea } from "../lib/autosize";
 import {
   getChatDraft,
   saveChatDraftText,
+  subscribeChatDraft,
   updateChatDraftAttachments,
 } from "../lib/chatDraftStore";
 import { useChat } from "../hooks/useChat";
@@ -516,6 +519,32 @@ export function ChatArea({
   // conversation switch both MOUNT this component (R13-5), so one lazy init
   // covers both and there is no second restore path to keep consistent with it.
   const [draft, setDraft] = useState(() => getChatDraft(member.id)?.text ?? "");
+  // 🔴 THE TEXT IS SUBSCRIBED TOO, NOT JUST READ ONCE (T-48, R14-1.3). The
+  // staged files have been a subscription since R13-2; the text was still a
+  // lazy init, and a lazy init is a place a message can WAIT but never a place
+  // it can ARRIVE. What arrives is a FAILED SEND: submit() clears the composer
+  // optimistically, and when the POST comes back with an error the failure arm
+  // writes the words back into this room's draft — deliberately into the store
+  // rather than into state, because the owner may have walked out. Walk out and
+  // back in before the failure lands (a switch to another room and back is
+  // enough — that is a fresh mount) and the store held the words while the
+  // composer showed an empty box; the next keystroke persisted the empty box
+  // over them. The message was gone, and the owner never saw it at all.
+  //
+  // ONLY INTO AN EMPTY COMPOSER, which is the same field-by-field rule the
+  // failure arm itself uses: what the owner can see and is typing wins, because
+  // two texts cannot occupy one composer.
+  const storedDraftText = useSyncExternalStore(
+    useCallback(
+      (cb: () => void) => subscribeChatDraft(member.id, cb),
+      [member.id],
+    ),
+    useCallback(() => getChatDraft(member.id)?.text ?? "", [member.id]),
+  );
+  useEffect(() => {
+    if (storedDraftText === "") return;
+    setDraft((cur) => (cur === "" ? storedDraftText : cur));
+  }, [storedDraftText]);
   // T-4e95 「回覆這則」: the message the composer is currently replying to, or
   // null in the ordinary send state. It rides the DRAFT store, not just this
   // component's state, for the same reason the text does — a 跳頁-and-back that

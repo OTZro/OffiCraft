@@ -310,6 +310,50 @@ describe("ChatArea draft survival", () => {
     });
   });
 
+  it("puts a failed send's words back ON SCREEN, even when the room was left and re-entered mid-flight", async () => {
+    // 🔴 R14-1.3. The failure arm writes the words into the room's DRAFT rather
+    // than into state, precisely because the owner may have walked out. That is
+    // right, and it was only half the journey: the composer read the text once,
+    // on mount, so the words sat in the store behind an empty box — and the
+    // next keystroke persisted the empty box over them. The whole message went,
+    // silently, without the owner ever seeing it come back.
+    let failSend: (e: Error) => void = () => {};
+    send.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          failSend = reject;
+        }),
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const first = renderChat(m1);
+    fireEvent.change(input(first.container), { target: { value: "沒送出去的字" } });
+    fireEvent.click(first.container.querySelector(".chat__send") as HTMLElement);
+    // Optimistically cleared, and the draft with it.
+    await waitFor(() => expect(input(first.container).value).toBe(""));
+
+    // 跳頁 and back while the POST is still in flight: a NEW composer, empty.
+    first.unmount();
+    const back = renderChat(m1);
+    expect(input(back.container).value).toBe("");
+
+    await act(async () => {
+      failSend(new Error("boom"));
+      await Promise.resolve();
+    });
+
+    // The words are visible where they were typed, not just in the store.
+    await waitFor(() =>
+      expect(input(back.container).value).toBe("沒送出去的字"),
+    );
+    // And the keystroke that used to be their last moment now edits them.
+    fireEvent.change(input(back.container), {
+      target: { value: "沒送出去的字!" },
+    });
+    await waitFor(() => expect(getChatDraft("m1")?.text).toBe("沒送出去的字!"));
+    warn.mockRestore();
+  });
+
   it("does NOT let the compose seed clobber a restored non-empty draft", () => {
     const first = renderChat(m1);
     fireEvent.change(input(first.container), { target: { value: "已在打字" } });

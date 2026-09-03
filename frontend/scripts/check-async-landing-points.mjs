@@ -165,6 +165,7 @@ const REGISTRY = [
   { file: "components/ChatArea.tsx", kind: "await", count: 2, verdict: "submit(); the room's own draft is written to the store BEFORE the on-screen restore, so a failed send survives even when nobody is looking (§3 rule 4)" },
   { file: "components/ChatArea.tsx", kind: ".then/.catch/.finally", count: 3, verdict: "loadAround + the wake button's two arms; all three write only this room's state, and this room is this mount" },
   { file: "components/ChatArea.tsx", kind: "setTimeout/setInterval", count: 2, verdict: "highlight clear + centring settle; cleared in the effect cleanup, and the state they write dies with the room" },
+  { file: "components/ChatArea.tsx", kind: "subscribe", count: 1, verdict: "the composer's own draft-TEXT subscription (R14-1.3), onto this peer's slice; a failed send's words are written to the store and this is what puts them back on screen. React unsubscribes on unmount, and the room is this mount" },
   { file: "components/ChatArea.tsx", kind: "Observer", count: 1, verdict: "centring ResizeObserver; disconnected in the same cleanup" },
   { file: "hooks/useChat.ts", kind: "await", count: 17, verdict: "one hook instance per room (R13-3), so a commit from a room the owner has left lands in a discarded component; the generation clock is what orders the commits WITHIN a room" },
   { file: "hooks/useChat.ts", kind: ".then/.catch/.finally", count: 2, verdict: "load()'s arms; the effect's own `alive` flag, re-asked after every await" },
