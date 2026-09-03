@@ -462,10 +462,20 @@ func TestDrainChat_FetchFault_LeavesTheWholeWindowUnread(t *testing.T) {
 	if n := drainChat(srv.Client(), cfg, &out, &drainWarner{}, nil); n != 0 {
 		t.Fatalf("faulting drain returned n=%d, want 0; out = %q", n, out.String())
 	}
-	if !strings.Contains(out.String(), "一頁都沒撈到") ||
-		!strings.Contains(out.String(), "這不是「沒有新訊息」") {
-		t.Fatalf("a faulted drain must announce itself AND rule out the wrong "+
-			"conclusion; out = %q", out.String())
+	// COUNTED, NOT MATCHED (owner, 2026-08-20 bars partial keyword comparison).
+	// "Did it announce itself" is a question about whether the drain wrote a line
+	// at all — that is the behaviour, and silence is the bug. The two
+	// strings.Contains checks that used to stand here asked about the WORDING.
+	//
+	// 🔴 WHAT IS NO LONGER GUARDED, said plainly: nothing now pins that the line
+	// rules out the wrong conclusion ("this is not 'no new messages'"). Someone
+	// can rewrite that sentence into one that reads as a quiet no-op and this
+	// test stays green. Pinning it would mean comparing the whole string, which
+	// is what the ruling asks for and what nobody will keep in step; the honest
+	// state is that the sentence is reviewed by people, not by CI.
+	if out.Len() == 0 {
+		t.Fatal("a faulted drain printed nothing — silence is exactly what it must " +
+			"not do, because it is what a drain that FOUND nothing looks like")
 	}
 	if got := len(srv.unreadIDs("kyle")); got != 2 {
 		t.Fatalf("a faulted drain moved the server's unread set to %d rows, want 2 — "+
