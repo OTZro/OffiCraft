@@ -104,8 +104,21 @@ CREATE INDEX idx_chat_attachment_ref_sender
 CREATE INDEX idx_chat_attachment_ref_recipient
     ON chat_attachment_ref(recipient, ts DESC, message_id ASC, ord ASC);
 
--- NOT for the gallery. Serves the DELETE path: when a blob is collected, find
--- the rows pointing at it. Do not drop it as unused.
+-- NOT for the gallery, and NOT load-bearing today. 🔴 THERE IS NO READER: at the
+-- time this landed, `git grep chat_attachment_ref` over the Go tree found the
+-- gallery read path and nothing keyed on attachment_id — the only such query
+-- lives in dal_blob_liveness_test.go. The single DELETE is the trigger
+-- chat_attachment_ref_ad, which is keyed on message_id, not this column; blob
+-- collection goes through DeleteChatInvolving and deletes chat_attachment.
+--
+-- It is kept for the blob-collection path that will want it, at the cost of one
+-- index maintained on every write. An earlier revision of this comment claimed
+-- it "serves the DELETE path" and said "do not drop it as unused" — that
+-- asserted a path that did not exist AND pre-emptively waved off the check that
+-- would have caught it. Replaced with what was actually measured.
+--
+-- ⇒ WHEN TO REVISIT: next time anyone touches this schema, re-run that grep. If
+-- there is still no production reader keyed on attachment_id, drop the index.
 CREATE INDEX idx_chat_attachment_ref_attachment
     ON chat_attachment_ref(attachment_id);
 
