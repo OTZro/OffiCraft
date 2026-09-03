@@ -40,7 +40,12 @@ function run(
     src: string,
   ) => void,
 ) {
-  const src = mkdtempSync(join(root, "src-"));
+  // 🔴 EACH RUN GETS ITS OWN PARENT, NOT JUST ITS OWN `src` (T-48, F-D). The
+  // path-alias case writes a `tsconfig.json` at `src/..`, and while every run
+  // shared one parent that file stayed there and poisoned every LATER run. It
+  // went unnoticed for as long as every later case asserted only "non-zero" —
+  // the first assertion that the census is CLEAN is the first one it broke.
+  const src = join(mkdtempSync(join(root, "run-")), "src");
   cpSync(REAL_SRC, src, { recursive: true });
   sabotage?.((rel, f) => {
     const file = join(src, rel);
@@ -281,6 +286,91 @@ describe("check-async-landing-points", () => {
     );
     expect(code, out).not.toBe(0);
     expect(out).toContain("hooks/useChat.ts declares the chat thread's own state");
+  });
+
+  // 🔴 THE CALLEE HALF OF RULE 7, WHICH USED TO BE A LITERAL NAME TEST (F-D).
+  // The rule's message promised it fires "however the shape is spelled". These
+  // three ordinary spellings all passed it — measured on a temp tree with the
+  // un-annotated mutant above as the positive control. Each names the SAME
+  // second thread setter; only the way the hook is reached differs.
+  const SECOND_THREAD =
+    "  const EMPTY2 = { messages: [] as ChatMessage[], hasMore: true, gapSuspected: false, hasNewer: false };\n";
+  const AFTER = "  const [peerLastReadTs, setPeerLastReadTs] = useState(0);";
+
+  it("reddens on a second thread state reached as React.useState", () => {
+    const { code, out } = run((edit) =>
+      edit("hooks/useChat.ts", (code) =>
+        'import * as React from "react";\n' +
+          code.replace(
+            AFTER,
+            AFTER +
+              "\n" +
+              SECOND_THREAD +
+              "  const [xthread, setXThread] = React.useState(EMPTY2);\n" +
+              "  void xthread; void setXThread;",
+          ),
+      ),
+    );
+    expect(code, out).not.toBe(0);
+    expect(out).toContain("hooks/useChat.ts declares the chat thread's own state");
+  });
+
+  it("reddens on a second thread state reached through a local alias of useState", () => {
+    const { code, out } = run((edit) =>
+      edit("hooks/useChat.ts", (code) =>
+        code.replace(
+          AFTER,
+          AFTER +
+            "\n" +
+            SECOND_THREAD +
+            "  const us = useState;\n" +
+            "  const [xthread, setXThread] = us(EMPTY2);\n" +
+            "  void xthread; void setXThread;",
+        ),
+      ),
+    );
+    expect(code, out).not.toBe(0);
+    expect(out).toContain("hooks/useChat.ts declares the chat thread's own state");
+  });
+
+  it("reddens on a second thread state reached through a renamed import of useState", () => {
+    const { code, out } = run((edit) =>
+      edit("hooks/useChat.ts", (code) =>
+        'import { useState as useStore } from "react";\n' +
+          code.replace(
+            AFTER,
+            AFTER +
+              "\n" +
+              SECOND_THREAD +
+              "  const [xthread, setXThread] = useStore(EMPTY2);\n" +
+              "  void xthread; void setXThread;",
+          ),
+      ),
+    );
+    expect(code, out).not.toBe(0);
+    expect(out).toContain("hooks/useChat.ts declares the chat thread's own state");
+  });
+
+  // 🟠 THE RESIDUE, ASSERTED AS A RESIDUE. Renaming the property is the one of
+  // review F-D's four spellings that still passes, and it passes ON PURPOSE:
+  // firing on any property that holds ChatMessage[] would redden every list in
+  // the tree. The rule's message names this; this test is what stops the
+  // message and the behaviour drifting apart.
+  it("does NOT redden on a thread-shaped state whose property is not named messages", () => {
+    const { code, out } = run((edit) =>
+      edit("hooks/useChat.ts", (code) =>
+        code.replace(
+          AFTER,
+          AFTER +
+            "\n" +
+            "  const EMPTY3 = { rows: [] as ChatMessage[], hasMore: true, gapSuspected: false, hasNewer: false };\n" +
+            "  const [xthread3, setXThread3] = useState(EMPTY3);\n" +
+            "  void xthread3; void setXThread3;",
+        ),
+      ),
+    );
+    expect(code, out).toBe(0);
+    expect(out).toContain("[async-landing] ok");
   });
 
   it("reddens when a SECOND component calls useQuotedMessageOverlay (R14-1.6)", () => {

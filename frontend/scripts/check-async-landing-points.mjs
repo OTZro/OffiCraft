@@ -798,13 +798,27 @@ const THREAD_STATE_OWNER = "lib/threadCommit.ts";
  *     union and so does not fire, which keeps every `commit(seq, next)` call
  *     site in `useChat` out of the rule.
  *
- * 🟠 WHAT IT STILL DOES NOT CATCH, SAID PLAINLY. A thread state whose messages
- * are held under a DIFFERENT element type — a locally declared interface with
- * the same fields, or `unknown[]`/`any[]` — is invisible to it, because
- * `ChatMessage` is where this rule anchors identity. That residue is a
- * deliberate floor, not an oversight: anything the chat surface can actually
- * render has to come out of `api/adapter`, and a check with no anchor at all
- * would fire on every `messages` in the tree.
+ * 🟠 WHAT IT STILL DOES NOT CATCH, SAID PLAINLY — and this list is what the
+ * failure message is held to, so keep the two in step. Three residues, each an
+ * anchor the rule cannot give up without firing on everything:
+ *   · the ELEMENT TYPE. A thread whose messages are held under a locally
+ *     declared twin of `ChatMessage`, or under `unknown[]`/`any[]`, is
+ *     invisible — `ChatMessage` from `api/adapter` is where identity is
+ *     anchored, and anything the chat surface can actually render comes from
+ *     there.
+ *   · the PROPERTY NAME. `{ rows: ChatMessage[]; … }` passes (measured, review
+ *     F-D case D). The rule asks for a property literally named `messages`;
+ *     firing on ANY property holding `ChatMessage[]` would redden every list
+ *     view in the tree.
+ *   · the MODULE ANCHOR on the callee. `reactHookOf` recognises React's hooks
+ *     by the specifier `"react"` and the exported name, not by symbol identity
+ *     against `@types/react` — see there for why. A hook re-exported through a
+ *     local barrel is out of reach.
+ *
+ * ⚠️ AND ONE WAY IT DIES LOUDLY RATHER THAN SILENTLY: the anchor is looked up
+ * as an INTERFACE declaration in `api/adapter.ts`. Refactoring `ChatMessage`
+ * into a `type` alias resolves nothing, and the vacuity check below then fails
+ * the run — noisy, not silent, but it is the next reader's first surprise.
  *
  * Over-approximating is otherwise the safe direction — a false positive is one
  * line of argument in review, a false negative is the defect back. */
@@ -838,6 +852,94 @@ function threadTypeProbe() {
   return threadProbe;
 }
 let threadProbe = null;
+
+const REACT_HOOKS = /^use(State|Reducer|Ref)$/;
+const REACT_MODULE = "react";
+
+/** The module specifier the import that DECLARED this binding names, or null. */
+function importedFrom(decl) {
+  const imp = ts.isImportSpecifier(decl)
+    ? decl.parent.parent.parent
+    : ts.isNamespaceImport(decl)
+      ? decl.parent.parent
+      : ts.isImportClause(decl)
+        ? decl.parent
+        : null;
+  const spec = imp?.moduleSpecifier;
+  return spec && ts.isStringLiteral(spec) ? spec.text : null;
+}
+
+/** WHICH React hook does this callee actually name — resolved, not spelled?
+ *
+ * 🔴 THE OTHER HALF OF RULE 7 USED TO BE A LITERAL IDENTIFIER TEST (T-48,
+ * independent review F-D). `/^use(State|Reducer|Ref)$/.test(callee.text)` while
+ * the TYPE half asked the checker, and the rule's own message promised it fires
+ * "however the shape is spelled". It did not. Measured on a temp tree, with the
+ * author's own un-annotated mutant as a positive control (rc=1, rule 7 fires):
+ *
+ *     React.useState(EMPTY2)                          rc=0  passed
+ *     const us = useState; us(EMPTY2)                 rc=0  passed
+ *     import { useState as useStore } … useStore(…)   rc=0  passed
+ *
+ * All three are ordinary spellings, and all three were a second thread setter
+ * that this census called clean. So the callee is now RESOLVED to the binding
+ * it came from: a named import (through its `propertyName`, so a rename is the
+ * export's own name again), a namespace or default import of `react`, and a
+ * local alias chased through its initialiser.
+ *
+ * 🟠 WHAT THIS IS NOT. It is not symbol identity against React's own
+ * declarations — that would need `@types/react` in the program, and this script
+ * has to run over a temp tree with no `node_modules` beside it (see
+ * `threadTypeProbe`). The anchor is therefore the MODULE SPECIFIER `"react"`
+ * plus the EXPORTED name, both read off the import that declared the binding.
+ * A hook re-exported through a local barrel is out of reach that way, and so is
+ * a call whose callee resolves to nothing at all — for the latter the old
+ * literal test stays on as a floor, because losing coverage is the one
+ * direction this rule may not move in. */
+function reactHookOf(callee, checker, depth = 0) {
+  if (depth > 8) return null;
+  if (ts.isPropertyAccessExpression(callee)) {
+    // `React.useState(…)` — the property name is React's export name; what has
+    // to be resolved is that `React` really is the react module.
+    if (!REACT_HOOKS.test(callee.name.text)) return null;
+    const obj = unwrap(callee.expression);
+    if (!ts.isIdentifier(obj)) return null;
+    const decls = checker.getSymbolAtLocation(obj)?.getDeclarations?.() ?? [];
+    return decls.some(
+      (d) =>
+        (ts.isNamespaceImport(d) || ts.isImportClause(d)) &&
+        importedFrom(d) === REACT_MODULE,
+    )
+      ? callee.name.text
+      : null;
+  }
+  if (!ts.isIdentifier(callee)) return null;
+  const decls = checker.getSymbolAtLocation(callee)?.getDeclarations?.() ?? [];
+  // Resolved to nothing (a global, an unresolvable module). Fall back to the
+  // name — over-approximating is the safe direction, and this is exactly the
+  // set the rule already covered before it learned to resolve anything.
+  if (decls.length === 0)
+    return REACT_HOOKS.test(callee.text) ? callee.text : null;
+  for (const d of decls) {
+    if (ts.isImportSpecifier(d)) {
+      // `import { useState as useStore }` — `propertyName` is `useState`.
+      const exported = (d.propertyName ?? d.name).text;
+      if (importedFrom(d) === REACT_MODULE && REACT_HOOKS.test(exported))
+        return exported;
+    }
+    if (ts.isVariableDeclaration(d) && d.initializer) {
+      // `const us = useState` / `const us = React.useState` — chase it.
+      const via = reactHookOf(unwrap(d.initializer), checker, depth + 1);
+      if (via) return via;
+    }
+  }
+  return null;
+}
+
+/** How many callees rule 7 resolved to a React hook over the whole walk. Zero
+ * means the resolution above matched nothing anywhere, i.e. the rule is looking
+ * at no call sites at all — reported rather than passed. */
+let reactHookCallsSeen = 0;
 
 function declaresThreadState(file) {
   const { program, checker, chatMessage } = threadTypeProbe();
@@ -880,19 +982,17 @@ function declaresThreadState(file) {
 
   const hits = [];
   eachNode(source, (n) => {
-    if (
-      ts.isCallExpression(n) &&
-      ts.isIdentifier(unwrap(n.expression)) &&
-      /^use(State|Reducer|Ref)$/.test(unwrap(n.expression).text)
-    ) {
+    const hook = ts.isCallExpression(n)
+      ? reactHookOf(unwrap(n.expression), checker)
+      : null;
+    if (hook) {
+      reactHookCallsSeen += 1;
       const types = [
         ...(n.typeArguments ?? []).map((a) => checker.getTypeFromTypeNode(a)),
         ...n.arguments.map((a) => checker.getTypeAtLocation(a)),
       ];
       if (types.some(carriesThread)) {
-        hits.push(
-          `${unwrap(n.expression).text}(…) over a { messages: ChatMessage[] } shape`,
-        );
+        hits.push(`${hook}(…) over a { messages: ChatMessage[] } shape`);
       }
     }
     if (
@@ -1253,6 +1353,15 @@ const OVERLAY_EXPORT = "useQuotedMessageOverlay";
  * from "…"`, `export * from "…"`) all resolve here, because two of the three
  * were ways past the old substring match and the third only worked by accident.
  * A fixpoint, because a re-export chain can be any length. */
+/** Joins `<alias> <module>` in the namespace set. It is U+001F UNIT SEPARATOR
+ * and NOT a NUL: two literal NUL bytes used to live in this file, and a NUL
+ * makes `grep` treat the whole file as binary and print NOTHING — not "binary
+ * file matches", nothing at all. Every grep-based CI check and every human
+ * grepping this file got a silent, confident "no hits" (pre-existing; origin/main
+ * has 0, c7b6a7d8 already had 2). U+001F cannot occur in an identifier or a
+ * module specifier either, and greps fine. */
+const NS_SEP = "\x1f";
+
 function overlayBindings(files) {
   const exportedAs = new Map([[OVERLAY_FILE, new Set([OVERLAY_EXPORT])]]);
   const locals = new Map();
@@ -1280,7 +1389,7 @@ function overlayBindings(files) {
         if (ts.isImportDeclaration(st) && target) {
           const b = st.importClause?.namedBindings;
           if (b && ts.isNamespaceImport(b)) {
-            note(get(namespaces, file), `${b.name.text} ${target}`);
+            note(get(namespaces, file), `${b.name.text}${NS_SEP}${target}`);
           }
           if (b && ts.isNamedImports(b)) {
             for (const el of b.elements) {
@@ -1319,7 +1428,7 @@ function overlayCallers(files) {
   for (const file of files) {
     if (file === OVERLAY_FILE) continue;
     const local = locals.get(file) ?? new Set();
-    const ns = [...(namespaces.get(file) ?? [])].map((s) => s.split(" "));
+    const ns = [...(namespaces.get(file) ?? [])].map((s) => s.split(NS_SEP));
     let hit = false;
     eachNode(ast(file), (n) => {
       if (!ts.isCallExpression(n)) return;
@@ -1488,13 +1597,22 @@ for (const file of files) {
   const hits = declaresThreadState(file);
   if (hits.length > 0 && where !== THREAD_STATE_OWNER) {
     problems.push(
-      `${where} declares the chat thread's own state (${hits.join(", ")}).\n  Only ${THREAD_STATE_OWNER} may hold it. Every write to the thread must go through its commit / mergeHistory / clear doors, because those are what await the page's WAITING reply cards before the rows reach the view — a second setter is a second way to paint messages whose cards are still in the air, and the scroll target then moves under the reader (measured +254px at 1280).\n  This test is on the TYPE, not on the annotation's text: it fires however the shape is spelled, including with no annotation at all. It does NOT fire on a thread whose messages are not \`ChatMessage\` (a locally redeclared twin, \`unknown[]\`) — that residue is named in declaresThreadState.`,
+      `${where} declares the chat thread's own state (${hits.join(", ")}).\n  Only ${THREAD_STATE_OWNER} may hold it. Every write to the thread must go through its commit / mergeHistory / clear doors, because those are what await the page's WAITING reply cards before the rows reach the view — a second setter is a second way to paint messages whose cards are still in the air, and the scroll target then moves under the reader (measured +254px at 1280).\n  Both halves are RESOLVED, not spelled. The shape is asked of the TYPE CHECKER (identity against \`ChatMessage\` in src/api/adapter.ts), so no annotation, an inferred literal, an alias or an import rename makes no difference; the callee is resolved back to the import that declared it, so \`React.useState(x)\`, \`const us = useState; us(x)\` and \`import { useState as useStore }\` all fire (measured).
+  IT DOES NOT FIRE ON, and this list is exhaustive: (1) a thread whose messages are not \`ChatMessage\` — a locally redeclared twin, \`unknown[]\`; (2) a thread whose property is not literally named \`messages\` (\`{ rows: ChatMessage[] }\` passes); (3) a React hook reached through a local re-export barrel — the callee is anchored on the module specifier "react" plus the exported name, not on symbol identity with @types/react, because this script must run over a tree with no node_modules. See declaresThreadState for why each anchor is where it is.`,
     );
   }
 }
 if (threadTypeProbe().chatMessage === null) {
   problems.push(
     `rule 7 could not resolve the \`ChatMessage\` interface from src/api/adapter.ts, so its structural test compares against nothing and every file passes it vacuously. Point it at wherever the chat message type lives now.`,
+  );
+}
+// Only meaningful once the anchor above resolved: `declaresThreadState` returns
+// early without a `ChatMessage`, so the counter would be 0 for that reason and
+// this message would blame the wrong half.
+if (threadTypeProbe().chatMessage !== null && reactHookCallsSeen === 0) {
+  problems.push(
+    `rule 7 resolved NO callee anywhere in the walk to React's useState/useReducer/useRef, so its callee test is matching nothing and every file passes that half vacuously. Either the chat surface stopped using React state entirely, or reactHookOf's anchor (the module specifier "react" plus the exported name) no longer describes how these files import their hooks.`,
   );
 }
 if (declaresThreadState(join(SRC, "lib", "threadCommit.ts")).length === 0) {
