@@ -447,6 +447,45 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			MCPTool:  "force_stop_member",
 		},
 		{
+			Method:  "POST",
+			Path:    "/api/members/{member_id}/cost/reset",
+			Handler: w.HandleResetCostApiMembersMemberIdCostResetPost,
+			Auth:    authGated,
+			// principalOwner, NOT the admin_agent floor its neighbours sit on,
+			// and that gap is the decision rather than an oversight (T-53,
+			// owner ruling rc-7dea0deefa63). The rows above control a member;
+			// this one destroys the owner's own spend record, irreversibly and
+			// with nothing else in the system holding a copy. An admin agent
+			// deciding that on his behalf is not a thing he asked for.
+			Requires: principalOwner,
+			Summary:  "Reset one actor's estimated spend to zero (owner-only, irreversible): clears the durable banked figure AND the live telemetry figure.",
+			// Owner-only cockpit surface, so MCP-excluded on the same reasoning
+			// as the mint / credential / avatar rows: an agent has nothing
+			// legitimate to do with the owner's spend record.
+			MCPExclude: true,
+		},
+		{
+			Method:  "POST",
+			Path:    "/api/accounts/cost/reset",
+			Handler: w.HandleResetAccountCostApiAccountsCostResetPost,
+			Auth:    authGated,
+			// Same owner-only floor, same reasoning, as the per-actor row
+			// above: an irreversible write to a figure the owner watches.
+			//
+			// 🔴 IT TOUCHES NO ACTOR. An earlier shape of this route did clear
+			// every actor on the account (rc-efae958cef40); the owner then
+			// ruled the two clearings SEPARATE (rc-5c5d7c7c6dcd, 2026-09-02),
+			// so the account card became an accumulator of its own (migration
+			// 00069) and this route writes that one row and nothing else.
+			Requires: principalOwner,
+			Summary:  "Reset ONE account's own accumulated spend (owner-only, irreversible): writes that account's accumulator to 0 and touches no member or worker figure.",
+			// The account key rides in the BODY, not the path: a real key is a
+			// compound free string containing '/' and '@', and an encoded
+			// slash that a proxy decodes would silently retarget an
+			// irreversible call. See the spec entry.
+			MCPExclude: true,
+		},
+		{
 			Method:   "POST",
 			Path:     "/api/self/waking",
 			Handler:  w.HandleReportWakingApiSelfWakingPost,

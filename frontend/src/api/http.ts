@@ -100,6 +100,8 @@ import type {
   ThemeWriteReceipt,
   ThemeDeleteResult,
   SseConnectionState,
+  AccountCostResetReceipt,
+  CostResetReceipt,
 } from "./adapter";
 import {
   toMember,
@@ -988,6 +990,50 @@ export const httpApi: Api = {
     await client.POST("/api/members/{member_id}/deactivate", {
       params: { path: { member_id: id } },
     });
+  },
+
+  async resetMemberCost(id: string): Promise<CostResetReceipt> {
+    // POST /api/members/{id}/cost/reset -> CostResetDTO. Clears BOTH halves of
+    // the actor's estimated spend (durable banked figure + live telemetry
+    // figure) — clearing one would let the number reappear on the next read.
+    // Takes no body. IRREVERSIBLE: nothing is retained server-side and there is
+    // no undo route, so callers gate it behind a confirm.
+    //
+    // The receipt carries the PRE-reset figures: that response is the last
+    // moment they exist anywhere. Nulls are passed through unchanged (null =
+    // nothing was there to clear, not zero cleared). Caller refetches; the
+    // 估計$ cell falls back to the dash on its own.
+    const { data } = await client.POST("/api/members/{member_id}/cost/reset", {
+      params: { path: { member_id: id } },
+    });
+    return {
+      memberId: data?.member_id ?? id,
+      clearedCost: data?.cleared_cost ?? null,
+      clearedBankedCost: data?.cleared_banked_cost ?? null,
+    };
+  },
+
+  async resetAccountCost(account: string): Promise<AccountCostResetReceipt> {
+    // POST /api/accounts/cost/reset {account} -> AccountCostResetDTO. Zeroes the
+    // ACCOUNT's own accumulated spend and NO member figure (owner ruling
+    // rc-5c5d7c7c6dcd) — the two are separate numbers and separate buttons.
+    //
+    // The account key rides in the BODY, not the path: a real key contains "/"
+    // and "@", and an encoded slash a proxy decodes would silently retarget an
+    // irreversible call.
+    //
+    // IRREVERSIBLE, so callers gate it behind a confirm. The receipt carries the
+    // PRE-reset figure — the last moment it exists — and null is passed through
+    // unchanged (null = nothing was there to clear, not zero cleared). An
+    // account nobody has reported under answers the same 200 with null rather
+    // than a 404. Caller refetches monitoring; the card is folded from that read.
+    const { data } = await client.POST("/api/accounts/cost/reset", {
+      body: { account },
+    });
+    return {
+      account: data?.account ?? account,
+      clearedCost: data?.cleared_cost ?? null,
+    };
   },
 
   async forceStopMember(id: string): Promise<void> {

@@ -402,6 +402,14 @@ var authzOutsideRouteTable = map[string]string{
 	"api_monitoring.go :: HandleGetMonitoringApiMonitoringGet :: m.Kind == machineKind": "" +
 		"monitoring splits member rows from machine rows by kind for rendering.",
 
+	"api_infra.go :: HandleResetCostApiMembersMemberIdCostResetPost :: m.Kind != KindOutsource": "" +
+		"T-53 成本歸零. The route table already makes the CALLER owner-only; this " +
+		"predicate picks which of the two accumulators the actor keeps its spend in, " +
+		"and it is deliberately the same test bankLiveCost makes for the same id — a " +
+		"staff member banks (and resets) on member.banked_cost, an outsource member " +
+		"through the worker row. It cannot be a Requires floor: the caller is owner on " +
+		"both arms, while the branch depends on the kind of the member named in the path.",
+
 	// ── personal-avatar target scoping (T-c826, owner 2026-07-27) ────────────
 	"api_members.go :: HandlePutMemberAvatarApiMembersMemberIdAvatarPut :: m.Kind == KindWarden": "" +
 		"T-c826 owner ruling: the route table already makes the caller owner-only; this " +
