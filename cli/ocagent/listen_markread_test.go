@@ -365,6 +365,14 @@ func TestDrainChat_EveryWatermarkEqualsWhatThatSenderActuallyPrinted(t *testing.
 
 // A sender whose message carries no usable ts has no watermark to report, so it
 // is skipped rather than reported as 0 (which would be a silent no-op anyway).
+//
+// ⚠️ WHAT THIS COSTS SINCE THE LEDGER WENT. A row that is printed and NOT
+// receipted stays in the server's unread set for ever, so it would be re-printed
+// by every drain from here on — the local ledger used to absorb that. It is not
+// reachable: the unread walk is `m.ts > COALESCE(last_read_ts, 0)`
+// (dal.go listChatUnread), so a row with ts ≤ 0 is never in the unread set to
+// begin with and this drain never sees one. The fixture below is hand-built. If
+// that predicate ever changes, this is the line that turns into a loop.
 func TestDrainChat_MessageWithoutTs_FilesNoReceipt(t *testing.T) {
 	srv := newMarkReadServer(t, `[{"id":"m1","from":"boss","to":"kyle","body":"hi"}]`)
 	var out bytes.Buffer
