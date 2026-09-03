@@ -298,6 +298,10 @@ scratchpad `before.sha`）。CSS 版面的三支 mutant（`position: fixed`／`o
 
 #### E1. `lib/lineDiff.ts` — LCS 行級 diff
 
+> ⚠️ **2026-09-03 補記（T-59）**：`lineDiff.ts` 的核心**已經不是 LCS 了**——換成 Myers 線性空間，
+> 記憶體從「兩側行數相乘」降成「相加」的量級，每側上限也從 2000 提到 20000。本節與下面的 mutant 表
+> 記的是 T-1f39 當時的實作，**照原樣保留不改**；要知道現在怎麼算的，讀 `lineDiff.ts` 的檔頭與 T-59。
+
 測試：`src/lib/lineDiff.test.ts`。
 
 | # | Mutant（改了什麼） | 紅了哪條斷言 |
