@@ -1314,8 +1314,13 @@ func printReplyCardAnswered(out io.Writer, id string, card map[string]any, trigg
 //     its own expiry — and drainReplyCards passes trigger "", so byTrigger
 //     renders nothing. There is no "· by <who>" suffix to contradict.
 //
-// PREMISE: both bullets rest on the client-side self-echo suppression, which no
-// test currently guards — if that suppression changes, this comment is false.
+// PREMISE: both bullets rest on the client-side self-echo suppression. That
+// premise IS guarded as of the third merge of main into this branch (T-f39c /
+// T-2c6d): isSelfEcho has a table test, and drainChat's self-sent suppression
+// has its own. The clause that used to stand here — "which no test currently
+// guards" — was true when it was written and became false the moment those
+// tests landed; a merge that reports zero conflicts does not tell you that a
+// sentence in the file it merged has stopped being true.
 //
 // The correction stands on the first bullet alone: on the one path that does
 // reach the author, the old body would silently credit the owner with a button
