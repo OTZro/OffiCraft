@@ -3423,9 +3423,16 @@ def test_happy_covers_manifest(routes_manifest: list[dict[str, str]]) -> None:
 
 
 def test_openapi_covers_manifest(routes_manifest: list[dict[str, str]]) -> None:
-    """The frozen spec/openapi.json and the served route table must describe
-    the SAME operation set — a route added to the server without a spec
-    freeze update (or vice versa) reddens the run here."""
+    """The frozen spec/openapi.json and routes_manifest.json must describe the
+    SAME operation set — a spec freeze update without a manifest update (or
+    vice versa) reddens the run here.
+
+    Both sides of THIS comparison are hand-written, so it cannot tell you the
+    server serves either set: two lists agreeing prove they were typed the same
+    day. The leg that reaches the server is
+    TestEveryServedRouteIsInThePermissionManifest (T-61,
+    server/ocserverd/routes_manifest_parity_t61_test.go), which compares
+    routes_manifest.json against the route table the mux is built from."""
     manifest_ops = {f"{r['method']} {r['path']}" for r in routes_manifest}
     spec_ops = {
         f"{m.upper()} {p}"
