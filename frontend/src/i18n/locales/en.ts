@@ -615,7 +615,7 @@ export const en: Dict = {
     themeImportLinkWorking: "Fetching…",
     themeImportLinkFailed: "Could not fetch that link",
     themeImportLinkShareNote:
-      "A share link carries no identity, never expires and cannot be revoked — anyone who can reach this studio and has the link can read the theme, including any private images inside it.",
+      "A share link carries no identity and never expires — anyone who can reach this studio and has the link can read the theme, including any private images inside it. A single link cannot be withdrawn; the only way to void one is coarse: remove the key that signed it under Settings › Signing keys, which voids every link that key signed at once.",
     themeImportDup: "A custom theme with that id already exists",
     themeImportReadFailed: "Could not read that file",
     themeLimitReached: "You've reached the custom-theme limit",

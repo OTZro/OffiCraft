@@ -2,8 +2,8 @@ package main
 
 // jwt.go — HS256 JWT mint/verify, the byte-level Go twin of
 // the retired Python plumbing/auth.py. One self-describing, stateless identity token for
-// every gated surface; the signing secret lives in the DB settings store
-// (settings.go).
+// every gated surface; the signing keys live in the DB settings store as a RING
+// (keyring.go) — many keys verify, exactly one signs.
 //
 // INTEROP CONTRACT (locked by jwt_test.go): given the same inputs, mintJWT
 // produces the IDENTICAL compact token the Python `plumbing.auth.mint`
@@ -160,10 +160,11 @@ func verifyJWT(token string, secret []byte, now int64) (map[string]any, error) {
 
 // ── Secret derivation ────────────────────────────────────────────────────────
 //
-// The signing secret itself now lives in the DB settings store (settings.go:
-// loadAuthSettings — migrated in for existing installs, minted for fresh
-// ones). The old resolveSecret ladder and its var/jwt_secret fallback file
-// are retired with it.
+// The signing keys live in the DB settings store as a ring (keyring.go:
+// loadKeyring). The pre-ring row settings.go:loadAuthSettings resolves —
+// migrated in for existing installs, minted for fresh ones — is adopted as that
+// ring's FIRST key rather than replaced. The old resolveSecret ladder and its
+// var/jwt_secret fallback file are retired.
 
 // deriveSecretFromPassword is a domain-separated SHA-256 of the owner
 // password — the historical config-less signing secret (retired Python twin:

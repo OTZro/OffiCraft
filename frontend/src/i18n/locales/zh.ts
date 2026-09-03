@@ -702,7 +702,7 @@ export const zh = {
     themeImportLinkWorking: "抓取中…",
     themeImportLinkFailed: "抓不到那條連結",
     themeImportLinkShareNote:
-      "分享連結沒有身分、永久有效、撤不回來——連得到這台站又拿到連結的人都讀得到這套主題,包含裡面的私人圖片。",
+      "分享連結沒有身分、也不會過期——連得到這台站又拿到連結的人都讀得到這套主題,包含裡面的私人圖片。單一條連結收不回來;要作廢只有一個很粗的辦法:到〈設定 › 簽章金鑰〉移除當初簽它的那把金鑰,那會讓同一把金鑰簽過的所有連結一起失效。",
     themeImportDup: "已有相同 id 的自訂主題",
     themeImportReadFailed: "讀取檔案失敗",
     themeLimitReached: "自訂主題數量已達上限",
@@ -868,7 +868,8 @@ export const zh = {
     galleryClose: "關閉檔案庫",
     galleryPreviewHint: "開新分頁預覽",
     galleryDownloadHint: "下載",
-    // 檔案級永久分享連結(?sig= HMAC)— 複製到剪貼簿。
+    // 檔案級分享連結(?sig= HMAC)— 複製到剪貼簿。不會過期,但不是永久:
+    // 它跟著簽章金鑰環走,移除當初簽它的那把金鑰就會讓它失效(T-62)。
     copyShareLink: "複製分享連結",
     shareLinkCopied: "已複製連結",
     shareLinkCopyFailed: "複製連結失敗",

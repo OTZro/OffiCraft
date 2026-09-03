@@ -271,7 +271,9 @@ func (s *apiServer) HandleSetPasswordApiAuthSetPasswordPost(w http.ResponseWrite
 // minted BEFORE the change is refused at the auth gate from now on. The
 // response carries a fresh owner token (iat = the stamp) so the current
 // session survives its own change. Agent/warden tokens are untouched — the
-// signing secret never rotates here (B1 zero-invalidation).
+// signing key never rotates HERE (B1 zero-invalidation). Rotating one is its
+// own owner action (api_signing_keys.go); a password change is not one, and
+// must not become one by accident.
 //
 // It deliberately does NOT also demand a TOTP code, unlike mfa/disable. While a
 // factor is armed, holding a live owner session already implies having passed

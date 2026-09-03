@@ -708,7 +708,15 @@ export interface paths {
          *     authorizes reading THIS ONE blob and nothing else; a bad/foreign sig is
          *     401; ``?sig=`` on any other route is ignored (401 missing credentials).
          *     Like ``?token=``, the param is an auth credential OUTSIDE the OpenAPI
-         *     parameter schema. Permanent by design (no expiry/revocation — beta).
+         *     parameter schema.
+         *
+         *     A sig carries NO EXPIRY and cannot be revoked one link at a time. It is not
+         *     unconditionally permanent, though, and since T-62 it never was: the derivation
+         *     key follows the SIGNING-KEY RING, so a sig keeps verifying while the key that
+         *     produced it is still in the ring, and every sig made under a key dies together
+         *     the moment an owner REMOVES that key (`POST
+         *     /api/auth/signing-keys/{key_id}/remove`). That is the whole revocation story —
+         *     coarse, deliberate, and a person's decision rather than a timer's.
          */
         get: operations["handle_get_chat_attachment_api_chat_attachment__attachment_id__get"];
         put?: never;
@@ -800,17 +808,20 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Mint a permanent single-file share link (?sig= HMAC; grants read of this one attachment only). Returns {url} as a SERVER-RELATIVE path — prefix it with the origin you reach this server on to get a link you can paste to someone. The sig carries NO identity and NO expiry: whoever holds the link reads that one blob without signing in, forever, and it cannot be revoked. Mint it for deliverables you meant to hand over; do not paste it anywhere the blob itself would not belong.
-         * @description Mint the permanent share link for ONE attachment
+         * Mint a permanent single-file share link (?sig= HMAC; grants read of this one attachment only). Returns {url} as a SERVER-RELATIVE path — prefix it with the origin you reach this server on to get a link you can paste to someone. The sig carries NO identity and NO expiry: whoever holds the link reads that one blob without signing in, for as long as the key that signed it is still in the server's signing-key ring. No single link can be withdrawn; the only way to void one is to remove that key (POST /api/auth/signing-keys/{key_id}/remove), which voids every link it signed at once. Mint it for deliverables you meant to hand over; do not paste it anywhere the blob itself would not belong.
+         * @description Mint the share link for ONE attachment
          *     (``GET /api/chat/attachments/<id>/share-link``). GATED like every chat
          *     route (any authenticated principal); 404 for an unknown blob id.
          *
          *     Returns ``{url}`` — the attachment's serve path
          *     (``/api/chat/attachment/<id>``) carrying a ``?sig=`` HMAC-SHA256
          *     credential over exactly that attachment id, signed with a
-         *     domain-separated key derived from the server signing secret. The sig is
-         *     PERMANENT (no expiry, no revocation — owner-accepted beta trade-off)
-         *     and grants NOTHING beyond reading this one blob: a different id, a
+         *     domain-separated key derived from the key that is CURRENTLY SIGNING (see
+         *     `GET /api/auth/signing-keys`). The sig carries no expiry and there is no
+         *     way to revoke one link on its own; what does end it is removing the signing
+         *     key it was made under, which ends every sig made under that key at the same
+         *     instant (T-62, owner ruling rc-cf9c27c07442). It grants NOTHING beyond
+         *     reading this one blob: a different id, a
          *     tampered sig, or any other endpoint stays 401 deny-by-default.
          */
         get: operations["handle_get_chat_attachment_share_link_api_chat_attachments__attachment_id__share_link_get"];

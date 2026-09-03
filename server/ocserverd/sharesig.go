@@ -9,12 +9,19 @@ package main
 // nothing beyond reading the one blob it names (any other id fails the HMAC;
 // any other route never consults sigs at all).
 //
-// KEY: derived from the server signing secret via domain separation
-// (SHA-256 over a versioned label + the secret), NEVER the JWT secret used
-// raw — a share sig must not be confusable with, or convertible into, any
-// JWT-signed material, and the derivation keeps the server stateless (no
-// first-boot key mint / DB row; the key is stable exactly as long as the
-// signing secret is, matching deriveSecretFromPassword's pattern in jwt.go).
+// KEY: derived from a server signing key via domain separation (SHA-256 over a
+// versioned label + the key), NEVER the JWT key used raw — a share sig must not
+// be confusable with, or convertible into, any JWT-signed material, and the
+// derivation needs no key of its own (matching deriveSecretFromPassword's
+// pattern in jwt.go).
+//
+// ⚠️ "the key is stable exactly as long as the signing secret is" used to end
+// that sentence, back when there WAS one signing secret and it never changed.
+// Since T-62 there is a RING (keyring.go): a new sig is made under the key that
+// currently signs, an existing sig verifies against every key still in the
+// ring, and removing a key ends every sig made under it at that instant. So a
+// share link is no longer permanent-by-construction — it is exactly as durable
+// as the key behind it, which is now something a person can end on purpose.
 
 import (
 	"crypto/hmac"
