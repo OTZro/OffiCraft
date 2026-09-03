@@ -434,23 +434,48 @@ func TestAStationAtTheReleasedVersionCanUpgradeToThisTree(t *testing.T) {
 			local, err = os.ReadFile(filepath.Base(rm.path))
 		}
 		if err != nil {
-			t.Fatalf("read this tree's copy of released migration %d (%s): %v — main ships it "+
-				"and the version scan says this tree declares it, so failing to read it here "+
-				"means the two scans disagree about what exists", v, rm.where, err)
+			// Reachable, and the likely cause is not exotic: RENAMING a shipped file.
+			// goose identifies a Go migration by the string passed to
+			// AddNamedMigration*, not by the filename, so a rename leaves the version
+			// declared while the path main knows is gone — and saying only "the two
+			// scans disagree" would send the reader looking for a scanner bug.
+			t.Fatalf("main ships released migration %d as %s, and this tree still declares "+
+				"version %d, but that path cannot be read here: %v.\nThe usual cause is that "+
+				"the FILE WAS RENAMED (or moved). A released migration's path is part of what "+
+				"shipped: goose identifies a Go migration by its registration string rather "+
+				"than its filename, so renaming one is invisible to goose and leaves this "+
+				"check unable to compare it against what stations actually ran. FIX: put the "+
+				"file back where main has it. If the path genuinely has to change, that is a "+
+				"decision for a person, not something to route around here.",
+				v, rm.path, v, err)
 		}
 		if strings.TrimSpace(rm.body) != strings.TrimSpace(string(local)) {
 			kind := "migration file"
+			mechanical := ""
 			if !rm.isSQL {
 				kind = "Go migration's source file"
+				// A Go migration shares a package with everything else in it, so a
+				// repo-wide rename reaches it whether or not anyone meant to touch a
+				// shipped migration. That case is real, and this check cannot tell it
+				// apart from a behaviour change — so it must not pretend to.
+				mechanical = "\nThis is a Go file, so a repo-wide rename or a formatting pass " +
+					"can reach it WITHOUT changing what the migration does. This check cannot " +
+					"tell that apart from a real edit, and does not try to. If that is what " +
+					"happened, do NOT open a new migration — an empty one fixes nothing. Keep " +
+					"the shipped file byte-for-byte as it shipped (alias the identifier, or " +
+					"leave the old name standing in this file) so that what stations ran and " +
+					"what this tree says they ran remain the same text."
 			}
 			t.Errorf("%s for version %d (%s) has ALREADY SHIPPED and this tree changes its "+
-				"body. goose records one row per version and never revisits it, so this edit "+
-				"reaches nobody who has already upgraded past %d — it applies on fresh installs "+
-				"only, and the two populations end up with different schemas without a single "+
-				"error anywhere. Every test in this package installs from empty and will "+
-				"therefore agree with the edited version. FIX: leave the shipped file alone and "+
-				"put the change in a NEW migration numbered %d. (baseline origin/main %s)",
-				kind, v, rm.where, v, nextFree, ref)
+				"body. goose records one row per version and never revisits it, so whatever "+
+				"this edit does reaches nobody who has already upgraded past %d — it takes "+
+				"effect on fresh installs only. IF THE EDIT CHANGES WHAT THE MIGRATION DOES, "+
+				"that is two populations with different schemas and not a single error "+
+				"anywhere; every test in this package installs from empty and will agree with "+
+				"the edited version, so nothing here would notice. FIX: leave the shipped file "+
+				"alone and put the CHANGE IN BEHAVIOUR in a new migration numbered %d.%s "+
+				"(baseline origin/main %s)",
+				kind, v, rm.where, v, nextFree, mechanical, ref)
 		}
 	}
 
