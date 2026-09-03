@@ -553,8 +553,10 @@ func (d *DAL) PutMember(m Member) error {
 // AddMemberBankedCost adds delta to ONLY member.banked_cost (T-14 項目 6) — the
 // durable cumulative spend of a staff member OR an outsource worker, since P7d
 // made both a row of the same table (outsource_worker.banked_cost is this
-// column). It is the SOLE writer that moves it: PutMember's upsert carries the
-// column on INSERT but never in its DO UPDATE SET.
+// column). PutMember's upsert carries the column on INSERT but never in its DO
+// UPDATE SET, so no whole-row write can move it — this function and
+// ZeroMemberBankedCost (T-53, just below) are its only writers, and they are the
+// only two by design: one accumulates, one resets.
 //
 // ACCUMULATES IN SQL, not in Go, for the reason SetMemberAgentIatFloor uses
 // max() in SQL: a read-modify-write in Go loses to whichever caller writes
