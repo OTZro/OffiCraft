@@ -110,6 +110,20 @@ function openModal() {
   );
 }
 
+/** One left-column row's rendered text — the name the reader picks the version
+ * by, read off the row rather than searched for in the panel's prose. */
+function rowName(testId: string): string {
+  const name = screen.getByTestId(testId).querySelector(".ta-versions__row-name");
+  return name?.textContent ?? "";
+}
+
+/** The same row's secondary line — the live row carries its name there, under a
+ * fixed 「目前版本」 heading. */
+function rowMeta(testId: string): string {
+  const meta = screen.getByTestId(testId).querySelector(".ta-versions__row-meta");
+  return meta?.textContent ?? "";
+}
+
 /** The rendered diff's text cells, in order — the comparison as DATA, not as
  * a keyword search over the panel's prose. */
 function diffLinesOnScreen(): string[] {
@@ -408,6 +422,31 @@ describe("TaskArtifactVersionsModal", () => {
     // of diffing it against itself.
     fireEvent.click(screen.getByTestId("ta-versions-pane-diff"));
     expect(screen.getByTestId("ta-versions-diff-live")).toBeTruthy();
+  });
+
+  // `label` is optional on the wire and nothing makes an agent send one, so the
+  // common deliverable arrives label-less and named only by its blob. Reading the
+  // left column under the label alone printed a row of 「未命名」 beneath a named
+  // current version — and lost the one fact two file versions most often differ
+  // by, which is the name the file was re-filed under.
+  it("names a label-less version by its own filename, not as unnamed", async () => {
+    mockedApi.listTaskArtifactVersions.mockResolvedValue([
+      mkVersion({ id: 2, label: "", filename: "report.md", url: "/api/chat/attachment/att-v2" }),
+    ]);
+    mockedApi.getTask.mockResolvedValue(
+      mkTask([mkArtifact({ label: "", filename: "report-final.md" })]),
+    );
+    stubFetch({
+      "/api/chat/attachment/att-v2": { mime: "text/plain", text: "old" },
+      "/api/chat/attachment/att-live": { mime: "text/plain", text: "new" },
+    });
+    openModal();
+
+    await waitFor(() => expect(screen.getByTestId("ta-versions-row-2")).toBeTruthy());
+    expect(rowName("ta-versions-row-2")).toBe("report.md");
+    // The rename is the difference the reader came for, so both sides must show
+    // their own name rather than one named side and one anonymous one.
+    expect(rowMeta("ta-versions-row-live")).toContain("report-final.md");
   });
 
   it("says the version history could not be read rather than showing an empty list", async () => {

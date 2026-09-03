@@ -273,8 +273,16 @@ export function TaskArtifactVersionsModal({
   );
   const livePayload = usePayload(live?.kind, live?.url, liveName);
 
+  // Word-for-word the live side's fallback chain below, and that is the point:
+  // a version's `label` is empty unless an agent chose to send one, while its
+  // `filename` is on the wire for every retained file. Reading only the label
+  // rendered the whole older column as "unnamed" underneath a named live row,
+  // and hid the one difference between two versions a reader most needs to see —
+  // that the deliverable was re-filed under a new name.
   const versionTitle = (v: TaskArtifactVersionView) =>
-    v.label || (v.kind === "link" ? v.url : t.tasks.artifacts.versionsUnnamed);
+    v.label ||
+    v.filename ||
+    (v.kind === "link" ? v.url : t.tasks.artifacts.versionsUnnamed);
   const liveTitle =
     live &&
     (live.label ||
