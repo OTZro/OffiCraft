@@ -1,7 +1,13 @@
 // useQuotedMessageOverlay — the ONE way the cockpit opens a message somebody
 // pointed at WITHOUT moving them (T-0b78).
 //
-// 🔴 IT HAS EXACTLY ONE CALLER: the chat bubble's quote row 「看原訊息」.
+// 🔴 IT HAS EXACTLY ONE CALLER: the chat bubble's quote row 「看原訊息」, and
+// since T-48 (R14-1.6) that is a machine-checked fact rather than a sentence
+// here — `lint:async-landing`'s QUOTED_OVERLAY_CALLERS sweeps the whole tree.
+// It matters because this hook keeps NO room stamp of its own: `ChatArea` is
+// mounted under `key={peerId}`, so a room switch unmounts it and takes the
+// overlay with it. A second caller keyed on a card id would not unmount, and
+// would paint room A's message full-screen over room B — R8-3's shape.
 // T-0b78 briefly routed the 請示 page's 跳到原訊息 and the inline task card's
 // 在聊天室回覆 through here too; owner 2026-08-29 sent those two BACK to
 // navigating (「1 跟 2 變回去原本那樣」) and knowingly took back the miss

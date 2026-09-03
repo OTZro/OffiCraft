@@ -50,9 +50,29 @@
 // in scope — and including `api/http.ts` would put 126 unrelated `await`s under
 // a count that churns on every new endpoint. Disagree by deleting the filter.
 //
+// 🔴 IT CARRIES TWO MORE CENSUSES, BECAUSE IT ALREADY WALKS THE GRAPH (T-48,
+// R14-3.1 / R14-1.6). Both are the same shape of question — "is this claim still
+// true of the WHOLE chat surface, not of the one file somebody remembered?" —
+// and both were being kept by prose:
+//
+//   * MODULE_STATE. `key={peerId}` deleted per-conversation component state, so
+//     the only place the twelve-instance defect family can come back is state
+//     that lives OUTSIDE a component. `chatDraftStore.ts` says in its header
+//     that everything surviving a room switch now lives there, and
+//     `chatDraftStore.test.ts` checks that sentence against ONE file — the file
+//     that already obeys it. The instance that actually happened was
+//     `liveComposers`, a second module-level per-room table grown in
+//     `ChatArea.tsx`, and a one-file census cannot see that. This one reads
+//     every file in the walk.
+//   * useQuotedMessageOverlay's SINGLE CALLER. The full-screen overlay gave up
+//     its own visit stamp on the grounds that ChatArea is its only caller and
+//     ChatArea is keyed. That was true, checked by hand, and guarded by a
+//     comment: a second caller whose own key is a card id would put room A's
+//     message over room B, which is R8-3's original shape.
+//
 // Run: `npm run lint:async-landing` (also wired into bin/ci.sh).
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -199,6 +219,42 @@ const REGISTRY = [
   { file: "lib/sharedSnapshot.ts", kind: ".then/.catch/.finally", count: 1, verdict: "single-flight settings snapshot; global generation, not per conversation" },
 ];
 
+/** MODULE-LEVEL MUTABLE STATE, across the whole walk (T-48, R14-3.1).
+ *
+ * A module-level table outlives every mount, so it is the one place a value can
+ * still cross from one conversation into another now that `key={peerId}` takes
+ * the component state with the room. Each row says WHAT KEYS IT — and "keyed by
+ * peer" is the only answer that makes a per-conversation table safe. The
+ * deleted `liveComposers` (a second peer-keyed table, in `ChatArea.tsx`, not in
+ * the store) is the shape this exists to catch coming back, under any name and
+ * in any file the chat surface imports.
+ *
+ * WHAT COUNTS AS STATE: a top-level `let`/`var`, and a top-level
+ * `new Map/Set/WeakMap/WeakSet()` constructed EMPTY — something written to
+ * later. A container built FROM a constant (`new Set(THEME_TOKENS)`) is a
+ * lookup table, not state, and is deliberately not registered; construct one
+ * empty and it joins the census. */
+const MODULE_STATE = [
+  { file: "hooks/useAttachmentStaging.ts", name: "pendingAttachmentSeq", verdict: "a monotonic key mint for staged rows; carries no per-conversation meaning and is never read back" },
+  { file: "hooks/useWorkerCodenames.ts", name: "cache", verdict: "keyed by the globally-unique `ow-` worker id, which names one worker in every room alike" },
+  { file: "hooks/useWorkerCodenames.ts", name: "inflight", verdict: "the same `ow-` ids, de-duplicating requests; not per conversation" },
+  { file: "hooks/useWorkerCodenames.ts", name: "listeners", verdict: "repaint callbacks for that global cache; each unsubscribes on unmount" },
+  { file: "lib/chatDraftStore.ts", name: "drafts", verdict: "keyed by PEER — the one table that survives a room switch on purpose, because a draft is what the owner has composed and not yet sent" },
+  { file: "lib/chatDraftStore.ts", name: "attachErrors", verdict: "keyed by PEER, and dropped when the office page unmounts (R14-2.1) so a refusal cannot outlive the surface that raised it" },
+  { file: "lib/chatDraftStore.ts", name: "listeners", verdict: "keyed by PEER; a write notifies only that room's subscribers" },
+  { file: "lib/escapeLayers.ts", name: "listening", verdict: "one boolean saying whether the shared keydown listener is attached; layers deregister on unmount" },
+  { file: "lib/sharedSnapshot.ts", name: "registry", verdict: "the set of global settings snapshots to reset on auth change; global by definition, not per conversation" },
+];
+
+/** The ONE caller `useQuotedMessageOverlay` is allowed to have (T-48, R14-1.6).
+ * The hook dropped its own visit stamp because `ChatArea` is keyed, so its
+ * state dies with the room. That reasoning is about the CALLER, not the hook: a
+ * second caller mounted under a card id (`ChatReplyCard`, `ReplyComposer`) does
+ * not unmount on a room switch, and would paint room A's message full-screen
+ * over room B. Adding a caller here is a decision to re-check that, not a
+ * formality. */
+const QUOTED_OVERLAY_CALLERS = ["components/ChatArea.tsx"];
+
 function walkFromChatArea() {
   const resolveSpec = (fromFile, spec) => {
     if (!spec.startsWith(".")) return null;
@@ -232,6 +288,43 @@ function walkFromChatArea() {
     }
   }
   return [...seen].sort();
+}
+
+/** Top-level mutable state declared in `file`. Top level = column 0: the same
+ * cheap, deliberate reading `chatDraftStore.test.ts` used, and nesting a table
+ * inside a function makes it per-call rather than per-module anyway. */
+function scanModuleState(file) {
+  const names = [];
+  for (const line of readFileSync(file, "utf8").split("\n")) {
+    if (/^\s*(\/\/|\*|\/\*)/.test(line)) continue;
+    const mutable = line.match(/^(?:export\s+)?(?:let|var)\s+([A-Za-z_$][\w$]*)/);
+    if (mutable) {
+      names.push(mutable[1]);
+      continue;
+    }
+    const container = line.match(
+      /^(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*(?::[^=]*)?=\s*new (?:Map|Set|WeakMap|WeakSet)\b.*\(\s*\)\s*;?\s*$/,
+    );
+    if (container) names.push(container[1]);
+  }
+  return names;
+}
+
+/** Every source file under the scanned root — NOT just the walk. A new caller of
+ * the quoted-message overlay is exactly the file nobody has imported from
+ * ChatArea yet, so the walk is the wrong population for that one question. */
+function allSourceFiles(dir) {
+  const out = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, e.name);
+    if (e.isDirectory()) {
+      out.push(...allSourceFiles(full));
+      continue;
+    }
+    if (!/\.tsx?$/.test(e.name) || /\.test\.tsx?$/.test(e.name)) continue;
+    out.push(full);
+  }
+  return out;
 }
 
 function scan(files) {
@@ -307,6 +400,56 @@ if (stale.length > 0) {
   );
 }
 
+// 5. Module-level mutable state, both directions, over the SAME walk. A table
+//    that outlives every mount is the only place left for one room's value to
+//    reach another; an unregistered one is an unanswered question about which
+//    room it belongs to.
+const foundState = [];
+for (const file of files) {
+  for (const name of scanModuleState(file)) {
+    foundState.push(`${file.slice(SRC.length + 1)} | ${name}`);
+  }
+}
+const regState = MODULE_STATE.map((r) => `${r.file} | ${r.name}`);
+for (const r of MODULE_STATE) {
+  if (r.verdict.trim().length < 20) {
+    problems.push(`${r.file} | ${r.name}: module state with nothing said about what keys it is not registered`);
+  }
+}
+const newState = foundState.filter((r) => !regState.includes(r)).sort();
+const goneState = regState.filter((r) => !foundState.includes(r)).sort();
+if (newState.length > 0) {
+  problems.push(
+    `module-level state the register does not know about — say what keys it, and if that key is not the PEER say why one room's value may reach another:\n${newState.map((r) => `    + ${r}`).join("\n")}`,
+  );
+}
+if (goneState.length > 0) {
+  problems.push(
+    `registered module-level state that no longer exists:\n${goneState.map((r) => `    - ${r}`).join("\n")}`,
+  );
+}
+
+// 6. The quoted-message overlay's caller list, over the WHOLE tree. Its state
+//    is protected by its caller's key and by nothing else.
+const overlayCallers = [];
+for (const file of allSourceFiles(SRC)) {
+  const rel = file.slice(SRC.length + 1).split("\\").join("/");
+  if (rel === "hooks/useQuotedMessageOverlay.tsx") continue;
+  const code = readFileSync(file, "utf8")
+    .split("\n")
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join("\n");
+  if (code.includes("useQuotedMessageOverlay(")) overlayCallers.push(rel);
+}
+overlayCallers.sort();
+if (
+  JSON.stringify(overlayCallers) !== JSON.stringify([...QUOTED_OVERLAY_CALLERS].sort())
+) {
+  problems.push(
+    `useQuotedMessageOverlay's callers changed:\n    calling:    ${overlayCallers.join(", ") || "(nobody)"}\n    registered: ${QUOTED_OVERLAY_CALLERS.join(", ")}\n  The overlay keeps NO room stamp of its own — it relies on its caller being unmounted by a room switch. A caller keyed on anything but the peer paints one room's message over another (R8-3).`,
+  );
+}
+
 if (problems.length > 0) {
   console.error("[async-landing] FAIL — the chat surface's async census is out of date.");
   console.error(
@@ -320,5 +463,5 @@ if (problems.length > 0) {
 }
 
 console.log(
-  `[async-landing] ok — ${files.length} files walked from ChatArea, ${found.size} (file, shape) pairs, all on the register`,
+  `[async-landing] ok — ${files.length} files walked from ChatArea, ${found.size} (file, shape) pairs and ${foundState.length} module-level state declarations on the register, ${overlayCallers.length} quoted-overlay caller(s)`,
 );

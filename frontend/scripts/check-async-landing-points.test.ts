@@ -103,6 +103,49 @@ describe("check-async-landing-points", () => {
     expect(out).toContain("lib/shareLink.ts | await");
   });
 
+  it("reddens when a SECOND module-level per-room table grows outside the draft store (R14-3.1)", () => {
+    // The instance that actually happened: `liveComposers`, a peer-keyed table
+    // in ChatArea.tsx rather than in chatDraftStore.ts. The store's own test
+    // cannot see it — it reads the store's file. This walks the whole graph.
+    const { code, out } = run((edit) =>
+      edit(CHAT_AREA, (code) =>
+        code.replace(
+          "export function ChatArea({",
+          'const liveComposers = new Map<string, () => void>();\nexport function ChatArea({',
+        ),
+      ),
+    );
+    expect(code, out).not.toBe(0);
+    expect(out).toContain("components/ChatArea.tsx | liveComposers");
+  });
+
+  it("reddens when registered module-level state disappears, so the register cannot describe a table that is gone", () => {
+    const { code, out } = run((edit) =>
+      edit("lib/chatDraftStore.ts", (code) =>
+        code.replace("const drafts = new Map", "const draftsById = new Map"),
+      ),
+    );
+    expect(code, out).not.toBe(0);
+    expect(out).toContain("registered module-level state that no longer exists");
+    expect(out).toContain("lib/chatDraftStore.ts | drafts");
+  });
+
+  it("reddens when a SECOND component calls useQuotedMessageOverlay (R14-1.6)", () => {
+    // The overlay carries no room stamp of its own: it relies on ChatArea being
+    // unmounted by a room switch. A caller keyed on a card id is not.
+    const { code, out } = run((edit) =>
+      edit("components/ReplyComposer.tsx", (code) =>
+        code.replace(
+          'import { useI18n } from "../i18n";',
+          'import { useI18n } from "../i18n";\nimport { useQuotedMessageOverlay } from "../hooks/useQuotedMessageOverlay";\nconst _q = () => useQuotedMessageOverlay((id: string) => id);',
+        ),
+      ),
+    );
+    expect(code, out).not.toBe(0);
+    expect(out).toContain("useQuotedMessageOverlay's callers changed");
+    expect(out).toContain("components/ReplyComposer.tsx");
+  });
+
   it("reddens when a file drops out of the WALK (R10-5 B1/B2/B3)", () => {
     // The population is derived from ChatArea's imports. A file that stops being
     // reachable takes its landing points with it, silently, unless the register

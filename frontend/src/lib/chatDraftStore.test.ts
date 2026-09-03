@@ -3,15 +3,20 @@
 // 🔴 WHY THIS FILE EXISTS. `ChatArea` is mounted under `key={peerId}`, so every
 // piece of per-conversation state dies with the room. This module is the ONE
 // deliberate exception: a draft and its staged files have to survive leaving the
-// room, because that is what a draft IS. Everything that survives a room switch
-// in this app now lives here — which makes it the single place where the defect
-// family T-48 spent twelve rounds on can come back, and the census that used to
-// enumerate cross-visit state (crossVisitState.test.ts) was deleted with the
-// hooks it watched.
+// room, because that is what a draft IS.
 //
 // So the rule this file keeps is narrow and mechanical: NOTHING IN THIS MODULE
 // MAY BE MUTABLE STATE THAT IS NOT KEYED BY PEER. A `let lastError` here is one
 // room's sentence shown in another room, and no component test would go red.
+//
+// 🔴 WHAT THIS FILE CANNOT KEEP, AND WHO KEEPS IT (T-48, R14-3.1). The store's
+// header claims everything surviving a room switch now lives here. This test
+// cannot check that claim: it reads THIS file, the one file already obeying it.
+// The instance that actually happened was `liveComposers` — a second
+// module-level, peer-keyed table grown in `ChatArea.tsx` — and a one-file
+// census is blind to it by construction. `lint:async-landing`'s MODULE_STATE
+// register is the census over the whole chat import graph; this one is the
+// narrow rule for the file that is the exception.
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
