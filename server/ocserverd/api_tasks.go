@@ -266,7 +266,10 @@ func (s *apiServer) taskDTOOf(t Task) (taskDTO, error) {
 		return taskDTO{}, err
 	}
 	dto := newTaskDTO(t, steps, deps, s.replyCardStatusesForSteps(steps))
-	artifacts, err := s.taskArtifactDTOs(t.ID)
+	// INDEX rows only (T-66, owner c-cd063427fb2f). The full set — url,
+	// filename, mime, kind, is_image, attachment_id, created_by, created_ts —
+	// is served by taskArtifactDTOs through GET /api/tasks/{task_id}/artifacts.
+	artifacts, err := s.taskArtifactRefDTOs(t.ID)
 	if err != nil {
 		return taskDTO{}, err
 	}
@@ -306,6 +309,26 @@ func (s *apiServer) blockingTasksOf(taskID string) ([]taskDepRefDTO, error) {
 		out = append(out, taskDepRefDTO{
 			ID: w.ID, TaskNo: TaskNo(w.ID), Title: w.Title, Status: w.Status,
 		})
+	}
+	return out, nil
+}
+
+// taskArtifactRefDTOs lists one task's artifacts as INDEX rows (id + label) —
+// what the shared task projection serves since T-66. Never nil.
+//
+// 🔴 IT DOES NOT TOUCH chat_attachment AT ALL. taskArtifactDTOs below runs one
+// GetChatAttachment per file/image row; this runs exactly one query no matter
+// how many artifacts a task has pinned, because the index carries no blob
+// metadata to resolve. That is why the slimming is a latency change on the task
+// read and not only a payload one.
+func (s *apiServer) taskArtifactRefDTOs(taskID string) ([]taskArtifactRefDTO, error) {
+	arts, err := s.dal.ListTaskArtifacts(taskID)
+	if err != nil {
+		return nil, err
+	}
+	out := []taskArtifactRefDTO{}
+	for _, a := range arts {
+		out = append(out, newTaskArtifactRefDTO(a))
 	}
 	return out, nil
 }

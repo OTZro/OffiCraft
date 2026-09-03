@@ -1515,6 +1515,17 @@ MATRIX: dict[str, Route] = {
         path=lambda ctx, _i: "/api/tasks/{}/artifact/{}".format(
             *_matrix_task_artifact(ctx)),
     ),
+    "GET /api/tasks/{task_id}/artifacts": Route(
+        # T-66. A READ, so it carries GET /api/tasks/{task_id}'s floor and NOT
+        # the agent write gate the two artifact WRITES on the neighbouring path
+        # carry: there is no executor guard, so no `agent_other` override — a
+        # second agent reading somebody else's artifacts is a 200, exactly as it
+        # already was through get_task before this ticket moved the full rows
+        # here. No field this serves was behind a stricter door before, so a
+        # tighter floor here would close nothing.
+        requires="machine",
+        path=lambda ctx, _i: f"/api/tasks/{_matrix_task(ctx)}/artifacts",
+    ),
     # ── outsource panel (M3) ────────────────────────────────────────────────
     "GET /api/outsource-workers": Route(requires="machine"),
     "GET /api/outsource-workers/{id}": Route(

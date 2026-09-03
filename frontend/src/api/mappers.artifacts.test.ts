@@ -4,8 +4,13 @@
 // fabricating a file/image.
 
 import { describe, it, expect } from "vitest";
-import { toTask, toTaskListItem, toTaskArtifact } from "./mappers";
-import type { WireTask, WireTaskListItem, WireTaskArtifact } from "./wire";
+import { toTask, toTaskListItem, toTaskArtifact, toTaskArtifactRef } from "./mappers";
+import type {
+  WireTask,
+  WireTaskListItem,
+  WireTaskArtifact,
+  WireTaskArtifactRef,
+} from "./wire";
 
 // The generated wire types carry every field (server response DTO is handwritten
 // always-present); these helpers build complete wire objects so the tests
@@ -69,6 +74,10 @@ function wireTask(over: Partial<WireTask>): WireTask {
     // so the complete-wire-object helper carries it like the rest.
     detail_level: "summary",
     notes_included: false,
+    // T-66: and the ARTIFACT rows describe themselves too — always "index",
+    // because the task read carries id + label per deliverable and nothing else
+    // (owner c-cd063427fb2f). Always-present on the wire, same as the pair above.
+    artifacts_detail_level: "index",
     ...over,
   };
 }
@@ -146,18 +155,37 @@ describe("toTaskArtifact", () => {
   });
 });
 
+describe("toTaskArtifactRef (T-66 index row)", () => {
+  it("passes id + label through and reads a missing label as empty", () => {
+    const w: WireTaskArtifactRef = { id: "ta-7", label: "設計稿" };
+    expect(toTaskArtifactRef(w)).toEqual({ id: "ta-7", label: "設計稿" });
+    // A deliverable pinned without a display name reads as "" — the mapper does
+    // NOT invent one (it has no filename and no url to invent from). Deciding
+    // what a nameless artifact LOOKS like is the renderer's job, on the full row
+    // it fetched through listTaskArtifacts.
+    expect(toTaskArtifactRef({ id: "ta-8", label: "" })).toEqual({ id: "ta-8", label: "" });
+  });
+});
+
 describe("toTask / toTaskListItem artifact folding", () => {
-  it("full task folds artifacts and keeps count == length", () => {
+  it("full task folds artifact INDEX rows and keeps count == length", () => {
     const view = toTask(
       wireTask({
         artifacts: [
-          wireArtifact({ id: "ta-1", kind: "link", url: "https://x/1" }),
-          wireArtifact({ id: "ta-2", kind: "file", attachment_id: "att-1", url: "/api/chat/attachment/att-1" }),
+          { id: "ta-1", label: "PR #1" },
+          { id: "ta-2", label: "" },
         ],
       }),
     );
     expect(view.artifacts?.length).toBe(2);
     expect(view.artifactCount).toBe(2);
+    // T-66: id + label, and NOTHING a renderer could draw a row from. The
+    // wire type no longer declares the rest, so this asserts the VIEW model
+    // stayed just as narrow — a mapper that widened it back (defaulting a
+    // url/kind in) would put the fat shape back into the cockpit's hands and
+    // let a component believe it need not fetch.
+    expect(Object.keys(view.artifacts![0]).sort()).toEqual(["id", "label"]);
+    expect(view.artifacts![0]).toEqual({ id: "ta-1", label: "PR #1" });
   });
 
   it("full task with no artifacts reports [] and count 0", () => {

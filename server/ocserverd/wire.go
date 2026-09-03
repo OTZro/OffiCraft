@@ -1464,8 +1464,9 @@ type taskStepStatusReceiptDTO struct {
 // taskArtifactReceiptDTO is the bounded confirmation returned after pinning or
 // un-pinning ONE deliverable (T-a98d). Same posture as taskStepStatusReceiptDTO:
 // the write answers with what the write did — the artifact it touched and the
-// resulting set size — not with the whole task. Full task detail, artifact list
-// included, remains available through get_task.
+// resulting set size — not with the whole task. Full task detail remains
+// available through get_task, and the artifact SET through list_task_artifacts
+// — since T-66 get_task carries only an id+label index of the artifacts.
 type taskArtifactReceiptDTO struct {
 	TaskID        string `json:"task_id"`
 	ArtifactID    string `json:"artifact_id"`
@@ -1645,6 +1646,23 @@ const (
 	taskDetailLevelFull    = "full"
 )
 
+// taskArtifactsDetailLevelIndex / ...Full are the two values of the ARTIFACT
+// half of the self-description (T-66, owner c-cd063427fb2f:「我覺得任務產物，只
+// 需要預設給標題跟ID, 有需要再透過另一隻去拿就好了」). Same reason the pair above
+// are constants: the two build sites (the shared task projection and
+// list_task_artifacts) must not drift into three spellings.
+//
+// 🔴 THE VALUE IS A NAME, NOT A BOOLEAN, and that is deliberate. A flag like
+// `artifacts_included: false` would be a permanently-false marker, and this
+// repo's hard lesson is that a guard which never fires reads exactly like a
+// green one. "index" is a positive statement that is TRUE of every payload that
+// carries it — this response's artifact rows are an INDEX (id + label) — and its
+// counterpart "full" is likewise true of every payload that carries THAT one.
+const (
+	taskArtifactsDetailLevelIndex = "index"
+	taskArtifactsDetailLevelFull  = "full"
+)
+
 // taskArtifactDTO is one pinned deliverable on a task's artifact set (T-3dc5).
 // For a link: URL is the external url, AttachmentID/Mime/Filename empty,
 // IsImage false. For file/image: URL is the blob serve path, AttachmentID/
@@ -1661,6 +1679,40 @@ type taskArtifactDTO struct {
 	AttachmentID string  `json:"attachment_id"`
 	CreatedTS    float64 `json:"created_ts"`
 	CreatedBy    string  `json:"created_by"`
+}
+
+// taskArtifactRefDTO is ONE artifact reduced to the two things a caller needs
+// in order to decide whether it wants the artifact at all: WHICH one it is (ID
+// — the handle every other artifact call takes) and WHAT it is called (Label).
+// It is what the shared task projection serves; the full row above is served
+// by GET /api/tasks/{task_id}/artifacts (MCP list_task_artifacts).
+//
+// 🔴 WHY THE SPLIT IS BY TASK AND NOT BY ARTIFACT. The obvious symmetry with
+// get_task_step would be a get_task_artifact taking one id. The owner ruled
+// against it (c-f2d0fecb1168:「應該是指名任務？」): the cockpit's artifact panel
+// opens onto the WHOLE set at once, so a per-artifact door would cost one call
+// per row — 32 calls for a 32-artifact ticket — whereas a step note is read one
+// at a time, which is why THAT split is per-step and this one is per-task.
+//
+// Label is honest-empty when the artifact was pinned without one; it is NOT
+// backfilled from the filename or the url here, because those live on the full
+// row and inventing a display name in the index would make the index look like
+// it carried more than it does. Deciding what to SHOW for a nameless artifact
+// is the renderer's job, on the full row it fetched.
+type taskArtifactRefDTO struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
+// taskArtifactListDTO is the answer of GET /api/tasks/{task_id}/artifacts: one
+// task's artifact set IN FULL, oldest→newest. It is a wrapped list rather than
+// a bare array so the response can say what it is — ArtifactsDetailLevel here
+// is "full", the counterpart of the "index" the task projection declares, the
+// same way taskStepDetailDTO answers "full" against taskDTO's "summary".
+type taskArtifactListDTO struct {
+	TaskID               string            `json:"task_id"`
+	ArtifactsDetailLevel string            `json:"artifacts_detail_level"`
+	Artifacts            []taskArtifactDTO `json:"artifacts"`
 }
 
 type taskDTO struct {
@@ -1712,6 +1764,18 @@ type taskDTO struct {
 	// stated in the tool description instead, where a caller can act on it.
 	DetailLevel   string `json:"detail_level"`
 	NotesIncluded bool   `json:"notes_included"`
+	// ArtifactsDetailLevel is the ARTIFACT half of the same self-description
+	// (T-66, owner c-cd063427fb2f). Always "index" on this type: the Artifacts
+	// rows below carry id + label and nothing else, and
+	// GET /api/tasks/{task_id}/artifacts (list_task_artifacts) answers "full".
+	//
+	// It is a NAME rather than an `artifacts_included: false` flag on purpose —
+	// see taskArtifactsDetailLevelIndex. And it is a separate field from
+	// DetailLevel rather than folded into it because the two abridgements are
+	// undone by two DIFFERENT calls: a caller reading "summary" is told to go to
+	// get_task_step, a caller reading "index" is told to go to
+	// list_task_artifacts, and one string cannot name both destinations.
+	ArtifactsDetailLevel string `json:"artifacts_detail_level"`
 	ProgressDone  int    `json:"progress_done"`
 	ProgressTotal int    `json:"progress_total"`
 	// CloseoutReported flips true once the executor reports the close-out
@@ -1719,8 +1783,16 @@ type taskDTO struct {
 	CloseoutReported bool `json:"closeout_reported"`
 	// Artifacts is the task's curated deliverable set (T-3dc5), oldest→newest;
 	// always present ([] when none). Optional in the spec (§12) but always
-	// serialised — the FE popover reads it, the light list reads only the count.
-	Artifacts []taskArtifactDTO `json:"artifacts"`
+	// serialised — the light list reads only the count.
+	//
+	// 🔴 SINCE T-66 THESE ARE INDEX ROWS (id + label), not the full artifact.
+	// Owner c-cd063427fb2f:「我覺得任務產物，只需要預設給標題跟ID, 有需要再透過
+	// 另一隻去拿就好了」. url / filename / mime / kind / is_image / attachment_id
+	// / created_by / created_ts are served by list_task_artifacts, one call per
+	// TASK (owner c-f2d0fecb1168) — never per artifact. ArtifactsDetailLevel
+	// above says so in the payload, so a caller does not have to know which
+	// fields a full row used to carry in order to notice the difference.
+	Artifacts []taskArtifactRefDTO `json:"artifacts"`
 	// Handoff / HandoffNote / HandoffTaskID: the DECLARED destination of the
 	// ball at close (T-74f8). "" = never declared (every task whose creator IS
 	// its executor, and every pre-column row); otherwise return_to_creator |
@@ -2219,15 +2291,23 @@ func newTaskDTO(t Task, steps []TaskStep, deps []string, cardStatus map[string]s
 		// deps, the create dedupe hit, description, title), so the declaration
 		// lands on all of them at once — which is the point of doing the
 		// slimming HERE rather than in each handler.
-		DetailLevel:      taskDetailLevelSummary,
-		NotesIncluded:    false,
-		ProgressDone:     done,
+		DetailLevel:   taskDetailLevelSummary,
+		NotesIncluded: false,
+		// T-66 / owner c-cd063427fb2f: the artifact rows are an INDEX on every
+		// one of those same nine responses. EXECUTOR JUDGEMENT, not an owner
+		// ruling: the owner said what the default payload should carry, not
+		// which layer should do the slimming. It is done HERE, on the shared
+		// builder, for the same reason the step note was — a per-handler
+		// projection is nine copies of one rule, and the copy nobody watches is
+		// the one that keeps serving the fat rows.
+		ArtifactsDetailLevel: taskArtifactsDetailLevelIndex,
+		ProgressDone:         done,
 		ProgressTotal:    total,
 		CloseoutReported: t.CloseoutTS > 0,
 		// Artifacts default to [] — the handler (taskDTOOf) folds the resolved
 		// set in after this pure projection, since resolving file/image blob
 		// metadata needs a DAL lookup that does not belong in a pure builder.
-		Artifacts: []taskArtifactDTO{},
+		Artifacts: []taskArtifactRefDTO{},
 		// Blocking defaults to [] for the same reason Artifacts does: resolving
 		// the reverse edge is a DAL read, and this builder is pure. taskDTOOf
 		// folds the real set in; a projection built without it (the create
@@ -2270,6 +2350,19 @@ func newTaskArtifactDTO(a TaskArtifact, att *ChatAttachment) taskArtifactDTO {
 		dto.IsImage = len(att.Mime) >= 6 && att.Mime[:6] == "image/"
 	}
 	return dto
+}
+
+// newTaskArtifactRefDTO projects one artifact row onto the INDEX wire (T-66):
+// the id and the label, and deliberately nothing that would need a second read.
+//
+// 🔴 IT TAKES NO ChatAttachment, and that is the point rather than an omission.
+// newTaskArtifactDTO above needs one lookup PER file/image artifact to resolve
+// mime/filename/is_image, so the shared task projection used to pay a
+// GetChatAttachment per pinned blob on all nine of its exits. The index needs
+// none of those fields, so the whole join leaves the task read; it is paid once,
+// on the artifacts call, by a caller that actually asked for the blob metadata.
+func newTaskArtifactRefDTO(a TaskArtifact) taskArtifactRefDTO {
+	return taskArtifactRefDTO{ID: a.ID, Label: a.Label}
 }
 
 // newTaskListItemDTO projects one task + its deps + pre-counted step progress

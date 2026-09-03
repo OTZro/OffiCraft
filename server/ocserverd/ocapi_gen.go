@@ -2762,11 +2762,26 @@ type TaskArtifactInputDTO struct {
 	Url          *string `json:"url,omitempty"`
 }
 
-// TaskArtifactReceiptDTO Bounded receipt returned after pinning or un-pinning ONE deliverable (T-a98d). It names the artifact the write touched and the resulting size of the set — the whole task used to ride back on a one-line pin, which no agent client could read. Fetch GET /api/tasks/{task_id} when full task detail (the artifact list included) is needed.
+// TaskArtifactListDTO One task's pinned deliverables IN FULL (T-66) — the answer of “GET /api/tasks/{task_id}/artifacts“ / MCP “list_task_artifacts“, and the counterpart of the “TaskArtifactRefDTO“ index a task response carries. “artifacts“ holds EVERY artifact on the task, oldest→newest, each a complete “TaskArtifactDTO“; an empty set is “[]“, never a 404. It is a wrapped list rather than a bare array so the response can say what it is: “artifacts_detail_level“ is “full“ here against the “index“ a task response declares — the same self-description “TaskStepDetailDTO“ carries as “detail_level“ = “full“ against “TaskDTO“'s “summary“.
+type TaskArtifactListDTO struct {
+	Artifacts *[]TaskArtifactDTO `json:"artifacts,omitempty"`
+
+	// ArtifactsDetailLevel What this response IS, said by the response itself (T-66): always ``full``. Every artifact row here is complete. A task response declares ``artifacts_detail_level`` = ``index`` instead, and its rows carry only ``id`` and ``label``.
+	ArtifactsDetailLevel *string `json:"artifacts_detail_level,omitempty"`
+	TaskId               string  `json:"task_id"`
+}
+
+// TaskArtifactReceiptDTO Bounded receipt returned after pinning or un-pinning ONE deliverable (T-a98d). It names the artifact the write touched and the resulting size of the set — the whole task used to ride back on a one-line pin, which no agent client could read. Fetch GET /api/tasks/{task_id} when full task detail is needed, and GET /api/tasks/{task_id}/artifacts (MCP “list_task_artifacts“) for the artifact set itself — since T-66 the task response carries only an id+label INDEX of the artifacts.
 type TaskArtifactReceiptDTO struct {
 	ArtifactCount int    `json:"artifact_count"`
 	ArtifactId    string `json:"artifact_id"`
 	TaskId        string `json:"task_id"`
+}
+
+// TaskArtifactRefDTO ONE pinned deliverable reduced to an INDEX ROW (T-66, owner c-cd063427fb2f): the “id“ — the handle every other artifact call takes — and the “label“, the deliverable's display title ("" when it was pinned without one; it is NOT backfilled from the filename or the url here, because inventing a display name in the index would make the index look like it carried more than it does). This is what a task response's “artifacts“ array holds. Everything else about the artifact — “kind“, “url“, “filename“, “mime“, “is_image“, “attachment_id“, “created_ts“, “created_by“ — lives on “TaskArtifactDTO“ and is fetched for the WHOLE task at once through “GET /api/tasks/{task_id}/artifacts“ (MCP “list_task_artifacts“). There is deliberately no per-artifact read: the cockpit's deliverables panel opens onto the whole set, so a per-artifact door would cost one call per row.
+type TaskArtifactRefDTO struct {
+	Id    string  `json:"id"`
+	Label *string `json:"label,omitempty"`
 }
 
 // TaskCloseoutReceiptDTO Bounded receipt returned after report_task_closeout (T-bb70). BOTH exits used to answer with the whole task — the first (stamping) report AND the idempotent no-op repeat — measured at over 51,000 characters for a write whose entire news is one bit, so re-reporting a close-out was the most expensive way in the system to be told nothing new. “closeout_ts“ rides along because the write DERIVES it (stamped by the first report, unmoved by every repeat), so it is the part the caller cannot predict — the same reason “frozen_by“ rides the priority receipt. Fetch GET /api/tasks/{task_id} when full task detail is needed.
@@ -2818,7 +2833,11 @@ type TaskCreateTargetDTO struct {
 
 // TaskDTO One task (M3 任務卡): a workflow with a Definition of Done, executed by a roster member or an anonymous outsource worker. “task_no“ IS the id itself, unchanged (T-5291) — there is no projection any more, so the number shown in the UI is byte-for-byte the “task_id“ you look the task up with. “status“ is DERIVED from the steps (not agent-reported): the work states not_started/in_progress/waiting_owner/waiting_external plus the terminals done/terminated/duplicated. “reassigning“ is NO LONGER a status — it is the orthogonal “lock“ field (the owner/admin handover hold, cleared by the claim action; see “POST /api/tasks/{task_id}/reassign“); “priority“ includes “frozen“ (pause-pushing — a priority, not a status). “executor_kind='outsource'“ with an empty “executor_id“ is the transient unassigned state. “closed_ts“ is null while open. “deps“ are the blocking task ids (display markers, never a status change); “progress_done“/“progress_total“ count step leaves (“superseded“ replan history counts toward neither side). “closeout_reported“ flips true once the executor reports the close-out follow-ups done (“report_task_closeout“; terminal tasks only). “creator_id“ is the verified token sub of the task's creator (a member id, an outsource worker id, or the literal "owner"); "" on rows created before the column existed. “duplicate_of“ is the id of the ORIGINAL task this one duplicates — non-empty ONLY while “status='duplicated'“ (MCP “mark_duplicate“); the graph is depth-1 by construction so the cockpit link always resolves in one hop.
 type TaskDTO struct {
-	Artifacts *[]TaskArtifactDTO `json:"artifacts,omitempty"`
+	// Artifacts The task's pinned deliverables as an INDEX (T-66, owner c-cd063427fb2f): each row is ``id`` + ``label`` and nothing else. The LIST is complete — every pinned deliverable has a row, so its length is the true count — but the ROWS are not: ``kind``, ``url``, ``filename``, ``mime``, ``is_image``, ``attachment_id``, ``created_ts`` and ``created_by`` are served by ``list_task_artifacts(task_id)``, which answers the whole ticket in one call. Read ``artifacts_detail_level`` (``index`` here) rather than inferring the abridgement from a missing field.
+	Artifacts *[]TaskArtifactRefDTO `json:"artifacts,omitempty"`
+
+	// ArtifactsDetailLevel What this response's ARTIFACT rows ARE, said by the response itself (T-66): always ``index``. Each entry of ``artifacts`` carries only ``id`` and ``label``; ``GET /api/tasks/{task_id}/artifacts`` (MCP ``list_task_artifacts``) answers ``full`` and carries every field. It is a separate field from ``detail_level`` because the two abridgements are undone by two different calls — ``detail_level`` = ``summary`` sends you to ``get_task_step``, ``artifacts_detail_level`` = ``index`` sends you to ``list_task_artifacts`` — and one string cannot name both.
+	ArtifactsDetailLevel *string `json:"artifacts_detail_level,omitempty"`
 
 	// Blocking THE REVERSE OF ``deps``: the NON-TERMINAL tasks that name THIS task in their own ``blocked_by`` — who is waiting on you (T-91). Never null ([] when nobody is). Until this field existed the blocking side was invisible: ``set_task_deps`` fans the delta to the BLOCKED task's audience only, so the executor of the ticket everyone is queued behind was told nothing, by any channel. The owner ruled that this stays WRITTEN ON THE TICKET and is never messaged, which is why there is no notification to match it — read it here and on the wake snapshot (``ResumeTaskDTO.blocking``, ids only). Each entry carries the waiting task's ``id``/``task_no``/``title``/``status``, resolved the same way ``dep_tasks`` resolves the forward direction. TERMINAL waiters are omitted: a closed ticket is not waiting for anything.
 	Blocking         *[]TaskDepRefDTO `json:"blocking,omitempty"`
@@ -4305,7 +4324,7 @@ type ServerInterface interface {
 	// Open task count (the tasks nav badge).
 	// (GET /api/tasks/count)
 	HandleTaskCountApiTasksCountGet(w http.ResponseWriter, r *http.Request)
-	// Read one task — and read it knowing it is a SUMMARY, not the whole of it: the response says so itself (“detail_level“ = “summary“, “notes_included“ = false). WHAT IS COMPLETE HERE: the task's own fields, its deps, its progress counts, its gate cards, and EVERY ONE of its steps. The step list has no cap, no paging and no truncation of any kind — the rows you get back are all the rows there are, so a step that is not here does not exist on this task. WHAT IS OMITTED, AND EXACTLY HOW MUCH OF IT: each step's working-note TEXT (T-66). In its place every step carries “note_size_chars“ — the EXACT number of characters of note sitting on the server for that step, where 0 means that step genuinely has no note — and “note_cap_chars“, the ceiling. A positive “note_size_chars“ is a precise promise that that many characters are waiting for you, and “get_task_step(task_id, step_id)“ is the one call that returns them, one step at a time. Read the sizes first, then fetch only the notes you actually need. Unknown id → 404.
+	// Read one task — and read it knowing it is a SUMMARY, not the whole of it: the response says so itself (“detail_level“ = “summary“, “notes_included“ = false). WHAT IS COMPLETE HERE: the task's own fields, its deps, its progress counts, its gate cards, and EVERY ONE of its steps. The step list has no cap, no paging and no truncation of any kind — the rows you get back are all the rows there are, so a step that is not here does not exist on this task. WHAT IS OMITTED, AND EXACTLY HOW MUCH OF IT: each step's working-note TEXT (T-66). In its place every step carries “note_size_chars“ — the EXACT number of characters of note sitting on the server for that step, where 0 means that step genuinely has no note — and “note_cap_chars“, the ceiling. A positive “note_size_chars“ is a precise promise that that many characters are waiting for you, and “get_task_step(task_id, step_id)“ is the one call that returns them, one step at a time. Read the sizes first, then fetch only the notes you actually need. ALSO OMITTED, AND EXACTLY WHAT IS LEFT IN ITS PLACE: the “artifacts“ rows are an INDEX of the task's pinned deliverables, not the deliverables (T-66). Every entry carries ONLY “id“ and “label“ — the deliverable's title, and the handle every other artifact call takes. Its “kind“, “url“, “filename“, “mime“, “is_image“, “attachment_id“, “created_ts“ and “created_by“ are NOT here: “list_task_artifacts(task_id)“ returns them, for EVERY artifact on the ticket, in ONE call — there is deliberately no per-artifact read. The response says which of the two it is: “artifacts_detail_level“ = “index“ here, “full“ there. The artifact LIST itself is not abridged — every pinned deliverable has a row here, so its length is the true count. Unknown id → 404.
 	// (GET /api/tasks/{task_id})
 	HandleGetTaskApiTasksTaskIdGet(w http.ResponseWriter, r *http.Request, taskId string)
 	// Correct THIS task's own TEXT — its title, its description, or both in one write (T-646a). Replaces `update_task_title` and `update_task_description`, which documented the same rules twice and could not be applied together: changing both meant two calls, two transactions and two SSE deltas, with room for someone else's write to land in between. WHO: the task's own executor, or an admin/owner; anyone else is a flat 403. Creating a task grants NO standing to keep rewriting it — if you handed the task over, it is the new executor's text now. ⚠️ ONE STRUCTURAL EXCEPTION (T-52, owner 2026-09-02): while the task has NO executor AT ALL (`executor_id` empty — where a 發包票 sits between create_task and the moment the scheduler binds a worker to it), its CREATOR may correct the text here, because otherwise nobody who is awake could fix the brief the contractor reads on arrival and that window has no upper bound. It SHUTS the instant an executor is bound — from then on the creator is a flat 403 again, even though it opened the ticket. TEXT ONLY: the same window opens add_task_artifact, remove_task_artifact, update_step_note, patch_step_note and the task_title / task_description restores, and nothing else — never freeze, terminate, reassign, claim, plan, step status, deps or closeout. PARTIAL: only the fields you NAME are touched, so omitting a field is a legal no-op for it that versions nothing and fans nothing. ⚠️ THE TWO FIELDS TREAT AN EXPLICIT BLANK DIFFERENTLY, and that is an owner ruling rather than an inconsistency (card rc-796541192519, 2026-08-11, option ①): a blank `title` ("" or whitespace-only) is REFUSED with 400 and does NOT clear the field, because create_task refuses a blank title too and an edit door looser than the create door would let a caller reach a task-list row with nothing in it; a blank `description` IS accepted and DOES clear the text, because plenty of cards legitimately have no prose. VALIDATION IS WHOLE-BODY AND HAPPENS FIRST: a request carrying a blank title alongside a perfectly good description writes NEITHER — a 400 leaves the task exactly as it was, never half-applied. Both values are trimmed of surrounding whitespace before they are stored AND before they are compared with what is there, so re-sending the same text with a stray trailing space is correctly seen as no change rather than spending one of the retained revisions saying nothing moved. ⚠️ THAT HOLDS ONLY WHILE THE STORED TEXT IS ALREADY TRIMMED. Whenever the stored description carries untrimmed whitespace, the next edit here normalises it and therefore DOES spend a revision — even when you re-send exactly what you read back. TWO things can put untrimmed text in that column, so this is not a one-time settling: create_task, which never trims the description (it does trim the title), and a RESTORE of a revision that holds untrimmed text, which is written back verbatim. Before this ticket both doors stored it raw and agreed; this tool trims and create still does not, which is a divergence awaiting a ruling rather than a promise about the system. The write is wholesale within each field: send the full corrected text, not a fragment. ⚠️ Division of labour with update_step_note: the DESCRIPTION says what this task IS (stable); the step NOTE says where a step is RIGHT NOW (volatile, handover-facing) — do not put progress here. A CLOSED task (completed / terminated / duplicated) is STILL editable, on the same terms — unlike its artifact set, which freezes at close: artifacts record what the task PRODUCED and must stop moving, while a ticket worded wrongly is usually found to be wrong after it closed, and freezing the text would preserve a known falsehood in the permanent record. Every change that actually alters a field retains the previous value as a document version — kind `task_title` / `task_description`, key = the task id — so a correction is recoverable through list_document_history and the older wording is never simply gone.
@@ -4317,6 +4336,9 @@ type ServerInterface interface {
 	// Un-pin (remove) one artifact from a task's artifact set — the counterpart to add_task_artifact. You may remove artifacts from a task you are the executor of (the owner/assistant may remove on any task). Give the task id and the artifact id (the id returned when it was added, or from get_task's artifacts). The underlying file blob is left intact; only the pin on the card is removed. ONLY WHILE THE TASK IS STILL OPEN: once a task closes (done / terminated / duplicated) its deliverable set is frozen in both directions — remove is refused with the same 409 as add. So swap a deliverable BEFORE you close the task, not after; after the close it can neither be removed nor put back. Answers with a bounded receipt (task_id, artifact_id, artifact_count), not the whole task.
 	// (DELETE /api/tasks/{task_id}/artifact/{artifact_id})
 	HandleRemoveTaskArtifactApiTasksTaskIdArtifactArtifactIdDelete(w http.ResponseWriter, r *http.Request, taskId string, artifactId string)
+	// Read one task's pinned deliverables IN FULL — the companion read to “get_task“, whose “artifacts“ rows carry only “id“ and “label“. Answers “{task_id, artifacts_detail_level, artifacts}“ where “artifacts_detail_level“ is “full“ (against the task view's “index“) and every artifact on the task is present, oldest→newest, complete: “kind“ (file|image|link), “url“ (the blob serve path for a file/image, the external link for a link), “label“, “filename“, “mime“, “is_image“, “attachment_id“, “created_ts“ and “created_by“. ONE call answers the WHOLE ticket, and that is deliberate — there is no per-artifact read, because whoever opens a task's deliverables wants the set (a 32-artifact ticket would otherwise cost 32 calls), whereas a step note is read one at a time and “get_task_step“ is per-step for exactly that reason. File/image metadata is resolved read-time and is honest-empty when the underlying blob is gone — never fabricated. A task with nothing pinned answers “artifacts: []“, not a 404; an unknown task id is a 404. Same read floor as “get_task“: any authenticated principal may read any task's artifacts, and no field here was behind a stricter door before.
+	// (GET /api/tasks/{task_id}/artifacts)
+	HandleListTaskArtifactsApiTasksTaskIdArtifactsGet(w http.ResponseWriter, r *http.Request, taskId string)
 	// Take over a reassigned task (the new executor claims it): clears the reassigning lock and fires the predecessor worker. The task status stays derived from its steps; only the lock is cleared. 409 if the task is not under the reassigning lock.
 	// (POST /api/tasks/{task_id}/claim)
 	HandleClaimTaskApiTasksTaskIdClaimPost(w http.ResponseWriter, r *http.Request, taskId string)
@@ -7895,6 +7917,32 @@ func (siw *ServerInterfaceWrapper) HandleRemoveTaskArtifactApiTasksTaskIdArtifac
 	handler.ServeHTTP(w, r)
 }
 
+// HandleListTaskArtifactsApiTasksTaskIdArtifactsGet operation middleware
+func (siw *ServerInterfaceWrapper) HandleListTaskArtifactsApiTasksTaskIdArtifactsGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "task_id" -------------
+	var taskId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "task_id", r.PathValue("task_id"), &taskId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "task_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleListTaskArtifactsApiTasksTaskIdArtifactsGet(w, r, taskId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // HandleClaimTaskApiTasksTaskIdClaimPost operation middleware
 func (siw *ServerInterfaceWrapper) HandleClaimTaskApiTasksTaskIdClaimPost(w http.ResponseWriter, r *http.Request) {
 
@@ -8844,6 +8892,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}", wrapper.HandleUpdateTaskApiTasksTaskIdPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/artifact", wrapper.HandleAddTaskArtifactApiTasksTaskIdArtifactPost)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/tasks/{task_id}/artifact/{artifact_id}", wrapper.HandleRemoveTaskArtifactApiTasksTaskIdArtifactArtifactIdDelete)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/tasks/{task_id}/artifacts", wrapper.HandleListTaskArtifactsApiTasksTaskIdArtifactsGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/claim", wrapper.HandleClaimTaskApiTasksTaskIdClaimPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/closeout", wrapper.HandleReportTaskCloseoutApiTasksTaskIdCloseoutPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/deps", wrapper.HandleSetTaskDepsApiTasksTaskIdDepsPost)

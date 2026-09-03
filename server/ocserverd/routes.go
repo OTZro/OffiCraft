@@ -1539,7 +1539,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleGetTaskApiTasksTaskIdGet,
 			Auth:     authGated,
 			Requires: principalMachine,
-			Summary:  "Read one task — and read it knowing it is a SUMMARY, not the whole of it: the response says so itself (``detail_level`` = ``summary``, ``notes_included`` = false). WHAT IS COMPLETE HERE: the task's own fields, its deps, its progress counts, its gate cards, and EVERY ONE of its steps. The step list has no cap, no paging and no truncation of any kind — the rows you get back are all the rows there are, so a step that is not here does not exist on this task. WHAT IS OMITTED, AND EXACTLY HOW MUCH OF IT: each step's working-note TEXT (T-66). In its place every step carries ``note_size_chars`` — the EXACT number of characters of note sitting on the server for that step, where 0 means that step genuinely has no note — and ``note_cap_chars``, the ceiling. A positive ``note_size_chars`` is a precise promise that that many characters are waiting for you, and ``get_task_step(task_id, step_id)`` is the one call that returns them, one step at a time. Read the sizes first, then fetch only the notes you actually need. Unknown id → 404.",
+			Summary:  "Read one task — and read it knowing it is a SUMMARY, not the whole of it: the response says so itself (``detail_level`` = ``summary``, ``notes_included`` = false). WHAT IS COMPLETE HERE: the task's own fields, its deps, its progress counts, its gate cards, and EVERY ONE of its steps. The step list has no cap, no paging and no truncation of any kind — the rows you get back are all the rows there are, so a step that is not here does not exist on this task. WHAT IS OMITTED, AND EXACTLY HOW MUCH OF IT: each step's working-note TEXT (T-66). In its place every step carries ``note_size_chars`` — the EXACT number of characters of note sitting on the server for that step, where 0 means that step genuinely has no note — and ``note_cap_chars``, the ceiling. A positive ``note_size_chars`` is a precise promise that that many characters are waiting for you, and ``get_task_step(task_id, step_id)`` is the one call that returns them, one step at a time. Read the sizes first, then fetch only the notes you actually need. ALSO OMITTED, AND EXACTLY WHAT IS LEFT IN ITS PLACE: the ``artifacts`` rows are an INDEX of the task's pinned deliverables, not the deliverables (T-66). Every entry carries ONLY ``id`` and ``label`` — the deliverable's title, and the handle every other artifact call takes. Its ``kind``, ``url``, ``filename``, ``mime``, ``is_image``, ``attachment_id``, ``created_ts`` and ``created_by`` are NOT here: ``list_task_artifacts(task_id)`` returns them, for EVERY artifact on the ticket, in ONE call — there is deliberately no per-artifact read. The response says which of the two it is: ``artifacts_detail_level`` = ``index`` here, ``full`` there. The artifact LIST itself is not abridged — every pinned deliverable has a row here, so its length is the true count. Unknown id → 404.",
 			MCPTool:  "get_task",
 		},
 		{
@@ -1779,6 +1779,26 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Requires: principalAgent,
 			Summary:  "Un-pin (remove) one artifact from a task's artifact set — the counterpart to add_task_artifact. You may remove artifacts from a task you are the executor of (the owner/assistant may remove on any task). Give the task id and the artifact id (the id returned when it was added, or from get_task's artifacts). The underlying file blob is left intact; only the pin on the card is removed. ONLY WHILE THE TASK IS STILL OPEN: once a task closes (done / terminated / duplicated) its deliverable set is frozen in both directions — remove is refused with the same 409 as add. So swap a deliverable BEFORE you close the task, not after; after the close it can neither be removed nor put back. Answers with a bounded receipt (task_id, artifact_id, artifact_count), not the whole task.",
 			MCPTool:  "remove_task_artifact",
+		},
+		{
+			// T-66 (owner c-cd063427fb2f / c-f2d0fecb1168): the full-artifact read
+			// the shared task projection stopped carrying. It sits here, directly
+			// after the two artifact WRITES, because x-mcp.order must be the
+			// consecutive range and conformance asserts this table agrees with it —
+			// moving this row moves list_task_artifacts in tools/list.
+			//
+			// principalMachine, NOT principalAgent: this is a READ carrying the same
+			// floor GET /api/tasks/{task_id} carries, and every field it serves rode
+			// that response until this ticket. A stricter floor here would close
+			// nothing and would only make the artifacts unreachable through the tool
+			// that exists to serve them.
+			Method:   "GET",
+			Path:     "/api/tasks/{task_id}/artifacts",
+			Handler:  w.HandleListTaskArtifactsApiTasksTaskIdArtifactsGet,
+			Auth:     authGated,
+			Requires: principalMachine,
+			Summary:  "Read one task's pinned deliverables IN FULL — the companion read to ``get_task``, whose ``artifacts`` rows carry only ``id`` and ``label``. Answers ``{task_id, artifacts_detail_level, artifacts}`` where ``artifacts_detail_level`` is ``full`` (against the task view's ``index``) and every artifact on the task is present, oldest→newest, complete: ``kind`` (file|image|link), ``url`` (the blob serve path for a file/image, the external link for a link), ``label``, ``filename``, ``mime``, ``is_image``, ``attachment_id``, ``created_ts`` and ``created_by``. ONE call answers the WHOLE ticket, and that is deliberate — there is no per-artifact read, because whoever opens a task's deliverables wants the set (a 32-artifact ticket would otherwise cost 32 calls), whereas a step note is read one at a time and ``get_task_step`` is per-step for exactly that reason. File/image metadata is resolved read-time and is honest-empty when the underlying blob is gone — never fabricated. A task with nothing pinned answers ``artifacts: []``, not a 404; an unknown task id is a 404. Same read floor as ``get_task``: any authenticated principal may read any task's artifacts, and no field here was behind a stricter door before.",
+			MCPTool:  "list_task_artifacts",
 		},
 		// T-4595: GET /api/self/task (get_my_task) is RETIRED — see the note in
 		// api_tasks.go. A worker reads its task through get_task like everyone

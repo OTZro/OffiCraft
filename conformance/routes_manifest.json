@@ -932,6 +932,13 @@
   },
   {
     "auth": "gated",
+    "mcp_tool": "list_task_artifacts",
+    "method": "GET",
+    "path": "/api/tasks/{task_id}/artifacts",
+    "requires": "machine"
+  },
+  {
+    "auth": "gated",
     "mcp_tool": "list_outsource_workers",
     "method": "GET",
     "path": "/api/outsource-workers",

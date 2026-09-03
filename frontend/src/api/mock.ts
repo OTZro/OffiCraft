@@ -73,6 +73,7 @@ import type {
   TaskTypeView,
   TaskCountView,
   TaskStepDetailView,
+  TaskArtifactView,
   TaskManualSummaryView,
   TaskManualView,
   TaskManualPatch,
@@ -3586,7 +3587,8 @@ export const mockApi: Api = {
         ...st,
         replyCardStatus: mockReplyCardStatusOf(st.replyCardId || null),
       })),
-      // Full task carries the resolved set; count kept == length (server parity).
+      // Full task carries the artifact INDEX (T-66: id + label per deliverable);
+      // count kept == length (server parity). The full rows are listTaskArtifacts.
       artifacts: task.artifacts ?? [],
       artifactCount: (task.artifacts ?? []).length,
     };
@@ -3624,6 +3626,23 @@ export const mockApi: Api = {
       noteSizeChars: 0,
       noteCapChars: 4000,
     };
+  },
+
+  async listTaskArtifacts(taskId: string): Promise<TaskArtifactView[]> {
+    // Mirrors GET /api/tasks/{task_id}/artifacts (T-66): the WHOLE ticket's
+    // deliverables, each in full, in one call.
+    //
+    // 🔴 The mock task fixtures have never carried artifacts (nothing in mock
+    // mode pins one — there is no addTaskArtifact here), so every task answers
+    // an EMPTY set. That is the honest projection of the fixtures, not a stub:
+    // a mock that invented deliverables would make the fetch-on-open path look
+    // exercised when the fixtures say there is nothing to open, and would make
+    // mock mode the only place the panel ever has rows.
+    //
+    // `findTask` still runs, so an unknown task id is a not-found here exactly
+    // as it is against a real server — never a silent [].
+    findTask(taskId);
+    return [];
   },
 
   async getTaskCount(): Promise<TaskCountView> {

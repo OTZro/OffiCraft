@@ -3661,8 +3661,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Read one task — and read it knowing it is a SUMMARY, not the whole of it: the response says so itself (``detail_level`` = ``summary``, ``notes_included`` = false). WHAT IS COMPLETE HERE: the task's own fields, its deps, its progress counts, its gate cards, and EVERY ONE of its steps. The step list has no cap, no paging and no truncation of any kind — the rows you get back are all the rows there are, so a step that is not here does not exist on this task. WHAT IS OMITTED, AND EXACTLY HOW MUCH OF IT: each step's working-note TEXT (T-66). In its place every step carries ``note_size_chars`` — the EXACT number of characters of note sitting on the server for that step, where 0 means that step genuinely has no note — and ``note_cap_chars``, the ceiling. A positive ``note_size_chars`` is a precise promise that that many characters are waiting for you, and ``get_task_step(task_id, step_id)`` is the one call that returns them, one step at a time. Read the sizes first, then fetch only the notes you actually need. Unknown id → 404.
-         * @description Read one task — and read it knowing it is a SUMMARY, not the whole of it: the response says so itself (``detail_level`` = ``summary``, ``notes_included`` = false). WHAT IS COMPLETE HERE: the task's own fields, its deps, its progress counts, its gate cards, and EVERY ONE of its steps. The step list has no cap, no paging and no truncation of any kind — the rows you get back are all the rows there are, so a step that is not here does not exist on this task. WHAT IS OMITTED, AND EXACTLY HOW MUCH OF IT: each step's working-note TEXT (T-66). In its place every step carries ``note_size_chars`` — the EXACT number of characters of note sitting on the server for that step, where 0 means that step genuinely has no note — and ``note_cap_chars``, the ceiling. A positive ``note_size_chars`` is a precise promise that that many characters are waiting for you, and ``get_task_step(task_id, step_id)`` is the one call that returns them, one step at a time. Read the sizes first, then fetch only the notes you actually need. Unknown id → 404.
+         * Read one task — and read it knowing it is a SUMMARY, not the whole of it: the response says so itself (``detail_level`` = ``summary``, ``notes_included`` = false). WHAT IS COMPLETE HERE: the task's own fields, its deps, its progress counts, its gate cards, and EVERY ONE of its steps. The step list has no cap, no paging and no truncation of any kind — the rows you get back are all the rows there are, so a step that is not here does not exist on this task. WHAT IS OMITTED, AND EXACTLY HOW MUCH OF IT: each step's working-note TEXT (T-66). In its place every step carries ``note_size_chars`` — the EXACT number of characters of note sitting on the server for that step, where 0 means that step genuinely has no note — and ``note_cap_chars``, the ceiling. A positive ``note_size_chars`` is a precise promise that that many characters are waiting for you, and ``get_task_step(task_id, step_id)`` is the one call that returns them, one step at a time. Read the sizes first, then fetch only the notes you actually need. ALSO OMITTED, AND EXACTLY WHAT IS LEFT IN ITS PLACE: the ``artifacts`` rows are an INDEX of the task's pinned deliverables, not the deliverables (T-66). Every entry carries ONLY ``id`` and ``label`` — the deliverable's title, and the handle every other artifact call takes. Its ``kind``, ``url``, ``filename``, ``mime``, ``is_image``, ``attachment_id``, ``created_ts`` and ``created_by`` are NOT here: ``list_task_artifacts(task_id)`` returns them, for EVERY artifact on the ticket, in ONE call — there is deliberately no per-artifact read. The response says which of the two it is: ``artifacts_detail_level`` = ``index`` here, ``full`` there. The artifact LIST itself is not abridged — every pinned deliverable has a row here, so its length is the true count. Unknown id → 404.
+         * @description Read one task — and read it knowing it is a SUMMARY, not the whole of it: the response says so itself (``detail_level`` = ``summary``, ``notes_included`` = false). WHAT IS COMPLETE HERE: the task's own fields, its deps, its progress counts, its gate cards, and EVERY ONE of its steps. The step list has no cap, no paging and no truncation of any kind — the rows you get back are all the rows there are, so a step that is not here does not exist on this task. WHAT IS OMITTED, AND EXACTLY HOW MUCH OF IT: each step's working-note TEXT (T-66). In its place every step carries ``note_size_chars`` — the EXACT number of characters of note sitting on the server for that step, where 0 means that step genuinely has no note — and ``note_cap_chars``, the ceiling. A positive ``note_size_chars`` is a precise promise that that many characters are waiting for you, and ``get_task_step(task_id, step_id)`` is the one call that returns them, one step at a time. Read the sizes first, then fetch only the notes you actually need. ALSO OMITTED, AND EXACTLY WHAT IS LEFT IN ITS PLACE: the ``artifacts`` rows are an INDEX of the task's pinned deliverables, not the deliverables (T-66). Every entry carries ONLY ``id`` and ``label`` — the deliverable's title, and the handle every other artifact call takes. Its ``kind``, ``url``, ``filename``, ``mime``, ``is_image``, ``attachment_id``, ``created_ts`` and ``created_by`` are NOT here: ``list_task_artifacts(task_id)`` returns them, for EVERY artifact on the ticket, in ONE call — there is deliberately no per-artifact read. The response says which of the two it is: ``artifacts_detail_level`` = ``index`` here, ``full`` there. The artifact LIST itself is not abridged — every pinned deliverable has a row here, so its length is the true count. Unknown id → 404.
          */
         get: operations["handle_get_task_api_tasks__task_id__get"];
         put?: never;
@@ -3688,7 +3688,7 @@ export interface paths {
         put?: never;
         /**
          * Register a deliverable (file, image, or link) onto the task's artifact set — the pinned deliverables shown on the task card. Append-only and repeatable: call it again to pin more. For a file or image, first upload the bytes via the chat-attachments upload to get an attachment id, then call this with kind=file|image and that attachment_id. For a link (e.g. a PR url) call it with kind=link and url — no upload needed. label is an optional display name (a link title such as "PR #123"), capped at 128 characters — Unicode runes, so 128 CJK characters fit; a longer label is refused with a 400, never truncated. Answers with a bounded receipt (task_id, artifact_id, artifact_count), not the whole task.
-         * @description Register a deliverable onto the task's artifact set (MCP ``add_task_artifact``; requires the executing agent — caller must be the task's executor, admin capability excepted). Append-only and repeatable: each call pins one more artifact. FILE/IMAGE artifacts reference a chat_attachment blob already uploaded via ``POST /api/chat/attachments`` (``kind=file|image`` + ``attachment_id``); LINK artifacts carry a bare URL (``kind=link`` + ``url``), no upload needed. Returns a BOUNDED receipt (``TaskArtifactReceiptDTO``: the new artifact's id plus the resulting count) — not the task, which used to ride back whole on a one-line pin; pull GET /api/tasks/{task_id} for the artifact list. Guards: 404 unknown task; 409 terminal task (a closed task's deliverables are frozen); 400 an invalid kind, a missing/blank ``attachment_id`` for file/image, a missing/blank ``url`` for link, or an ``attachment_id`` that resolves to no stored blob.
+         * @description Register a deliverable onto the task's artifact set (MCP ``add_task_artifact``; requires the executing agent — caller must be the task's executor, admin capability excepted). Append-only and repeatable: each call pins one more artifact. FILE/IMAGE artifacts reference a chat_attachment blob already uploaded via ``POST /api/chat/attachments`` (``kind=file|image`` + ``attachment_id``); LINK artifacts carry a bare URL (``kind=link`` + ``url``), no upload needed. Returns a BOUNDED receipt (``TaskArtifactReceiptDTO``: the new artifact's id plus the resulting count) — not the task, which used to ride back whole on a one-line pin; pull GET /api/tasks/{task_id}/artifacts (MCP ``list_task_artifacts``) for the artifact list — since T-66 GET /api/tasks/{task_id} carries only an id+label INDEX of it. Guards: 404 unknown task; 409 terminal task (a closed task's deliverables are frozen); 400 an invalid kind, a missing/blank ``attachment_id`` for file/image, a missing/blank ``url`` for link, or an ``attachment_id`` that resolves to no stored blob.
          */
         post: operations["handle_add_task_artifact_api_tasks__task_id__artifact_post"];
         delete?: never;
@@ -3709,9 +3709,29 @@ export interface paths {
         post?: never;
         /**
          * Un-pin (remove) one artifact from a task's artifact set — the counterpart to add_task_artifact. You may remove artifacts from a task you are the executor of (the owner/assistant may remove on any task). Give the task id and the artifact id (the id returned when it was added, or from get_task's artifacts). The underlying file blob is left intact; only the pin on the card is removed. ONLY WHILE THE TASK IS STILL OPEN: once a task closes (done / terminated / duplicated) its deliverable set is frozen in both directions — remove is refused with the same 409 as add. So swap a deliverable BEFORE you close the task, not after; after the close it can neither be removed nor put back. Answers with a bounded receipt (task_id, artifact_id, artifact_count), not the whole task.
-         * @description Un-pin one artifact from a task's set (MCP ``remove_task_artifact``). SAME permission model as add (owner ruling 2026-07-18 — the executing agent removes its OWN task's deliverables): requires the executing agent — caller must be the task's executor, admin capability (owner/admin agent) excepted. Returns a BOUNDED receipt (``TaskArtifactReceiptDTO``: the removed artifact's id plus the resulting count) — not the task; pull GET /api/tasks/{task_id} for the artifact list. The referenced chat_attachment blob is left intact (it may be shared with a chat message). SYMMETRIC with add (owner ruling 2026-07-25): a closed task's deliverable set is frozen in BOTH directions — an add-only freeze made un-pin an unrecoverable loss, since the deliverable could be taken off a closed card and never put back. Like add's, the freeze sits AFTER the permission check, so admin/owner are not exempt. Guards: 404 unknown task → 403 not the executor → 409 terminal task (a closed task's deliverables are frozen) → 404 unknown artifact → 400 the artifact belongs to a different task.
+         * @description Un-pin one artifact from a task's set (MCP ``remove_task_artifact``). SAME permission model as add (owner ruling 2026-07-18 — the executing agent removes its OWN task's deliverables): requires the executing agent — caller must be the task's executor, admin capability (owner/admin agent) excepted. Returns a BOUNDED receipt (``TaskArtifactReceiptDTO``: the removed artifact's id plus the resulting count) — not the task; pull GET /api/tasks/{task_id}/artifacts (MCP ``list_task_artifacts``) for the artifact list — since T-66 GET /api/tasks/{task_id} carries only an id+label INDEX of it. The referenced chat_attachment blob is left intact (it may be shared with a chat message). SYMMETRIC with add (owner ruling 2026-07-25): a closed task's deliverable set is frozen in BOTH directions — an add-only freeze made un-pin an unrecoverable loss, since the deliverable could be taken off a closed card and never put back. Like add's, the freeze sits AFTER the permission check, so admin/owner are not exempt. Guards: 404 unknown task → 403 not the executor → 409 terminal task (a closed task's deliverables are frozen) → 404 unknown artifact → 400 the artifact belongs to a different task.
          */
         delete: operations["handle_remove_task_artifact_api_tasks__task_id__artifact__artifact_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/{task_id}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one task's pinned deliverables IN FULL — the companion read to ``get_task``, whose ``artifacts`` rows carry only ``id`` and ``label``. Answers ``{task_id, artifacts_detail_level, artifacts}`` where ``artifacts_detail_level`` is ``full`` (against the task view's ``index``) and every artifact on the task is present, oldest→newest, complete: ``kind`` (file|image|link), ``url`` (the blob serve path for a file/image, the external link for a link), ``label``, ``filename``, ``mime``, ``is_image``, ``attachment_id``, ``created_ts`` and ``created_by``. ONE call answers the WHOLE ticket, and that is deliberate — there is no per-artifact read, because whoever opens a task's deliverables wants the set (a 32-artifact ticket would otherwise cost 32 calls), whereas a step note is read one at a time and ``get_task_step`` is per-step for exactly that reason. File/image metadata is resolved read-time and is honest-empty when the underlying blob is gone — never fabricated. A task with nothing pinned answers ``artifacts: []``, not a 404; an unknown task id is a 404. Same read floor as ``get_task``: any authenticated principal may read any task's artifacts, and no field here was behind a stricter door before.
+         * @description Read one task's pinned deliverables IN FULL — the companion read to ``get_task``, whose ``artifacts`` rows carry only ``id`` and ``label``. Answers ``{task_id, artifacts_detail_level, artifacts}`` where ``artifacts_detail_level`` is ``full`` (against the task view's ``index``) and every artifact on the task is present, oldest→newest, complete: ``kind`` (file|image|link), ``url`` (the blob serve path for a file/image, the external link for a link), ``label``, ``filename``, ``mime``, ``is_image``, ``attachment_id``, ``created_ts`` and ``created_by``. ONE call answers the WHOLE ticket, and that is deliberate — there is no per-artifact read, because whoever opens a task's deliverables wants the set (a 32-artifact ticket would otherwise cost 32 calls), whereas a step note is read one at a time and ``get_task_step`` is per-step for exactly that reason. File/image metadata is resolved read-time and is honest-empty when the underlying blob is gone — never fabricated. A task with nothing pinned answers ``artifacts: []``, not a 404; an unknown task id is a 404. Same read floor as ``get_task``: any authenticated principal may read any task's artifacts, and no field here was behind a stricter door before.
+         */
+        get: operations["handle_list_task_artifacts_api_tasks__task_id__artifacts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -8586,8 +8606,37 @@ export interface components {
             url: string;
         };
         /**
+         * TaskArtifactRefDTO
+         * @description ONE pinned deliverable reduced to an INDEX ROW (T-66, owner c-cd063427fb2f): the ``id`` — the handle every other artifact call takes — and the ``label``, the deliverable's display title ("" when it was pinned without one; it is NOT backfilled from the filename or the url here, because inventing a display name in the index would make the index look like it carried more than it does). This is what a task response's ``artifacts`` array holds. Everything else about the artifact — ``kind``, ``url``, ``filename``, ``mime``, ``is_image``, ``attachment_id``, ``created_ts``, ``created_by`` — lives on ``TaskArtifactDTO`` and is fetched for the WHOLE task at once through ``GET /api/tasks/{task_id}/artifacts`` (MCP ``list_task_artifacts``). There is deliberately no per-artifact read: the cockpit's deliverables panel opens onto the whole set, so a per-artifact door would cost one call per row.
+         */
+        TaskArtifactRefDTO: {
+            /** Id */
+            id: string;
+            /**
+             * Label
+             * @default
+             */
+            label: string;
+        };
+        /**
+         * TaskArtifactListDTO
+         * @description One task's pinned deliverables IN FULL (T-66) — the answer of ``GET /api/tasks/{task_id}/artifacts`` / MCP ``list_task_artifacts``, and the counterpart of the ``TaskArtifactRefDTO`` index a task response carries. ``artifacts`` holds EVERY artifact on the task, oldest→newest, each a complete ``TaskArtifactDTO``; an empty set is ``[]``, never a 404. It is a wrapped list rather than a bare array so the response can say what it is: ``artifacts_detail_level`` is ``full`` here against the ``index`` a task response declares — the same self-description ``TaskStepDetailDTO`` carries as ``detail_level`` = ``full`` against ``TaskDTO``'s ``summary``.
+         */
+        TaskArtifactListDTO: {
+            /** Artifacts */
+            artifacts?: components["schemas"]["TaskArtifactDTO"][];
+            /**
+             * Artifacts Detail Level
+             * @description What this response IS, said by the response itself (T-66): always ``full``. Every artifact row here is complete. A task response declares ``artifacts_detail_level`` = ``index`` instead, and its rows carry only ``id`` and ``label``.
+             * @default full
+             */
+            artifacts_detail_level: string;
+            /** Task Id */
+            task_id: string;
+        };
+        /**
          * TaskArtifactReceiptDTO
-         * @description Bounded receipt returned after pinning or un-pinning ONE deliverable (T-a98d). It names the artifact the write touched and the resulting size of the set — the whole task used to ride back on a one-line pin, which no agent client could read. Fetch GET /api/tasks/{task_id} when full task detail (the artifact list included) is needed.
+         * @description Bounded receipt returned after pinning or un-pinning ONE deliverable (T-a98d). It names the artifact the write touched and the resulting size of the set — the whole task used to ride back on a one-line pin, which no agent client could read. Fetch GET /api/tasks/{task_id} when full task detail is needed, and GET /api/tasks/{task_id}/artifacts (MCP ``list_task_artifacts``) for the artifact set itself — since T-66 the task response carries only an id+label INDEX of the artifacts.
          */
         TaskArtifactReceiptDTO: {
             /** Artifact Count */
@@ -8740,8 +8789,17 @@ export interface components {
          * @description One task (M3 任務卡): a workflow with a Definition of Done, executed by a roster member or an anonymous outsource worker. ``task_no`` IS the id itself, unchanged (T-5291) — there is no projection any more, so the number shown in the UI is byte-for-byte the ``task_id`` you look the task up with. ``status`` is DERIVED from the steps (not agent-reported): the work states not_started/in_progress/waiting_owner/waiting_external plus the terminals done/terminated/duplicated. ``reassigning`` is NO LONGER a status — it is the orthogonal ``lock`` field (the owner/admin handover hold, cleared by the claim action; see ``POST /api/tasks/{task_id}/reassign``); ``priority`` includes ``frozen`` (pause-pushing — a priority, not a status). ``executor_kind='outsource'`` with an empty ``executor_id`` is the transient unassigned state. ``closed_ts`` is null while open. ``deps`` are the blocking task ids (display markers, never a status change); ``progress_done``/``progress_total`` count step leaves (``superseded`` replan history counts toward neither side). ``closeout_reported`` flips true once the executor reports the close-out follow-ups done (``report_task_closeout``; terminal tasks only). ``creator_id`` is the verified token sub of the task's creator (a member id, an outsource worker id, or the literal "owner"); "" on rows created before the column existed. ``duplicate_of`` is the id of the ORIGINAL task this one duplicates — non-empty ONLY while ``status='duplicated'`` (MCP ``mark_duplicate``); the graph is depth-1 by construction so the cockpit link always resolves in one hop.
          */
         TaskDTO: {
-            /** Artifacts */
-            artifacts?: components["schemas"]["TaskArtifactDTO"][];
+            /**
+             * Artifacts
+             * @description The task's pinned deliverables as an INDEX (T-66, owner c-cd063427fb2f): each row is ``id`` + ``label`` and nothing else. The LIST is complete — every pinned deliverable has a row, so its length is the true count — but the ROWS are not: ``kind``, ``url``, ``filename``, ``mime``, ``is_image``, ``attachment_id``, ``created_ts`` and ``created_by`` are served by ``list_task_artifacts(task_id)``, which answers the whole ticket in one call. Read ``artifacts_detail_level`` (``index`` here) rather than inferring the abridgement from a missing field.
+             */
+            artifacts?: components["schemas"]["TaskArtifactRefDTO"][];
+            /**
+             * Artifacts Detail Level
+             * @description What this response's ARTIFACT rows ARE, said by the response itself (T-66): always ``index``. Each entry of ``artifacts`` carries only ``id`` and ``label``; ``GET /api/tasks/{task_id}/artifacts`` (MCP ``list_task_artifacts``) answers ``full`` and carries every field. It is a separate field from ``detail_level`` because the two abridgements are undone by two different calls — ``detail_level`` = ``summary`` sends you to ``get_task_step``, ``artifacts_detail_level`` = ``index`` sends you to ``list_task_artifacts`` — and one string cannot name both.
+             * @default index
+             */
+            artifacts_detail_level: string;
             /**
              * Blocking
              * @description THE REVERSE OF ``deps``: the NON-TERMINAL tasks that name THIS task in their own ``blocked_by`` — who is waiting on you (T-91). Never null ([] when nobody is). Until this field existed the blocking side was invisible: ``set_task_deps`` fans the delta to the BLOCKED task's audience only, so the executor of the ticket everyone is queued behind was told nothing, by any channel. The owner ruled that this stays WRITTEN ON THE TICKET and is never messaged, which is why there is no notification to match it — read it here and on the wake snapshot (``ResumeTaskDTO.blocking``, ids only). Each entry carries the waiting task's ``id``/``task_no``/``title``/``status``, resolved the same way ``dep_tasks`` resolves the forward direction. TERMINAL waiters are omitted: a closed ticket is not waiting for anything.
@@ -17356,6 +17414,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TaskArtifactReceiptDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_list_task_artifacts_api_tasks__task_id__artifacts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskArtifactListDTO"];
                 };
             };
             /** @description Validation error (unified error envelope). */

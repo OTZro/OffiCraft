@@ -85,6 +85,7 @@ import type {
   TaskTypeView,
   TaskCountView,
   TaskStepDetailView,
+  TaskArtifactView,
   TaskManualSummaryView,
   TaskManualView,
   TaskManualPatch,
@@ -137,6 +138,7 @@ import {
   toTask,
   toTaskListItem,
   toTaskStepDetail,
+  toTaskArtifact,
   toOutsourceWorker,
   toTaskType,
   toTaskManual,
@@ -1670,6 +1672,20 @@ export const httpApi: Api = {
       }),
     );
     return toTaskStepDetail(wire);
+  },
+
+  async listTaskArtifacts(taskId: string): Promise<TaskArtifactView[]> {
+    // GET /api/tasks/{task_id}/artifacts -> TaskArtifactListDTO (T-66). The ONE
+    // read that carries an artifact's url/filename/mime/kind/is_image: getTask
+    // carries an id+label INDEX and stopped carrying the rest, so anything that
+    // DRAWS an artifact opens this. One call answers the whole ticket; an
+    // unknown task 404s through the client middleware as an ApiError.
+    const wire = unwrap(
+      await client.GET("/api/tasks/{task_id}/artifacts", {
+        params: { path: { task_id: taskId } },
+      }),
+    );
+    return (wire.artifacts ?? []).map(toTaskArtifact);
   },
 
   async getTaskCount(): Promise<TaskCountView> {

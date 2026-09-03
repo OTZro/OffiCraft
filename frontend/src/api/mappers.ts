@@ -90,6 +90,7 @@ import type {
   WireTaskStep,
   WireTaskStepDetail,
   WireTaskArtifact,
+  WireTaskArtifactRef,
   WireOutsourceWorker,
   WireTaskManual,
   WireTaskManualListItem,
@@ -116,6 +117,7 @@ import type {
   TaskStepView,
   TaskStepDetailView,
   TaskArtifactView,
+  TaskArtifactRefView,
   OutsourceWorkerView,
   TaskTypeView,
   TaskManualSummaryView,
@@ -535,6 +537,16 @@ export function toTaskArtifact(w: WireTaskArtifact): TaskArtifactView {
   };
 }
 
+/** Map one wire artifact INDEX row → `TaskArtifactRefView` (T-66) — the two
+ * fields a task response carries per deliverable since owner c-cd063427fb2f.
+ * Honest passthrough: an artifact pinned without a label maps to "", and this
+ * mapper does NOT invent one from a filename or a url, because it has neither.
+ * The renderer decides what a nameless artifact looks like, on the full row it
+ * fetched through `listTaskArtifacts`. */
+export function toTaskArtifactRef(w: WireTaskArtifactRef): TaskArtifactRefView {
+  return { id: w.id, label: w.label ?? "" };
+}
+
 /** Map one wire dep ref → `TaskDepRefView` (T-a3e4). Honest passthrough: an
  * entry with an empty `status` is a dep whose task is GONE, and the card says
  * 查無此任務 for it — this mapper never substitutes a plausible status. */
@@ -585,7 +597,9 @@ export function toTask(w: WireTask): TaskView {
       .sort((a, b) => a.orderIdx - b.orderIdx),
     // Full task carries the resolved set; count kept == length so a hydrated
     // card keeps the same 「產物 N」 badge as its light-list frame.
-    artifacts: (w.artifacts ?? []).map(toTaskArtifact),
+    // INDEX rows (T-66): id + label. The full rows come from
+    // `listTaskArtifacts`, not from here — see TaskView.artifacts.
+    artifacts: (w.artifacts ?? []).map(toTaskArtifactRef),
     artifactCount: (w.artifacts ?? []).length,
   };
 }

@@ -2152,6 +2152,27 @@ HAPPY: dict[str, Happy] = {
             *_happy_task_artifact(ctx)),
         check=lambda _c, r: _expect(r, lambda d: d["artifact_count"] == 0),
     ),
+    "GET /api/tasks/{task_id}/artifacts": Happy(
+        # T-66: the full-artifact read. The check is on the VALUES that came
+        # back, not on the shape — the artifact is pinned through the real write
+        # face first and this row asserts the same url/label/kind come out,
+        # plus the self-declared artifacts_detail_level="full" that tells a
+        # caller this response is the whole row. A handler that answered the
+        # id+label INDEX the task view carries (no url, no kind) cannot pass,
+        # and neither can one that forgot the marker.
+        identity="agent",
+        path=lambda ctx: "/api/tasks/{}/artifacts".format(
+            *_happy_task_artifact(ctx)),
+        check=lambda _c, r: _expect(
+            r,
+            lambda d: d["artifacts_detail_level"] == "full"
+            and len(d["artifacts"]) == 1
+            and d["artifacts"][0]["kind"] == "link"
+            and d["artifacts"][0]["url"] == "https://example.com/pr/1"
+            and d["artifacts"][0]["label"] == "conf PR"
+            and d["artifacts"][0]["created_ts"] > 0,
+        ),
+    ),
     # ── outsource panel (M3) ─────────────────────────────────────────────────
     "GET /api/outsource-workers": Happy(
         check=lambda _c, r: _expect(r, lambda d: isinstance(d, list)),

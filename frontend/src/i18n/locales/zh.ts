@@ -292,6 +292,8 @@ export const zh = {
       close: "關閉產物",
       remove: "移除產物",
       removeConfirm: "從任務卡移除這個產物?(不會刪除檔案本身)",
+      loading: "載入產物中…",
+      loadFailed: "產物讀取失敗,請關掉再打開試試",
       downloadHint: "下載",
       openLinkHint: "開啟連結",
     },

@@ -1352,9 +1352,11 @@ export function TaskCard({
                 directions (the server 409s un-pin exactly like add), so drop
                 the 移除 affordance instead of letting the click fail. Gating
                 here rather than at the call site covers every caller at once. */}
+            {/* T-66: no hydrate seam any more. The task read carries an
+                id+label INDEX of the artifacts (owner c-cd063427fb2f), so the
+                popover fetches the full rows itself when it opens. */}
             <TaskArtifactsBadge
               task={view}
-              onHydrate={onHydrate}
               onRemoveArtifact={
                 TERMINAL.has(view.status) ? undefined : onRemoveArtifact
               }

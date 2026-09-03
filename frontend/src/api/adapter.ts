@@ -528,18 +528,40 @@ export interface TaskView {
   progressDone: number;
   progressTotal: number;
   steps: TaskStepView[];
-  /** The task's curated deliverable set (T-3dc5), oldest→newest. Only the FULL
-   * task (getTask) carries these; the LIGHT list leaves it [] (it carries only
-   * `artifactCount` for the collapsed card's 「產物 N」 badge). The popover
-   * hydrates the full task to render them. OPTIONAL so hand-built test fixtures
-   * stay valid (the replyCardStatus precedent); the mapper always sets it. */
-  artifacts?: TaskArtifactView[];
+  /** The task's curated deliverable set (T-3dc5), oldest→newest, as an INDEX:
+   * each entry is `{ id, label }` and NOTHING else.
+   *
+   * 🔴 THE ARTIFACT DETAIL IS NOT ON THIS VIEW MODEL (T-66, owner
+   * c-cd063427fb2f:「我覺得任務產物，只需要預設給標題跟ID, 有需要再透過另一隻去
+   * 拿就好了」). url / filename / mime / kind / isImage / attachmentId /
+   * createdTs / createdBy arrive from `listTaskArtifacts`, one call for the
+   * whole ticket. A component that wants to RENDER an artifact and finds only
+   * these two fields is being told, correctly, to go and fetch it.
+   *
+   * Only the FULL task (getTask) carries even the index; the LIGHT list leaves
+   * it [] (it carries only `artifactCount` for the collapsed card's 「產物 N」
+   * badge). OPTIONAL so hand-built test fixtures stay valid (the
+   * replyCardStatus precedent); the mapper always sets it. */
+  artifacts?: TaskArtifactRefView[];
   /** Number of pinned deliverables — the collapsed card's 「產物 N」 badge (0 ⇒
    * badge hidden). On the light list it is the SERVER count (`artifact_count`);
    * on a hydrated full task it equals `artifacts.length` (kept consistent so a
    * post-hydrate card keeps the same badge). OPTIONAL so hand-built fixtures
    * stay valid; the mapper always sets it. */
   artifactCount?: number;
+}
+
+/** ONE pinned deliverable as an INDEX ROW (T-66): which one it is and what it
+ * is called, and nothing that would need a second read. This is what a
+ * `TaskView.artifacts` entry is.
+ *
+ * `label` is honest-empty when the deliverable was pinned without one — it is
+ * NOT backfilled from a filename or a url here, because those live on the full
+ * row. Deciding what to SHOW for a nameless artifact is the renderer's job, on
+ * the full row it fetched. */
+export interface TaskArtifactRefView {
+  id: string;
+  label: string;
 }
 
 /** ONE pinned deliverable on a task's artifact set (T-3dc5), in view-model
@@ -1997,6 +2019,22 @@ export interface Api {
    * task's step.
    */
   getTaskStep(taskId: string, stepId: string): Promise<TaskStepDetailView>;
+  /**
+   * Fetch ONE task's pinned deliverables in full
+   * (`GET /api/tasks/{task_id}/artifacts`, T-66) — the only read that carries
+   * an artifact's url / filename / mime / kind / isImage / attachmentId /
+   * createdTs / createdBy.
+   *
+   * 🔴 It exists because `getTask` stopped carrying them: a task's `artifacts`
+   * are an id+label INDEX now (owner c-cd063427fb2f), so anything that DRAWS an
+   * artifact calls this. ONE call answers the WHOLE ticket — there is
+   * deliberately no per-artifact read (owner c-f2d0fecb1168:「應該是指名任務？」),
+   * because the cockpit's deliverables panel opens onto the entire set and a
+   * per-artifact door would cost one call per row.
+   *
+   * An unknown task id is a 404 (ApiError); a task with nothing pinned is [].
+   */
+  listTaskArtifacts(taskId: string): Promise<TaskArtifactView[]>;
   /** The task counts behind the nav badge (`GET /api/tasks/count`) — a cheap
    * dedicated endpoint so the badge can refetch on every "task" SSE delta
    * without pulling the list. `open` = non-terminal (the badge). `total` = every

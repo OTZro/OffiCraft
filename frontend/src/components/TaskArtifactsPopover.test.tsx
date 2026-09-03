@@ -23,10 +23,19 @@ import type { TaskArtifactView } from "../api/adapter";
 
 // The popover keeps itself live via api.subscribeEvents (the ChatGalleryPanel
 // pattern) — stub it to a no-op unsubscribe so the unit test never touches SSE.
+//
+// 🔴 `listTaskArtifacts` IS THE POINT OF THE STUB, not scaffolding. Before T-66
+// this file handed the rows in through an `onHydrate` prop, so every case here
+// would have stayed GREEN against a cockpit that fetched nothing — which is
+// exactly the regression this ticket creates the risk of, now that the task read
+// carries an id+label index and no url/filename/mime at all. Every case now goes
+// through this stub, and the stub itself is asserted on.
+const { listTaskArtifacts } = vi.hoisted(() => ({ listTaskArtifacts: vi.fn() }));
 vi.mock("../api", () => ({
   api: {
     subscribeEvents: () => () => {},
     getChatAttachmentShareLink: vi.fn(),
+    listTaskArtifacts,
   },
 }));
 
@@ -54,11 +63,14 @@ function renderBadge(
   opts: { count?: number; onRemove?: (t: string, a: string) => Promise<void> } = {},
 ) {
   const count = opts.count ?? artifacts.length;
+  // The rows come from the SERVER, not from a prop: the task the card holds
+  // carries only the count (and, on a hydrated card, an id+label index that
+  // nothing here could draw a row from).
+  listTaskArtifacts.mockResolvedValue(artifacts);
   return render(
     <I18nProvider>
       <TaskArtifactsBadge
-        task={{ id: "t-1", artifactCount: count, artifacts: [] }}
-        onHydrate={async () => ({ artifacts })}
+        task={{ id: "t-1", artifactCount: count }}
         onRemoveArtifact={opts.onRemove}
       />
     </I18nProvider>,
@@ -67,6 +79,7 @@ function renderBadge(
 
 beforeEach(() => {
   seq = 0;
+  listTaskArtifacts.mockReset();
 });
 
 afterEach(() => {
@@ -250,6 +263,95 @@ describe("產物 popover — the one list (T-49fb)", () => {
     fireEvent.click(screen.getByTestId("task-artifacts-badge"));
     await waitFor(() => expect(screen.getByText("only a link")).toBeTruthy());
     expect(screen.queryByText("還沒有產物")).toBeNull();
+  });
+});
+
+describe("產物面板：打開才抓 (T-66)", () => {
+  // Owner c-cd063427fb2f:「我覺得任務產物，只需要預設給標題跟ID, 有需要再透過
+  // 另一隻去拿就好了」— so the panel is the thing that goes and gets them, and
+  // it does it when it OPENS.
+  const rows = [
+    mkArtifact({ id: "ta-l", kind: "link", label: "PR #77", url: "https://github.com/x/y/pull/77" }),
+  ];
+
+  it("fetches NOTHING until the badge is clicked, then fetches THIS task's set", async () => {
+    renderBadge(rows, { count: 1 });
+    // Rendering the card costs no artifact fetch — that is the whole saving.
+    expect(listTaskArtifacts).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("task-artifacts-badge"));
+    await waitFor(() => expect(screen.getByText("PR #77")).toBeTruthy());
+    expect(listTaskArtifacts).toHaveBeenCalledWith("t-1");
+    // ONE call for the WHOLE ticket (owner c-f2d0fecb1168:「應該是指名任務？」),
+    // never one per row.
+    expect(listTaskArtifacts).toHaveBeenCalledTimes(1);
+  });
+
+  it("draws rows from FIELDS THE TASK READ DOES NOT CARRY, so it must have fetched", async () => {
+    // 🔴 THE REGRESSION CASE. `url` / `filename` / `mime` / `is_image` left the
+    // task response in this ticket, so the only way this assertion can hold is
+    // that the panel called the server itself. A cockpit that went on reading
+    // the card's own `artifacts` would render an index (id + label) and have
+    // no href, no thumbnail and no filename to show.
+    const { container } = renderBadge(
+      [
+        mkArtifact({ id: "ta-f", kind: "file", filename: "spec.pdf", mime: "application/pdf", url: "/api/chat/attachment/att-f" }),
+        mkArtifact({ id: "ta-l2", kind: "link", label: "PR #88", url: "https://github.com/x/y/pull/88" }),
+      ],
+      { count: 2 },
+    );
+    fireEvent.click(screen.getByTestId("task-artifacts-badge"));
+    await waitFor(() => expect(screen.getByText("spec.pdf")).toBeTruthy());
+    const anchor = container.querySelector("a.task-artifacts__link") as HTMLAnchorElement;
+    expect(anchor.getAttribute("href")).toBe("https://github.com/x/y/pull/88");
+  });
+
+  it("says it is LOADING rather than showing an empty panel", async () => {
+    // A pending fetch must not read as 「還沒有產物」 — the badge the reader just
+    // clicked has already told them there is one.
+    listTaskArtifacts.mockReturnValue(new Promise(() => {}));
+    render(
+      <I18nProvider>
+        <TaskArtifactsBadge task={{ id: "t-1", artifactCount: 1 }} />
+      </I18nProvider>,
+    );
+    fireEvent.click(screen.getByTestId("task-artifacts-badge"));
+    await waitFor(() => expect(screen.getByTestId("task-artifacts-loading")).toBeTruthy());
+    expect(screen.queryByText("還沒有產物")).toBeNull();
+  });
+
+  it("shows a FAILURE the reader can see, never a silent blank", async () => {
+    listTaskArtifacts.mockRejectedValue(new Error("boom"));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    render(
+      <I18nProvider>
+        <TaskArtifactsBadge task={{ id: "t-1", artifactCount: 1 }} />
+      </I18nProvider>,
+    );
+    fireEvent.click(screen.getByTestId("task-artifacts-badge"));
+    await waitFor(() => expect(screen.getByTestId("task-artifacts-error")).toBeTruthy());
+    // And it is NOT reported as an empty set: those two mean different things.
+    expect(screen.queryByText("還沒有產物")).toBeNull();
+    expect(screen.queryByTestId("task-artifacts-loading")).toBeNull();
+  });
+
+  it("names a labelless link by its url, and a nameless one by its id — never blank", async () => {
+    const { container } = renderBadge(
+      [
+        mkArtifact({ id: "ta-nolabel", kind: "link", label: "", url: "https://example.com/no-label" }),
+        mkArtifact({ id: "ta-nothing", kind: "link", label: "", url: "" }),
+      ],
+      { count: 2 },
+    );
+    fireEvent.click(screen.getByTestId("task-artifacts-badge"));
+    await waitFor(() =>
+      expect(container.querySelectorAll("a.task-artifacts__link").length).toBe(2),
+    );
+    const names = Array.from(
+      container.querySelectorAll("a.task-artifacts__link .task-artifacts__chip-name"),
+    ).map((n) => n.textContent);
+    expect(names).toEqual(["https://example.com/no-label", "#ta-nothing".replace("#ta-", "#")]);
+    for (const n of names) expect(n).not.toBe("");
   });
 });
 

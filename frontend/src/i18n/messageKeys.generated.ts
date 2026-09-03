@@ -1037,6 +1037,8 @@ export const MESSAGE_KEYS: readonly string[] = [
   "tasks.artifacts.downloadHint",
   "tasks.artifacts.empty",
   "tasks.artifacts.imageName",
+  "tasks.artifacts.loadFailed",
+  "tasks.artifacts.loading",
   "tasks.artifacts.open",
   "tasks.artifacts.openLinkHint",
   "tasks.artifacts.panelTitle",

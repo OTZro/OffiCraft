@@ -256,6 +256,8 @@ export const en: Dict = {
       close: "Close artifacts",
       remove: "Remove artifact",
       removeConfirm: "Remove this artifact from the task card? (The file itself is kept.)",
+      loading: "Loading artifacts…",
+      loadFailed: "Could not load artifacts — close and reopen to retry",
       downloadHint: "Download",
       openLinkHint: "Open link",
     },

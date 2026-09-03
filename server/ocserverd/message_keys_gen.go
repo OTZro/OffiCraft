@@ -1038,6 +1038,8 @@ var messageKeys = map[string]bool{
 	"tasks.artifacts.downloadHint":                     true,
 	"tasks.artifacts.empty":                            true,
 	"tasks.artifacts.imageName":                        true,
+	"tasks.artifacts.loadFailed":                       true,
+	"tasks.artifacts.loading":                          true,
 	"tasks.artifacts.open":                             true,
 	"tasks.artifacts.openLinkHint":                     true,
 	"tasks.artifacts.panelTitle":                       true,
