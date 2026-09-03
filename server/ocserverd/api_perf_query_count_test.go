@@ -134,6 +134,20 @@ func TestTaskTableReadPatternKnowsItsOwnBoundary(t *testing.T) {
 // subquery ALIAS (`FROM (SELECT … ) x` then `FROM x`) are NOT counted, and the
 // miss direction is 誤綠. The inner `FROM task_step` of a subquery IS counted,
 // because the literal text is still in the statement.
+//
+// 🔴 WHAT THIS GUARD DOES AND DOES NOT SEE — read this before trusting it.
+// The property it守住 is 「次數不隨 dep 數 / 母體成長」, measured by running the
+// SAME request against two databases whose POPULATION sizes differ. So it sees
+// exactly one shape of N+1: a per-row read over a set that GROWS with the
+// fixture.
+// It does NOT see a per-row read placed AFTER the handler's status filter —
+// `?statuses=in_progress` returns ONE row in both runs, so a
+// `ListTaskSteps(t.ID)` sitting there costs 1 extra query in both, the two
+// tallies stay equal, and the constant bound (`few.step > 3`) still passes. That
+// is a REAL N+1 on the unfiltered/default list, and this guard is blind to it.
+// Owner ruling (T-66): 那是真的洞,但這一輪不補 — it is out of this ticket's
+// scope, and closing it needs a second axis (vary the number of RETURNED rows,
+// not just the population). 不要以為這道護欄守得比上面這段更多。
 var taskStepTableRead = regexp.MustCompile(
 	`(?i)\b(?:from|join)\s+(?:[a-z_][a-z0-9_]*\.)?` +
 		"(?:\"task_step\"|'task_step'|`task_step`|\\[task_step\\]|task_step\\b)")

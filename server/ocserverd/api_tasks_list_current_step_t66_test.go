@@ -27,7 +27,10 @@ package main
 // `task_step` barrel was added by this same ticket.
 
 import (
+	"fmt"
 	"net/http/httptest"
+	"os"
+	"regexp"
 	"testing"
 )
 
@@ -186,25 +189,111 @@ func TestTaskListCurrentStepIsEmptyWhenEveryStepIsFinished(t *testing.T) {
 	}
 }
 
+// stepStatusConstDecl pulls the step-status VOCABULARY out of domain.go itself
+// rather than out of a list typed here.
+//
+// 🔴 WHY THE CORPUS IS DERIVED. The test below claims that the SQL rule
+// (dal.AllTaskCurrentStep, which hard-codes `status != done AND status !=
+// superseded`) and the Go rule (domain.CurrentStep → StepIsTerminal) agree.
+// A HAND-TYPED fixture list makes that claim only about the statuses somebody
+// remembered to type. Add a THIRD terminal state to StepIsTerminal tomorrow and
+// the SQL will NOT follow — but if the new status never appears in a fixture,
+// no row disagrees and this test stays green while the two rules have already
+// drifted. Deriving the corpus from the constant block means a new
+// `StepStatusX = "x"` walks into the fixtures on its own.
+//
+// The regexp is deliberately anchored on the `StepStatus… = "…"` const form,
+// which is the only shape that block has ever used; if it is ever reshaped the
+// floor assertion below (the six statuses known when this was written must all
+// come back) reddens instead of the corpus silently emptying.
+var stepStatusConstDecl = regexp.MustCompile(`StepStatus[A-Za-z]+\s*=\s*"([a-z_]+)"`)
+
+// t66AllStepStatuses returns every declared step status, in declaration order.
+func t66AllStepStatuses(t *testing.T) []string {
+	t.Helper()
+	src, err := os.ReadFile("domain.go")
+	if err != nil {
+		t.Fatalf("read domain.go (the vocabulary source): %v", err)
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, m := range stepStatusConstDecl.FindAllStringSubmatch(string(src), -1) {
+		if !seen[m[1]] {
+			seen[m[1]] = true
+			out = append(out, m[1])
+		}
+	}
+	// 反恆真 #1:語料不能是空的,也不能只剩一兩個。
+	if len(out) < 6 {
+		t.Fatalf("只從 domain.go 抽出 %d 個 step 狀態(%v)— 抽取壞了,"+
+			"這一跑的「每個狀態都測過」是假的", len(out), out)
+	}
+	// 反恆真 #2:抽出來的每一個都必須是真的 step 狀態(不是別的常數被誤抓)。
+	for _, st := range out {
+		if !ValidStepStatus(st) {
+			t.Fatalf("抽到 %q,但 ValidStepStatus 不認它 — 抽取抓錯了東西", st)
+		}
+	}
+	// 反恆真 #3:寫這支測試時已知的六個必須全在。這是唯一手列的東西,而它是
+	// 一道 FLOOR(下限),不是語料本身 — 新增的狀態靠上面的抽取自己走進來。
+	for _, want := range []string{
+		StepStatusPending, StepStatusInProgress, StepStatusWaitingOwner,
+		StepStatusWaitingExternal, StepStatusDone, StepStatusSuperseded,
+	} {
+		if !seen[want] {
+			t.Fatalf("語料少了已知狀態 %q — 抽取沒抓到它,語料的涵蓋度是假的", want)
+		}
+	}
+	return out
+}
+
 // TestTaskListCurrentStepRuleIsTheSharedOne asserts the single-source-of-truth
 // claim directly: dal.AllTaskCurrentStep (SQL) and domain.CurrentStep (memory)
-// must give the same answer for every task in one population — including the
-// two empty cases. If someone re-implements the rule in SQL and it drifts, this
-// is what reddens.
+// must give the same answer — through the LIST WIRE, not just the DAL — for
+// every declared step status, in two plan shapes each, plus the no-plan case.
+//
+// 🔴 THE MUTANT THIS EXISTS FOR: add a third terminal state to StepIsTerminal
+// and leave dal.AllTaskCurrentStep's hard-coded `!= done AND != superseded`
+// alone. Go then skips a step SQL still points at, and the two rules disagree on
+// exactly the tasks whose plan contains that status — which is why the corpus
+// has to contain EVERY status, derived, rather than the ones somebody typed.
+// Verified by planting that mutant; transcript in evidence-current-step-drift.txt.
 func TestTaskListCurrentStepRuleIsTheSharedOne(t *testing.T) {
 	s := t66Server(t)
-	fixtures := map[string][][3]string{
-		// taskID → [stepID, name, status]
-		"t-cur0000000010": {{"ts-a1", "第一步", StepStatusDone}, {"ts-a2", "第二步", StepStatusPending}},
-		"t-cur0000000011": {{"ts-b1", "唯一一步", StepStatusWaitingOwner}},
-		"t-cur0000000012": {{"ts-f1", "改寫掉的", StepStatusSuperseded}, {"ts-f2", "真的在做", StepStatusInProgress}},
-		"t-cur0000000013": {{"ts-g1", "做完了", StepStatusDone}},
-		"t-cur0000000014": nil, // no plan at all
+	statuses := t66AllStepStatuses(t)
+
+	// Two plan shapes per status, so a status is exercised both as the HEAD of
+	// the plan and as the row sitting behind a finished one (the position where
+	// "first non-terminal" actually has to make a choice).
+	type fixture struct {
+		id    string
+		shape string
+		steps [][2]string // [stepID, status]
 	}
-	for id, steps := range fixtures {
-		t66PutTask(t, s, id, "票 "+id)
-		for i, st := range steps {
-			t66PutStep(t, s, id, st[0], i+1, st[1], st[2])
+	var fixtures []fixture
+	for i, st := range statuses {
+		alone := fixture{
+			id:    fmt.Sprintf("t-st%02dalone01", i),
+			shape: "只有一步(" + st + ")",
+			steps: [][2]string{{fmt.Sprintf("ts-%02da1", i), st}},
+		}
+		behind := fixture{
+			id:    fmt.Sprintf("t-st%02dbehind1", i),
+			shape: "done 之後接一步(" + st + ")",
+			steps: [][2]string{
+				{fmt.Sprintf("ts-%02db1", i), StepStatusDone},
+				{fmt.Sprintf("ts-%02db2", i), st},
+			},
+		}
+		fixtures = append(fixtures, alone, behind)
+	}
+	// 沒有計畫的票 — 兩邊都必須說「沒有當前步驟」。
+	fixtures = append(fixtures, fixture{id: "t-stnoplan001", shape: "沒有計畫"})
+
+	for _, f := range fixtures {
+		t66PutTask(t, s, f.id, "票 "+f.shape)
+		for idx, st := range f.steps {
+			t66PutStep(t, s, f.id, st[0], idx+1, "步驟 "+st[0], st[1])
 		}
 	}
 
@@ -213,30 +302,39 @@ func TestTaskListCurrentStepRuleIsTheSharedOne(t *testing.T) {
 		t.Fatalf("AllTaskCurrentStep: %v", err)
 	}
 	nonEmpty := 0
-	for id := range fixtures {
-		steps, err := s.dal.ListTaskSteps(id)
+	for _, f := range fixtures {
+		steps, err := s.dal.ListTaskSteps(f.id)
 		if err != nil {
 			t.Fatal(err)
 		}
-		wantID, wantName := CurrentStep(steps)
-		got := sqlSide[id] // absent = zero value = ("", ""), which is the rule's own answer
+		wantID, wantName := CurrentStep(steps) // the Go rule = the single source
+		// (a) the SQL twin, read straight off the DAL …
+		got := sqlSide[f.id] // absent = zero value = ("", ""), the rule's own answer
 		if got.ID != wantID || got.Name != wantName {
-			t.Errorf("%s: SQL 與記憶體版本的「當前步驟」不一致:SQL=(%q, %q) domain=(%q, %q)",
-				id, got.ID, got.Name, wantID, wantName)
+			t.Errorf("%s [%s]:SQL 與 domain.CurrentStep 不一致:SQL=(%q, %q) domain=(%q, %q)"+
+				" — 兩個「當前步驟」的定義已經漂移了",
+				f.id, f.shape, got.ID, got.Name, wantID, wantName)
+		}
+		// (b) … and the same answer as it reaches the WIRE.
+		row := t66ListRow(t, s, f.id)
+		if row.CurrentStepID != wantID || row.CurrentStepName != wantName {
+			t.Errorf("%s [%s]:list 回應與 domain.CurrentStep 不一致:wire=(%q, %q) domain=(%q, %q)",
+				f.id, f.shape, row.CurrentStepID, row.CurrentStepName, wantID, wantName)
 		}
 		if wantID != "" {
 			nonEmpty++
 		}
 	}
-	// 反恆真:如果每一格都空,上面的等式全部是 ""=="",什麼都沒證明。
-	if nonEmpty < 3 {
-		t.Fatalf("語料不合格:只有 %d 張票算得出當前步驟,兩邊都空的等式證明不了任何事", nonEmpty)
+
+	// 反恆真:如果每一格都空,上面的等式全部是 ""=="",什麼都沒證明。今天有
+	// 四個非終態 × 兩種計畫形狀 = 8 張票該指得出當前步驟;寫成不等式而不是
+	// 等式,是為了新增一個非終態狀態時這裡不會無謂地紅。
+	if nonEmpty < 8 {
+		t.Fatalf("語料不合格:只有 %d 張票算得出當前步驟(預期至少 8),"+
+			"兩邊都空的等式證明不了任何事", nonEmpty)
 	}
 	// 而且 SQL 那一邊不能替沒有當前步驟的票憑空生一列出來。
-	if _, ok := sqlSide["t-cur0000000013"]; ok {
-		t.Errorf("全部完成的票不該出現在 AllTaskCurrentStep 的結果裡")
-	}
-	if _, ok := sqlSide["t-cur0000000014"]; ok {
+	if _, ok := sqlSide["t-stnoplan001"]; ok {
 		t.Errorf("沒有計畫的票不該出現在 AllTaskCurrentStep 的結果裡")
 	}
 }
