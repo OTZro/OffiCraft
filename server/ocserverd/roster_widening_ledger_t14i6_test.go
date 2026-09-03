@@ -58,12 +58,27 @@ package main
 //
 // ⚠️ THAT IS A FACT ABOUT HISTORY, NOT ABOUT THIS TREE. No AST walk over the
 // current sources can recover it — both groups now spell the identical call.
-// So `Widened` is a HUMAN RULING recorded in the ledger, re-derived by hand
-// against origin/main (66e0eaf9) when this file was written and reported as six
-// sites. The gate does NOT verify it; what the gate guarantees is that every
-// call site HAS a ruling and a reason, and that neither side of the table can
-// drift without a name being printed. A new call site defaults to nothing — it
-// is unlisted, which is red — never to "not widened".
+// So `Widened` is a HUMAN RULING, re-derived by hand against origin/main
+// (66e0eaf9) when this file was written and reported as six sites. The gate
+// does NOT verify it.
+//
+// 🔴 AND IT DOES NOT NEED TO, BECAUSE `Widened` IS FROZEN HISTORY. It is a
+// claim about two commits that have both already landed — 66e0eaf9 and PR ② —
+// and no future edit to this tree can change whether a site was widened by a
+// commit that is already in the graph. IT CANNOT ROT. That is the difference
+// between this column and the prose enumeration it replaced: the prose made a
+// claim about the PRESENT ("today's call sites"), which the next commit could
+// falsify while nobody looked; this column makes a claim about the PAST, which
+// nothing can. Do not come back to "make it verifiable" — an AST walk over
+// today's sources could not confirm it even in principle, and there is no
+// decay for a checker to catch.
+//
+// The one failure mode that WOULD be live is a NEW call site landing with
+// `Widened: true` — a false statement about history, written today. That one
+// is already closed by the shape of the join: a new call site defaults to
+// UNLISTED, which is red and prints its name, never to a ruling. Its author
+// must add a row in the same diff, where a reviewer sees the word `Widened`
+// next to a call that obviously postdates PR ②.
 //
 // ── WHY THIS IS NOT ONE OF THE USELESS GATES ────────────────────────────────
 //
@@ -113,7 +128,8 @@ package main
 //   - IT CANNOT JUDGE WHETHER A REASON IS TRUE. A fluent, false sentence passes;
 //     the length check stops a shrug, not a lie. The value is that padding must
 //     appear IN THE DIFF, in the same commit, where a reviewer sees it.
-//   - IT CANNOT VERIFY `Widened`. See above — that column is testimony.
+//   - IT CANNOT VERIFY `Widened` — and that column is frozen history, so there
+//     is nothing for it to catch. See above.
 //   - PACKAGE-LOCAL. It globs `*.go` in ocserverd's own directory. Measured
 //     2026-09-04: `git grep -l ListMembers -- '*.go'` names 26 files, all 26
 //     inside this directory and none outside it — so the scope happens to be
@@ -159,7 +175,8 @@ const rosterQueryDeletedTwin = "ListMembersIncludingOutsource"
 // listMembersCallSiteRuling is one row of the caller audit dal.go's doc used to
 // carry in prose.
 type listMembersCallSiteRuling struct {
-	// Widened is testimony, not a measurement — see the file header. True when
+	// Widened is a human ruling about two landed commits, not a measurement of
+	// this tree — frozen history that cannot rot; see the file header. True when
 	// the site read ListMembers back when it was `WHERE kind != 'outsource'`,
 	// and so sees contractor rows today that it never saw before PR ②.
 	Widened bool
@@ -217,9 +234,22 @@ var listMembersCallSiteLedger = map[string]listMembersCallSiteRuling{
 			"the codename-uniqueness scan when a new member is minted without a name. " +
 			"It WANTS the union of every name ever taken — staff, warden, contractor, " +
 			"and soft-removed rows too — because a name collision is a collision " +
-			"whoever holds it. Narrow was the bug: under the old query PickMemberName " +
-			"could hand a new staff member a name a live contractor is already " +
-			"answering to. Filtering nothing is the decision here, made on purpose.",
+			"whoever holds it. 🔴 BUT WIDENING IT IS A STRICT NO-OP TODAY, NOT A " +
+			"LATENT BUGFIX — re-derived 2026-09-04, and this row said the opposite " +
+			"until then. The two name spaces cannot meet: a contractor's member Name " +
+			"IS its codename (memberFromWorker, dal_tasks.go), the sole writer of a " +
+			"codename is DeriveCodename (outsource_sched.go is its only non-test " +
+			"caller), and DeriveCodename emits exactly `<O|S|H|X>-<n>` — a ONE-LETTER " +
+			"stem. PickMemberName returns only a MemberNamePool entry or, once the " +
+			"pool is exhausted, `<PoolName>-<n>`; every pool entry is a multi-letter " +
+			"given name, so no name it can return and no name it can fold into " +
+			"`taken` ever equals a codename, case-folding included. The contractor " +
+			"rows now arriving change neither the available set nor the fallback. " +
+			"Filtering nothing is still the decision here, made on purpose: the " +
+			"question this fold asks is 'has ANYONE ever answered to this name', " +
+			"which asks nothing about kind — so it is already right for the day a " +
+			"contractor is named from the pool, and a kind test added here would be " +
+			"the bug rather than the fix.",
 	},
 
 	"api_roles.go :: HandleDeleteRoleApiRolesRoleDelete": {
