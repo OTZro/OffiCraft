@@ -418,7 +418,7 @@
     {
       "id": "ocagent-run-6",
       "source": "cli/ocagent/listen_run.go",
-      "callsite": "drainChat(l.api, l.cfg, l.seen, l.out, !l.seen.primed)",
+      "callsite": "drainChat(l.api, l.cfg, l.seen, l.out, !l.seen.primed, l.ack)",
       "kind": "seam",
       "seam_reason": "hop: the ONE place chat is drained since T-48 — both entrances (every connect and a chat delta) call l.drainChatNow(), which calls this. It is a GET (fetchChat), and since T-48 there IS a POST below it: the read receipt filed after the lines are printed. That POST is claimed by ocagent-chat-mark-read; this row stays a seam because the body is built there, not here."
     },
@@ -474,7 +474,7 @@
     {
       "id": "codex-hop-4",
       "source": "cli/ocwarden/codex_session.go",
-      "callsite": "s.reportIdentity()\n\t\t\t\t\ts.requestRateLimits()\n\t\t\t\t\tidentityHeartbeat.Reset(codexTelemetryThrottle)\n\t\t\t\t},\n\t\t\t\ts.openListenerTurn)",
+      "callsite": "s.reportIdentity()\n\t\t\t\t\ts.requestRateLimits()\n\t\t\t\t\tidentityHeartbeat.Reset(codexTelemetryThrottle)\n\t\t\t\t},\n\t\t\t\ts.openListenerTurn, s.closeBatch)",
       "kind": "seam",
       "seam_reason": "hop to the codex identity POST declared by codex-identity. The anchor deliberately runs to the CLOSING argument of handleListenerLine rather than stopping at requestRateLimits: independent review swapped that third argument for a no-op `func(string) {}` and every codex member went permanently silent — no notice, no chat event, no task event ever became a turn — with all three Go suites AND this guard green. Deleting the whole call was already caught here by accident (the reportIdentity/requestRateLimits pair lives in the closure); replacing one argument was caught by nothing. Pinning `s.openListenerTurn)` inside the anchor is what makes that swap red."
     },

@@ -288,11 +288,31 @@ func stationVerdict(prev, cur string, firstConnect bool) string {
 // this session just DID — drop it silently. Owner-/server-/other-member-triggered
 // frames always process; a blank/absent trigger processes too (fail-open — an older
 // server or an unknown actor must not lose wakes). Directed band frames carry no
-// trigger and are untouched by construction. EXEMPTION (spec §2.3): the `member`
-// topic is never suppressed — a member delta naming self is a lifecycle NUDGE for the
-// hooks below (prints nothing by itself), and the self-requested recycle
-// (restart_self, T-4c71) rides a SELF-triggered member delta whose recycle wake
-// must still land.
+// trigger and are untouched by construction.
+//
+// EXEMPTION ① (spec §2.3): the `member` topic is never suppressed — a member delta
+// naming self is a lifecycle NUDGE for the hooks below (prints nothing by itself),
+// and the self-requested recycle (restart_self, T-4c71) rides a SELF-triggered
+// member delta whose recycle wake must still land.
+//
+// EXEMPTION ② — `chat` (c-75113935a255, ruled by the owner). A self-triggered chat
+// delta now DOES drive the refetch. It still prints nothing: drainChat drops
+// `sender == self` rows, so what this buys is not a line but a RECEIPT — the
+// self-addressed note (in practice a hand-off a member writes to itself) is marked
+// read at the moment it is written, on the same path as everybody else's mail,
+// instead of waiting for whatever reconnect happens next.
+//
+// 🔴 ITS PRICE, PAID KNOWINGLY: every message this member sends to ITSELF now costs
+// one extra GET /api/chat, which usually comes back empty or holding only that one
+// row. One post fans exactly one chat frame to this listener (the audience is a
+// SET, and self-send collapses sender and recipient into one member), so it is one
+// refetch per self-sent message and not a multiple; the read receipt this drain
+// files fans a `chat_read` frame, which this switch has no case for, so nothing
+// cascades. The owner chose consistency between the two paths over that request.
+//
+// Suppression is unchanged for every OTHER topic, and that matters: without it a
+// member starts receiving a delta for every reply card it answers and every task it
+// moves — its own work read back to it, one line at a time.
 func (l *listener) dispatch(payload []byte) {
 	frame, _ := safeJSON(string(payload)).(map[string]any)
 	// Every line printed below belongs to THIS frame, so it reports the
@@ -302,11 +322,11 @@ func (l *listener) dispatch(payload []byte) {
 	defer l.stamp.enter(frame)()
 	topic, _ := frame["topic"].(string)
 	trigger := frameTrigger(frame)
-	if isSelfEcho(trigger, l.cfg.ID) && topic != memberTopic {
+	if isSelfEcho(trigger, l.cfg.ID) && topic != memberTopic && topic != chatTopic {
 		return // my own echo — recipient==self ∧ actor==self (spec §2.3)
 	}
 	switch topic {
-	case "chat":
+	case chatTopic:
 		// R7 HARD CONSTRAINT: the chat delta payload is convenience — NEVER merged.
 		// The delta is a pure NUDGE ⇒ REFETCH /api/chat and print the unread-for-me.
 		//

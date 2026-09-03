@@ -144,7 +144,9 @@ const (
 	// defaultTmuxSocket mirrors agent/spawn.py DEFAULT_SOCKET.
 	defaultTmuxSocket = "officraft"
 
-	// memberTopic / desiredOffline / desiredOnline mirror the wire literals.
+	// chatTopic / memberTopic / desiredOffline / desiredOnline mirror the wire
+	// literals.
+	chatTopic      = "chat"
 	memberTopic    = "member"
 	desiredOffline = "offline"
 	desiredOnline  = "online"
@@ -710,43 +712,120 @@ func intField(v any) int {
 // chat downlink (R7: the delta payload is NEVER read — refetch the authority).
 // ---------------------------------------------------------------------------
 
-// fetchChat refetches the AUTHORITATIVE chat list for selfID from
-// GET /api/chat?with=<selfID> — owner-scoped + participant-filtered by the SERVER.
-// Returns the wire ChatMessageDTOs (from/to/body/id/ts), oldest→newest, or nil on any
-// fault. Mirrors fetch_chat.
+// chatUnreadPageLimit is the row budget of ONE unread page. The walk below pages
+// until the server stops handing back a cursor, so this number does not bound
+// what a drain prints — it only decides how many round trips a given backlog
+// costs. 50 keeps a normal catch-up to a single round trip.
+const chatUnreadPageLimit = 50
+
+// chatUnreadMaxPages is the SECOND net under "page until the cursor is empty".
 //
-// THE WIRE ANSWERS AN OBJECT since T-48: {"messages": [...], "next_cursor": ...}.
-// The rows are read out of `messages`; `next_cursor` is DROPPED, because this
-// call takes the server's newest window and the drain that consumes it already
-// says out loud when it could not see the whole backlog ("至少 N 則未讀"). Paging
-// the token here would change what that line means without changing the line.
+// The first net is the cursor-repeat check in fetchChat: a server that keeps
+// handing back the SAME token would otherwise spin forever. It does not catch a
+// server that mints a FRESH token every time (or one that answers rows without
+// ever ending), and that shape is just as fatal — the listener's only thread
+// would never come back and this member would go deaf with nothing said. So the
+// walk also refuses to take more than this many pages.
 //
-// A body that is not an object with a `messages` ARRAY is a fault, answered nil
-// like a non-200 — the same fail-closed shape this function already had for a
-// non-array body. It must not degrade to "zero messages": that is
-// indistinguishable from a quiet conversation, and this drain's whole job is to
-// notice what arrived.
-func fetchChat(client httpClient, cfg Config, selfID string) []map[string]any {
-	path := "/api/chat?with=" + url.QueryEscape(selfID)
-	status, body := getJSON(client, cfg, path, true)
-	if status != 200 {
-		return nil
-	}
-	env, ok := body.(map[string]any)
-	if !ok {
-		return nil
-	}
-	list, ok := env["messages"].([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]map[string]any, 0, len(list))
-	for _, it := range list {
-		if m, ok := it.(map[string]any); ok {
-			out = append(out, m)
+// 100 pages × 50 rows is 5 000 messages, orders of magnitude above any real
+// backlog, which is the point: hitting this is a server bug, not a busy inbox,
+// and the line it prints says so. It is also what bounds the REQUEST cost of a
+// misbehaving server: at worst this walk costs 100 GETs, once per drain.
+const chatUnreadMaxPages = 100
+
+// chatFetch is what one full unread walk answers.
+//
+// `rows` is nil ONLY on a first-page fault — the fail-closed shape fetchChat has
+// always had, kept because "zero messages" and "I could not look" must not be
+// the same answer. A fault on a LATER page keeps the pages already in hand:
+// unread is served oldest-first, so what a partial walk holds is a contiguous
+// run from the oldest, and printing it (then marking it read) leaves the rest
+// exactly where the next drain will find it.
+//
+// `stop` is non-empty when the walk ended for any reason OTHER than the server
+// saying "no more" — a mid-walk fault, a cursor that did not advance, or the
+// page ceiling. It is a line to print: a backfill that quietly stopped short is
+// indistinguishable from a backfill that finished, and this drain's whole job is
+// to notice what arrived.
+type chatFetch struct {
+	rows []map[string]any
+	stop string
+}
+
+// fetchChat walks the caller's OWN UNREAD from
+// GET /api/chat?recipient=<selfID>&unread=true&limit=… , following `next_cursor`
+// until the server stops issuing one. Returns the wire ChatMessageDTOs
+// (from/to/body/id/ts), OLDEST→NEWEST across every page. Mirrors fetch_chat.
+//
+// WHY UNREAD AND NOT ?with=<self> (T-48). The old call took the server's newest
+// window of the whole conversation and let the client work out what was new.
+// That window is a fixed size, so a long enough absence pushed the oldest unread
+// out of it — messages nobody could print because nobody fetched them. The
+// unread query is defined by the caller's own per-sender watermarks instead, so
+// the set is exactly "what I have not been shown", and paging it to exhaustion
+// is what makes the backfill COMPLETE rather than merely recent.
+//
+// `with=` IS DELIBERATELY ABSENT: recipient=<self> already pins this listener as
+// a participant, so `with=` would only re-state it — and the unread index leads
+// with `recipient`, so the narrower filter is also the one the server can serve
+// straight off the index.
+//
+// 🔴 NOTHING HERE MARKS ANYTHING READ. The unread route is a pure read; the
+// receipt is filed by drainChat AFTER the lines are printed.
+func fetchChat(client httpClient, cfg Config, selfID string) chatFetch {
+	base := "/api/chat?recipient=" + url.QueryEscape(selfID) +
+		"&unread=true&limit=" + strconv.Itoa(chatUnreadPageLimit)
+	rows := make([]map[string]any, 0, chatUnreadPageLimit)
+	issued := map[string]bool{}
+	cursor := ""
+	for page := 1; ; page++ {
+		path := base
+		if cursor != "" {
+			path += "&cursor=" + url.QueryEscape(cursor)
 		}
+		// ONE page: the T-48 envelope {"messages": [...], "next_cursor": "…"}. A
+		// non-200, a body that is not an object, or one whose `messages` is not an
+		// array is a FAULT — it must not degrade to "zero messages", which is
+		// indistinguishable from a quiet conversation.
+		//
+		// A `next_cursor` that is absent, null, empty or not a string reads as "no
+		// more pages". That is the safe direction: an under-printed drain is
+		// retried by the next one, whereas treating junk as a token would put an
+		// unusable value back on the wire.
+		status, body := getJSON(client, cfg, path, true)
+		env, _ := body.(map[string]any)
+		list, listOK := env["messages"].([]any)
+		if status != 200 || !listOK {
+			if page == 1 {
+				return chatFetch{} // total fault: not "no messages"
+			}
+			return chatFetch{rows: rows, stop: fmt.Sprintf(
+				"[ocagent] chat: 補印在第 %d 頁斷掉了（已經撈到 %d 則）—— 未讀沒撈完，"+
+					"剩下的下一次補印會再試；等不及就用 get_chat 自己回頭撈。\n", page, len(rows))}
+		}
+		for _, it := range list {
+			if m, ok := it.(map[string]any); ok {
+				rows = append(rows, m)
+			}
+		}
+		next := strings.TrimSpace(strOrEmpty(env["next_cursor"]))
+		if next == "" {
+			return chatFetch{rows: rows} // the server says this is the end
+		}
+		if issued[next] {
+			return chatFetch{rows: rows, stop: fmt.Sprintf(
+				"[ocagent] chat: 補印停在第 %d 頁（已經撈到 %d 則）—— server 的 next_cursor 沒有前進，"+
+					"同一個游標又發了一次。未讀沒撈完，請用 get_chat 自己回頭撈。\n", page, len(rows))}
+		}
+		if page >= chatUnreadMaxPages {
+			return chatFetch{rows: rows, stop: fmt.Sprintf(
+				"[ocagent] chat: 補印撈到第 %d 頁就停了（已經撈到 %d 則），server 還在給 next_cursor —— "+
+					"這是分頁上限，不是你的信箱真有這麼多。未讀沒撈完，請用 get_chat 自己回頭撈。\n",
+				page, len(rows))}
+		}
+		issued[next] = true
+		cursor = next
 	}
-	return out
 }
 
 // fmtAgo renders an age in seconds as the terse single-unit form the chat line uses:
@@ -803,32 +882,6 @@ func attachmentSummary(m map[string]any) string {
 		return fmt.Sprintf("📎%d圖 %d檔", imgs, files)
 	}
 }
-
-// chatBacklogPrintCap bounds how many backlog chat lines ONE drain may print.
-//
-// WHY A CAP AT ALL: the cold-start backfill this cap guards (see chatSeen) can
-// hand a freshly booted session an arbitrarily long unread run — every line of
-// it lands in the agent's context window and competes with the work it was
-// woken for. Unbounded, a quiet weekend's backlog would wash out exactly the
-// context the backfill exists to preserve.
-//
-// WHY 20: this is a COST bound, not a frequency one — nobody has measured how
-// many messages a typical catch-up carries, so the number is chosen from what
-// the reader can afford, not from what the wire usually sends. One drain line
-// is `from` + tags + the FULL rendered body, empirically a few dozen to a few
-// hundred tokens; 20 of them is a low-thousands-of-tokens ceiling — the size of
-// one ordinary file read, an amount a session can absorb without the backlog
-// becoming the session. It also sits comfortably above a short absence (a
-// restart, a redeploy), so the cap is expected to bite only on the long-offline
-// case it was written for. REVISIT with real volume data.
-//
-// WHAT ELSE ALREADY BOUNDS THIS: GET /api/chat returns the newest
-// chatListDefaultLimit (30) messages when the caller passes no limit, and this
-// drain passes none — so the *observed* backlog can never exceed 30 lines today
-// and this cap can only ever trim the oldest ~10 of them. That server default is
-// a default, not a contract (it takes a ?limit= and can be retuned), which is
-// exactly why the client keeps its own ceiling instead of inheriting one.
-const chatBacklogPrintCap = 20
 
 // ---------------------------------------------------------------------------
 // batch acknowledgement — the codex sidecar's delivery receipt (T-48).
@@ -957,7 +1010,8 @@ func (g *ackGate) confirm(out io.Writer) bool {
 //     the drain PRIMES silently, exactly as before: a brand-new session must not
 //     be washed out by however much history predates it.
 //   - PRIMED — a previous process already baselined. The drain PRINTS what
-//     arrived since (capped by chatBacklogPrintCap), which is the whole point.
+//     arrived since — all of it, since fetchChat pages the unread set to
+//     exhaustion — which is the whole point.
 //
 // RECONNECTS are unaffected in both directions: every drain runs against this
 // same set, so the id a connect drain already printed is in it and the next one
@@ -1111,9 +1165,9 @@ func (s *chatSeen) warnWriteFailed(out io.Writer, err error) {
 // baseline) advances the cursor WITHOUT printing so connecting does not re-print
 // history — but see chatSeen: the cursor is PERSISTED, so `silent` is true when
 // the store came up UNPRIMED, which is a first listen on this machine OR a state
-// file that could not be read; a primed one backfills what it missed (capped by
-// chatBacklogPrintCap). A fetch fault prints nothing and leaves the persisted
-// cursor untouched, so the next drain retries the same window.
+// file that could not be read; a primed one backfills EVERYTHING it missed. A
+// fetch fault prints nothing and leaves the persisted cursor untouched, so the
+// next drain retries the same window.
 // R7: reads ONLY the refetched authority, never a delta. Mirrors drain_chat.
 //
 // `gate` (nil on the claude path) makes "printed" stop meaning "delivered": with
@@ -1124,19 +1178,26 @@ func drainChat(client httpClient, cfg Config, seen *chatSeen, out io.Writer, sil
 	sid := strings.ToLower(strings.TrimSpace(cfg.ID))
 	now := float64(time.Now().Unix())
 	msgs := fetchChat(client, cfg, cfg.ID)
-	if msgs == nil {
+	// A walk that ended short says so BEFORE the lines it did manage to fetch,
+	// so the reader meets the caveat before the batch it applies to. Not on a
+	// silent baseline: nothing is being surfaced there, so there is nothing for
+	// the caveat to qualify.
+	if msgs.stop != "" && !silent {
+		fmt.Fprint(out, msgs.stop)
+	}
+	if msgs.rows == nil {
 		return 0 // fetch fault: print nothing and leave the persisted set untouched
 	}
 	// delivered stays true on the claude path and on a silent baseline: nothing
 	// was surfaced that anybody could fail to deliver.
 	delivered := true
-	unread := make([]map[string]any, 0, len(msgs))
-	for _, m := range msgs {
+	unread := make([]map[string]any, 0, len(msgs.rows))
+	// selfSent collects the messages this member sent to ITSELF — see the block
+	// that receipts them below, which is the one place in this drain where a line
+	// is marked read without ever being printed.
+	var selfSent []map[string]any
+	for _, m := range msgs.rows {
 		if strings.ToLower(strings.TrimSpace(strOrEmpty(m["to"]))) != sid {
-			continue
-		}
-		mid := strOrEmpty(m["id"])
-		if mid != "" && seen.m[mid] {
 			continue
 		}
 		// ECHO SUPPRESSION, message level (T-2c6d). The dispatch gate applies
@@ -1150,47 +1211,52 @@ func drainChat(client httpClient, cfg Config, seen *chatSeen, out io.Writer, sil
 		// DELAYS a self echo; it does not remove it. Applying the same predicate to
 		// the refetched sender closes that half.
 		//
-		// SKIPPED HERE, NOT AT PRINT TIME, and that placement is the point: this
-		// loop builds `unread`, which feeds BOTH the chatBacklogPrintCap slice below
-		// and this function's return value. Filtering later would let a queue of
-		// self-sent messages push a real inbound one past the cap, and would report
-		// unread lines that never print.
+		// 🔴 THE RULE LIVES HERE, NOT IN THE API (rc-dccab860be32). GET /api/chat's
+		// unread set no longer excludes `sender == caller`, so these rows DO come
+		// back and this is the only party that drops them. That is deliberate:
+		// "don't read me my own words back" is a presentation decision, and the
+		// server should not be the one holding it.
 		//
-		// The cursor still advances without an assignment here: the `next` rebuild
-		// below is keyed on the `to` filter alone, so a self-sent message addressed
-		// to this listener is recorded as seen exactly like any other — that is what
-		// stops it accumulating and later surfacing behind someone else's message.
+		// SKIPPED HERE, NOT AT PRINT TIME, and that placement is the point: this
+		// loop builds `unread`, which is BOTH what prints below and this function's
+		// return value. Filtering later would report unread lines that never print.
+		//
+		// BEFORE THE `seen` CHECK, deliberately: a self-sent row must reach
+		// selfSent on EVERY drain, including the drains after one already recorded
+		// it locally. Behind the seen check it would be dropped on the second pass
+		// and never receipted, and since the server keeps returning what nobody has
+		// marked read, the same rows would pile up in every future unread walk.
 		//
 		// Reusing isSelfEcho keeps the fail-open rule (spec/sse.md §2.3): a blank or
 		// missing sender is never an echo, so it stays visible. TrimSpace mirrors
 		// the `to` filter above, so both sides of the message are matched the same
 		// way, and isSelfEcho's EqualFold makes the comparison case-insensitive.
 		if isSelfEcho(strings.TrimSpace(strOrEmpty(m["from"])), cfg.ID) {
+			selfSent = append(selfSent, m)
+			continue
+		}
+		if mid := strOrEmpty(m["id"]); mid != "" && seen.m[mid] {
 			continue
 		}
 		unread = append(unread, m)
 	}
 	if !silent {
-		// TRUNCATE FROM THE OLD END: when the backlog overruns the cap the
-		// NEWEST chatBacklogPrintCap lines print (freshest context wins) and one
-		// honest notice names what was dropped, so the session knows to reach for
-		// get_chat rather than believing it read everything. The dropped ones are
-		// still recorded as seen below — a line this session was told about must
-		// not come back on the next drain.
+		// EVERY UNREAD LINE PRINTS. There used to be a per-drain print cap here
+		// that kept the newest N and announced the rest as 略過 N 則 — and that
+		// notice was not merely a smaller backfill, it was a WRONG one: the
+		// receipt filed below is a per-sender WATERMARK, so a skipped older line
+		// of a sender who still had a surviving newer line was swept to read by
+		// that sender's own receipt. It was announced as fetchable and then
+		// marked as read, and nothing would ever offer it again.
 		//
-		// "至少": len(unread) is what THIS FETCH could see, and fetchChat sends no
-		// ?limit=, so the server answers with its own newest-N window. A long
-		// enough absence overruns that window too, and the ones past it are not
-		// in this count — they are not printed, not counted, and nothing else
-		// says so. Reporting len(unread) as "the" unread total would be a number
-		// this line cannot know; it is a floor, so it says floor.
-		show := unread
-		if len(show) > chatBacklogPrintCap {
-			fmt.Fprintf(out, "[ocagent] chat: 至少 %d 則未讀，只補印最新 %d 則（略過 %d 則較舊 — 用 get_chat 取回）\n",
-				len(show), chatBacklogPrintCap, len(show)-chatBacklogPrintCap)
-			show = show[len(show)-chatBacklogPrintCap:]
-		}
-		for _, m := range show {
+		// Nothing replaces the cap because nothing needs to: fetchChat now walks
+		// the caller's unread to exhaustion, so `unread` IS the whole backlog
+		// rather than a window of it, and a backlog is only as long as the time
+		// this member spent away. The cost this cap was protecting — the agent's
+		// context window — is real, but it is paid for by messages that were
+		// genuinely sent TO this member and never shown; dropping them is not a
+		// saving, it is a loss with a receipt filed against it.
+		for _, m := range unread {
 			printChatLine(out, m, now)
 		}
 		// AFTER the lines are out, never before: a read receipt claims a HUMAN-
@@ -1204,18 +1270,49 @@ func drainChat(client httpClient, cfg Config, seen *chatSeen, out io.Writer, sil
 		// below — wait for its verdict. An empty batch is not gated: there is
 		// nothing to confirm and nothing that could be lost, and blocking on a
 		// round trip for zero lines would only add a way to hang.
-		if len(show) > 0 {
+		if len(unread) > 0 {
 			delivered = gate.confirm(out)
 		}
+		// 🔴 THE ONE EXCEPTION TO "printed, therefore read" (rc-dccab860be32,
+		// ruled by the owner). Everywhere else in this drain a receipt trails a
+		// line that actually reached the session; these rows are receipted having
+		// been printed NOWHERE.
+		//
+		// WHY: since the unread set stopped excluding `sender == caller`, a
+		// message this member sent to itself comes back on every unread walk. It
+		// is dropped above, so no receipt would ever be filed for it, so the
+		// server would keep returning it — forever, and one more of them with
+		// every self-addressed note, until the backfill is mostly the member's own
+		// voice. Marking them is what keeps the unread set finite.
+		//
+		// SCOPE — `sender == this member`, AND NOTHING ELSE, AND IT MUST NOT GROW.
+		// The exception is safe only because the reader and the writer are the
+		// same party: nobody is being told they were shown something they were
+		// not. Any other unprinted row belongs to someone who is entitled to a ✓
+		// that means what it says, so widening this to "skipped", "too long",
+		// "uninteresting" or "already in the transcript" would put this system
+		// straight back into the bug the whole ticket exists to remove.
+		//
+		// Its receipt is INDEPENDENT of `delivered`: the ack gate answers for what
+		// the sidecar had to deliver, and nothing here was ever delivered to
+		// anybody. The senders cannot collide either — a printed line's sender is
+		// never this member, so the two groups never share a watermark.
+		//
+		// `show` is therefore WHAT GETS A RECEIPT, which is no longer the same
+		// list as what was printed: the printed lines only when the consumer
+		// confirmed them, plus the self-sent rows unconditionally.
+		show := make([]map[string]any, 0, len(unread)+len(selfSent))
 		if delivered {
-			reportChatRead(client, cfg, show, seen, out)
+			show = append(show, unread...)
 		}
+		show = append(show, selfSent...)
+		reportChatRead(client, cfg, show, seen, out)
 	}
 	// REBUILD from the refetched authority rather than only adding: an id absent
 	// from the list has aged out of the server's window and can never drain
 	// again, so dropping it keeps the file bounded (mirrors drainReplyCards).
-	next := make(map[string]bool, len(msgs))
-	for _, m := range msgs {
+	next := make(map[string]bool, len(msgs.rows))
+	for _, m := range msgs.rows {
 		if strings.ToLower(strings.TrimSpace(strOrEmpty(m["to"]))) != sid {
 			continue
 		}
@@ -1230,9 +1327,9 @@ func drainChat(client httpClient, cfg Config, seen *chatSeen, out io.Writer, sil
 	// them seen and never print them again. Dropping them here is what makes
 	// "the next drain prints it again" true rather than a wish.
 	//
-	// EVERY unread id, not only the printed ones: the lines the backlog cap
-	// dropped were announced by the 略過 N 則 line, which is in this same
-	// undelivered batch — so nothing about this window reached the agent.
+	// EVERY unread id: one drain prints its whole backfill as a single batch and
+	// gates it once, so an unconfirmed batch means nothing about this window
+	// reached the agent.
 	if !delivered {
 		for _, m := range unread {
 			if mid := strOrEmpty(m["id"]); mid != "" {
@@ -1261,28 +1358,19 @@ func drainChat(client httpClient, cfg Config, seen *chatSeen, out io.Writer, sil
 // showed. So each sender gets its own high-water mark, computed from that
 // sender's own lines only.
 //
-// 🔴 THE CAP CORNER — and the earlier version of this comment got it WRONG, so
-// read it carefully (caught by the T-48 independent review).
+// 🔴 THE WATERMARK ONLY TELLS THE TRUTH BECAUSE NOTHING IS SKIPPED ANY MORE.
+// A receipt is a WATERMARK, not a per-message acknowledgement: it says
+// "everything at or below this ts is read". While drainChat capped its print at
+// the newest N lines, a sender with one surviving printed line had that receipt
+// sweep in every OLDER line of theirs the cap had dropped — announced as
+// fetchable, then marked read, and never offered again. The cap is gone and the
+// unread walk is exhaustive, so every line covered by a watermark is a line this
+// drain actually printed.
+// Pinned by TestDrainChat_LongBacklog_PrintsEveryLineItsWatermarkCovers.
 //
-// chatBacklogPrintCap drops the OLDEST lines and prints the newest. A receipt is
-// a WATERMARK, not a per-message acknowledgement: it says "everything at or
-// below this ts is read". So for a sender who still has a SURVIVING printed
-// line, the dropped older ones are swept in by that same receipt — marked read
-// although their bodies never reached the session. This comment used to claim
-// the opposite ("no receipt is filed for them; the sender's next message carries
-// the watermark past them"), which is only true of the narrower case below.
-//
-// It is a real hole in this ticket's premise (printed, therefore read) and it is
-// LEFT AS IS rather than quietly patched: reporting the oldest printed ts
-// instead would leave the newest printed lines unread and re-print them forever.
-// The drain does announce the gap — it prints a 略過 N 則 line naming the count
-// and telling the reader to fetch them with get_chat.
-// Pinned by TestDrainChat_BacklogCap_SweepsDroppedOlderLinesOfASurvivingSender.
-//
-// The case that really files nothing is a sender ALL of whose lines were
-// dropped: no surviving line, no entry in the map, no receipt. A message the
-// wire sent without a usable ts is skipped for the same reason — there is no
-// watermark to report.
+// A sender files NO receipt when none of their lines printed — an undelivered
+// batch, or a message the wire sent without a usable ts, which has no watermark
+// to report.
 // markReadPath is the read-receipt endpoint (POST): body {peer, last_read_ts},
 // reader = the verified JWT sub, watermark monotonic (a stale report is a
 // no-op 200).

@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -76,6 +79,36 @@ func msgsJSON(ids ...string) string {
 // route serves, and fetchChat would answer nil — a fault, deliberately, rather
 // than "no messages".
 func chatBody(list string) string { return `{"messages":` + list + `}` }
+
+// chatPage renders ONE page of the T-48 unread walk: the messages, plus the
+// cursor that continues it. An empty `next` mints no cursor at all, which is how
+// the wire says "this is the end".
+func chatPage(next string, msgs ...string) string {
+	body := chatBody("[" + strings.Join(msgs, ",") + "]")
+	if next == "" {
+		return body
+	}
+	return strings.TrimSuffix(body, "}") + `,"next_cursor":` + strconv.Quote(next) + "}"
+}
+
+// mustReturn fails the test if fn has not returned within the deadline.
+//
+// 🔴 THE POINT IS THAT A LOOP GUARD'S TEST GOES RED RATHER THAN HANGING. What
+// the guards under test prevent is a walk that NEVER comes back, and a test that
+// merely blocks on that proves nothing: it looks like a slow suite, gets killed
+// by the runner with no attribution, and the next person reruns it. So the wait
+// has a deadline of its own and the failure names what it means.
+func mustReturn(t *testing.T, what string, fn func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { defer close(done); fn() }()
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatalf("%s never returned — the unread walk is spinning, which is this "+
+			"member's only thread gone and this member permanently deaf", what)
+	}
+}
 
 // emptyChatOrList answers the empty body for `path`: the chat envelope on
 // /api/chat, a bare array anywhere else. The stub servers below answer several
@@ -330,18 +363,33 @@ func TestLoadChatSeen_EmptyArrayIsPrimed(t *testing.T) {
 	}
 }
 
-// The backfill is BOUNDED: over the cap only the newest chatBacklogPrintCap
-// lines print, one notice names the drop, and the dropped ones are still
-// recorded so they never come back.
-func TestDrainChat_BacklogOverCap_TruncatesOldestAndSaysSo(t *testing.T) {
+// 🔴 THE BACKFILL IS COMPLETE. There used to be a 20-line print cap here that
+// kept the newest and announced the rest as 略過 N 則; this pins that EVERY
+// unread line prints, across as many pages as it takes, and that no line is
+// summarised away.
+func TestDrainChat_LongBacklogAcrossPages_PrintsEveryLine(t *testing.T) {
 	home := t.TempDir()
-	total := chatBacklogPrintCap + 7
+	const total = 47 // deliberately far more than one page and than the old cap
 	ids := make([]string, 0, total)
+	msgs := make([]string, 0, total)
 	for i := 1; i <= total; i++ {
-		ids = append(ids, fmt.Sprintf("m%02d", i))
+		id := fmt.Sprintf("m%02d", i)
+		ids = append(ids, id)
+		msgs = append(msgs, tsMsg(id, "boss", "kyle", float64(i)))
 	}
-	srv := newMutableChatServer(t, msgsJSON(ids...))
-	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle", Home: home}
+	pages := []string{
+		chatPage("c1", msgs[:20]...),
+		chatPage("c2", msgs[20:40]...),
+		chatPage("", msgs[40:]...),
+	}
+	srv := newMarkReadServer(t, "[]")
+	srv.serveChat(func(q url.Values, nth int) (int, string) {
+		if nth > len(pages) {
+			return 200, chatPage("")
+		}
+		return 200, pages[nth-1]
+	})
+	cfg := markCfg(srv.URL, home)
 
 	// primed with nothing seen ⇒ the whole list is backlog.
 	if err := os.MkdirAll(filepath.Dir(chatSeenPath(cfg)), 0o755); err != nil {
@@ -352,39 +400,99 @@ func TestDrainChat_BacklogOverCap_TruncatesOldestAndSaysSo(t *testing.T) {
 	}
 	s := loadChatSeen(chatSeenPath(cfg))
 	var out bytes.Buffer
-	if n := drainChat(srv.Client(), cfg, s, &out, false, nil); n != total {
+	var n int
+	mustReturn(t, "drainChat over a three-page backlog", func() {
+		n = drainChat(srv.Client(), cfg, s, &out, false, nil)
+	})
+	if n != total {
 		t.Fatalf("returned count = %d want the full unread count %d", n, total)
 	}
 
 	got := out.String()
-	lines := strings.Count(got, "[ocagent] chat from ")
-	if lines != chatBacklogPrintCap {
-		t.Fatalf("printed %d chat lines, want the cap %d", lines, chatBacklogPrintCap)
+	if lines := strings.Count(got, "[ocagent] chat from "); lines != total {
+		t.Fatalf("printed %d chat lines, want all %d — a backfill that prints a "+
+			"subset is the bug this replaced", lines, total)
 	}
-	if !strings.Contains(got, fmt.Sprintf("至少 %d 則未讀，只補印最新 %d 則", total, chatBacklogPrintCap)) ||
-		!strings.Contains(got, "get_chat") {
-		t.Fatalf("truncation notice missing or unhelpful; out = %q", got)
+	for _, id := range ids {
+		if !strings.Contains(got, "#"+id) {
+			t.Fatalf("%s was never printed; out = %q", id, got)
+		}
 	}
-	// The SKIPPED count is the number the reader acts on — it is what tells them
-	// how much is missing and therefore whether to go and fetch it. Asserting the
-	// prefix above leaves it unguarded: an independent review put a constant 999
-	// there and every test still passed.
-	if !strings.Contains(got, fmt.Sprintf("略過 %d 則較舊", total-chatBacklogPrintCap)) {
-		t.Fatalf("truncation notice must state the skipped count %d; out = %q",
-			total-chatBacklogPrintCap, got)
+	// No line may stand in for messages the session was not shown.
+	for _, banned := range []string{"略過", "只補印", "至少"} {
+		if strings.Contains(got, banned) {
+			t.Fatalf("the drain still summarises part of the backlog away (%q); out = %q",
+				banned, got)
+		}
 	}
-	// the NEWEST survive, the OLDEST are dropped.
-	if !strings.Contains(got, "#"+ids[total-1]) {
-		t.Fatalf("newest message %s must print; out = %q", ids[total-1], got)
-	}
-	if strings.Contains(got, "#"+ids[0]) {
-		t.Fatalf("oldest message %s must be truncated away; out = %q", ids[0], got)
-	}
-	// dropped-but-announced messages are recorded: the next drain is silent.
+	// everything printed is recorded: the next drain is silent.
 	out.Reset()
 	s2 := loadChatSeen(chatSeenPath(cfg))
 	if n := drainChat(srv.Client(), cfg, s2, &out, false, nil); n != 0 || out.Len() != 0 {
-		t.Fatalf("truncated messages must still be marked seen: n=%d out=%q", n, out.String())
+		t.Fatalf("a printed backlog must be marked seen: n=%d out=%q", n, out.String())
+	}
+}
+
+// 🔴 LOOP GUARD ①. "Page until next_cursor is empty" is a promise the SERVER
+// keeps, and a server that hands back a cursor that never advances would spin
+// this walk forever — on the listener's only thread, so this member would
+// receive nothing ever again. It stops, it keeps what it did get, and it SAYS SO:
+// a silent stop is indistinguishable from a finished backfill.
+func TestDrainChat_CursorThatNeverAdvances_StopsSaysSoAndKeepsWhatItGot(t *testing.T) {
+	srv := newMarkReadServer(t, "[]")
+	srv.serveChat(func(q url.Values, nth int) (int, string) {
+		return 200, chatPage("stuck", tsMsg(fmt.Sprintf("m%d", nth), "boss", "kyle", float64(nth)))
+	})
+	cfg := markCfg(srv.URL, t.TempDir())
+	seen := loadChatSeen(chatSeenPath(cfg))
+	seen.primed = true
+	var out bytes.Buffer
+
+	mustReturn(t, "drainChat against a server whose cursor never advances", func() {
+		drainChat(srv.Client(), cfg, seen, &out, false, nil)
+	})
+
+	got := out.String()
+	if !strings.Contains(got, "沒有前進") || !strings.Contains(got, "get_chat") {
+		t.Fatalf("a walk cut short by a stuck cursor must say so and say what to do; "+
+			"out = %q", got)
+	}
+	if !strings.Contains(got, "#m1") || !strings.Contains(got, "#m2") {
+		t.Fatalf("what the walk DID fetch must still print; out = %q", got)
+	}
+	// page 1 mints "stuck", page 2 hands the same token back ⇒ stop.
+	if n := len(srv.chatQueries()); n != 2 {
+		t.Fatalf("the walk made %d requests, want 2 — it must stop the first time a "+
+			"cursor it has already followed comes back", n)
+	}
+}
+
+// 🔴 LOOP GUARD ②, the second net. A server that mints a FRESH token every time
+// defeats guard ① completely, and is just as fatal. The page ceiling stops it,
+// and stopping there is also said out loud — the reader must not read a ceiling
+// as an inbox.
+func TestDrainChat_EndlessFreshCursors_StopsAtThePageCeilingAndSaysSo(t *testing.T) {
+	srv := newMarkReadServer(t, "[]")
+	srv.serveChat(func(q url.Values, nth int) (int, string) {
+		return 200, chatPage(fmt.Sprintf("c%d", nth),
+			tsMsg(fmt.Sprintf("m%d", nth), "boss", "kyle", float64(nth)))
+	})
+	cfg := markCfg(srv.URL, t.TempDir())
+	seen := loadChatSeen(chatSeenPath(cfg))
+	seen.primed = true
+	var out bytes.Buffer
+
+	mustReturn(t, "drainChat against a server that never stops issuing cursors", func() {
+		drainChat(srv.Client(), cfg, seen, &out, false, nil)
+	})
+
+	got := out.String()
+	if !strings.Contains(got, "分頁上限") || !strings.Contains(got, "get_chat") {
+		t.Fatalf("stopping at the ceiling must say it was a CEILING, not an inbox; "+
+			"out = %q", got)
+	}
+	if n := len(srv.chatQueries()); n != chatUnreadMaxPages {
+		t.Fatalf("the walk made %d requests, want the ceiling %d", n, chatUnreadMaxPages)
 	}
 }
 

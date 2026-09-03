@@ -9,9 +9,12 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -50,6 +53,14 @@ type markReadServer struct {
 	// recorded — the hook the "print first" guardrail uses to snapshot what the
 	// session had already been told at the moment the receipt was filed.
 	beforeMark func()
+	// chatAnswer, if set, OWNS the /api/chat route: it is handed the query and
+	// the 1-based request number and returns (status, verbatim body). That is
+	// what lets a test serve a real multi-page unread walk — and the pathological
+	// walks that must not spin the client forever. Nil ⇒ `list` in one page.
+	chatAnswer func(q url.Values, nth int) (int, string)
+	// queries records every /api/chat request line, so a test can assert WHAT
+	// was asked for and not only what came back.
+	queries []url.Values
 }
 
 func newMarkReadServer(t *testing.T, list string) *markReadServer {
@@ -79,8 +90,15 @@ func newMarkReadServer(t *testing.T, list string) *markReadServer {
 		}
 		if strings.HasPrefix(r.URL.Path, "/api/chat") {
 			m.mu.Lock()
-			list := m.list
+			m.queries = append(m.queries, r.URL.Query())
+			nth, answer, list := len(m.queries), m.chatAnswer, m.list
 			m.mu.Unlock()
+			if answer != nil {
+				status, body := answer(r.URL.Query(), nth)
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte(body))
+				return
+			}
 			w.WriteHeader(200)
 			_, _ = w.Write([]byte(chatBody(list)))
 			return
@@ -112,6 +130,21 @@ func (m *markReadServer) snapshot() []markCall {
 	defer m.mu.Unlock()
 	out := append([]markCall(nil), m.calls...)
 	return out
+}
+
+// serveChat installs the /api/chat responder under the lock, so a test that sets
+// it cannot race the handler goroutine that reads it.
+func (m *markReadServer) serveChat(f func(q url.Values, nth int) (int, string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.chatAnswer = f
+}
+
+// chatQueries is every /api/chat request line this server saw, in order.
+func (m *markReadServer) chatQueries() []url.Values {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]url.Values(nil), m.queries...)
 }
 
 func (m *markReadServer) rawBodies() []string {
@@ -229,54 +262,65 @@ func TestDrainChat_MultipleSenders_EachMarkedToItsOwnWatermark(t *testing.T) {
 	}
 }
 
-// 🔴 THE CAP CORNER, PINNED BECAUSE THE COMMENT ABOVE reportChatRead USED TO GET
-// IT WRONG (found by the T-48 independent review).
+// 🔴 A WATERMARK MAY ONLY COVER LINES THAT WERE ACTUALLY PRINTED.
 //
-// chatBacklogPrintCap drops the OLDEST lines and prints the newest. The receipt
-// is a WATERMARK — "everything at or below this ts is read" — so for a sender
-// who still has a surviving printed line, THE DROPPED OLDER ONES ARE SWEPT IN
-// TOO. They are marked read although their bodies never reached the session.
-//
-// That is a genuine hole in this ticket's premise ("printed, therefore read"),
-// and it is pinned rather than quietly fixed because the alternative — reporting
-// the OLDEST printed line's ts — would leave the newest printed lines unread and
-// re-print them forever. The user is told: the drain prints a 略過 N 則 line.
-//
-// The one case that really files nothing is a sender ALL of whose lines were
-// dropped: no surviving line, no entry, no receipt.
-func TestDrainChat_BacklogCap_SweepsDroppedOlderLinesOfASurvivingSender(t *testing.T) {
+// A receipt is a per-sender watermark: "everything at or below this ts is read".
+// While the drain capped its print at the newest N lines, a sender with one
+// surviving printed line had that same receipt sweep in every OLDER line of
+// theirs the cap had dropped — announced as fetchable, then marked read, never
+// offered again. The cap is gone and the unread walk is exhaustive, so this
+// asserts the invariant directly rather than the absence of the cap: for every
+// receipt, every message from that sender at or below the reported ts must
+// appear in the printed output.
+func TestDrainChat_LongBacklog_PrintsEveryLineItsWatermarkCovers(t *testing.T) {
 	now := float64(time.Now().Unix())
-	msgs := make([]string, 0, chatBacklogPrintCap+6)
-	// alice speaks only at the very start ⇒ every one of her lines is dropped.
-	msgs = append(msgs, tsMsg("a-old", "alice", "kyle", now-500))
-	// bob's oldest line is dropped too, but he also has the newest line of all.
-	msgs = append(msgs, tsMsg("b-old", "bob", "kyle", now-499))
-	for i := 0; i < chatBacklogPrintCap; i++ {
-		msgs = append(msgs, tsMsg(fmt.Sprintf("b-%d", i), "bob", "kyle", now-float64(100-i)))
+	type wire struct {
+		id, from string
+		ts       float64
 	}
-	srv := newMarkReadServer(t, "["+strings.Join(msgs, ",")+"]")
+	rows := []wire{{"a-old", "alice", now - 500}, {"b-old", "bob", now - 499}}
+	for i := 0; i < 30; i++ { // well past the 20 lines the old cap would have kept
+		rows = append(rows, wire{fmt.Sprintf("b-%d", i), "bob", now - float64(100-i)})
+	}
+	lines := make([]string, 0, len(rows))
+	for _, r := range rows {
+		lines = append(lines, tsMsg(r.id, r.from, "kyle", r.ts))
+	}
+	pages := []string{chatPage("c1", lines[:20]...), chatPage("", lines[20:]...)}
+	srv := newMarkReadServer(t, "[]")
+	srv.serveChat(func(q url.Values, nth int) (int, string) {
+		if nth > len(pages) {
+			return 200, chatPage("")
+		}
+		return 200, pages[nth-1]
+	})
 	var out bytes.Buffer
 
-	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), loadChatSeen(""), &out, false, nil)
+	mustReturn(t, "drainChat over a two-page backlog", func() {
+		drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), loadChatSeen(""), &out, false, nil)
+	})
 
-	if !strings.Contains(out.String(), "略過") {
-		t.Fatalf("a drain over the cap must announce what it skipped; got:\n%s", out.String())
+	high := map[string]float64{}
+	for _, c := range srv.snapshot() {
+		if c.LastReadTS > high[c.Peer] {
+			high[c.Peer] = c.LastReadTS
+		}
 	}
-	calls := srv.snapshot()
-	if len(calls) != 1 || calls[0].Peer != "bob" {
-		t.Fatalf("receipts = %+v, want exactly one for bob — alice had every line "+
-			"dropped, so she has no surviving line and must get no receipt at all", calls)
+	if len(high) != 2 {
+		t.Fatalf("receipts = %+v, want one per sender — both alice and bob had "+
+			"lines printed", srv.snapshot())
 	}
-	// The pin: bob's watermark is his NEWEST printed line, which is strictly
-	// above his dropped one ⇒ the dropped line is covered by it.
-	wantTS := now - float64(100-(chatBacklogPrintCap-1))
-	if calls[0].LastReadTS != wantTS {
-		t.Fatalf("bob's watermark = %v, want %v (his newest printed line)", calls[0].LastReadTS, wantTS)
-	}
-	if calls[0].LastReadTS <= now-499 {
-		t.Fatalf("watermark %v does not cover bob's dropped line at %v — if this ever "+
-			"becomes true the comment above reportChatRead must change with it",
-			calls[0].LastReadTS, now-499)
+	for _, r := range rows {
+		covered := r.ts <= high[r.from]
+		printed := strings.Contains(out.String(), "#"+r.id)
+		if covered && !printed {
+			t.Fatalf("%s (from %s, ts %v) is marked read by a watermark of %v but was "+
+				"never printed — the sender sees a ✓ for something nobody was shown",
+				r.id, r.from, r.ts, high[r.from])
+		}
+		if !printed {
+			t.Fatalf("%s was never printed at all; the backfill is not complete", r.id)
+		}
 	}
 }
 
@@ -730,8 +774,24 @@ func TestDrainChat_AckThatNeverArrives_TimesOutSaysSoAndKeepsTheMessageUnread(t 
 
 func TestDrainChat_UnackedBatch_LeavesTheMessageUnreadUnseenAndReprintable(t *testing.T) {
 	now := float64(time.Now().Unix())
-	list := "[" + tsMsg("m1", "boss", "kyle", now-30) + "]"
-	srv := newMarkReadServer(t, list)
+	// A MULTI-PAGE backfill, because "a batch" had to be redefined when the drain
+	// started paging: the whole backfill is ONE batch, gated once at the end, so
+	// a single refusal takes every page of it back rather than leaving the
+	// session holding some pages and not others.
+	byCursor := map[string]string{
+		"":   chatPage("c1", tsMsg("m1", "boss", "kyle", now-30)),
+		"c1": chatPage("c2", tsMsg("m2", "boss", "kyle", now-20)),
+		"c2": chatPage("", tsMsg("m3", "boss", "kyle", now-10)),
+	}
+	srv := newMarkReadServer(t, "[]")
+	srv.serveChat(func(q url.Values, _ int) (int, string) {
+		page, ok := byCursor[q.Get("cursor")]
+		if !ok {
+			t.Errorf("unknown cursor %q", q.Get("cursor"))
+			return 200, chatPage("")
+		}
+		return 200, page
+	})
 	home := t.TempDir()
 	cfg := markCfg(srv.URL, home)
 	seen := loadChatSeen(chatSeenPath(cfg))
@@ -740,35 +800,251 @@ func TestDrainChat_UnackedBatch_LeavesTheMessageUnreadUnseenAndReprintable(t *te
 
 	// An answer for a DIFFERENT batch must not be mistaken for this one's.
 	gate := newAckGate(ackEnv("1"), strings.NewReader("ack 7\nnack 1\n"))
-	drainChat(srv.Client(), cfg, seen, &out, false, gate)
+	mustReturn(t, "drainChat over a nacked three-page backfill", func() {
+		drainChat(srv.Client(), cfg, seen, &out, false, gate)
+	})
 
-	if !strings.Contains(out.String(), "chat from boss (#m1") {
-		t.Fatalf("precondition: the line must be printed before anyone can fail to "+
-			"deliver it; out = %q", out.String())
+	for _, id := range []string{"m1", "m2", "m3"} {
+		if !strings.Contains(out.String(), "chat from boss (#"+id) {
+			t.Fatalf("precondition: every page must be printed before anyone can "+
+				"fail to deliver it; %s missing from %q", id, out.String())
+		}
+	}
+	// ONE gate for the whole backfill: a second marker would mean a long
+	// catch-up blocks the listener once per page.
+	if n := strings.Count(out.String(), agentLinePrefix+noticeBatch+" "); n != 1 {
+		t.Fatalf("the backfill printed %d batch markers, want exactly 1 — every page "+
+			"of one catch-up is one batch; out = %q", n, out.String())
 	}
 	if calls := srv.snapshot(); len(calls) != 0 {
-		t.Errorf("a message that never reached the agent was marked read: %+v — the "+
+		t.Errorf("a batch that never reached the agent was marked read: %+v — the "+
 			"sender now sees a ✓ for something nobody was ever shown", calls)
 	}
-	if seen.m["m1"] {
-		t.Fatal("an undelivered message was recorded as surfaced; the seen set is " +
-			"rebuilt from the refetched window, so this drops it for good and no " +
-			"later drain can ever print it again")
+	for _, id := range []string{"m1", "m2", "m3"} {
+		if seen.m[id] {
+			t.Fatalf("undelivered %s was recorded as surfaced; the seen set is "+
+				"rebuilt from the refetched window, so this drops it for good and "+
+				"no later drain can ever print it again", id)
+		}
 	}
 
-	// The recovery this exists for: the next drain prints it again.
+	// The recovery this exists for: the next drain prints ALL of it again.
 	var out2 bytes.Buffer
 	gate2 := newAckGate(ackEnv("1"), strings.NewReader("ack 1\n"))
 	seen2 := loadChatSeen(chatSeenPath(cfg))
-	if n := drainChat(srv.Client(), cfg, seen2, &out2, false, gate2); n != 1 {
-		t.Fatalf("the next drain reported %d unread, want 1", n)
+	var n int
+	mustReturn(t, "the redelivery drain", func() {
+		n = drainChat(srv.Client(), cfg, seen2, &out2, false, gate2)
+	})
+	if n != 3 {
+		t.Fatalf("the next drain reported %d unread, want 3", n)
 	}
-	if !strings.Contains(out2.String(), "chat from boss (#m1") {
-		t.Fatalf("the undelivered message never came back; out = %q", out2.String())
+	for _, id := range []string{"m1", "m2", "m3"} {
+		if !strings.Contains(out2.String(), "chat from boss (#"+id) {
+			t.Fatalf("undelivered %s never came back; out = %q", id, out2.String())
+		}
 	}
 	if calls := srv.snapshot(); len(calls) != 1 {
 		t.Errorf("the re-delivered batch was acked, so its receipt must now be "+
 			"filed exactly once: %+v", calls)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// rc-dccab860be32 — "don't read me my own words back" moved from the API to
+// this client, and with it the ONE exception to "printed, therefore read".
+// ---------------------------------------------------------------------------
+
+type unreadRow struct {
+	id, from, to string
+	ts           float64
+}
+
+// unreadChatServer is a MINIATURE of the real unread contract: it holds a fixed
+// message list, answers ?unread=true&recipient=&limit= oldest-first from each
+// sender's watermark, pages with a cursor, and ADVANCES that watermark on
+// POST /api/chat/mark-read.
+//
+// A canned list cannot answer "what does the NEXT drain see", because the answer
+// has to depend on what this drain reported. That question is the whole point of
+// the self-sent receipt: without it the same rows come back forever.
+type unreadChatServer struct {
+	*httptest.Server
+	mu   sync.Mutex
+	rows []unreadRow
+	high map[string]float64 // sender → this reader's watermark
+}
+
+func newUnreadChatServer(t *testing.T, rows []unreadRow) *unreadChatServer {
+	t.Helper()
+	u := &unreadChatServer{rows: rows, high: map[string]float64{}}
+	u.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == markReadPath {
+			var c markCall
+			raw, _ := io.ReadAll(r.Body)
+			if err := json.Unmarshal(raw, &c); err != nil {
+				t.Errorf("mark-read body is not JSON: %v (%s)", err, raw)
+			}
+			u.mu.Lock()
+			if c.LastReadTS > u.high[c.Peer] {
+				u.high[c.Peer] = c.LastReadTS
+			}
+			u.mu.Unlock()
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`{"reader_id":"kyle","peer_id":"` + c.Peer + `","last_read_ts":0}`))
+			return
+		}
+		if !strings.HasPrefix(r.URL.Path, "/api/chat") {
+			w.WriteHeader(404)
+			return
+		}
+		q := r.URL.Query()
+		if q.Get("unread") != "true" {
+			t.Errorf("this server only serves the unread walk; got %v", q)
+		}
+		open := u.unreadFor(q.Get("recipient"))
+		start, _ := strconv.Atoi(q.Get("cursor"))
+		limit, _ := strconv.Atoi(q.Get("limit"))
+		end := start + limit
+		if limit <= 0 || end > len(open) {
+			end = len(open)
+		}
+		lines := make([]string, 0, end-start)
+		for _, row := range open[start:end] {
+			lines = append(lines, tsMsg(row.id, row.from, row.to, row.ts))
+		}
+		next := ""
+		if end < len(open) {
+			next = strconv.Itoa(end)
+		}
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(chatPage(next, lines...)))
+	}))
+	t.Cleanup(u.Server.Close)
+	return u
+}
+
+// unreadFor is what a caller has NOT marked read, oldest first — the server's
+// own view, which is the only thing that can answer whether a receipt landed.
+func (u *unreadChatServer) unreadFor(recipient string) []unreadRow {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	var open []unreadRow
+	for _, row := range u.rows {
+		if row.to == recipient && row.ts > u.high[row.from] {
+			open = append(open, row)
+		}
+	}
+	return open
+}
+
+func (u *unreadChatServer) unreadIDs(recipient string) []string {
+	var ids []string
+	for _, row := range u.unreadFor(recipient) {
+		ids = append(ids, row.id)
+	}
+	return ids
+}
+
+// A note this member wrote to itself is not news to it. The unread set carries
+// it now (the API stopped filtering `sender == caller`), so this client is the
+// only party left that can keep it out of the backfill.
+func TestDrainChat_SelfSentMessage_IsNeverPrinted(t *testing.T) {
+	now := float64(time.Now().Unix())
+	srv := newUnreadChatServer(t, []unreadRow{
+		{"self-1", "kyle", "kyle", now - 300},
+		{"m1", "boss", "kyle", now - 200},
+	})
+	cfg := markCfg(srv.URL, t.TempDir())
+	seen := loadChatSeen(chatSeenPath(cfg))
+	seen.primed = true
+	var out bytes.Buffer
+
+	n := drainChat(srv.Client(), cfg, seen, &out, false, nil)
+
+	if !strings.Contains(out.String(), "#m1") {
+		t.Fatalf("precondition: a real inbound line must print; out = %q", out.String())
+	}
+	if strings.Contains(out.String(), "#self-1") {
+		t.Fatalf("the member was read its own note back; out = %q", out.String())
+	}
+	if n != 1 {
+		t.Fatalf("unread count = %d, want 1 — a self-sent row is not unread mail", n)
+	}
+}
+
+// 🔴 …AND IT IS STILL RECEIPTED, which is the one place this drain marks a line
+// read without printing it. Nothing marks it if this drain does not: the server
+// keeps returning what nobody has read, so every self-addressed note would pile
+// up in every future unread walk until the backfill is mostly this member's own
+// voice.
+//
+// The shape is two consecutive drains, and the SECOND ledger is fresh on
+// purpose: a local "already surfaced" set would hide the row from the print
+// either way, so only the server's own view of what is still unread can tell
+// the difference between "receipted" and "merely suppressed".
+func TestDrainChat_SelfSentMessage_IsStillMarkedReadSoItDoesNotComeBack(t *testing.T) {
+	now := float64(time.Now().Unix())
+	srv := newUnreadChatServer(t, []unreadRow{
+		{"self-1", "kyle", "kyle", now - 300},
+		{"m1", "boss", "kyle", now - 200},
+	})
+	cfg := markCfg(srv.URL, t.TempDir())
+	var out bytes.Buffer
+
+	// The ledger ALREADY carries self-1, as a previous process would have left
+	// it. That is what makes this drain the interesting one: the local "already
+	// surfaced" check must not stand in front of the receipt, or a self-sent row
+	// is receipted at most once — on the one drain that first saw it — and every
+	// drain after that skips it while the server goes on returning it.
+	if err := os.MkdirAll(filepath.Dir(chatSeenPath(cfg)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(chatSeenPath(cfg), []byte(`["self-1"]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	first := loadChatSeen(chatSeenPath(cfg))
+	if !first.primed {
+		t.Fatal("precondition: a persisted ledger must load primed")
+	}
+	drainChat(srv.Client(), cfg, first, &out, false, nil)
+
+	if got := srv.unreadIDs("kyle"); len(got) != 0 {
+		t.Fatalf("still unread after the drain: %v — a self-sent row nobody receipts "+
+			"comes back on every walk from here on", got)
+	}
+
+	var out2 bytes.Buffer
+	fresh := loadChatSeen("")
+	fresh.primed = true
+	if n := drainChat(srv.Client(), cfg, fresh, &out2, false, nil); n != 0 || out2.Len() != 0 {
+		t.Fatalf("the second drain fetched the same backlog again: n=%d out=%q",
+			n, out2.String())
+	}
+}
+
+// The self-sent receipt does not ride on the ack gate. The gate answers for what
+// the sidecar had to DELIVER, and a self-sent row was delivered to nobody — so a
+// refused batch must still not leave it piling up on the server forever.
+func TestDrainChat_SelfSentMessage_IsReceiptedEvenWhenTheBatchIsNacked(t *testing.T) {
+	now := float64(time.Now().Unix())
+	srv := newUnreadChatServer(t, []unreadRow{
+		{"self-1", "kyle", "kyle", now - 300},
+		{"m1", "boss", "kyle", now - 200},
+	})
+	cfg := markCfg(srv.URL, t.TempDir())
+	seen := loadChatSeen(chatSeenPath(cfg))
+	seen.primed = true
+	var out bytes.Buffer
+
+	gate := newAckGate(ackEnv("1"), strings.NewReader("nack 1\n"))
+	mustReturn(t, "drainChat over a nacked batch alongside a self-sent row", func() {
+		drainChat(srv.Client(), cfg, seen, &out, false, gate)
+	})
+
+	if got := srv.unreadIDs("kyle"); !slices.Equal(got, []string{"m1"}) {
+		t.Fatalf("still unread = %v, want only m1 — the refused line must come back "+
+			"and the self-sent one must not", got)
 	}
 }
 
