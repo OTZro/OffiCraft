@@ -201,10 +201,18 @@ END;
 --    hours, and all three were files sent while designing this table). After
 --    migrating, on the same DB, this must return 1:
 --      SELECT (SELECT count(*) FROM chat_attachment_ref)
---           = (SELECT count(*) FROM chat_message m,
---                  json_each(json_extract(m.meta,'$.attachments')) j
+--           = (SELECT count(*) FROM chat_message m, json_each(
+--                  CASE WHEN json_valid(m.meta)
+--                        AND json_type(m.meta,'$.attachments') = 'array'
+--                       THEN json_extract(m.meta,'$.attachments')
+--                       ELSE '[]' END) j
 --              WHERE COALESCE(json_extract(j.value,'$.id'),'') <> '');
---    (the FROM clause is the same CASE guard as the triggers use — see above)
+--    ⚠️ THE `CASE` IS PART OF THE CHECK, NOT DECORATION. Copy this verbatim.
+--    An earlier revision of this comment left the bare json_extract here after
+--    the triggers moved to CASE; run THAT and it dies with "malformed JSON" on
+--    the first corrupt row — and the person running it is VERIFYING a
+--    migration, i.e. exactly the moment they will blame the migration rather
+--    than the command. (O-206 caught it by running the comment.)
 INSERT INTO chat_attachment_ref
     (message_id, ord, attachment_id, sender, recipient, ts, mime, filename)
 SELECT m.id, j.key, json_extract(j.value, '$.id'), m.sender, m.recipient, m.ts,
