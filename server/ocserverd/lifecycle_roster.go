@@ -137,6 +137,67 @@ func lifecyclePolicyFor(m Member) LifecyclePolicy {
 	}}
 }
 
+// ── WHICH HALF drives one row ────────────────────────────────────────────────
+
+// lifecycleDriver names ONE of the two halves of the merged lifecycle tick
+// (lifecycle_tick.go runs runReconcileTick first, then runOutsourceTick). The
+// value IS the producer's own function name, so a parity failure can print the
+// half by the name a reader can grep for rather than as "half 0" / "half 1".
+type lifecycleDriver string
+
+const (
+	driverReconcile lifecycleDriver = "runReconcileTick"
+	driverOutsource lifecycleDriver = "runOutsourceTick"
+	// driverNone is not a legitimate answer for any row. It exists so that a
+	// future non-exhaustive edit to lifecycleTickDriverFor fails LOUDLY as
+	// "claimed by NEITHER half" in the parity test, instead of quietly
+	// defaulting the row into whichever half the zero value happens to name.
+	driverNone lifecycleDriver = ""
+)
+
+// lifecycleTickDriverFor answers WHICH HALF of the merged lifecycle tick drives
+// ONE row. Exactly one half, for every row, always.
+//
+// 🔴 WHY THIS FUNCTION EXISTS — it encodes nothing new, and that is the point.
+//
+// Today the answer is written down NOWHERE. It is a side effect of a SQL
+// string: DAL.ListMembers is `FROM member WHERE kind != 'outsource'` (dal.go),
+// so runReconcileTick's roster read simply never sees a worker row, while
+// runOutsourceTick's read (ListOutsourceWorkers) never sees anything else. That
+// WHERE clause is the ONE AND ONLY thing keeping the same row out of both FSMs
+// in a single tick, and its absence is not hypothetical: with the clause lifted,
+// one ACTIVE desired-online worker row was measured taking a `start` from
+// enqueueWardenFrame AND a `start` from notifyWorkerSpawn in the SAME tick,
+// leaving an entry in reconcileStates and in workerReconcileStates at once. An
+// already-ONLINE worker emits no second frame but still books that second state
+// entry — so counting dispatched frames alone under-reports the overlap by half.
+//
+// T-14 項目 6 wants that WHERE clause merged away. This function is the wall
+// built BEFORE it comes down: the split moves out of a query and into a named,
+// TOTAL predicate that both halves ask by name, so "exactly one half owns a
+// row" becomes a sentence a test can falsify cell by cell
+// (TestLifecycleTickDriver_EveryRowHasExactlyOneDriver) rather than a property
+// a reader has to infer from a SQL string in another file.
+//
+// 🔴 IT IS DELIBERATELY NOT NARROWER THAN THE SQL IT STANDS IN FOR. This step
+// is a pure re-siting of the existing split and must stay behaviour-identical:
+// EVERY kind='outsource' row belongs to the outsource half — assigned, active
+// and released, held down or not — because that is exactly the population
+// ListOutsourceWorkers hands runOutsourceTick today. Rows that half then
+// declines (a released row inside its reclaim grace, a desired-offline assigned
+// row) are declined INSIDE it, by its own switch; they must never fall through
+// to the reconcile half, and this function is what stops them.
+//
+// This is NOT the entry filter. lifecyclePolicyFor answers "should this row
+// still have an instance at all?"; this answers the question BEFORE it, "whose
+// question is that to ask?". Both halves ask both, driver first.
+func lifecycleTickDriverFor(m Member) lifecycleDriver {
+	if m.Kind == KindOutsource {
+		return driverOutsource
+	}
+	return driverReconcile
+}
+
 // ── the formalities ──────────────────────────────────────────────────────────
 
 // The pass names. They are the vocabulary the parity test speaks, so a pass

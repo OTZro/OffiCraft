@@ -2787,6 +2787,17 @@ func (s *apiServer) runReconcileTick(now float64) {
 	}
 	var members []Member
 	for _, m := range all {
+		// WHICH HALF drives this row (lifecycle_roster.go), asked BEFORE the
+		// entry filter — "is this mine to decide" comes before "should it
+		// exist". A NO-OP TODAY, deliberately: ListMembers' `WHERE kind !=
+		// 'outsource'` already guarantees the answer here is driverReconcile for
+		// every row in `all`. It is the structural stand-in for that WHERE
+		// clause, put in place BEFORE the clause is merged away, so the split
+		// between the two halves survives the merge as something the parity test
+		// can falsify rather than as a property of a query in another file.
+		if lifecycleTickDriverFor(m) != driverReconcile {
+			continue
+		}
 		// THE entry filter (lifecycle_roster.go). It used to be written out here
 		// by hand, and again in reconcileMemberNow, and a third time — in its
 		// outsource dialect — in runOutsourceTick. One question, one answer.
