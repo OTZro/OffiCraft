@@ -139,3 +139,50 @@ func TestChatGalleryReturnsASelfMessageOnce(t *testing.T) {
 		t.Fatalf("a self-message must appear exactly once, got %v", got)
 	}
 }
+
+func TestChatGalleryRowCarriesTheWholeSnapshotNotJustTheID(t *testing.T) {
+	// Every field below is SNAPSHOTTED into chat_attachment_ref by the trigger
+	// rather than read from chat_message at query time. The other tests in this
+	// file compare id lists only, so a trigger that wrote sender into recipient
+	// would leave all three of them green while the panel credited every image
+	// to the wrong member. Assert the whole projection, from the one row.
+	srv, secret, db := newWiredTestServerWithDB(t)
+	tok, err := mintJWT("mira", "agent", 300, secret, time.Now().Unix(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO member (id, name, kind) VALUES ('owner', 'Owner', 'assistant')`); err != nil {
+		t.Fatal(err)
+	}
+	// Asymmetric on purpose: mira is the RECIPIENT here, so a swap is visible.
+	seedGalleryMessage(t, db, "c-a", "owner", "mira", 300,
+		`{"attachments":[{"id":"att-a1","mime":"image/png","filename":"a1.png"}]}`)
+
+	status, body := doRaw(t, "GET", srv.URL+"/api/chat/attachments?with=mira", tok, "", nil)
+	if status != 200 {
+		t.Fatalf("gallery: want 200, got %d %s", status, body)
+	}
+	var rows []chatGalleryEntryDTO
+	if err := json.Unmarshal([]byte(body), &rows); err != nil {
+		t.Fatalf("gallery body is not JSON: %v %s", err, body)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("want exactly one row, got %d: %s", len(rows), body)
+	}
+	got, want := rows[0], chatGalleryEntryDTO{
+		ID:        "att-a1",
+		URL:       "/api/chat/attachment/att-a1",
+		Filename:  "a1.png",
+		Mime:      "image/png",
+		IsImage:   true,
+		MessageID: "c-a",
+		From:      "owner",
+		FromName:  "Owner",
+		To:        "mira",
+		TS:        300,
+	}
+	if got != want {
+		t.Fatalf("gallery row projection wrong:\n got %+v\nwant %+v", got, want)
+	}
+}
