@@ -44,11 +44,17 @@
 //           cannot express. So the multi leg ticks, ASSERTS THE CARD IS STILL
 //           WAITING, and only then sends.
 //
-//   (3) THE CHIP'S LEADING MARK IS THE CARD KIND, WORDLESSLY. The 1/2/3/4
-//       ordinal is gone: a multi card's options carry tick boxes, a single
-//       card's carry radios (owner: 「那個1, 2, 3, 4直接變成打勾的嗎」), and a
-//       line above the options says what a press will DO — the only thing
-//       standing between "I tapped to see" and an answer that is one-shot.
+//   (3) THE CHIP'S LEADING MARK IS THE CARD KIND, WORDLESSLY. A multi card's
+//       options carry TICK BOXES (owner: 「那個1, 2, 3, 4直接變成打勾的嗎」);
+//       a single card's keep the 1/2/3/4 ORDINAL. ⚠️ This paragraph used to say
+//       the ordinal was gone and that a single card carried radios — owner
+//       reverted that on 2026-08-31 (「單選可以跟之前一樣顯示 1, 2, 3, 4 就好嘛?」,
+//       see ReplyCardBody's note: the radio's selected ring was a state a
+//       one-tap card can never be seen in), and this file's own assertions
+//       (「a single-select card numbers its options again」 / 「and no ordinals」)
+//       have pinned it ever since. A line above the
+//       options says what a press will DO — the only thing standing between
+//       "I tapped to see" and an answer that is one-shot.
 //
 // ⚠ HISTORY (found while writing this spec; FIXED since): the http adapter's
 // subscribeEvents() used to open its OWN EventSource per subscriber — App

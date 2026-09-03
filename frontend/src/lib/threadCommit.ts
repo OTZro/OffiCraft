@@ -3,9 +3,12 @@
 // 🔴 WHY THIS IS A MODULE AND NOT ONE CAREFUL CALL SITE PER COMMIT POINT.
 // The reply cards a thread carries are fetched SEPARATELY and LATER than the messages, so a
 // waiting card above a scroll target grows after the fact and pushes the target
-// down (measured +254px at 1280 wide; 0 at 390, where the browser's own scroll
-// anchoring absorbs it). The fix is that every commit must have those cards in
-// hand BEFORE the messages reach the view — and the way that fix has failed
+// down (measured +254px at 1280 wide — and NOT 0 at 390, which this line used to
+// claim: `visual-guards/chat-jump-card-shift.ct.spec.tsx` measures +200px there
+// and `08_unread_jump` +215.78px in the browser. What absorbs the growth is a
+// card ABOVE THE FOLD, a placement, not a narrow viewport). The fix is that every
+// commit must have those cards in hand BEFORE the messages reach the view — and
+// the way that fix has failed
 // before, four times in one night with a green suite, is a hand-written
 // `await prefetch(...)` at each of N commit points that the next reader has to
 // remember to write.

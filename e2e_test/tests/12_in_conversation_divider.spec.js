@@ -93,8 +93,11 @@ test.describe('B12 · in-conversation arrivals — the preview strip and the div
     expect(overflow, 'the thread must overflow one screen (real scroll state)').toBe(true);
     // 🔴 THE SCROLL HAS TO BE WAITED FOR, NOT MERELY ISSUED.
     // `el.scrollTop = 0` updates the property synchronously, but ChatArea keeps
-    // its "is the owner near the bottom?" answer in `nearBottomRef`, and the ONLY
-    // writer of that ref is its onScroll handler. A programmatic assignment
+    // its "is the owner near the bottom?" answer in a ref of its own
+    // (`session.nearBottom`, on the per-conversation `ChatSession` — there is no
+    // `nearBottomRef` any more, and it is written from a handful of sites, not
+    // one). The site that answers THIS question is its onScroll handler: a
+    // programmatic assignment
     // dispatches the scroll event on a later task, so code that assigns and walks
     // straight on leaves the component still holding the previous answer: the
     // next arrival is auto-followed to the bottom and no preview strip is ever armed.

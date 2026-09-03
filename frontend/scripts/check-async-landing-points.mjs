@@ -739,7 +739,10 @@ const MODULE_STATE = [
  * 🔴 WHY IT IS A LINT AND NOT A COMMENT. The chat thread's reply cards are
  * fetched separately from and later than its messages, so a WAITING card above a
  * scroll target grows after the fact and pushes the target down (measured +254px
- * at 1280 wide; 0 at 390, where the browser's scroll anchoring absorbs it). The
+ * at 1280 wide; NOT 0 at 390 — that half of this sentence was wrong until
+ * 2026-09-04: visual-guards/chat-jump-card-shift.ct.spec.tsx measures +200px
+ * there and 08_unread_jump +215.78px in the browser. Only a card ABOVE THE FOLD
+ * is absorbed by `overflow-anchor: auto`, which is a placement, not a width). The
  * fix is that every commit must hold those cards BEFORE the rows reach the view
  * — and the way that fix fails is N hand-written `await prefetch(...)` calls at
  * N commit points, one of which the next reader forgets. That failure has a

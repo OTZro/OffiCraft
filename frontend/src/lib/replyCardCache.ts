@@ -7,9 +7,18 @@
 // WAITING card is the one that grows when it lands (options, chips, composer),
 // while answered/expired ones mount collapsed and never fetch at all. A waiting
 // card sitting ABOVE a scroll target therefore pushes that target down after the
-// jump has already landed on it: measured +254px at 1280 wide. (At 390 the
-// browser's own scroll anchoring absorbs it, which is why a 390-only guard
-// proves nothing — see visual-guards/chat-jump-card-shift.ct.spec.tsx.)
+// jump has already landed on it: measured +254px at 1280 wide.
+//
+// ⚠️ 390 IS NOT IMMUNE, AND THIS FILE USED TO SAY IT WAS. The brief this was
+// written from claimed the shift is 0 at 390 「because browser scroll anchoring
+// absorbs it」; the guard cited for that claim is the one that DISPROVED it.
+// `visual-guards/chat-jump-card-shift.ct.spec.tsx` measured a card in view above
+// the target shifting it +521px at 1280 AND +200px at 390 — narrower, because
+// the same card renders shorter at phone width, not absorbed. Measured again in
+// the browser on 2026-09-04 through `08_unread_jump`'s landing point: +215.78px
+// at 390, +195.77px at 1280. What IS absorbed is a card placed ABOVE the fold,
+// where `overflow-anchor: auto` compensates the growth exactly — that is a
+// PLACEMENT property, not a width one, and it is what a fixture must avoid.
 //
 // This module is HALF the fix. It makes a card's value available on the FIRST
 // frame the row is painted; `lib/threadCommit.ts` is the other half — the choke
