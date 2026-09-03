@@ -1094,6 +1094,25 @@ type OutsourceWorker struct {
 	// offline projects spawn_state "stopped". Replaces the earlier bespoke
 	// stopped_since marker with the member value domain (owner: 外包＝系統代管的正職員工).
 	DesiredState string
+	// RestartAfterStop is the SECOND owner intent (T-14 項目 7, migrations/00070),
+	// a DIRECT mirror of member.restart_after_stop: 「這一輪下線收口之後，把它帶
+	// 起來」. The 下線 verbs clear it, the 重啟 verbs (重新聚焦 / 改機器 / 換 model
+	// on a stopped worker) set it, and consumeWorkerRestartAfterStop spends it at
+	// the converged-offline edge of the outsource tick.
+	//
+	// 🔴 IT HAS TO BE CARRIED HERE, and this is the field that made T-65 包② a
+	// two-commit change rather than a one-commit one. restart_after_stop is one of
+	// the FEW owner-intent columns that is deliberately NOT insertOnly
+	// (mfRestartAfterStop, dal_member_patch.go), so memberWholeRow carries it into
+	// PutMember's SET list — which means every PutOutsourceWorker is a write of
+	// this column. While the projection did not carry it, memberFromWorker rebuilt
+	// the Member with the zero value and each of the 13 non-test PutOutsourceWorker
+	// call sites wrote restart_after_stop=0 over whatever was there. A handler
+	// stamping the intent would have had it erased by the very next worker write,
+	// with NOTHING going red: the owner presses 重新聚焦 on a stopped worker, gets
+	// a 200, and the worker never comes up.
+	// Pinned by TestOutsourceProjectionCarriesRestartAfterStop.
+	RestartAfterStop bool
 	// BankedCost is the persistent historical cumulative cost (T-ba6b,
 	// migrations/00021), the worker twin of member.BankedCost: the live
 	// telemetry cost folds in here (bankLiveCost — the SAME helper the member
@@ -1157,6 +1176,7 @@ func workerFromMember(m Member) OutsourceWorker {
 		WakingSince:        m.WakingSince,
 		ForcedStopAt:       m.ForcedStopAt,
 		DesiredState:       m.DesiredState,
+		RestartAfterStop:   m.RestartAfterStop,
 		BankedCost:         m.BankedCost,
 		AvatarAttachmentID: m.AvatarAttachmentID,
 	}
@@ -1218,6 +1238,14 @@ func memberFromWorker(w OutsourceWorker) Member {
 		// anchor survives the next worker write. Dropping it back to a constant
 		// re-opens the exact bug.
 		WakingSince:        w.WakingSince,
+		// 🔴 CARRIED, NOT ZEROED (T-65 包②) — and unlike WakingSince above, this one
+		// is load-bearing on a column the whole-row upsert ACTIVELY WRITES rather
+		// than merely fails to refresh. mfRestartAfterStop is not insertOnly, so
+		// dropping this line back to the zero value does not leave the stored intent
+		// alone: it CLEARS it, on every single worker write. That is a silent
+		// erasure — no error, no red test that does not look for it specifically —
+		// so it has its own mutant in the T-65 包② DoD.
+		RestartAfterStop:   w.RestartAfterStop,
 		BankedCost:         w.BankedCost,
 		LastOp:             w.LastOp,
 		LastOpOK:           w.LastOpOK,
