@@ -978,6 +978,12 @@ var identityGateLedger = map[string]string{
 		"NOT an identity gate — the wire twin of the reply-card kind copy above.",
 	"wire.go :: newTaskArtifactDTO :: Kind: a.Kind": "" +
 		"NOT an identity gate — ARTIFACT kind (file / image / link), copied to the DTO.",
+	"wire.go :: newTaskArtifactVersionDTO :: Kind: h.Kind": "" +
+		"NOT an identity gate — the same artifact kind copied onto a retained VERSION's " +
+		"DTO (T-60). Kind is immutable across versions, so this is a carry, not a choice.",
+	"api_tasks.go :: HandleReplaceTaskArtifactApiTasksTaskIdArtifactArtifactIdReplacePost :: Kind: art.Kind": "" +
+		"NOT an identity gate — the replacement row carries the pinned artifact's own " +
+		"kind forward verbatim; that carry IS the immutability rule, not a population.",
 
 	// ── NOT identity gates at all ──────────────────────────────────────────
 	//
@@ -993,8 +999,17 @@ var identityGateLedger = map[string]string{
 	"api_tasks.go :: taskArtifactDTOs :: a.Kind != ArtifactKindLink": "" +
 		"NOT an identity gate — ARTIFACT kind (file / image / link). Same overloaded " +
 		"field name, same reason for keeping it visible.",
-	"wire.go :: newTaskArtifactDTO :: a.Kind != ArtifactKindLink": "" +
-		"NOT an identity gate — the wire twin of the artifact-kind test above.",
+	"api_tasks.go :: HandleListTaskArtifactHistoryApiTasksTaskIdArtifactArtifactIdHistoryGet :: v.Kind != ArtifactKindLink": "" +
+		"NOT an identity gate — the same artifact kind read off a RETAINED VERSION row " +
+		"(T-60 history), deciding whether that version has a blob to resolve a filename " +
+		"from. Kept listed rather than filtered out of the scan.",
+	"api_tasks.go :: HandleReplaceTaskArtifactApiTasksTaskIdArtifactArtifactIdReplacePost :: kind != art.Kind": "" +
+		"NOT an identity gate — the artifact kind a replace body asked for versus the " +
+		"pinned artifact's own, which is the T-60 immutability rule. No population is " +
+		"on either side.",
+	"api_tasks.go :: HandleReplaceTaskArtifactApiTasksTaskIdArtifactArtifactIdReplacePost :: art.Kind == ArtifactKindLink": "" +
+		"NOT an identity gate — the same artifact kind picking which content rules apply " +
+		"(a link carries a url, a file carries an attachment).",
 	"api_tasks_handoff.go :: applyHandoffPlan :: plan.Kind switch case HandoffFollowUp": "" +
 		"NOT an identity gate — HANDOFF-PLAN kind (none / follow-up / return to " +
 		"creator). Caught by the switch shape, which exists for the member-kind switch " +

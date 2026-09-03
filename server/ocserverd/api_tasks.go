@@ -3054,36 +3054,23 @@ func (s *apiServer) HandleReplaceTaskArtifactApiTasksTaskIdArtifactArtifactIdRep
 	if !ok {
 		return
 	}
-	// pinned is the artifact's CONTENT kind (file/image/link) — the same value
-	// add reads out of its request body, and nothing to do with a member kind.
-	//
-	// 🔴 IT IS READ INTO A LOCAL ON PURPOSE, and the comparisons below use
-	// `pinned` rather than `art.Kind`, exactly as add uses its own local. The
-	// authz surface scanner (authz_surface_gate_test.go) matches the SELECTOR
-	// NAME `.Kind` and cannot see the type it is selected from, so
-	// `art.Kind == ArtifactKindLink` — an artifact's content kind — is
-	// mis-read by it as a caller-identity test and demands an entry in an
-	// inventory of authorization decisions, which this is not. Cleaning this
-	// back to `art.Kind ==` inline produces a red with no apparent cause; read
-	// that scanner's file header for the debt this workaround leaves behind.
-	pinned := art.Kind
-	if kind := trimmedOrEmpty(body.Kind); kind != "" && kind != pinned {
-		writeError(w, http.StatusBadRequest, artifactKindRefusal(pinned, kind))
+	if kind := trimmedOrEmpty(body.Kind); kind != "" && kind != art.Kind {
+		writeError(w, http.StatusBadRequest, artifactKindRefusal(art.Kind, kind))
 		return
 	}
 	next := TaskArtifact{
 		ID:        art.ID,
 		TaskID:    art.TaskID,
-		Kind:      pinned,
+		Kind:      art.Kind,
 		Label:     trimmedOrEmpty(body.Label),
 		CreatedTS: nowSecs(),
 		CreatedBy: currentActor(r),
 	}
 	url, attID := trimmedOrEmpty(body.Url), trimmedOrEmpty(body.AttachmentId)
-	if pinned == ArtifactKindLink {
+	if art.Kind == ArtifactKindLink {
 		if attID != "" {
 			writeError(w, http.StatusBadRequest,
-				artifactKindRefusal(pinned, ArtifactKindFile))
+				artifactKindRefusal(art.Kind, ArtifactKindFile))
 			return
 		}
 		if url == "" {
@@ -3095,12 +3082,12 @@ func (s *apiServer) HandleReplaceTaskArtifactApiTasksTaskIdArtifactArtifactIdRep
 	} else {
 		if url != "" {
 			writeError(w, http.StatusBadRequest,
-				artifactKindRefusal(pinned, ArtifactKindLink))
+				artifactKindRefusal(art.Kind, ArtifactKindLink))
 			return
 		}
 		if attID == "" {
 			writeError(w, http.StatusBadRequest,
-				"attachment_id is required for a "+pinned+" artifact")
+				"attachment_id is required for a "+art.Kind+" artifact")
 			return
 		}
 		if isMemberAvatarAttachmentID(attID) {
