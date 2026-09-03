@@ -46,6 +46,7 @@ const h = vi.hoisted(() => {
       lastReadTs: 1,
     })),
     postChat: vi.fn(async () => ({}) as unknown),
+    getReplyCard: vi.fn(async (id: string) => ({ id }) as unknown),
     sseHandler: null as ((topic: string) => void) | null,
   };
 });
@@ -57,6 +58,7 @@ vi.mock("../api", () => ({
     listChatReads: h.listChatReads,
     markChatRead: h.markChatRead,
     postChat: h.postChat,
+    getReplyCard: h.getReplyCard,
     subscribeEvents: (cb: (topic: string) => void) => {
       h.sseHandler = cb;
       return () => {
@@ -69,6 +71,10 @@ vi.mock("../api", () => ({
 import { useChat } from "./useChat";
 import type { JumpOutcome } from "./useChat";
 import { ApiError } from "../api/errors";
+import {
+  getCachedReplyCard,
+  resetReplyCardCache,
+} from "../lib/replyCardCache";
 
 /** A promise the test resolves by hand — the only way to hold a request in
  * flight and land something else on top of it, which is what every race below
@@ -96,6 +102,31 @@ function mkMsg(id: string, from: string, to: string, ts: number): ChatMessage {
   };
 }
 
+/** A row carrying a WAITING 請示卡 — the only kind that grows when its card
+ * lands, and therefore the only kind a commit must hold before painting. */
+function mkCardMsg(id: string, cardId: string, ts: number): ChatMessage {
+  return {
+    ...mkMsg(id, "b", "owner", ts),
+    replyCardId: cardId,
+    replyCardStatus: "waiting",
+  };
+}
+
+/** Renders `useChat` and records, IN ORDER, when the carrying row first reached
+ * the caller and when its card arrived in the prefill cache. The whole claim is
+ * that the card is there FIRST; the order is the assertion. */
+function renderWatchingCard(rowId: string, cardId: string) {
+  const seen: string[] = [];
+  const hook = renderHook(() => {
+    const v = useChat("b");
+    if (getCachedReplyCard(cardId) && !seen.includes("card")) seen.push("card");
+    if (v.messages.some((m) => m.id === rowId) && !seen.includes("row"))
+      seen.push("row");
+    return v;
+  });
+  return { ...hook, seen };
+}
+
 /** `count` messages b↔owner with ids `${prefix}0..` and ascending ts from
  * `tsStart` — a full server page when count === 30. */
 function page(prefix: string, tsStart: number, count: number): ChatMessage[] {
@@ -111,6 +142,8 @@ beforeEach(() => {
   h.listChatWindow.mockReset().mockResolvedValue([]);
   h.listChatReads.mockClear();
   h.markChatRead.mockClear();
+  h.getReplyCard.mockClear();
+  resetReplyCardCache();
   h.sseHandler = null;
   hasFocusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(true);
 });
@@ -458,6 +491,65 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
       await new Promise((r) => setTimeout(r, 20));
     });
     expect(h.listChat.mock.calls.length).toBe(before + 1);
+  });
+
+  // 🔴 GUARD B'S OTHER TWO COMMIT PATHS (T-48, independent review F8). The
+  // shared `afterEach` in ChatArea.anchor-entry.test.tsx asserts this shape,
+  // but only ONE test in that file seeds a waiting card, so for the other
+  // commit paths the invariant is vacuously true there. `loadNewer` and
+  // `resetToLatest` are the two paths that REPLACE or EXTEND the thread without
+  // going through an entry anchor, and they get their own denominators here.
+  it("loadNewer's page has its waiting card in hand BEFORE the row reaches the caller", async () => {
+    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
+    const { result, seen } = renderWatchingCard("t-card", "rc-fwd");
+    await waitFor(() => expect(result.current.messages).toHaveLength(30));
+
+    h.listChatWindow
+      .mockResolvedValueOnce(page("a", 100, 30))
+      .mockResolvedValueOnce(page("a", 129, 30));
+    await act(async () => {
+      await result.current.loadAround("a0");
+    });
+    const newestLoaded =
+      result.current.messages[result.current.messages.length - 1].id;
+
+    h.listChatWindow.mockResolvedValueOnce([
+      mkMsg(newestLoaded, "b", "owner", 158),
+      mkCardMsg("t-card", "rc-fwd", 159),
+    ]);
+    await act(async () => {
+      await result.current.loadNewer();
+    });
+
+    // The denominator: the row really did arrive, and its card really was read.
+    expect(result.current.messages.map((m) => m.id)).toContain("t-card");
+    expect(h.getReplyCard).toHaveBeenCalledWith("rc-fwd");
+    expect(seen).toEqual(["card", "row"]);
+  });
+
+  it("resetToLatest's replacement page has its waiting card in hand BEFORE the row reaches the caller", async () => {
+    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
+    const { result, seen } = renderWatchingCard("z-card", "rc-latest");
+    await waitFor(() => expect(result.current.messages).toHaveLength(30));
+
+    h.listChatWindow
+      .mockResolvedValueOnce(page("a", 100, 30))
+      .mockResolvedValueOnce(page("a", 129, 30));
+    await act(async () => {
+      await result.current.loadAround("a0");
+    });
+
+    h.listChat.mockResolvedValueOnce([
+      ...page("z", 9000, 29),
+      mkCardMsg("z-card", "rc-latest", 9100),
+    ]);
+    await act(async () => {
+      await result.current.resetToLatest();
+    });
+
+    expect(result.current.messages.map((m) => m.id)).toContain("z-card");
+    expect(h.getReplyCard).toHaveBeenCalledWith("rc-latest");
+    expect(seen).toEqual(["card", "row"]);
   });
 
   it("a walk that stopped on a page carrying nothing new is restarted by the reader scrolling again", async () => {

@@ -298,8 +298,16 @@ beforeEach(() => {
  * The rule, therefore: if a render put a `replyCardStatus: "waiting"` row on
  * screen, that row's `getReplyCard` must ALREADY HAVE HAPPENED — never after the
  * commit that painted it. It is asserted here rather than inside one test
- * because it is a property of every commit path this file drives, and the way
- * this machinery has failed before is one path nobody remembered to check.
+ * because it must hold of every commit path this file drives, and the way this
+ * machinery has failed before is one path nobody remembered to check.
+ *
+ * ⚠️ BUT SAY WHAT THE DENOMINATOR ACTUALLY IS (independent review F8). Exactly
+ * ONE test in this file seeds a waiting card, so for the other tests here this
+ * afterEach is vacuously true — it is a live assertion over the ANCHOR-ENTRY
+ * path and a standing net over the rest, not evidence about them. The other two
+ * commit paths carry their own denominators in
+ * `useChat.scrollback.test.ts` ("loadNewer's page has its waiting card in hand
+ * BEFORE the row reaches the caller", and the same for `resetToLatest`).
  *
  * ⚠️ It carries its own DENOMINATOR. An invariant over an empty set is green for
  * the wrong reason, and most tests in this file seed no cards at all — so a test
