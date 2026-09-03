@@ -479,6 +479,20 @@ func TestListener_ChatDeltaAfterReconnect_FilesReadReceipt(t *testing.T) {
 // 🔴 THE SERVER IS THE ORACLE, NOT THE CLIENT. The assertion is on what
 // GET /api/chat still owes this member, and the fake mark-read route records
 // nothing on a non-200 — exactly as the real route cannot.
+// nonEmptyLines counts what a drain actually wrote, without looking at what any
+// of it says: the owner's 2026-08-20 ruling bars partial keyword matching, and
+// "did a warning appear alongside the reprint" is a question about how many
+// lines came out, not about their wording.
+func nonEmptyLines(s string) int {
+	n := 0
+	for _, line := range strings.Split(s, "\n") {
+		if strings.TrimSpace(line) != "" {
+			n++
+		}
+	}
+	return n
+}
+
 func TestDrainChat_MarkReadRefused_TheSameBatchPrintsAgainNextDrain(t *testing.T) {
 	now := float64(time.Now().Unix())
 	srv := newUnreadChatServer(t, []unreadRow{
@@ -502,6 +516,14 @@ func TestDrainChat_MarkReadRefused_TheSameBatchPrintsAgainNextDrain(t *testing.T
 		t.Fatalf("a refused receipt moved the server's unread set to %v — it must "+
 			"move nothing", ids)
 	}
+	// The first drain is also the ONLY one that explains itself: two printed
+	// lines plus the single warning the refusal produced. Counted as lines and
+	// not matched as text — what the warning SAYS is not this test's business,
+	// but whether the reprints outlive it is.
+	if got := nonEmptyLines(out.String()); got != 3 {
+		t.Fatalf("the first refused drain wrote %d lines, want 3 (2 messages + the "+
+			"one warning); out = %q", got, out.String())
+	}
 
 	// A NEW process (nothing is carried over — there is nothing that could be)
 	// finds the same two lines still owed, and prints them.
@@ -516,6 +538,25 @@ func TestDrainChat_MarkReadRefused_TheSameBatchPrintsAgainNextDrain(t *testing.T
 			t.Fatalf("%s came back %d times on the retry drain, want 1; out = %q",
 				id, c, out2.String())
 		}
+	}
+
+	// 🔴 THE SAME PROCESS, WHICH IS THE CASE THAT ACTUALLY HAPPENS. A listener
+	// does not restart between drains: it reconnects, and every reconnect drains
+	// again with the SAME warner. So the reprint comes back while the latch is
+	// already spent — the batch repeats and the explanation does not. That
+	// asymmetry is why warnMarkReadFailed's one line has to announce the reprints
+	// in advance rather than describe a dark ✓; this asserts the asymmetry it is
+	// written against, so a build that lost either half reddens here.
+	var outSame bytes.Buffer
+	if n := drainChat(srv.Client(), cfg, &outSame, warn, nil); n != 2 {
+		t.Fatalf("the same process's next drain printed %d lines, want the same 2; "+
+			"out = %q", n, outSame.String())
+	}
+	if got := nonEmptyLines(outSame.String()); got != 2 {
+		t.Fatalf("the repeat drain wrote %d lines, want exactly the 2 messages and "+
+			"nothing else — the warning is once per process, so these reprints "+
+			"arrive with no explanation of their own and the FIRST warning has to "+
+			"have covered them; out = %q", got, outSame.String())
 	}
 
 	// …and once the endpoint recovers, the SAME rows are receipted and stop

@@ -1268,10 +1268,25 @@ func reportChatRead(client httpClient, cfg Config, printed []map[string]any, war
 }
 
 // warnMarkReadFailed says ONCE per process that the read receipt did not land.
-// It is one line because the loss is cosmetic — the message itself was
-// delivered and printed; only the sender's ✓ stays dark — but it is not
-// nothing: a silently un-filed receipt is exactly the class of "no error, wrong
-// picture" bug this whole change exists to remove.
+//
+// 🔴 THE LOSS IS NOT COSMETIC, AND THIS LINE USED TO SAY IT WAS. While a local
+// ledger existed, a refused receipt cost only the sender's ✓: the batch had been
+// recorded as surfaced on this side, so it never came back. That ledger is gone
+// (T-48, rc-224dee5770dd) and the receipt is now the ONLY thing that moves the
+// server's unread watermark — so a receipt that does not land leaves the whole
+// batch unread, and every drain from here on fetches and prints it again, for
+// as long as the endpoint keeps refusing. Pinned by
+// TestDrainChat_MarkReadRefused_TheSameBatchPrintsAgainNextDrain.
+//
+// WHY THE LATCH STAYS ONCE-PER-PROCESS ANYWAY. The reprints are unbounded, so a
+// warning that tracked them would be unbounded too — and this line deliberately
+// does NOT wear the "[ocagent] listen:" head, which means the codex sidecar
+// forwards it and every copy becomes a model turn (cli/ocwarden's
+// actionableCodexListenerLine). One line per flap of a flapping endpoint is the
+// same unbounded-turn failure this ticket exists to remove. So the line is said
+// once and made to cover the whole episode instead: it states up front that the
+// batch WILL keep reprinting, which is the explanation every later reprint needs
+// and the reason none of them needs its own.
 func warnMarkReadFailed(warn *markReadWarner, out io.Writer, peer string, status int) {
 	if out == nil {
 		return
@@ -1283,7 +1298,9 @@ func warnMarkReadFailed(warn *markReadWarner, out io.Writer, peer string, status
 		warn.warned = true
 	}
 	fmt.Fprintf(out, "[ocagent] mark-read 沒送成功（peer=%s，HTTP %d）— 訊息已經印出來了，"+
-		"只是對方看到的已讀勾不會亮。這個行程不會再提醒第二次。\n", peer, status)
+		"但是回條沒送成功，server 那邊就還算未讀：這一批下一次補印會再印一次，"+
+		"而且會一直重印到回條送成功為止，在那之前對方的已讀勾也不會亮。"+
+		"這個行程只會講這一次 —— 之後再看到同一批訊息重複出現，原因就是這一行。\n", peer, status)
 }
 
 // printChatLine emits the one-line-per-message form documented on drainChat.
