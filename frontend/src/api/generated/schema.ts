@@ -1509,9 +1509,11 @@ export interface paths {
          *     of band and rate-limited, asking her to have the owner change it. The response
          *     to the caller is unchanged and takes exactly as long as any other refusal.
          *
-         *     The signing secret and the password hash are loaded from the DB settings table
-         *     at boot and updated in place by the owner endpoints; this handler never sees a
-         *     hard-coded secret.
+         *     The signing keys and the password hash are loaded from the DB settings table at
+         *     boot and updated in place by the owner endpoints; this handler never sees a
+         *     hard-coded secret. The keys are a RING (`GET /api/auth/signing-keys`): the token
+         *     minted here is signed by the one key that currently signs, and stays valid while
+         *     that key remains in the ring.
          */
         post: operations["handle_login_api_login_post"];
         delete?: never;
