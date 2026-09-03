@@ -1610,6 +1610,15 @@ func (s *apiServer) HandleRefocusMemberApiMembersMemberIdRefocusPost(w http.Resp
 			internalError(w, err)
 			return
 		}
+		// The five last_op* columns left the whole-row writer in T-55 批次B, so the
+		// stamp is IN MEMORY ONLY until this lands — the same seam the 換 model and
+		// 改機器 faces above take. It MUST precede the tick below: that tick can
+		// spend the intent and stamp its own receipt, and a persist after it would
+		// push this handler's older snapshot back over the newer sentence.
+		if err := s.persistMemberOpReceipt(*m, requestTrigger(r)); err != nil {
+			internalError(w, err)
+			return
+		}
 		// The member may ALREADY be converged offline (a stop that landed before
 		// the owner pressed this), in which case the queued start is spendable on
 		// this very tick rather than up to a cadence later.

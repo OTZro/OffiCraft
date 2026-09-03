@@ -596,6 +596,26 @@ func memberRestartQueuedReceipt(op string) string {
 // fires" can never disagree about the same member — and a 強制停止 whose kill is
 // still in flight is not restarted underneath itself.
 //
+// 🔴 WHOLE-ROW DEPENDENT — T-55 TRIPWIRE. This function is the tree's heaviest
+// single-write site: TWELVE fields land in one tick (seven assigned here —
+// restart_after_stop, desired_state, stopping_since, stopped_since,
+// waking_since, refocus_since, refocus_op — plus the five last_op* columns
+// stampMemberOpReceipt writes). It relied on the whole-row writer to carry all
+// twelve, so EVERY T-55 batch that marks a column insertOnly silently amputates
+// a field here: the member is still brought up correctly and only the row's
+// stored state is a batch behind, which is why no ordinary test notices. 批次B
+// already did it to the five receipt columns and 批次C to the four wind-down
+// anchors — both are repaired below through their sole writers; 批次D
+// (desired_state + restart_after_stop) and 批次E (waking_since) will do it again.
+//
+// THE TRIPWIRE, so nobody has to read this comment first:
+// TestConsumeRestartAfterStopPersistsEveryFieldItMutates
+// (member_restart_after_stop_t14_test.go) runs this function against a real DAL,
+// reads the row back, and requires the stored row to equal the member this
+// function mutated — field by field, over reflect, enumerating nothing. Mark any
+// column insertOnly without giving this site a writer for it and that test goes
+// red NAMING THE FIELD.
+//
 // The anchors it clears are 活化's list minus forced_stop_at: that column is the
 // durable record that the PREVIOUS session was cut off and is deliberately never
 // cleared by a boot (migrations/00057). Clearing stopping_since is what closes
@@ -617,9 +637,28 @@ func (s *apiServer) consumeRestartAfterStop(m *Member, now float64) bool {
 	stampMemberOpReceipt(m, spawnReasonHeldDown+": the stop the owner asked for has "+
 		"landed — starting this member again, which is what the 重啟 he pressed "+
 		"during the wind-down asked for", now)
+	// The four wind-down anchors left the whole-row writer in T-55 批次C
+	// (insertOnly), so the four clears above are IN MEMORY ONLY until this lands.
+	// BEFORE the row write, for the reason persistMemberWindDownAnchors spells
+	// out: putMember fans the delta the agent's wind-down hook reads, and these
+	// are the columns it reads.
+	if err := s.persistMemberWindDownAnchors(*m); err != nil {
+		reconcileLog("%s: queued restart-after-stop anchor persist failed: %v", m.ID, err)
+		return false
+	}
 	if err := s.putMember(*m, triggerServer); err != nil {
 		reconcileLog("%s: queued restart-after-stop persist failed: %v", m.ID, err)
 		return false
+	}
+	// The five last_op* columns left the whole-row writer in T-55 批次B, so the
+	// stamp above is IN MEMORY ONLY until this lands. Ordered after the row write
+	// for the reason every other site orders it that way: the receipt explains a
+	// change that is already stored, never one that failed. A failure here is not
+	// fatal — the member IS up, and refusing to return true would re-arm an
+	// intent that has already been spent — so it is logged and the tick moves on
+	// with a stale explanation on the row.
+	if err := s.persistMemberOpReceipt(*m, triggerServer); err != nil {
+		reconcileLog("%s: restart-after-stop receipt persist failed: %v", m.ID, err)
 	}
 	reconcileLog("%s: stop converged and a 重啟 was queued behind it — desired_state "+
 		"back to online", m.ID)

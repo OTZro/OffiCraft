@@ -484,12 +484,12 @@ func TestMemberColumnPropertiesAreDeclaredInOnePlace(t *testing.T) {
 	if got, want := len(fields), len(wantCols); got != want {
 		t.Errorf("memberWholeRow projects %d columns, memberColumns has %d", got, want)
 	}
-	// 35 columns minus the 18 insert-only ones. The number moves whenever a
+	// 36 columns minus the 18 insert-only ones. The number moves whenever a
 	// column is migrated out (T-55 has been doing that in batches), and it is
 	// asserted rather than derived ON PURPOSE: a column silently joining or
 	// leaving the whole-row update is the failure this whole line of work exists
 	// to stop, so it has to be a deliberate edit here, in the same commit.
-	if got, want := len(updatableMemberFields(fields)), 17; got != want {
+	if got, want := len(updatableMemberFields(fields)), 18; got != want {
 		t.Errorf("a whole-row write now updates %d columns, want %d. If you "+
 			"migrated a column out, say so by bumping this number; if you did "+
 			"not, a column changed sides on its own.", got, want)

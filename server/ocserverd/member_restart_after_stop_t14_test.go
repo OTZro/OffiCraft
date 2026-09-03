@@ -51,7 +51,10 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -492,5 +495,234 @@ func TestActivateStillCancelsTheStopOutright(t *testing.T) {
 	if after.RestartAfterStop {
 		t.Error("活化 SPENT nothing — it left the queued start on the row, where it " +
 			"would fire a second time after the owner's next 下線")
+	}
+}
+
+// ── the whole-row-writer guards ──────────────────────────────────────────────
+
+// TestConsumeRestartAfterStopPersistsEveryFieldItMutates is the structural guard
+// on the T-55 seam, and it enumerates NOTHING.
+//
+// consumeRestartAfterStop is the heaviest single-write dependent left on the
+// tree: one putMember used to carry every field it touches. T-55 is marking
+// those columns insertOnly one batch at a time, and each batch silently drops
+// whatever this function was relying on the whole-row writer to carry — the
+// member still comes up, only the row's explanation is a batch behind, and no
+// existing test read that row back.
+//
+// The guard is therefore derived, not listed: it takes the member the function
+// mutated IN MEMORY and the member the database holds AFTERWARDS and requires
+// them to be the same row. Every Member field is a memberColumns column
+// (scanMember binds all 36, one per field), and `m` starts life as a DB read, so
+// a field the function never touches is equal on both sides for free and only a
+// mutation that failed to land can make this red. A future batch marking
+// desired_state, refocus_op or anything else insertOnly reddens this test and
+// NAMES THE FIELD, without anyone remembering to come back here.
+func TestConsumeRestartAfterStopPersistsEveryFieldItMutates(t *testing.T) {
+	s := newReconcileTestServer(t)
+	const id = "m-consume-persists"
+
+	// The row is built directly rather than driven through the verbs the tests
+	// above use, and NOT for convenience: hub.Disconnect kicks a reconcile of its
+	// own, so a fixture that ends with a disconnect races the very function this
+	// test calls by hand. Never connecting means IsOnline is false by
+	// construction and no tick can run underneath the assertion.
+	m := testAgent(id)
+	m.DesiredState = DesiredStateOffline
+	m.RestartAfterStop = true
+	putTestMember(t, s, m)
+
+	// 🔴 WITHOUT THE SEEDING THE GUARD IS HALF BLIND. consumeRestartAfterStop
+	// CLEARS most of what it touches, so a field the fixture happens to leave at
+	// zero is "cleared" to the value it already had and a lost write looks
+	// exactly like a landed one. Seeding puts a distinct non-zero value under
+	// every anchor first, so "cleared" and "never written" stop looking alike.
+	seedEveryAnchor(t, s, &m)
+
+	before, err := s.dal.GetMember(id)
+	if err != nil || before == nil {
+		t.Fatalf("read the seeded row: %v", err)
+	}
+	if !before.RestartAfterStop || before.DesiredState != DesiredStateOffline ||
+		before.RosterStatus != RosterStatusActive || s.hub.IsOnline(id) {
+		t.Fatalf("the seeded row is not on the converged-offline edge this guard has to "+
+			"run on: restart=%v desired=%q roster=%q online=%v",
+			before.RestartAfterStop, before.DesiredState, before.RosterStatus, s.hub.IsOnline(id))
+	}
+	got := *before
+	if !s.consumeRestartAfterStop(&got, nowSecs()) {
+		// The precondition held one line ago, so a false here is a persist arm
+		// failing — which the production code only reconcileLogs.
+		t.Fatalf("consumeRestartAfterStop returned false on a row that met every " +
+			"precondition — one of its writes failed (see the reconcile log line above)")
+	}
+
+	after, err := s.dal.GetMember(id)
+	if err != nil || after == nil {
+		t.Fatalf("read back: %v", err)
+	}
+	assertMemberRowMatchesMemory(t, "consumeRestartAfterStop", got, *after)
+
+	// The one sentence a reader of this guard would otherwise have to take on
+	// trust: the row explains ITSELF, not the op before it.
+	if !strings.Contains(after.LastOpReason, "starting this member again") {
+		t.Errorf("the row still explains the PREVIOUS op — last_op_reason = %q, want the "+
+			"「下線後把人帶起來」 receipt consumeRestartAfterStop stamps", after.LastOpReason)
+	}
+}
+
+// TestRefocusQueuedRestartPersistsEveryFieldItMutates is the SAME guard on the
+// SECOND site that queues a restart: the 重新聚焦 handler's 下線 → 重啟 branch
+// (api_members.go, the aRefocusStampWouldReachTheAgent gate). It is a separate
+// call site with a separate set of writes, and the guard above cannot see it.
+//
+// The session is kept LIVE on purpose. The handler runs an event-driven
+// reconcile before answering, and on a converged-offline row that tick spends
+// the intent through consumeRestartAfterStop — which stamps a receipt of its
+// own and would repair this site's loss inside the same request, leaving the
+// handler's own writes untested. With the session up, consumeRestartAfterStop
+// refuses (`s.hub.IsOnline`) and what the row holds afterwards is what THIS
+// handler stored.
+func TestRefocusQueuedRestartPersistsEveryFieldItMutates(t *testing.T) {
+	s := newReconcileTestServer(t)
+	const id = "m-refocus-queued-persists"
+
+	m := deactivatedButStillConnected(id)
+	putTestMember(t, s, m)
+	seedEveryAnchor(t, s, &m)
+	connectOnline(t, s, id)
+
+	before, err := s.dal.GetMember(id)
+	if err != nil || before == nil {
+		t.Fatalf("read the seeded row: %v", err)
+	}
+	if before.DesiredState != DesiredStateOffline || !aStopWasEverAskedFor(*before) ||
+		aRefocusStampWouldReachTheAgent(*before) || !s.hub.IsOnline(id) {
+		t.Fatalf("the seeded row is not the 下線-in-flight-with-a-live-session shape "+
+			"this branch needs: desired=%q stopping_since=%v online=%v",
+			before.DesiredState, before.StoppingSince, s.hub.IsOnline(id))
+	}
+
+	// The expectation is built by calling the two production mutators the branch
+	// calls, not by writing their effects out by hand — so a field added to
+	// either one is covered the day it is added.
+	want := *before
+	stampRestartIntent(&want)
+	stampMemberOpReceipt(&want, memberRestartQueuedReceipt(refocusOpRefocus), nowSecs())
+
+	rec := httptest.NewRecorder()
+	s.HandleRefocusMemberApiMembersMemberIdRefocusPost(rec,
+		taskReq(t, "POST", "/api/members/"+id+"/refocus", nil, wireOwnerID, "owner"), id)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("refocus on a member on its way offline: want 200, got %d %s",
+			rec.Code, rec.Body.String())
+	}
+
+	after, err := s.dal.GetMember(id)
+	if err != nil || after == nil {
+		t.Fatalf("read back: %v", err)
+	}
+	// last_op_at is the ONE field the handler reads a wall clock for, so it
+	// cannot be predicted — it gets its own assertion instead of being dropped:
+	// a receipt that never reached the row leaves the SEEDED stamp behind, which
+	// is what this compares against.
+	if after.LastOpAt <= before.LastOpAt {
+		t.Fatalf("last_op_at did not move (stored %v, seeded %v) — the receipt this "+
+			"handler stamped never reached the row", after.LastOpAt, before.LastOpAt)
+	}
+	want.LastOpAt = after.LastOpAt
+
+	assertMemberRowMatchesMemory(t,
+		"HandleRefocusMemberApiMembersMemberIdRefocusPost (the 下線 → 重啟 branch)",
+		want, *after)
+}
+
+// assertMemberRowMatchesMemory compares a mutated in-memory Member against the
+// row the database holds for it, field by field, and names each field that did
+// not land. Pointers are compared by VALUE (LastOpOK is three-valued and
+// LinkedTaskID is nullable — comparing addresses would pass on nothing).
+//
+// It walks reflect fields rather than a written-out list on purpose: a field
+// added to Member is covered the day it is added.
+func assertMemberRowMatchesMemory(t *testing.T, site string, inMemory, stored Member) {
+	t.Helper()
+	mv, sv := reflect.ValueOf(inMemory), reflect.ValueOf(stored)
+	var lost []string
+	for i := 0; i < mv.NumField(); i++ {
+		name := mv.Type().Field(i).Name
+		want, got := derefForCompare(mv.Field(i)), derefForCompare(sv.Field(i))
+		if want == got {
+			continue
+		}
+		lost = append(lost, fmt.Sprintf("%s: in memory %v, in the database %v", name, want, got))
+	}
+	if len(lost) == 0 {
+		return
+	}
+	t.Fatalf("%s mutated these fields and the database did not receive them:\n  %s\n"+
+		"\nThis site writes through ONE whole-row putMember. A field listed above "+
+		"has been marked insertOnly (T-55 is moving them out batch by batch) and now "+
+		"needs its own writer at this call site — see persistMemberOpReceipt and "+
+		"persistMemberWindDownAnchors for the two seams that already exist. Nothing "+
+		"else goes red when this happens: the member still behaves correctly and only "+
+		"the row's stored state is stale.",
+		site, strings.Join(lost, "\n  "))
+}
+
+// derefForCompare renders one field as a comparable value, flattening pointers
+// to "<nil>" or their pointee so *bool / *string compare by content.
+func derefForCompare(v reflect.Value) any {
+	if v.Kind() != reflect.Ptr {
+		return v.Interface()
+	}
+	if v.IsNil() {
+		return "<nil>"
+	}
+	return v.Elem().Interface()
+}
+
+// membersFieldsPinnedForSeeding are the fields seedEveryAnchor must leave alone:
+// each one is read by a guard under test, by a schema CHECK, or by a row this
+// fixture points at. Everything else is fair game — and the point of an explicit
+// REFUSE list rather than an explicit ALLOW list is that a new column is seeded
+// by default, so it arrives covered rather than arriving invisible.
+var membersFieldsPinnedForSeeding = map[string]bool{
+	"ID": true, "Kind": true, "RosterStatus": true, "DesiredState": true,
+	"RestartAfterStop": true, "RoleKey": true, "Runtime": true, "Effort": true,
+	"DesiredMachineID": true, "LastMachineID": true, "LinkedTaskID": true,
+}
+
+// seedEveryAnchor writes a distinct non-zero value into every unpinned float64
+// and string field of a member and persists it, so that a subsequent CLEAR to
+// zero is distinguishable from a write that never happened.
+func seedEveryAnchor(t *testing.T, s *apiServer, m *Member) {
+	t.Helper()
+	v := reflect.ValueOf(m).Elem()
+	stamp := 1_700_000_000.0
+	for i := 0; i < v.NumField(); i++ {
+		f := v.Field(i)
+		if membersFieldsPinnedForSeeding[v.Type().Field(i).Name] {
+			continue
+		}
+		switch f.Kind() {
+		case reflect.Float64:
+			stamp++
+			f.SetFloat(stamp)
+		case reflect.String:
+			f.SetString("oc-t14-seed")
+		}
+	}
+	// 🔴 THE SEED MUST NOT GO THROUGH THE UPDATE PATH IT IS PROBING. PutMember on
+	// an existing row patches only the updatable columns — the very set this
+	// guard exists to catch columns leaving — so seeding that way lands nothing
+	// for exactly the columns that matter, and the guard reads green under its
+	// own mutant. Deleting first forces insertMemberRowIfAbsent, which binds
+	// every column in memberWholeRow and therefore needs no column list of its
+	// own.
+	if _, err := s.dal.wdb.Exec(`DELETE FROM member WHERE id = ?`, m.ID); err != nil {
+		t.Fatalf("clearing the row before seeding: %v", err)
+	}
+	if err := s.dal.PutMember(*m); err != nil {
+		t.Fatalf("seeding the anchors: %v", err)
 	}
 }
