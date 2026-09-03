@@ -25,7 +25,7 @@ func newReconcileTestServer(t *testing.T) *apiServer {
 	if err := seedOutOfBox(dal); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	return newAPIServer(dal, NewHub(), []byte("reconcile-test-secret"), 3600, "../..")
+	return newAPIServer(dal, NewHub(), singleKeyring([]byte("reconcile-test-secret")), 3600, "../..")
 }
 
 func testAgent(id string) Member {

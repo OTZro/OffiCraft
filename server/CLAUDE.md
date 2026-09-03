@@ -12,7 +12,7 @@
 
 ## 2. wire、route 與權限是同一個契約
 
-- `spec/openapi.json` 先於 handler；`bin/gen-ocapi` 產生 `ocapi_gen.go`。route table 在 `routes.go`，它同時承載 auth、`requires`、MCP surface 與 handler；`conformance/routes_manifest.json` 與 spec 是核對來源。新增 endpoint 必須讓這幾個 executable source 同批一致，不能只改 handler；`TestEveryServedRouteIsInThePermissionManifest`（T-61）把 route table 與 manifest 雙向釘死，漏登記或殘留都會當場紅並指名，例外要走 `exemptRoute` 並具名理由與裁定出處。
+- `spec/openapi.json` 先於 handler；`bin/gen-ocapi` 產生 `ocapi_gen.go`。route table 在 `routes.go`，它同時承載 auth、`requires`、MCP surface 與 handler；`conformance/routes_manifest.json` 與 spec 是核對來源。新增 endpoint 必須讓這幾個 executable source 同批一致，不能只改 handler；`TestRouteTableCoversSpecSurface` 把 route table 與 `spec/openapi.json` 雙向釘死，conformance 的 `test_openapi_covers_manifest` 再把 spec 與 manifest 釘成對稱相等，漏登記或殘留會在這兩道之一當場紅。⚠️ 這道保證是**跨語言的兩跳**：本機只跑 `go test ./...` 只涵蓋前半段，要連 conformance 一起跑才完整（CI 的 `bin/ci.sh` 兩者都跑）。兩跳都是集合比較，所以**看不見 `routes_manifest.json` 內部的重複列**——重複只會讓同一條 route 被多測一次，不會讓任何 route 逃掉權限測試。
 - DTO 的 wire shape 由 `wire.go` 的手寫型別維護；`null`、空字串、缺欄與 `additionalProperties:false` 都是語意。不要因生成 struct 的 `omitempty` 偷掉既定 wire。
 - verified token 的 `sub` 是 caller identity，不採信 request body 的 caller id。`requires` 是唯一 route capability floor；boot-time assertion 要拒絕未知 floor、auth／requires 不一致與漏寫 floor。MCP tool 的 caller、target、作用域必須沿用同一條 route gate，不得借 target 的身分。
 - capability 階梯是 `machine < agent < admin_agent < owner`。`owner`、`admin_agent` 與 `MCPExclude` 的現行分配只以 `routes.go` 和治理測試為準，不在本檔硬編可變端點名單；`/api/mint`、owner 憑證與個人 push 類能力不能因「方便自動化」而下放。
@@ -40,7 +40,7 @@
 
 - chat、task message、create/answer reply card 的四個 attachment 寫入面，都要先驗證全部 attachment（至少 `id` 與 `data_b64`）再寫任何 row；使用帶 attachments 的原子 DAL seam，不把 blob、message、card 拆成可留下半筆的多次呼叫。
 - 一般 blob reference、avatar reference、artifact reference 不可混用。avatar 是 stable member id 綁 `member.avatar_attachment_id` 的單一 owner blob；replacement、remove、hard delete 與 rollback 同 transaction 維護 pointer/blob。SSE 只發 delta，不攜帶圖片 bytes。
-- `GET /api/chat/attachments/{attachment_id}/share-link` 的授權在 mint seam（`principalMachine`），回傳 server-relative、永久且不可撤銷的 path；blob GET 仍是 streaming／MCPExclude。不要把 share link 當成登入後的短期 URL。
+- `GET /api/chat/attachments/{attachment_id}/share-link` 的授權在 mint seam（`principalMachine`），回傳 server-relative 的 path；blob GET 仍是 streaming／MCPExclude。不要把 share link 當成登入後的短期 URL。sig **沒有到期時間、也不能單條撤銷**，但 T-62 之後**不再是不可撤銷**：它由當時在簽的那把金鑰派生，那把金鑰離開簽章金鑰環（設定 › 簽章金鑰的「移除」）時，它簽過的每一條連結同時失效 —— 粗粒度、由人決定時機。
 - 文件 history list 只回 metadata；body 用指定 kind + key 的 `get_document_version` 逐筆取，seed 用 `get_document_seed`。role definition、task manual SOP、task manual learnings 的 restore 需要文件仍存在；lessons 才能在 deleted role 上以 overlay + seed 恢復。SOP 與 learnings 是兩條各自有 cap/history 的序列，purpose、display、assignee 不在 version body 裡。
 - context cap 的五個 key 是 duty、insight、learning、manual SOP、manual learnings，各自 accessor、預設值到上限 100000；`global_context` 與 `task.description` 不套這組 cap。長度單位是 Unicode rune，不是 byte。
 - 五個受 cap 的寫面都遵守同一條：新內容未超過下限可寫；超過下限時必須嚴格短於舊內容；等長或變長拒絕。比較 caller-visible 的 folded content（含 seed/overlay），`allow_shrink` 是另一個 wipe guard，不是 cap bypass。回應要同時報 size 與 cap；manual 的 SOP、learnings 分開報。

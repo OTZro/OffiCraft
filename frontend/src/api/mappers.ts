@@ -22,6 +22,7 @@ import type {
   VersionView,
   ReleaseCheckView,
   BackupHealthView,
+  SigningKeyView,
   BackupHealthStatus,
   BackupHealthCode,
   GlobalContextView,
@@ -58,6 +59,7 @@ import type {
   WireVersion,
   WireReleaseCheck,
   WireBackupHealth,
+  WireSigningKeys,
   WireGlobalContext,
   WireBootDoc,
   WireDocumentHistory,
@@ -1207,6 +1209,27 @@ export function toReleaseCheck(w: WireReleaseCheck): ReleaseCheckView {
  * The nullable numbers coalesce to null (a defaulted-away wire field arrives as
  * `undefined`); nothing here manufactures a timestamp or an age.
  */
+/**
+ * WireSigningKeys → SigningKeyView[] (T-62), preserving the server's order
+ * (oldest first).
+ *
+ * The one narrowing: `created_ts` of 0 becomes null. Zero is how the wire says
+ * "this key has been here since before the ring existed and its creation time
+ * was never recorded" — passed through as a number it would render as January
+ * 1970, which is not an unknown date but a WRONG one. Narrowing it here means
+ * no component has to remember the convention.
+ *
+ * 🔴 Nothing is derived from a key here, and there is nothing to derive from:
+ * the wire carries no key material at all.
+ */
+export function toSigningKeys(w: WireSigningKeys): SigningKeyView[] {
+  return w.keys.map((k) => ({
+    keyId: k.key_id,
+    createdTs: k.created_ts === 0 ? null : k.created_ts,
+    isSigning: k.is_signing,
+  }));
+}
+
 export function toBackupHealth(w: WireBackupHealth): BackupHealthView {
   const status: BackupHealthStatus =
     w.status === "healthy" || w.status === "unhealthy" ? w.status : "unknown";

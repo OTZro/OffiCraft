@@ -781,7 +781,7 @@ func (s *apiServer) notifyWorkerSpawn(w OutsourceWorker, now float64) bool {
 			": could not assemble the worker's boot context: "+err.Error(), now)
 		return false
 	}
-	if len(s.secret) == 0 {
+	if len(s.keys.signingSecret()) == 0 {
 		s.stampWorkerPlacementBlocked(&w, spawnReasonNoSecret+
 			": the server has no JWT signing secret, so no worker token can be minted", now)
 		return false

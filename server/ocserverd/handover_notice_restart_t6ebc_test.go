@@ -38,7 +38,7 @@ func restartableNoticeServers(t *testing.T, memberID string) (*apiServer, *apiSe
 		if err := runMigrations(db); err != nil {
 			t.Fatalf("goose up: %v", err)
 		}
-		return newAPIServer(NewDAL(db), NewHub(), []byte("notice-restart-secret"), 3600,
+		return newAPIServer(NewDAL(db), NewHub(), singleKeyring([]byte("notice-restart-secret")), 3600,
 			assetRoot(t.TempDir()))
 	}
 	before := newServer()
@@ -220,7 +220,7 @@ func TestHandoverNotice_ADatabaseFailureFallsTowardSending(t *testing.T) {
 		if err := runMigrations(db); err != nil {
 			t.Fatalf("goose up: %v", err)
 		}
-		return newAPIServer(NewDAL(db), NewHub(), []byte("notice-dbfail-secret"), 3600,
+		return newAPIServer(NewDAL(db), NewHub(), singleKeyring([]byte("notice-dbfail-secret")), 3600,
 			assetRoot(t.TempDir())), db.Close
 	}
 

@@ -288,6 +288,32 @@ func mfAgentIatFloor(v float64) memberField {
 	return memberField{col: "agent_iat_floor", val: v, insertOnly: true, forwardOnly: true}
 }
 
+// mfRestartAfterStop — 「下線之後要不要起來」 (T-14 項目 7, migrations/00070),
+// and the ONE owner-intent column on this table that is deliberately NOT
+// insert-only: restart_after_stop IS carried by the whole-row upsert.
+//
+// It is written by the same HTTP faces that write desired_state, in the same
+// putMember, and the two have to land together: a 下線 that cleared the flag and
+// a 重啟 that set it must never be split across two writes, or the member comes
+// back up after a 停止 (or stays down after a 重啟). Carving it out would buy
+// snapshot safety at the price of that pairing, which is the more expensive of
+// the two.
+//
+// 🔴 THAT MAKES ITS ABSENCE FROM THE INSERT-ONLY SET TEMPORARY, AND THE DEBT IS
+// OWED TO T-55 批次D. desired_state is itself owner intent and is scheduled to
+// leave the whole-row writer for a single-column setter. The moment it does, the
+// pair this comment relies on is broken: desired_state lands through its own
+// statement while restart_after_stop still rides the whole-row write — exactly
+// the two-write split described above, and NOTHING GOES RED, because each half
+// is individually correct. So 批次D must move this column out WITH desired_state
+// and in the SAME write (one statement setting both, not one single-column
+// writer each), or a 停止 whose flag-clear is carried by a stale snapshot brings
+// the member back up, and a 重啟 whose flag-set loses the same race leaves it
+// down.
+func mfRestartAfterStop(v bool) memberField {
+	return memberField{col: "restart_after_stop", val: v}
+}
+
 // memberWholeRow projects a Member onto the full column list.
 //
 // The order below follows memberColumns for readability only. It is NOT
@@ -315,6 +341,7 @@ func memberWholeRow(m Member) []memberField {
 		mfActivatedTS(m.ActivatedTS),
 		mfAvatarAttachmentID(m.AvatarAttachmentID), mfForcedStopAt(m.ForcedStopAt),
 		mfHandoverNoticedTS(m.HandoverNoticedTS), mfAgentIatFloor(m.AgentIatFloor),
+		mfRestartAfterStop(m.RestartAfterStop),
 	}
 }
 

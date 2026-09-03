@@ -1030,7 +1030,7 @@ func (s *apiServer) buildStartFrame(m Member) ([]byte, bool) {
 	if m.RosterStatus != RosterStatusActive {
 		return nil, false
 	}
-	if len(s.secret) == 0 {
+	if len(s.keys.signingSecret()) == 0 {
 		return nil, false
 	}
 	boot, err := s.buildBootContext("", &m)
@@ -1286,6 +1286,11 @@ func (s *apiServer) resolveEmptyRuntimeForPlacement(m *Member, warden string) {
 // decision whose state is NOT advanced, so the next tick retries — the
 // producer never records a command it did not deliver.
 func (s *apiServer) reconcileOne(m Member, st reconcileState, now float64) reconcileDecision {
+	// 下線 → 重啟, spent (T-14 項目 7). BEFORE the observation is built, because
+	// flipping desired_state back to online is what makes this tick take the
+	// decideUp arm and START the member — the same tick the stop converged on,
+	// not the one after it. A no-op for every member with nothing queued.
+	s.consumeRestartAfterStop(&m, now)
 	obs := memberObservation{
 		MemberID:       m.ID,
 		Desired:        parseDesired(m.DesiredState),

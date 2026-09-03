@@ -17,6 +17,7 @@ import type {
   VersionView,
   ReleaseCheckView,
   BackupHealthView,
+  SigningKeyView,
   AuthStatusView,
   MfaEnrollView,
   MfaStateView,
@@ -1865,12 +1866,14 @@ export interface Api {
    * READ-ONLY, like every read door on this API since T-48 — the only thing
    * that advances a read watermark is `markChatRead`. */
   listChatAttachments(withId: string): Promise<GalleryAttachment[]>;
-  /** Mint the PERMANENT share link for one attachment
+  /** Mint the share link for one attachment
    * (`GET /api/chat/attachments/{id}/share-link`): resolves to the blob's
    * server-relative serve path carrying its `?sig=` file-level HMAC credential
    * — anyone holding the URL may read exactly this one blob, nothing else, no
-   * expiry. Callers prefix the page origin to form the absolute, sendable URL.
-   * Unknown id → 404 (throws). */
+   * expiry. It is NOT permanent: the sig is derived from the key that signs at
+   * mint time, so removing that key from the signing-key ring voids it, along
+   * with every other link that key signed (T-62). Callers prefix the page
+   * origin to form the absolute, sendable URL. Unknown id → 404 (throws). */
   getChatAttachmentShareLink(attachmentId: string): Promise<string>;
   /** Post a chat message. May carry text and/or MULTIPLE generic `attachments`
    * (pasted images AND/OR uploaded files, mixed), sent to the server as the
@@ -2334,6 +2337,15 @@ export interface Api {
    * `healthy`.
    */
   getBackupHealth(): Promise<BackupHealthView>;
+  /** GET /api/auth/signing-keys — the ring, oldest first (T-62, owner-gated). */
+  getSigningKeys(): Promise<SigningKeyView[]>;
+  /** POST /api/auth/signing-keys/rotate — add a key and hand signing to it.
+   * Nothing is revoked; every existing key keeps verifying. Answers the ring
+   * AFTER the rotation, so no caller re-fetches to learn where it stands. */
+  rotateSigningKey(): Promise<SigningKeyView[]>;
+  /** POST /api/auth/signing-keys/{keyId}/remove — REVOKE everything that key
+   * signed. No undo, no grace period. Answers the ring after the removal. */
+  removeSigningKey(keyId: string): Promise<SigningKeyView[]>;
   /** The folded global-context doc (owner overlay ⊕ file seed). */
   getGlobalContext(): Promise<GlobalContextView>;
   /** Whole-doc replace of the global context → returns the folded doc

@@ -2148,6 +2148,26 @@
         "additionalProperties": false,
         "type": "object"
       },
+      "SigningKeyDTO": {
+        "description": "ONE signing key, as the outside is allowed to see it: which key it is, when it was made, and whether it is the one signing. There is deliberately no field that could carry key material \u2014 not the key, not a fingerprint, not a hash prefix \u2014 so \"did this leak the key\" is answered by the shape of the type rather than by remembering to strip a field at each call site.",
+        "properties": {
+          "created_ts": {"type": "number", "format": "double"},
+          "is_signing": {"type": "boolean"},
+          "key_id": {"type": "string"}
+        },
+        "required": ["key_id", "created_ts", "is_signing"],
+        "title": "SigningKeyDTO",
+        "type": "object"
+      },
+      "SigningKeysDTO": {
+        "description": "The whole signing-key ring, oldest first. Every mutating call answers with the FULL ring rather than with just what changed, so the settings page never has to re-fetch to learn the truth after acting.",
+        "properties": {
+          "keys": {"items": {"$ref": "#/components/schemas/SigningKeyDTO"}, "type": "array"}
+        },
+        "required": ["keys"],
+        "title": "SigningKeysDTO",
+        "type": "object"
+      },
       "MfaActivateDTO": {
         "description": "Prove a pending TOTP enrolment and ARM the second factor (`POST /api/auth/mfa/activate`, owner-gated). The code must verify against the secret `…/mfa/enroll` handed out; on success that secret becomes the ACTIVE one and the second factor is armed from the next login onward. A wrong code or password leaves the pending secret in place so the owner can simply try again.\n\n🔴 `password` IS REQUIRED, and the owner token alone is deliberately not enough. Arming a factor is as destructive as removing one: an attacker holding only a stolen owner token could otherwise enrol a secret THEY control and activate it, after which the real owner's password yields 401 and they cannot disable it (that needs a live code from the attacker's authenticator) — a transient token theft turned into a durable lockout recoverable only from a host shell. The same reasoning that makes `…/mfa/disable` demand both factors applies symmetrically to arming.",
         "properties": {
@@ -9227,6 +9247,170 @@
         }
       }
     },
+    "/api/auth/signing-keys": {
+      "get": {
+        "description": "List the server's HS256 signing keys (owner-gated).\n\nEvery key in the ring VERIFIES tokens; exactly one of them SIGNS new ones. This is what the settings page renders: how many keys exist, when each was created, and which one is signing.\n\n\ud83d\udd34 NO KEY MATERIAL, AND NOT EVEN A HASH OF IT, EVER APPEARS HERE. `key_id` is drawn from crypto/rand and stored; it is not a function of the key. A hash-derived identifier would be harmless for a random key and a password oracle for a migrated one, whose key IS `SHA-256` over the owner password (`deriveSecretFromPassword`) \u2014 publishing any digest of it would hand out an offline dictionary attack on that password.\n\n`created_ts` is `0` for the key an install has been using since before the ring existed: its creation time was never recorded, and clients MUST render that as unknown rather than as the epoch.",
+        "operationId": "handle_signing_keys_api_auth_signing_keys_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SigningKeysDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Validation error (unified error envelope)."
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Client error (unified error envelope)."
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Server error (unified error envelope)."
+          }
+        },
+        "summary": "List the signing keys: id, when it was made, which one signs.",
+        "x-mcp": {
+          "include": false
+        }
+      }
+    },
+    "/api/auth/signing-keys/rotate": {
+      "post": {
+        "description": "Mint a new signing key and put it in charge of signing (owner-gated).\n\nThis is the transition, not a cut-over. The outgoing key STAYS in the ring and keeps verifying, so every token already in circulation \u2014 and every attachment share link \u2014 goes on working; it simply never signs again. Tokens minted from this point carry the new key.\n\nIt takes effect on the NEXT REQUEST: the ring is shared by pointer with the HTTP gate, so no restart and no redeploy is involved. (Within one process \u2014 a second server on the same database keeps its old ring until it restarts.)\n\nNothing is revoked here. Revocation is the separate, human-timed `\u2026/{key_id}/remove`.",
+        "operationId": "handle_signing_key_rotate_api_auth_signing_keys_rotate_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SigningKeysDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Validation error (unified error envelope)."
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Client error (unified error envelope)."
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Server error (unified error envelope)."
+          }
+        },
+        "summary": "Mint a new signing key and hand signing over to it; the old one stays, verifying.",
+        "x-mcp": {
+          "include": false
+        }
+      }
+    },
+    "/api/auth/signing-keys/{key_id}/remove": {
+      "post": {
+        "description": "Remove a retired signing key \u2014 THIS is the revocation, and it has no undo (owner-gated).\n\nThe moment this returns, every token signed by that key is refused, and every attachment share link produced under it stops working: a share `?sig=` is an HMAC under a key derived from the signing key, so it is governed by the ring too (owner ruling, card rc-cf9c27c07442). There is no grace period and holders are not notified \u2014 which is why the timing is a person's decision and never a timer's.\n\n\u26a0\ufe0f Warden credentials carry NO `exp`, so \"wait for the old tokens to expire\" is not a strategy for them: they are valid until their key leaves the ring. The question to answer before calling this is whether every machine has reconnected, not how many days have passed.\n\nThe key that is currently SIGNING cannot be removed (409) \u2014 rotate first, then remove the one that stepped down. An unknown `key_id` is a 404.",
+        "operationId": "handle_signing_key_remove_api_auth_signing_keys_key_id_remove_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {"type": "string"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SigningKeysDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Validation error (unified error envelope)."
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Client error (unified error envelope)."
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Server error (unified error envelope)."
+          }
+        },
+        "summary": "Remove a retired key, revoking everything it signed. Refuses the signing key.",
+        "x-mcp": {
+          "include": false
+        }
+      }
+    },
     "/api/backup-health": {
       "get": {
         "description": "Is the scheduled database backup still producing retreat points? (T-da06)\n\nThe backup engine already reported every outcome — but only to the server\nlog, a file with no reader, so \"the schedule died three days ago\" and \"all\ngood\" looked identical from the cockpit. This is the read side that makes the\ndifference visible: the cockpit renders the verdict under\nSettings › 系統更新與備份 (T-5e71, owner 2026-08-02 — it used to be a topbar\nindicator plus a monitor-page card, and he ruled both out).\n\nDeliberately its own small endpoint rather than a field on `GET /api/monitoring`:\nmonitoring is a large fold that re-fetches on every telemetry event, and this\nis a three-value answer read by a page that has nothing else to do with the\nmonitoring fold — hanging it there would move a big payload for no reason.\nThat separation is what makes it cheap to move the surface again.\n\nHonest by construction: a watchdog that has not evaluated yet reports\n`unknown`, never `healthy`.",
@@ -10100,7 +10284,7 @@
     },
     "/api/chat/attachment/{attachment_id}": {
       "get": {
-        "description": "Serve a chat attachment blob (``GET /api/chat/attachment/<id>``). GATED and\nowner-scoped exactly like ``handle_list_chat``: the ``owner`` dep re-verifies\nthe token (deny-by-default) and fixes the single data scope, and the lookup is\nscoped to that owner — a blob outside the owner's scope (or nonexistent) is a\n404, so a caller can not fetch another owner's attachment. Returns the raw\nbytes with the stored ``mime`` as the media type.\n\nDISPOSITION SPLIT (M2-3 gallery「開新分頁預覽」 vs 「下載」): an IMAGE is\nserved with no disposition at all (unchanged — ``<img src>`` keeps working);\nany other PREVIEWABLE mime (text/*, application/pdf — see\n``_is_previewable_mime``) is served ``inline; filename=\"<name>\"`` so a new\ntab RENDERS it instead of force-downloading; everything else keeps\n``attachment; filename=\"<name>\"`` and downloads under its original name.\n\nSECURITY: an inline ``text/html`` blob would otherwise execute\nattacker-supplied script ON THIS ORIGIN (an agent-uploaded page could read\nthe owner JWT out of localStorage). Every non-image inline preview therefore\ncarries ``Content-Security-Policy: sandbox`` — the document still renders\nvisually, but script execution and same-origin reach are disabled.\n\nSHARE-SIG (third credential, this route ONLY — precedence Authorization\nheader → ``?token=`` → ``?sig=``): when the request carries NO bearer\ncredential at all, a ``?sig=`` query param is accepted instead — an\nHMAC-SHA256 over exactly this ``attachment_id`` under a domain-separated\nkey derived from the server signing secret (minted by\n``GET /api/chat/attachments/{attachment_id}/share-link``). A valid sig\nauthorizes reading THIS ONE blob and nothing else; a bad/foreign sig is\n401; ``?sig=`` on any other route is ignored (401 missing credentials).\nLike ``?token=``, the param is an auth credential OUTSIDE the OpenAPI\nparameter schema. Permanent by design (no expiry/revocation — beta).",
+        "description": "Serve a chat attachment blob (``GET /api/chat/attachment/<id>``). GATED and\nowner-scoped exactly like ``handle_list_chat``: the ``owner`` dep re-verifies\nthe token (deny-by-default) and fixes the single data scope, and the lookup is\nscoped to that owner — a blob outside the owner's scope (or nonexistent) is a\n404, so a caller can not fetch another owner's attachment. Returns the raw\nbytes with the stored ``mime`` as the media type.\n\nDISPOSITION SPLIT (M2-3 gallery「開新分頁預覽」 vs 「下載」): an IMAGE is\nserved with no disposition at all (unchanged — ``<img src>`` keeps working);\nany other PREVIEWABLE mime (text/*, application/pdf — see\n``_is_previewable_mime``) is served ``inline; filename=\"<name>\"`` so a new\ntab RENDERS it instead of force-downloading; everything else keeps\n``attachment; filename=\"<name>\"`` and downloads under its original name.\n\nSECURITY: an inline ``text/html`` blob would otherwise execute\nattacker-supplied script ON THIS ORIGIN (an agent-uploaded page could read\nthe owner JWT out of localStorage). Every non-image inline preview therefore\ncarries ``Content-Security-Policy: sandbox`` — the document still renders\nvisually, but script execution and same-origin reach are disabled.\n\nSHARE-SIG (third credential, this route ONLY — precedence Authorization\nheader → ``?token=`` → ``?sig=``): when the request carries NO bearer\ncredential at all, a ``?sig=`` query param is accepted instead — an\nHMAC-SHA256 over exactly this ``attachment_id`` under a domain-separated\nkey derived from the server signing secret (minted by\n``GET /api/chat/attachments/{attachment_id}/share-link``). A valid sig\nauthorizes reading THIS ONE blob and nothing else; a bad/foreign sig is\n401; ``?sig=`` on any other route is ignored (401 missing credentials).\nLike ``?token=``, the param is an auth credential OUTSIDE the OpenAPI\nparameter schema.\n\nA sig carries NO EXPIRY and cannot be revoked one link at a time. It is not\nunconditionally permanent, though, and since T-62 it never was: the derivation\nkey follows the SIGNING-KEY RING, so a sig keeps verifying while the key that\nproduced it is still in the ring, and every sig made under a key dies together\nthe moment an owner REMOVES that key (`POST\n/api/auth/signing-keys/{key_id}/remove`). That is the whole revocation story —\ncoarse, deliberate, and a person's decision rather than a timer's.",
         "operationId": "handle_get_chat_attachment_api_chat_attachment__attachment_id__get",
         "parameters": [
           {
@@ -10331,7 +10515,7 @@
     },
     "/api/chat/attachments/{attachment_id}/share-link": {
       "get": {
-        "description": "Mint the permanent share link for ONE attachment\n(``GET /api/chat/attachments/<id>/share-link``). GATED like every chat\nroute (any authenticated principal); 404 for an unknown blob id.\n\nReturns ``{url}`` — the attachment's serve path\n(``/api/chat/attachment/<id>``) carrying a ``?sig=`` HMAC-SHA256\ncredential over exactly that attachment id, signed with a\ndomain-separated key derived from the server signing secret. The sig is\nPERMANENT (no expiry, no revocation — owner-accepted beta trade-off)\nand grants NOTHING beyond reading this one blob: a different id, a\ntampered sig, or any other endpoint stays 401 deny-by-default.",
+        "description": "Mint the share link for ONE attachment\n(``GET /api/chat/attachments/<id>/share-link``). GATED like every chat\nroute (any authenticated principal); 404 for an unknown blob id.\n\nReturns ``{url}`` — the attachment's serve path\n(``/api/chat/attachment/<id>``) carrying a ``?sig=`` HMAC-SHA256\ncredential over exactly that attachment id, signed with a\ndomain-separated key derived from the key that is CURRENTLY SIGNING (see\n`GET /api/auth/signing-keys`). The sig carries no expiry and there is no\nway to revoke one link on its own; what does end it is removing the signing\nkey it was made under, which ends every sig made under that key at the same\ninstant (T-62, owner ruling rc-cf9c27c07442). It grants NOTHING beyond\nreading this one blob: a different id, a\ntampered sig, or any other endpoint stays 401 deny-by-default.",
         "operationId": "handle_get_chat_attachment_share_link_api_chat_attachments__attachment_id__share_link_get",
         "parameters": [
           {
@@ -10386,14 +10570,14 @@
             "description": "Server error (unified error envelope)."
           }
         },
-        "summary": "Mint a permanent single-file share link (?sig= HMAC; grants read of this one attachment only). Returns {url} as a SERVER-RELATIVE path — prefix it with the origin you reach this server on to get a link you can paste to someone. The sig carries NO identity and NO expiry: whoever holds the link reads that one blob without signing in, forever, and it cannot be revoked. Mint it for deliverables you meant to hand over; do not paste it anywhere the blob itself would not belong.",
+        "summary": "Mint a single-file share link (?sig= HMAC; grants read of this one attachment only). Returns {url} as a SERVER-RELATIVE path — prefix it with the origin you reach this server on to get a link you can paste to someone. The sig carries NO identity and NO expiry: whoever holds the link reads that one blob without signing in, for as long as the key that signed it is still in the server's signing-key ring. No single link can be withdrawn; the only way to void one is to remove that key (POST /api/auth/signing-keys/{key_id}/remove), which voids every link it signed at once. Mint it for deliverables you meant to hand over; do not paste it anywhere the blob itself would not belong.",
         "x-mcp": {
           "include": true,
           "order": 27,
           "name": "get_chat_attachment_share_link",
-          "description": "Mint a permanent single-file share link (?sig= HMAC; grants read of this one attachment only). Returns {url} as a SERVER-RELATIVE path — prefix it with the origin you reach this server on to get a link you can paste to someone. The sig carries NO identity and NO expiry: whoever holds the link reads that one blob without signing in, forever, and it cannot be revoked. Mint it for deliverables you meant to hand over; do not paste it anywhere the blob itself would not belong.",
+          "description": "Mint a single-file share link (?sig= HMAC; grants read of this one attachment only). Returns {url} as a SERVER-RELATIVE path — prefix it with the origin you reach this server on to get a link you can paste to someone. The sig carries NO identity and NO expiry: whoever holds the link reads that one blob without signing in, for as long as the key that signed it is still in the server's signing-key ring. No single link can be withdrawn; the only way to void one is to remove that key (POST /api/auth/signing-keys/{key_id}/remove), which voids every link it signed at once. Mint it for deliverables you meant to hand over; do not paste it anywhere the blob itself would not belong.",
           "legacy": {
-            "descriptor": "{\n      \"description\": \"Mint a permanent single-file share link (?sig= HMAC; grants read of this one attachment only). Returns {url} as a SERVER-RELATIVE path \\u2014 prefix it with the origin you reach this server on to get a link you can paste to someone. The sig carries NO identity and NO expiry: whoever holds the link reads that one blob without signing in, forever, and it cannot be revoked. Mint it for deliverables you meant to hand over; do not paste it anywhere the blob itself would not belong.\",\n      \"inputSchema\": {\n        \"properties\": {\n          \"attachment_id\": {\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"attachment_id\"\n        ],\n        \"type\": \"object\"\n      },\n      \"name\": \"get_chat_attachment_share_link\"\n    }"
+            "descriptor": "{\n      \"description\": \"Mint a single-file share link (?sig= HMAC; grants read of this one attachment only). Returns {url} as a SERVER-RELATIVE path \\u2014 prefix it with the origin you reach this server on to get a link you can paste to someone. The sig carries NO identity and NO expiry: whoever holds the link reads that one blob without signing in, for as long as the key that signed it is still in the server's signing-key ring. No single link can be withdrawn; the only way to void one is to remove that key (POST /api/auth/signing-keys/{key_id}/remove), which voids every link it signed at once. Mint it for deliverables you meant to hand over; do not paste it anywhere the blob itself would not belong.\",\n      \"inputSchema\": {\n        \"properties\": {\n          \"attachment_id\": {\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"attachment_id\"\n        ],\n        \"type\": \"object\"\n      },\n      \"name\": \"get_chat_attachment_share_link\"\n    }"
           }
         }
       }
@@ -11734,7 +11918,7 @@
     },
     "/api/login": {
       "post": {
-        "description": "Exchange the owner password for an owner-scoped JWT (M1 §3.5).\n\nThe single PUBLIC business entry point. The submitted password is verified\nagainst the argon2id hash in the DB settings table (`auth.password_hash`); on\na match an HS256 JWT scoped to the single owner (`sub = DEFAULT_OWNER`,\n`scope=owner`) is minted with the configured TTL, and is thereafter the one\ncredential for REST / MCP / SSE. A wrong password — or no password set at all\n(deny-by-default) — is a flat 401, with no hint which it was.\n\nWhile the owner has a TOTP secret enrolled (`GET /api/auth/status` →\n`mfa_required`), a correct password is NOT sufficient: `code` must also verify,\nand its absence or a wrong value is the same flat 401. A code is single-use —\nreplaying one inside its ~90s acceptance window is refused.\n\nEvery failed attempt — wrong password AND wrong code alike — is answered no\nearlier than a fixed interval after the request arrived, so the four ways to\nfail here are indistinguishable by ELAPSED TIME as well as by message. A\nsuccess is answered immediately: knowing the password costs nothing. There is\nno attempt counter, no backoff and no lockout — nobody can hold the owner out\nby guessing. Separately, a server-wide cap on concurrent credential\nverifications answers 429 with a `Retry-After` header when it is full; that is\nthe only 429 this route produces. The cap is SERVER-WIDE rather than\nper-client on purpose: the server binds loopback, so every remote caller\narrives through a tunnel and is indistinguishable by address.\n\nA correct password with a wrong code is the one refusal that means something —\nthe password has leaked — so the server also warns the seeded assistant, out\nof band and rate-limited, asking her to have the owner change it. The response\nto the caller is unchanged and takes exactly as long as any other refusal.\n\nThe signing secret and the password hash are loaded from the DB settings table\nat boot and updated in place by the owner endpoints; this handler never sees a\nhard-coded secret.",
+        "description": "Exchange the owner password for an owner-scoped JWT (M1 §3.5).\n\nThe single PUBLIC business entry point. The submitted password is verified\nagainst the argon2id hash in the DB settings table (`auth.password_hash`); on\na match an HS256 JWT scoped to the single owner (`sub = DEFAULT_OWNER`,\n`scope=owner`) is minted with the configured TTL, and is thereafter the one\ncredential for REST / MCP / SSE. A wrong password — or no password set at all\n(deny-by-default) — is a flat 401, with no hint which it was.\n\nWhile the owner has a TOTP secret enrolled (`GET /api/auth/status` →\n`mfa_required`), a correct password is NOT sufficient: `code` must also verify,\nand its absence or a wrong value is the same flat 401. A code is single-use —\nreplaying one inside its ~90s acceptance window is refused.\n\nEvery failed attempt — wrong password AND wrong code alike — is answered no\nearlier than a fixed interval after the request arrived, so the four ways to\nfail here are indistinguishable by ELAPSED TIME as well as by message. A\nsuccess is answered immediately: knowing the password costs nothing. There is\nno attempt counter, no backoff and no lockout — nobody can hold the owner out\nby guessing. Separately, a server-wide cap on concurrent credential\nverifications answers 429 with a `Retry-After` header when it is full; that is\nthe only 429 this route produces. The cap is SERVER-WIDE rather than\nper-client on purpose: the server binds loopback, so every remote caller\narrives through a tunnel and is indistinguishable by address.\n\nA correct password with a wrong code is the one refusal that means something —\nthe password has leaked — so the server also warns the seeded assistant, out\nof band and rate-limited, asking her to have the owner change it. The response\nto the caller is unchanged and takes exactly as long as any other refusal.\n\nThe signing keys and the password hash are loaded from the DB settings table at\nboot and updated in place by the owner endpoints; this handler never sees a\nhard-coded secret. The keys are a RING (`GET /api/auth/signing-keys`): the token\nminted here is signed by the one key that currently signs, and stays valid while\nthat key remains in the ring.",
         "operationId": "handle_login_api_login_post",
         "requestBody": {
           "content": {
