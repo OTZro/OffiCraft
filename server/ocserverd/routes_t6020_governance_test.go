@@ -144,6 +144,18 @@ func t6020AllOpenedRows() map[[2]string]string {
 // the per-actor button alone could never drive that card to absent. Everything
 // that makes the per-actor row owner-only holds here with a larger blast
 // radius, so it would have been strange for this one to sit lower.
+//
+// 簽章金鑰 (the three /api/auth/signing-keys* rows, T-62) join on the /api/auth/mfa*
+// reasoning — DERIVED from that ruling, not a new one of the owner's, and
+// labelled as derived on purpose so nobody later cites a card that does not
+// exist. It is the same argument one step further along: change-password and
+// the MFA rows decide how the owner authenticates; these decide how EVERYONE
+// does, the calling agent included. An admin_agent that could reach them could
+// rotate the key that signs its own credential, or remove the key that
+// credential is signed under — self-escalation and self-destruction from the
+// same door. Off the MCP surface for the reason the password is: governing the
+// key that authenticates the office is never something the office does on the
+// owner's behalf.
 var t6020Withheld = [][2]string{
 	{"POST", "/api/mint"},
 	{"POST", "/api/auth/change-password"},
@@ -159,6 +171,9 @@ var t6020Withheld = [][2]string{
 	{"DELETE", "/api/members/{member_id}/avatar"},
 	{"POST", "/api/members/{member_id}/cost/reset"},
 	{"POST", "/api/accounts/cost/reset"},
+	{"GET", "/api/auth/signing-keys"},
+	{"POST", "/api/auth/signing-keys/rotate"},
+	{"POST", "/api/auth/signing-keys/{key_id}/remove"},
 }
 
 func t6020RouteIndex(t *testing.T) map[[2]string]RouteSpec {
@@ -299,11 +314,12 @@ func TestT6020WithheldRoutesStayOwnerOnlyAndOffTheMCPSurface(t *testing.T) {
 	// deliberate. The rows are GET /api/auth/mfa and POST
 	// offer/enroll/activate/disable: five, not three. The literal is kept so
 	// ADDING an owner-only row stays a deliberate act with a reason attached.
-	if len(t6020Withheld) != 14 {
-		t.Fatalf("this table must list 14 owner-only routes and lists %d — 7 from the "+
+	if len(t6020Withheld) != 17 {
+		t.Fatalf("this table must list 17 owner-only routes and lists %d — 7 from the "+
 			"owner rulings, plus the 5 /api/auth/mfa* rows added by the MFA change, "+
-			"plus 成本歸零 from rc-7dea0deefa63 and 帳號整包歸零 from rc-efae958cef40 "+
-			"(see the note on the table). Do not read the 14 as one owner ruling: "+
+			"plus 成本歸零 from rc-7dea0deefa63 and 帳號整包歸零 from rc-efae958cef40, "+
+			"plus the 3 /api/auth/signing-keys* rows from T-62 "+
+			"(see the note on the table). Do not read the 17 as one owner ruling: "+
 			"the T-6020 ruling covered 7.",
 			len(t6020Withheld))
 	}
