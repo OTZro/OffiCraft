@@ -1,14 +1,14 @@
 -- +goose Up
--- 🔴 PROVISIONAL NUMBER (00073). See the same note at the top of
--- 00072_chat_message_recipient_sender_ts.sql — the two numbers were issued
--- together by Kyle on 2026-09-03 (c-d24b617b62e7) and both are provisional.
--- This one MUST stay above 00072: it drops and recreates `member`, and the
--- rebuild only carries the columns named below.
+-- 🔴 THE NUMBER IS STILL ONLY TRUE AS OF THE LAST SCAN. See the header of
+-- 00075_chat_message_recipient_sender_ts.sql -- the pair moved together from
+-- 00072/00073 on 2026-09-04, and the re-scan instructions there apply to this
+-- file too. This one MUST stay ABOVE 00075: it drops and recreates `member`,
+-- and the rebuild only carries the columns named below.
 -- 🔴 THE COLUMN LIST BELOW IS THE WHOLE RISK. Anything added to `member` by a
 -- migration numbered BELOW this one and not named here is dropped for every
 -- existing row, silently. That is not hypothetical: #387 landed
 -- 00070_member_restart_after_stop.sql while this pack was in flight, and on the
--- renumber all three guards in migration_00073_member_kind_staff_test.go went
+-- renumber all three guards in migration_00076_member_kind_staff_test.go went
 -- red naming restart_after_stop before the column was added here.
 -- Rename the member kind 'assistant' to 'staff' — the whole vocabulary move, in
 -- one migration, on the same package as the T-48 chat work.

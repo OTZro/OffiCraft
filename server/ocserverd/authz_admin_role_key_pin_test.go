@@ -1,8 +1,8 @@
 package main
 
-// authz_admin_role_key_pin_test.go — T-48 / 00073 guard rail.
+// authz_admin_role_key_pin_test.go — T-48 / 00076 guard rail.
 //
-// WHY THIS FILE EXISTS. Migration 00073 renames the member KIND 'assistant' to
+// WHY THIS FILE EXISTS. Migration 00076 renames the member KIND 'assistant' to
 // 'staff'. The string "assistant" is also, and unrelatedly, the ROLE_KEY that
 // grants admin_agent capability (authz.go: adminRoleKey). The two are different
 // axes that happen to spell themselves the same way today:
@@ -37,7 +37,7 @@ func TestAdminRoleKeyIsPinnedAgainstTheKindRename(t *testing.T) {
 	if adminRoleKey != wantAdminRoleKey() {
 		t.Fatalf("adminRoleKey moved: got %q, want %q.\n"+
 			"This is the admin capability boundary, NOT the member kind. If you are "+
-			"renaming the kind 'assistant' -> 'staff' (migration 00073), this constant "+
+			"renaming the kind 'assistant' -> 'staff' (migration 00076), this constant "+
 			"is NOT part of that rename — a repo-wide substitution caught it by "+
 			"accident. Revert this constant; leave the kind rename in place.",
 			adminRoleKey, wantAdminRoleKey())
@@ -64,7 +64,7 @@ func TestAdminClassificationSurvivesOnRoleKeyAlone(t *testing.T) {
 }
 
 // TestAdminRoleKeyAndMachineKindAreSeparateAxes pins the third literal in the
-// neighbourhood. machineKind is not part of the 00073 rename either, and it is
+// neighbourhood. machineKind is not part of the 00076 rename either, and it is
 // checked BEFORE role_key in classifyMember, so a change here silently outranks
 // the admin test above.
 func TestAdminRoleKeyAndMachineKindAreSeparateAxes(t *testing.T) {

@@ -1,11 +1,17 @@
 -- +goose Up
--- 🔴 PROVISIONAL NUMBER (00072). Kyle allocated 00072 + 00073 to this pack on
--- 2026-09-03 (c-d24b617b62e7) as PROVISIONAL numbers, so CI can run at all: a
--- collision makes goose panic while it is still reading the files, and not one
--- assertion gets to run. #400 holds 00071 and is ahead of us at the door.
--- ⇒ Come back to Kyle for a fresh number in the moment before land, and keep
---    this file BELOW its sibling: the index created here is destroyed by the
---    member rebuild's DROP TABLE in 00073 and rebuilt there. The pair is
+-- 🔴 THE NUMBER IS STILL ONLY TRUE AS OF THE LAST SCAN. Renumbered 00072 ->
+-- 00075 on 2026-09-04 after Kyle showed the old pair would land UNDER a bigger
+-- number already in flight: goose runs with allowMissing=false, so arriving
+-- late with a smaller number is not a slow migration, it is a server that does
+-- not start (`found N missing migrations before current version`). He proved it
+-- on a throwaway DB with both directions as controls, rather than from reading.
+-- ⇒ RE-SCAN BEFORE THE FINAL PUSH, and scan BOTH sources -- migrations/*.sql
+--    AND AddNamedMigrationContext("NNNNN -- across ALL remote branches, not
+--    just origin/main, which cannot see numbers held by branches in flight.
+--    At the 2026-09-04 scan: main's max was 00070, the highest in use anywhere
+--    was 00074, and 00075/00076 were free.
+-- ⇒ KEEP THIS FILE BELOW ITS SIBLING. The index created here is destroyed by
+--    the member rebuild's DROP TABLE in 00076 and rebuilt there. The pair is
 --    order-dependent; renumbering them apart, or swapping them, is a data bug.
 -- T-48: one composite index so the UNREAD COUNT stops scanning the chat table.
 --
