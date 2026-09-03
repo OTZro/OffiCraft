@@ -1091,13 +1091,13 @@ func (d *DAL) listChatWindow(f chatListFilter, start, end *chatAnchor, limit int
 // cheap side of that trade.
 //
 // ⚠️ T-48: a COMPOSITE index on (recipient, sender, ts) DOES now exist
-// (migration 00067) — do not read the paragraph above as "this table carries no
+// (migration 00072) — do not read the paragraph above as "this table carries no
 // index". It is a different shape, added for a different query: it COVERS the
 // unread count (2.7× there) and leaves this path untouched, because the
 // scrollback query cannot use it at all and the planner keeps
 // idx_chat_message_ts. The two statements are about two different indexes; the
 // 23× result above still stands for the single-column one.
-// 🔑 The 00067 numbers are SYNTHETIC (owner ruled it in on that basis, knowingly
+// 🔑 The 00072 numbers are SYNTHETIC (owner ruled it in on that basis, knowingly
 // — rc-6b67aa1a331c). The 23× above is from a real-data copy. Do not quote them
 // as if they came from the same measurement.
 func (d *DAL) ListChatLatest(participant string, limit int) ([]ChatMessage, error) {

@@ -1,4 +1,15 @@
 -- +goose Up
+-- 🔴 PROVISIONAL NUMBER (00073). See the same note at the top of
+-- 00072_chat_message_recipient_sender_ts.sql — the two numbers were issued
+-- together by Kyle on 2026-09-03 (c-d24b617b62e7) and both are provisional.
+-- This one MUST stay above 00072: it drops and recreates `member`, and the
+-- rebuild only carries the columns named below.
+-- 🔴 THE COLUMN LIST BELOW IS THE WHOLE RISK. Anything added to `member` by a
+-- migration numbered BELOW this one and not named here is dropped for every
+-- existing row, silently. That is not hypothetical: #387 landed
+-- 00070_member_restart_after_stop.sql while this pack was in flight, and on the
+-- renumber all three guards in migration_00073_member_kind_staff_test.go went
+-- red naming restart_after_stop before the column was added here.
 -- Rename the member kind 'assistant' to 'staff' — the whole vocabulary move, in
 -- one migration, on the same package as the T-48 chat work.
 --
@@ -78,7 +89,8 @@ CREATE TABLE member_rebuild (
     session_boot_ts      REAL NOT NULL DEFAULT 0,
     forced_stop_at       REAL NOT NULL DEFAULT 0,
     handover_noticed_ts  REAL NOT NULL DEFAULT 0,
-    agent_iat_floor      REAL NOT NULL DEFAULT 0
+    agent_iat_floor      REAL NOT NULL DEFAULT 0,
+    restart_after_stop   INTEGER NOT NULL DEFAULT 0
 );
 
 -- Named column lists on BOTH sides: the trailing columns arrived as later ALTERs
@@ -92,7 +104,7 @@ INSERT INTO member_rebuild (id, name, kind, role_key, model, effort,
     codename, created_ts, released_ts, activated_ts, runtime, last_machine_id,
     avatar_attachment_id, actual_model, actual_runtime, actual_effort,
     refocus_op, session_boot_ts, forced_stop_at, handover_noticed_ts,
-    agent_iat_floor)
+    agent_iat_floor, restart_after_stop)
   SELECT id, name,
     CASE kind WHEN 'assistant' THEN 'staff' ELSE kind END,
     role_key, model, effort,
@@ -102,7 +114,7 @@ INSERT INTO member_rebuild (id, name, kind, role_key, model, effort,
     codename, created_ts, released_ts, activated_ts, runtime, last_machine_id,
     avatar_attachment_id, actual_model, actual_runtime, actual_effort,
     refocus_op, session_boot_ts, forced_stop_at, handover_noticed_ts,
-    agent_iat_floor
+    agent_iat_floor, restart_after_stop
   FROM member;
 
 DROP TABLE member;
@@ -164,7 +176,8 @@ CREATE TABLE member_rebuild (
     session_boot_ts      REAL NOT NULL DEFAULT 0,
     forced_stop_at       REAL NOT NULL DEFAULT 0,
     handover_noticed_ts  REAL NOT NULL DEFAULT 0,
-    agent_iat_floor      REAL NOT NULL DEFAULT 0
+    agent_iat_floor      REAL NOT NULL DEFAULT 0,
+    restart_after_stop   INTEGER NOT NULL DEFAULT 0
 );
 
 INSERT INTO member_rebuild (id, name, kind, role_key, model, effort,
@@ -174,7 +187,7 @@ INSERT INTO member_rebuild (id, name, kind, role_key, model, effort,
     codename, created_ts, released_ts, activated_ts, runtime, last_machine_id,
     avatar_attachment_id, actual_model, actual_runtime, actual_effort,
     refocus_op, session_boot_ts, forced_stop_at, handover_noticed_ts,
-    agent_iat_floor)
+    agent_iat_floor, restart_after_stop)
   SELECT id, name,
     CASE kind WHEN 'staff' THEN 'assistant' ELSE kind END,
     role_key, model, effort,
@@ -184,7 +197,7 @@ INSERT INTO member_rebuild (id, name, kind, role_key, model, effort,
     codename, created_ts, released_ts, activated_ts, runtime, last_machine_id,
     avatar_attachment_id, actual_model, actual_runtime, actual_effort,
     refocus_op, session_boot_ts, forced_stop_at, handover_noticed_ts,
-    agent_iat_floor
+    agent_iat_floor, restart_after_stop
   FROM member;
 
 DROP TABLE member;

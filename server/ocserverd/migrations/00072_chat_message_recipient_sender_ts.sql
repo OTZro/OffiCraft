@@ -1,4 +1,12 @@
 -- +goose Up
+-- 🔴 PROVISIONAL NUMBER (00072). Kyle allocated 00072 + 00073 to this pack on
+-- 2026-09-03 (c-d24b617b62e7) as PROVISIONAL numbers, so CI can run at all: a
+-- collision makes goose panic while it is still reading the files, and not one
+-- assertion gets to run. #400 holds 00071 and is ahead of us at the door.
+-- ⇒ Come back to Kyle for a fresh number in the moment before land, and keep
+--    this file BELOW its sibling: the index created here is destroyed by the
+--    member rebuild's DROP TABLE in 00073 and rebuilt there. The pair is
+--    order-dependent; renumbering them apart, or swapping them, is a data bug.
 -- T-48: one composite index so the UNREAD COUNT stops scanning the chat table.
 --
 -- owner ruling 2026-09-02 (rc-6b67aa1a331c, option 1: 「放進這包，現在就加這個複合

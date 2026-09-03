@@ -1,8 +1,8 @@
 package main
 
-// migration_00068_member_kind_staff_test.go — T-48.
+// migration_00073_member_kind_staff_test.go — T-48.
 //
-// 00068 renames the member kind 'assistant' to 'staff'. SQLite cannot alter a
+// 00073 renames the member kind 'assistant' to 'staff'. SQLite cannot alter a
 // CHECK in place, so the migration rebuilds `member`: create member_rebuild with
 // the CHECK set {'staff','warden','outsource'}, copy every row through a named
 // 35-column INSERT…SELECT that maps 'assistant' -> 'staff' (leaving 'warden' and
@@ -17,27 +17,27 @@ package main
 // against one specific way the migration could be wrong; a test that no mutation
 // can turn red is decoration, so each is named with its mutant:
 //
-//	TestMigration00068UpMapsAssistantToStaff
+//	TestMigration00073UpMapsAssistantToStaff
 //	  → the CASE is dropped, inverted, or widened: 'assistant' rows left as
 //	    'assistant' (or the WHOLE copy replaced by a no-op), or 'warden' /
 //	    'outsource' swept up by a blanket `'staff' AS kind`, or rows lost by a
 //	    WHERE on the SELECT. The anti-vacuity guard is what stops an empty
 //	    fixture from making all of that pass.
 //
-//	TestMigration00068UpPreservesEveryColumn
+//	TestMigration00073UpPreservesEveryColumn
 //	  → the INSERT column list and the SELECT list drift apart — two same-typed
 //	    columns transposed (actual_model/actual_runtime, waking_since/
 //	    stopping_since …), a column silently defaulted, a NULL flattened to ''
 //	    or 0. Row-count and kind assertions are all blind to this; only a
 //	    column-by-column readback sees it.
 //
-//	TestMigration00068KindCheckSet
+//	TestMigration00073KindCheckSet
 //	  → the rebuild's CHECK is not actually changed (still lists 'assistant'),
 //	    or is changed to something that admits both, or the column is created
 //	    with no CHECK at all. Asserted through the constraint's behaviour, so a
 //	    CHECK that exists but does not bind still fails.
 //
-//	TestMigration00068IndexSurvivesUp  🔴 the important one
+//	TestMigration00073IndexSurvivesUp  🔴 the important one
 //	  → the trailing CREATE UNIQUE INDEX is forgotten (DROP TABLE took it and
 //	    RENAME does not bring it back — codenames silently become duplicable), or
 //	    it is re-created without UNIQUE, or without the `WHERE codename IS NOT
@@ -46,14 +46,14 @@ package main
 //	    BEHAVIOURALLY: matching sqlite_master.sql as a string would pass on an
 //	    index that does not bind and would break on harmless whitespace.
 //
-//	TestMigration00068DownRestoresThePreUpState
+//	TestMigration00073DownRestoresThePreUpState
 //	  → the Down's CASE is missing or wrong ('staff' left as 'staff' against a
 //	    CHECK that no longer admits it, or warden/outsource rewritten), its
 //	    column lists drift, or — the quiet one — its own trailing CREATE UNIQUE
 //	    INDEX is missing, leaving a rolled-back database that looks fine and
 //	    enforces nothing.
 //
-//	TestMigration00068UpDownUpIsStable
+//	TestMigration00073UpDownUpIsStable
 //	  → the round trip is not idempotent: a second Up over a Down'd database
 //	    produces a different population than the first (a mapping that is not 1:1
 //	    in both directions, or a Down that leaves residue behind).
@@ -72,16 +72,16 @@ import (
 )
 
 const (
-	migration00068Version      = 68
-	migration00068PriorVersion = migration00068Version - 1
+	migration00073Version      = 73
+	migration00073PriorVersion = migration00073Version - 1
 )
 
-// migration00068Columns is the full member column list as of 00068, in the order
+// migration00073Columns is the full member column list as of 00073, in the order
 // the migration itself names them. Enumerated by hand from the migration's
 // CREATE TABLE rather than from pragma_table_info, so that a rebuild which
 // forgot a column is a disagreement between this list and the database rather
 // than a list that quietly follows the mistake.
-func migration00068Columns() []string {
+func migration00073Columns() []string {
 	return []string{
 		"id", "name", "kind", "role_key", "model", "effort",
 		"desired_state", "desired_machine_id", "waking_since", "stopping_since",
@@ -90,11 +90,11 @@ func migration00068Columns() []string {
 		"codename", "created_ts", "released_ts", "activated_ts", "runtime", "last_machine_id",
 		"avatar_attachment_id", "actual_model", "actual_runtime", "actual_effort",
 		"refocus_op", "session_boot_ts", "forced_stop_at", "handover_noticed_ts",
-		"agent_iat_floor",
+		"agent_iat_floor", "restart_after_stop",
 	}
 }
 
-// migration00068Fixture is the pre-68 world. EVERY column of every row carries a
+// migration00073Fixture is the pre-68 world. EVERY column of every row carries a
 // distinctive non-default value, and no two columns of the same row share one —
 // that is what makes a transposed pair in the INSERT…SELECT visible instead of
 // merely plausible. NULLs (the three nullable columns), CJK text, empty strings
@@ -102,7 +102,7 @@ func migration00068Columns() []string {
 //
 // Kinds: three 'assistant' (the population that must move), one 'warden' and one
 // 'outsource' (the populations that must not).
-func migration00068Fixture() []map[string]any {
+func migration00073Fixture() []map[string]any {
 	return []map[string]any{
 		{
 			"id": "m-a1", "name": "Alpha Assistant", "kind": "assistant",
@@ -119,7 +119,7 @@ func migration00068Fixture() []map[string]any {
 			"actual_runtime": "actual-runtime-alpha", "actual_effort": "actual-effort-alpha",
 			"refocus_op": "refocus-alpha", "session_boot_ts": 10.25,
 			"forced_stop_at": 11.125, "handover_noticed_ts": 12.0625,
-			"agent_iat_floor": 13.5,
+			"agent_iat_floor": 13.5, "restart_after_stop": int64(61),
 		},
 		{
 			// The NULL / empty / CJK row: everything nullable is NULL, and the
@@ -138,7 +138,7 @@ func migration00068Fixture() []map[string]any {
 			"actual_runtime": "實際執行器", "actual_effort": "實際力度",
 			"refocus_op": "重新聚焦-乙", "session_boot_ts": 18.5,
 			"forced_stop_at": 19.25, "handover_noticed_ts": 20.125,
-			"agent_iat_floor": 21.0625,
+			"agent_iat_floor": 21.0625, "restart_after_stop": int64(62),
 		},
 		{
 			// A second codename-less row: two NULL codenames must coexist both
@@ -158,7 +158,7 @@ func migration00068Fixture() []map[string]any {
 			"actual_runtime": "actual-runtime-gamma", "actual_effort": "actual-effort-gamma",
 			"refocus_op": "refocus-gamma", "session_boot_ts": 31.5,
 			"forced_stop_at": 32.25, "handover_noticed_ts": 33.125,
-			"agent_iat_floor": 34.0625,
+			"agent_iat_floor": 34.0625, "restart_after_stop": int64(63),
 		},
 		{
 			"id": "m-w1", "name": "The Warden", "kind": "warden",
@@ -175,7 +175,7 @@ func migration00068Fixture() []map[string]any {
 			"actual_runtime": "actual-runtime-warden", "actual_effort": "actual-effort-warden",
 			"refocus_op": "refocus-warden", "session_boot_ts": 44.5,
 			"forced_stop_at": 45.25, "handover_noticed_ts": 46.125,
-			"agent_iat_floor": 47.0625,
+			"agent_iat_floor": 47.0625, "restart_after_stop": int64(64),
 		},
 		{
 			"id": "m-o1", "name": "外包 worker", "kind": "outsource",
@@ -192,25 +192,25 @@ func migration00068Fixture() []map[string]any {
 			"actual_runtime": "actual-runtime-outsource", "actual_effort": "actual-effort-outsource",
 			"refocus_op": "refocus-outsource", "session_boot_ts": 57.5,
 			"forced_stop_at": 58.25, "handover_noticed_ts": 59.0625,
-			"agent_iat_floor": 60.125,
+			"agent_iat_floor": 60.125, "restart_after_stop": int64(65),
 		},
 	}
 }
 
-// migration00068WantKindAfterUp is the kind each fixture row must carry once
-// 00068 has run. Worked out by hand from what the migration claims, never
+// migration00073WantKindAfterUp is the kind each fixture row must carry once
+// 00073 has run. Worked out by hand from what the migration claims, never
 // derived from its own CASE expression.
-func migration00068WantKindAfterUp(before string) string {
+func migration00073WantKindAfterUp(before string) string {
 	if before == "assistant" {
 		return "staff"
 	}
 	return before
 }
 
-// migration00068Norm renders a scanned or seeded cell as a comparable string,
+// migration00073Norm renders a scanned or seeded cell as a comparable string,
 // carrying its type along so that a NULL flattened to ” or a REAL rounded into
 // an INTEGER is a difference rather than a match.
-func migration00068Norm(v any) string {
+func migration00073Norm(v any) string {
 	switch t := v.(type) {
 	case nil:
 		return "NULL"
@@ -227,9 +227,9 @@ func migration00068Norm(v any) string {
 	}
 }
 
-// migration00068World brings a temp database to the state just BEFORE 00068 and
+// migration00073World brings a temp database to the state just BEFORE 00073 and
 // seeds the fixture there (kind='assistant' is still legal at that version).
-func migration00068World(t *testing.T) *sql.DB {
+func migration00073World(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := openSQLite(filepath.Join(t.TempDir(), "member-kind-staff.db"))
 	if err != nil {
@@ -239,15 +239,15 @@ func migration00068World(t *testing.T) *sql.DB {
 	if err := runMigrations(db); err != nil {
 		t.Fatalf("goose up: %v", err)
 	}
-	if err := goose.DownTo(db, "migrations", migration00068PriorVersion); err != nil {
-		t.Fatalf("down to %d: %v", migration00068PriorVersion, err)
+	if err := goose.DownTo(db, "migrations", migration00073PriorVersion); err != nil {
+		t.Fatalf("down to %d: %v", migration00073PriorVersion, err)
 	}
 
-	cols := migration00068Columns()
+	cols := migration00073Columns()
 	placeholders := strings.TrimSuffix(strings.Repeat("?, ", len(cols)), ", ")
 	stmt := fmt.Sprintf(`INSERT INTO member (%s) VALUES (%s)`,
 		strings.Join(cols, ", "), placeholders)
-	for _, row := range migration00068Fixture() {
+	for _, row := range migration00073Fixture() {
 		args := make([]any, 0, len(cols))
 		for _, c := range cols {
 			v, ok := row[c]
@@ -270,19 +270,19 @@ func migration00068World(t *testing.T) *sql.DB {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM member`).Scan(&seeded); err != nil {
 		t.Fatalf("count seeded rows: %v", err)
 	}
-	if seeded != len(migration00068Fixture()) {
+	if seeded != len(migration00073Fixture()) {
 		t.Fatalf("seeded %d member rows, wrote %d — the fixture did not land",
-			seeded, len(migration00068Fixture()))
+			seeded, len(migration00073Fixture()))
 	}
 	return db
 }
 
-// migration00068ReadAll reads the whole member table as id → column → normalised
+// migration00073ReadAll reads the whole member table as id → column → normalised
 // value, by NAME, so a rebuild that reordered the physical columns is not
 // mistaken for a rebuild that moved the data.
-func migration00068ReadAll(t *testing.T, db *sql.DB) map[string]map[string]string {
+func migration00073ReadAll(t *testing.T, db *sql.DB) map[string]map[string]string {
 	t.Helper()
-	cols := migration00068Columns()
+	cols := migration00073Columns()
 	rows, err := db.Query(fmt.Sprintf(`SELECT %s FROM member`, strings.Join(cols, ", ")))
 	if err != nil {
 		t.Fatalf("read member: %v", err)
@@ -300,7 +300,7 @@ func migration00068ReadAll(t *testing.T, db *sql.DB) map[string]map[string]strin
 		}
 		row := map[string]string{}
 		for i, c := range cols {
-			row[c] = migration00068Norm(cells[i])
+			row[c] = migration00073Norm(cells[i])
 		}
 		id, _ := cells[0].(string)
 		if b, ok := cells[0].([]byte); ok {
@@ -317,7 +317,7 @@ func migration00068ReadAll(t *testing.T, db *sql.DB) map[string]map[string]strin
 	return out
 }
 
-// migration00068AssertCodenameIndex is the BEHAVIOURAL index check, shared by
+// migration00073AssertCodenameIndex is the BEHAVIOURAL index check, shared by
 // the Up and the Down tests. It asks the database to enforce the two halves of
 // the index rather than reading its DDL back as a string:
 //
@@ -327,7 +327,7 @@ func migration00068ReadAll(t *testing.T, db *sql.DB) map[string]map[string]strin
 // kind is the legal member kind at the schema version under test, since the
 // CHECK set differs either side of the migration. Rows are inserted under a
 // caller-supplied id prefix so repeated calls in one database do not collide.
-func migration00068AssertCodenameIndex(t *testing.T, db *sql.DB, kind, prefix string) {
+func migration00073AssertCodenameIndex(t *testing.T, db *sql.DB, kind, prefix string) {
 	t.Helper()
 
 	var idxs int
@@ -410,16 +410,16 @@ func migration00068AssertCodenameIndex(t *testing.T, db *sql.DB, kind, prefix st
 
 // ── 1. the mapping ───────────────────────────────────────────────────────────
 
-// TestMigration00068UpMapsAssistantToStaff is the load-bearing assertion of the
+// TestMigration00073UpMapsAssistantToStaff is the load-bearing assertion of the
 // Up: every 'assistant' becomes 'staff', 'warden' and 'outsource' are
 // byte-identical, and not one row is gained or lost.
-func TestMigration00068UpMapsAssistantToStaff(t *testing.T) {
-	db := migration00068World(t)
+func TestMigration00073UpMapsAssistantToStaff(t *testing.T) {
+	db := migration00073World(t)
 
 	// Anti-vacuity, second half: the fixture must actually contain all three
 	// kinds, or "warden was untouched" is a claim about nothing.
 	kindsSeeded := map[string]int{}
-	for _, r := range migration00068Fixture() {
+	for _, r := range migration00073Fixture() {
 		kindsSeeded[r["kind"].(string)]++
 	}
 	for _, k := range []string{"assistant", "warden", "outsource"} {
@@ -428,31 +428,31 @@ func TestMigration00068UpMapsAssistantToStaff(t *testing.T) {
 		}
 	}
 
-	if err := goose.UpTo(db, "migrations", migration00068Version); err != nil {
-		t.Fatalf("goose up through %d: %v", migration00068Version, err)
+	if err := goose.UpTo(db, "migrations", migration00073Version); err != nil {
+		t.Fatalf("goose up through %d: %v", migration00073Version, err)
 	}
 
-	got := migration00068ReadAll(t, db)
-	if len(got) != len(migration00068Fixture()) {
-		t.Fatalf("member holds %d rows after 00068, want %d — the rebuild's INSERT…SELECT "+
+	got := migration00073ReadAll(t, db)
+	if len(got) != len(migration00073Fixture()) {
+		t.Fatalf("member holds %d rows after 00073, want %d — the rebuild's INSERT…SELECT "+
 			"must copy every row, and a WHERE or a failed copy loses members silently",
-			len(got), len(migration00068Fixture()))
+			len(got), len(migration00073Fixture()))
 	}
 
-	for _, want := range migration00068Fixture() {
+	for _, want := range migration00073Fixture() {
 		id := want["id"].(string)
 		t.Run(id, func(t *testing.T) {
 			row, ok := got[id]
 			if !ok {
-				t.Fatalf("member %q did not survive 00068", id)
+				t.Fatalf("member %q did not survive 00073", id)
 			}
 			before := want["kind"].(string)
-			wantKind := migration00068WantKindAfterUp(before)
-			if row["kind"] != migration00068Norm(wantKind) {
-				t.Errorf("member %q was kind %q before 00068 and is %s after, want %s — "+
+			wantKind := migration00073WantKindAfterUp(before)
+			if row["kind"] != migration00073Norm(wantKind) {
+				t.Errorf("member %q was kind %q before 00073 and is %s after, want %s — "+
 					"the migration maps 'assistant' -> 'staff' value by value and passes "+
 					"'warden' / 'outsource' through untouched",
-					id, before, row["kind"], migration00068Norm(wantKind))
+					id, before, row["kind"], migration00073Norm(wantKind))
 			}
 		})
 	}
@@ -466,37 +466,37 @@ func TestMigration00068UpMapsAssistantToStaff(t *testing.T) {
 		t.Fatalf("count stray kinds: %v", err)
 	}
 	if stray != 0 {
-		t.Errorf("%d member rows carry a kind outside {'staff','warden','outsource'} after 00068", stray)
+		t.Errorf("%d member rows carry a kind outside {'staff','warden','outsource'} after 00073", stray)
 	}
 	var assistants int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM member WHERE kind = 'assistant'`).Scan(&assistants); err != nil {
 		t.Fatalf("count leftover assistants: %v", err)
 	}
 	if assistants != 0 {
-		t.Errorf("%d rows still carry kind='assistant' after 00068 — the whole point of the "+
+		t.Errorf("%d rows still carry kind='assistant' after 00073 — the whole point of the "+
 			"migration is that this population is renamed, not merely joined by a new name", assistants)
 	}
 }
 
 // ── 2. everything that is NOT kind ───────────────────────────────────────────
 
-// TestMigration00068UpPreservesEveryColumn is the test that catches a mis-ordered
+// TestMigration00073UpPreservesEveryColumn is the test that catches a mis-ordered
 // INSERT…SELECT column list. The two lists in the migration are long, hand-typed
 // and名 for column, so a transposed same-typed pair is both easy to write and
 // invisible to every other assertion in this file.
-func TestMigration00068UpPreservesEveryColumn(t *testing.T) {
-	db := migration00068World(t)
-	before := migration00068ReadAll(t, db)
+func TestMigration00073UpPreservesEveryColumn(t *testing.T) {
+	db := migration00073World(t)
+	before := migration00073ReadAll(t, db)
 	if len(before) == 0 {
 		t.Fatal("no rows seeded — this comparison would prove nothing")
 	}
 
-	if err := goose.UpTo(db, "migrations", migration00068Version); err != nil {
-		t.Fatalf("goose up through %d: %v", migration00068Version, err)
+	if err := goose.UpTo(db, "migrations", migration00073Version); err != nil {
+		t.Fatalf("goose up through %d: %v", migration00073Version, err)
 	}
-	after := migration00068ReadAll(t, db)
+	after := migration00073ReadAll(t, db)
 
-	for _, seeded := range migration00068Fixture() {
+	for _, seeded := range migration00073Fixture() {
 		id := seeded["id"].(string)
 		t.Run(id, func(t *testing.T) {
 			pre, ok := before[id]
@@ -505,9 +505,9 @@ func TestMigration00068UpPreservesEveryColumn(t *testing.T) {
 			}
 			post, ok := after[id]
 			if !ok {
-				t.Fatalf("member %q did not survive 00068", id)
+				t.Fatalf("member %q did not survive 00073", id)
 			}
-			for _, c := range migration00068Columns() {
+			for _, c := range migration00073Columns() {
 				if c == "kind" {
 					continue // deliberately changed; covered by its own test
 				}
@@ -522,12 +522,12 @@ func TestMigration00068UpPreservesEveryColumn(t *testing.T) {
 			}
 			// Cross-check against the hand-written fixture too, so a readback
 			// helper that is itself wrong in both directions cannot hide.
-			for _, c := range migration00068Columns() {
+			for _, c := range migration00073Columns() {
 				if c == "kind" {
 					continue
 				}
-				if want := migration00068Norm(seeded[c]); post[c] != want {
-					t.Errorf("column %q of member %q is %s after 00068, want the seeded %s",
+				if want := migration00073Norm(seeded[c]); post[c] != want {
+					t.Errorf("column %q of member %q is %s after 00073, want the seeded %s",
 						c, id, post[c], want)
 				}
 			}
@@ -537,14 +537,14 @@ func TestMigration00068UpPreservesEveryColumn(t *testing.T) {
 
 // ── 3. the CHECK set ─────────────────────────────────────────────────────────
 
-// TestMigration00068KindCheckSet proves the CHECK really changed, from both
+// TestMigration00073KindCheckSet proves the CHECK really changed, from both
 // sides: the retired value must be refused and the new one accepted. Asserted on
 // err being nil / non-nil only — the message SQLite produces for a CHECK is not
 // this migration's contract.
-func TestMigration00068KindCheckSet(t *testing.T) {
-	db := migration00068World(t)
-	if err := goose.UpTo(db, "migrations", migration00068Version); err != nil {
-		t.Fatalf("goose up through %d: %v", migration00068Version, err)
+func TestMigration00073KindCheckSet(t *testing.T) {
+	db := migration00073World(t)
+	if err := goose.UpTo(db, "migrations", migration00073Version); err != nil {
+		t.Fatalf("goose up through %d: %v", migration00073Version, err)
 	}
 
 	cases := []struct {
@@ -581,57 +581,57 @@ func TestMigration00068KindCheckSet(t *testing.T) {
 
 // ── 4. 🔴 the index ──────────────────────────────────────────────────────────
 
-// TestMigration00068IndexSurvivesUp is the most important test in this file.
+// TestMigration00073IndexSurvivesUp is the most important test in this file.
 // `DROP TABLE member` destroys idx_member_codename and `RENAME` does not bring
 // it back, so the Up has to re-create it explicitly — and if it does not,
 // NOTHING raises: codenames simply become duplicable and the next collision is a
 // live data bug. Checked behaviourally, plus existence by name.
-func TestMigration00068IndexSurvivesUp(t *testing.T) {
-	db := migration00068World(t)
+func TestMigration00073IndexSurvivesUp(t *testing.T) {
+	db := migration00073World(t)
 
 	// Negative control: the guarantee exists BEFORE the migration, so a green
 	// result below is about the rebuild preserving it rather than about the
 	// index never having been there.
-	migration00068AssertCodenameIndex(t, db, "assistant", "pre")
+	migration00073AssertCodenameIndex(t, db, "assistant", "pre")
 
-	if err := goose.UpTo(db, "migrations", migration00068Version); err != nil {
-		t.Fatalf("goose up through %d: %v", migration00068Version, err)
+	if err := goose.UpTo(db, "migrations", migration00073Version); err != nil {
+		t.Fatalf("goose up through %d: %v", migration00073Version, err)
 	}
-	migration00068AssertCodenameIndex(t, db, "staff", "post")
+	migration00073AssertCodenameIndex(t, db, "staff", "post")
 }
 
 // ── 5. the Down ──────────────────────────────────────────────────────────────
 
-// TestMigration00068DownRestoresThePreUpState is exact rather than plausible:
+// TestMigration00073DownRestoresThePreUpState is exact rather than plausible:
 // 'staff' and 'assistant' are the same population under two names, so the
 // mapping is 1:1 in both directions and no row becomes unrepresentable. The
 // Down also does DROP TABLE, so it owes the index back too.
-func TestMigration00068DownRestoresThePreUpState(t *testing.T) {
-	db := migration00068World(t)
-	before := migration00068ReadAll(t, db)
+func TestMigration00073DownRestoresThePreUpState(t *testing.T) {
+	db := migration00073World(t)
+	before := migration00073ReadAll(t, db)
 	if len(before) == 0 {
 		t.Fatal("no rows seeded — this round trip would prove nothing")
 	}
 
-	if err := goose.UpTo(db, "migrations", migration00068Version); err != nil {
+	if err := goose.UpTo(db, "migrations", migration00073Version); err != nil {
 		t.Fatalf("up: %v", err)
 	}
-	if err := goose.DownTo(db, "migrations", migration00068PriorVersion); err != nil {
+	if err := goose.DownTo(db, "migrations", migration00073PriorVersion); err != nil {
 		t.Fatalf("down: %v", err)
 	}
-	after := migration00068ReadAll(t, db)
+	after := migration00073ReadAll(t, db)
 
 	if len(after) != len(before) {
 		t.Fatalf("Down produced %d member rows, want %d", len(after), len(before))
 	}
-	for _, seeded := range migration00068Fixture() {
+	for _, seeded := range migration00073Fixture() {
 		id := seeded["id"].(string)
 		t.Run(id, func(t *testing.T) {
 			post, ok := after[id]
 			if !ok {
 				t.Fatalf("member %q did not survive the round trip", id)
 			}
-			for _, c := range migration00068Columns() {
+			for _, c := range migration00073Columns() {
 				if post[c] != before[id][c] {
 					t.Errorf("column %q of member %q is %s after Up→Down, want the pre-Up %s — "+
 						"kind must be mapped back to 'assistant' and every other column is "+
@@ -645,33 +645,33 @@ func TestMigration00068DownRestoresThePreUpState(t *testing.T) {
 	// The quiet failure: a Down that forgets its own CREATE UNIQUE INDEX leaves
 	// a database that looks fine and enforces nothing. 'assistant' is the legal
 	// kind again at this version.
-	migration00068AssertCodenameIndex(t, db, "assistant", "post-down")
+	migration00073AssertCodenameIndex(t, db, "assistant", "post-down")
 }
 
 // ── 6. stability ─────────────────────────────────────────────────────────────
 
-// TestMigration00068UpDownUpIsStable runs the round trip twice: the state after
+// TestMigration00073UpDownUpIsStable runs the round trip twice: the state after
 // the second Up must equal the state after the first. A mapping that is not 1:1
 // in both directions, or a Down that leaves residue, diverges here even when
 // each single direction looks right on its own.
-func TestMigration00068UpDownUpIsStable(t *testing.T) {
-	db := migration00068World(t)
+func TestMigration00073UpDownUpIsStable(t *testing.T) {
+	db := migration00073World(t)
 
-	if err := goose.UpTo(db, "migrations", migration00068Version); err != nil {
+	if err := goose.UpTo(db, "migrations", migration00073Version); err != nil {
 		t.Fatalf("first up: %v", err)
 	}
-	firstUp := migration00068ReadAll(t, db)
+	firstUp := migration00073ReadAll(t, db)
 	if len(firstUp) == 0 {
 		t.Fatal("no rows after the first Up — this round trip would prove nothing")
 	}
 
-	if err := goose.DownTo(db, "migrations", migration00068PriorVersion); err != nil {
+	if err := goose.DownTo(db, "migrations", migration00073PriorVersion); err != nil {
 		t.Fatalf("down: %v", err)
 	}
-	if err := goose.UpTo(db, "migrations", migration00068Version); err != nil {
+	if err := goose.UpTo(db, "migrations", migration00073Version); err != nil {
 		t.Fatalf("second up: %v", err)
 	}
-	secondUp := migration00068ReadAll(t, db)
+	secondUp := migration00073ReadAll(t, db)
 
 	// Flattened and sorted so the diff names the whole population, not the first
 	// cell that happens to differ.
@@ -679,7 +679,7 @@ func TestMigration00068UpDownUpIsStable(t *testing.T) {
 		out := make([]string, 0, len(m))
 		for id, row := range m {
 			cells := make([]string, 0, len(row))
-			for _, c := range migration00068Columns() {
+			for _, c := range migration00073Columns() {
 				cells = append(cells, c+"="+row[c])
 			}
 			out = append(out, id+"\x00"+strings.Join(cells, "\x00"))
@@ -695,12 +695,12 @@ func TestMigration00068UpDownUpIsStable(t *testing.T) {
 
 	// The index must survive the second Up as well — it is re-created by every
 	// direction, so a rebuild that only remembers it once shows up here.
-	migration00068AssertCodenameIndex(t, db, "staff", "second-up")
+	migration00073AssertCodenameIndex(t, db, "staff", "second-up")
 }
 
 // 🔴 THE HAND LIST IS A CLOSED LOOP UNTIL THIS TEST EXISTS.
 //
-// migration00068Columns() is enumerated by hand ON PURPOSE (see its own comment):
+// migration00073Columns() is enumerated by hand ON PURPOSE (see its own comment):
 // a rebuild that forgot a column then disagrees with the list instead of quietly
 // following the mistake. That catches one direction and one only —
 // "the migration dropped a column THE LIST KNOWS ABOUT".
@@ -719,14 +719,14 @@ func TestMigration00068UpDownUpIsStable(t *testing.T) {
 // is exactly one such change in flight: #387 adds member.restart_after_stop.
 //
 // So this test is the one place the LIVE schema meets the list.
-// migration00068SchemaBeforeUp brings a temp database to the state just before
-// 00068 **by going UP and stopping there** — never by migrating past it and
+// migration00073SchemaBeforeUp brings a temp database to the state just before
+// 00073 **by going UP and stopping there** — never by migrating past it and
 // coming back down.
 //
-// 🔴 THE DIRECTION IS THE WHOLE TEST. migration00068World (used by every other
+// 🔴 THE DIRECTION IS THE WHOLE TEST. migration00073World (used by every other
 // test in this file, correctly) reaches the same version with runMigrations +
-// goose.DownTo, and DownTo RUNS 00068'S OWN DOWN — which rebuilds `member` from
-// migration00068Columns(). Read pragma_table_info after that and the "live
+// goose.DownTo, and DownTo RUNS 00073'S OWN DOWN — which rebuilds `member` from
+// migration00073Columns(). Read pragma_table_info after that and the "live
 // schema" is a table the thing under test just recreated from the very list it
 // is being compared against: it agrees with itself, always, no matter what an
 // earlier migration added. That is the identical closed loop this test exists to
@@ -736,8 +736,8 @@ func TestMigration00068UpDownUpIsStable(t *testing.T) {
 // database AFTER the helper returned, which is not what a migration does).
 //
 // Going up and stopping leaves `member` exactly as the REAL earlier migrations
-// built it. Nothing 00068 wrote is in the picture.
-func migration00068SchemaBeforeUp(t *testing.T) *sql.DB {
+// built it. Nothing 00073 wrote is in the picture.
+func migration00073SchemaBeforeUp(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := openSQLite(filepath.Join(t.TempDir(), "member-schema-before-68.db"))
 	if err != nil {
@@ -748,14 +748,14 @@ func migration00068SchemaBeforeUp(t *testing.T) *sql.DB {
 	if err := goose.SetDialect("sqlite3"); err != nil {
 		t.Fatalf("set dialect: %v", err)
 	}
-	if err := goose.UpTo(db, "migrations", migration00068PriorVersion); err != nil {
-		t.Fatalf("up to %d: %v", migration00068PriorVersion, err)
+	if err := goose.UpTo(db, "migrations", migration00073PriorVersion); err != nil {
+		t.Fatalf("up to %d: %v", migration00073PriorVersion, err)
 	}
 	return db
 }
 
-func TestMigration00068ColumnListMatchesTheLiveSchema(t *testing.T) {
-	db := migration00068SchemaBeforeUp(t)
+func TestMigration00073ColumnListMatchesTheLiveSchema(t *testing.T) {
+	db := migration00073SchemaBeforeUp(t)
 
 	rows, err := db.Query(`SELECT name FROM pragma_table_info('member')`)
 	if err != nil {
@@ -780,7 +780,7 @@ func TestMigration00068ColumnListMatchesTheLiveSchema(t *testing.T) {
 	}
 
 	listed := map[string]bool{}
-	for _, c := range migration00068Columns() {
+	for _, c := range migration00073Columns() {
 		listed[c] = true
 	}
 
@@ -790,7 +790,7 @@ func TestMigration00068ColumnListMatchesTheLiveSchema(t *testing.T) {
 			missingFromList = append(missingFromList, c)
 		}
 	}
-	for _, c := range migration00068Columns() {
+	for _, c := range migration00073Columns() {
 		if !live[c] {
 			missingFromSchema = append(missingFromSchema, c)
 		}
@@ -801,14 +801,14 @@ func TestMigration00068ColumnListMatchesTheLiveSchema(t *testing.T) {
 	// reason to think this file is any of their business.
 	if len(missingFromList) > 0 {
 		t.Errorf("member has %d column(s) this migration does not know about: %s\n"+
-			"⇒ You added a column to `member`. Update migration00068Columns() AND the "+
+			"⇒ You added a column to `member`. Update migration00073Columns() AND the "+
 			"INSERT…SELECT in migrations/%05d_member_kind_assistant_to_staff.sql (both "+
 			"directions, Up and Down) — otherwise that rebuild COPIES THE TABLE WITHOUT "+
 			"YOUR COLUMN and every existing row silently loses its value.",
-			len(missingFromList), strings.Join(missingFromList, ", "), migration00068Version)
+			len(missingFromList), strings.Join(missingFromList, ", "), migration00073Version)
 	}
 	if len(missingFromSchema) > 0 {
-		t.Errorf("migration00068Columns() names %d column(s) that member does not have: %s\n"+
+		t.Errorf("migration00073Columns() names %d column(s) that member does not have: %s\n"+
 			"⇒ Either the column was dropped by an earlier migration and this list is stale, "+
 			"or the name is misspelled. The rebuild would fail on it.",
 			len(missingFromSchema), strings.Join(missingFromSchema, ", "))
@@ -847,48 +847,48 @@ func memberShape(t *testing.T, db *sql.DB) (cols []string, idx []string) {
 
 // 🔴 THE LIST-FREE HALF, AND IT IS THE ONE THAT CANNOT GO STALE.
 //
-// TestMigration00068ColumnListMatchesTheLiveSchema keeps the hand list honest,
+// TestMigration00073ColumnListMatchesTheLiveSchema keeps the hand list honest,
 // but it still has a hand list in it. This one has none: it photographs `member`
-// immediately BEFORE 00068 runs and again immediately AFTER, and demands the two
+// immediately BEFORE 00073 runs and again immediately AFTER, and demands the two
 // photographs match. Whatever the schema happens to be on the day, a rebuild is
 // only allowed to change VALUES (assistant -> staff), never the SHAPE.
 //
-// WHY THE INDEX HALF IS NOT DECORATION: 00068's own comment calls the index "THE
+// WHY THE INDEX HALF IS NOT DECORATION: 00073's own comment calls the index "THE
 // TRAP IN THIS ONE" — DROP TABLE takes idx_member_codename with it and RENAME
 // does not bring it back, and a missing unique index does not raise, does not
 // log, and makes codenames silently duplicable. Independent review #16 measured
 // that adding an index to an earlier migration passed every test in this file:
 // the rebuild ate it and nothing said a word. This is that missing assertion.
-func TestMigration00068PreservesTheShapeOfMemberWhateverItIs(t *testing.T) {
-	db := migration00068SchemaBeforeUp(t)
+func TestMigration00073PreservesTheShapeOfMemberWhateverItIs(t *testing.T) {
+	db := migration00073SchemaBeforeUp(t)
 
 	beforeCols, beforeIdx := memberShape(t, db)
 	if len(beforeCols) == 0 || len(beforeIdx) == 0 {
 		t.Fatalf("precondition: member must have columns (%d) and at least one index (%d) "+
-			"before 00068 — if this fires, the reader is broken, not the schema",
+			"before 00073 — if this fires, the reader is broken, not the schema",
 			len(beforeCols), len(beforeIdx))
 	}
 
-	if err := goose.UpTo(db, "migrations", migration00068Version); err != nil {
-		t.Fatalf("up to %d: %v", migration00068Version, err)
+	if err := goose.UpTo(db, "migrations", migration00073Version); err != nil {
+		t.Fatalf("up to %d: %v", migration00073Version, err)
 	}
 	afterCols, afterIdx := memberShape(t, db)
 
 	if !reflect.DeepEqual(beforeCols, afterCols) {
-		t.Errorf("00068 changed member's COLUMNS.\n before: %v\n  after: %v\n"+
+		t.Errorf("00073 changed member's COLUMNS.\n before: %v\n  after: %v\n"+
 			"⇒ The rebuild's INSERT…SELECT names a fixed column list. Anything the "+
 			"schema has that the list does not is copied away, and every existing row "+
 			"loses that value silently. Add your column to BOTH directions of "+
-			"migrations/%05d and to migration00068Columns().",
-			beforeCols, afterCols, migration00068Version)
+			"migrations/%05d and to migration00073Columns().",
+			beforeCols, afterCols, migration00073Version)
 	}
 	if !reflect.DeepEqual(beforeIdx, afterIdx) {
-		t.Errorf("00068 changed member's INDEXES.\n before: %v\n  after: %v\n"+
+		t.Errorf("00073 changed member's INDEXES.\n before: %v\n  after: %v\n"+
 			"⇒ DROP TABLE takes every index with it and RENAME does not bring them "+
 			"back. A lost UNIQUE index raises nothing and logs nothing — it just makes "+
 			"the column duplicable. Recreate it explicitly in BOTH directions of "+
 			"migrations/%05d.",
-			beforeIdx, afterIdx, migration00068Version)
+			beforeIdx, afterIdx, migration00073Version)
 	}
 }
 
@@ -897,20 +897,20 @@ func TestMigration00068PreservesTheShapeOfMemberWhateverItIs(t *testing.T) {
 // The two tests above both learn what `member` looks like by asking a database
 // that goose built. That is one ruler with two faces, and one ruler can go blind
 // on its own: the first version of the column test read the schema after
-// goose.DownTo had let 00068's own Down rebuild the table from the very list
+// goose.DownTo had let 00073's own Down rebuild the table from the very list
 // under test, so it agreed with itself no matter what an earlier migration
 // added, and it passed the real #387 scenario in full green.
 //
 // So this one never runs a migration. It REPLAYS the .sql text of every
-// migration below 00068 and works out what columns `member` must have by the
-// time 00068 starts — CREATE TABLE, the member_rebuild/RENAME swap, and every
+// migration below 00073 and works out what columns `member` must have by the
+// time 00073 starts — CREATE TABLE, the member_rebuild/RENAME swap, and every
 // ADD/DROP COLUMN, Up sections only. Its answer comes from the files a reviewer
 // reads, not from an engine's behaviour.
 //
 // The point is not that this parser is better. It is that when the two rulers
 // disagree, ONE OF THEM IS WRONG AND YOU FIND OUT — which is exactly what did
 // not happen while there was only one.
-func TestMigration00068ColumnListAgreesWithTheMigrationTextItself(t *testing.T) {
+func TestMigration00073ColumnListAgreesWithTheMigrationTextItself(t *testing.T) {
 	entries, err := embeddedMigrations.ReadDir("migrations")
 	if err != nil {
 		t.Fatalf("read migrations dir: %v", err)
@@ -924,7 +924,7 @@ func TestMigration00068ColumnListAgreesWithTheMigrationTextItself(t *testing.T) 
 		if _, err := fmt.Sscanf(e.Name(), "%05d_", &ver); err != nil {
 			t.Fatalf("migration name %q does not start with a version: %v", e.Name(), err)
 		}
-		if ver < migration00068Version {
+		if ver < migration00073Version {
 			names = append(names, e.Name())
 		}
 	}
@@ -965,14 +965,14 @@ func TestMigration00068ColumnListAgreesWithTheMigrationTextItself(t *testing.T) 
 		}
 	}
 
-	want := migration00068Columns()
+	want := migration00073Columns()
 	if !reflect.DeepEqual(cols, want) {
-		t.Errorf("the migration TEXT and migration00068Columns() disagree about member.\n"+
+		t.Errorf("the migration TEXT and migration00073Columns() disagree about member.\n"+
 			"  from replaying the .sql files: %v\n"+
 			"  from the hand-written list:    %v\n"+
 			"⇒ One of the two is stale. If you added a column, add it to the list (and to "+
 			"both directions of migrations/%05d). If you removed one, remove it from the list.",
-			cols, want, migration00068Version)
+			cols, want, migration00073Version)
 	}
 }
 
