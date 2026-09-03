@@ -148,6 +148,38 @@ func TestTriggersAndBackfillProjectTheSameRows(t *testing.T) {
 		}}})
 	mustAgree(t, d, "after a message whose first ref has no id")
 
+	// A self-message matches BOTH single-sided read queries. It is the one
+	// shape where the index and the projection could agree while the endpoint
+	// still double-counts, so it is pinned on both sides: here for parity, and
+	// in TestChatGalleryReturnsASelfMessageOnce for the de-duplication.
+	put(ChatMessage{ID: "c-self", Sender: "m-1", Recipient: "m-1", TS: 5,
+		Meta: att("a-self")})
+	mustAgree(t, d, "after a self-message")
+
+	// The same blob id twice in one message. The migration's own header says
+	// (attachment_id, message_id) is NOT a safe key — this is the shape that
+	// makes that true, and `ord` is the only thing keeping the two rows apart.
+	put(ChatMessage{ID: "c-dup", Sender: "m-1", Recipient: "owner", TS: 6,
+		Meta: att("a-dup", "a-dup")})
+	mustAgree(t, d, "after one message naming the same blob twice")
+
+	// Shapes the element guard rejects. Each of these used to make the whole
+	// INSERT fail with "malformed JSON" (a string element), or land a
+	// fabricated serve url in the index (a non-string id). Both sides must
+	// reject them identically, so parity is the place they stay pinned.
+	put(ChatMessage{ID: "c-bad", Sender: "m-1", Recipient: "owner", TS: 7,
+		Meta: map[string]any{"attachments": []any{
+			"a-bare-string",
+			[]any{1},
+			map[string]any{"id": 123},
+			map[string]any{"id": "a-good", "mime": "image/png", "filename": "a-good.png"},
+		}}})
+	mustAgree(t, d, "after a message mixing rejected element shapes with a good one")
+
+	put(ChatMessage{ID: "c-notarray", Sender: "m-1", Recipient: "owner", TS: 8,
+		Meta: map[string]any{"attachments": "nope"}})
+	mustAgree(t, d, "after a message whose attachments is not an array")
+
 	if _, _, err := d.DeleteChatInvolving("m-1"); err != nil {
 		t.Fatalf("delete chat involving: %v", err)
 	}
