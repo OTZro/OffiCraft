@@ -51,45 +51,52 @@
     },
     {
       "id": "ocagent-attachment-post",
-      "source": "cli/ocagent/diff.go",
+      "source": "cli/ocagent/upload.go",
       "callsite": "req, err := http.NewRequest(http.MethodPost, reqURL, body)",
       "kind": "skip",
-      "skip_reason": "Streams a raw body, not JSON — there is no request schema for a wire test to compare a body against. Both `upload` and `diff` send through this one seam (T-59 extracted it out of cmdUpload so the second subcommand could not grow its own slightly different copy of the auth and exit-code contract)."
+      "skip_reason": "Streams a raw body, not JSON — there is no request schema for a wire test to compare a body against. `upload` is the ONLY subcommand that sends through it: T-59 extracted it out of cmdUpload for `diff` to share, and then `diff` stopped uploading at all (a comparison is a URL, not a stored blob), leaving the seam with one caller."
     },
     {
       "id": "ocagent-attachment-post-do",
-      "source": "cli/ocagent/diff.go",
+      "source": "cli/ocagent/upload.go",
       "callsite": "resp, err := client.Do(req)",
       "kind": "skip",
       "skip_reason": "The send half of the raw-bytes upload above."
     },
     {
       "id": "ocagent-upload-one-file-hop",
-      "source": "cli/ocagent/diff.go",
+      "source": "cli/ocagent/upload.go",
       "callsite": "ref, code := postAttachment(client, cfg, verb, f, info.Size(),",
       "kind": "seam",
       "seam_reason": "uploadOneFile: opens one path and hands the stream to the shared seam. The send it performs is ocagent-attachment-post, which is where the raw-bytes reason lives; naming the path adds no route."
     },
     {
-      "id": "ocagent-diff-side-hop",
+      "id": "ocagent-diff-external-hop",
       "source": "cli/ocagent/diff.go",
-      "callsite": "ref, size, code := uploadOneFile(client, cfg, \"diff\", path, \"\", errOut)",
+      "callsite": "return mintExternalDiffLink(client, cfg, before, after,",
       "kind": "seam",
-      "seam_reason": "`diff` uploads EACH SIDE THAT IS A FILE through the same seam as `upload`. One row, not two: since a side may instead name a document (T-59 second round) the two sides share one closure, so there is one callsite and the count of sends is 0, 1 or 2 depending on the pair — which is the point, a document side is a reference and uploads nothing. Declared rather than skipped so the sends behind one subcommand stay countable; a transposed pair is the failure this guards."
+      "seam_reason": "cmdDiff's ONE conditional hop: reached only when --external asks for the signed link, and the request it performs is ocagent-diff-share-link-mint below. The default flavour returns before this line without touching the network at all."
     },
     {
-      "id": "ocagent-diff-pair-hop",
+      "id": "ocagent-diff-share-link-mint",
       "source": "cli/ocagent/diff.go",
-      "callsite": "ref, code := postAttachment(client, cfg, \"diff\",",
-      "kind": "seam",
-      "seam_reason": "The third send: the pointer pair naming the two blobs the first two minted. It carries JSON, but it goes out through the raw-bytes seam (ocagent-attachment-post) rather than postJSON, so there is no frozen request schema to compare it against — the shape is instead enforced server-side, and a malformed pair is a 400."
+      "callsite": "req, err := http.NewRequest(http.MethodGet, reqURL, nil)",
+      "kind": "skip",
+      "skip_reason": "GET with a nil body — nothing goes out. It asks GET /api/diff/share-link to mint the EXTERNAL comparison link, and it is the ONE request `diff` can make: only the server holds the signing key, so the default (internal) link is a pure local computation and this is what --external costs."
+    },
+    {
+      "id": "ocagent-diff-share-link-mint-do",
+      "source": "cli/ocagent/diff.go",
+      "callsite": "resp, err := client.Do(req)",
+      "kind": "skip",
+      "skip_reason": "The send half of the bodyless mint GET above."
     },
     {
       "id": "ocagent-diff-dispatch-hop",
       "source": "cli/ocagent/main.go",
       "callsite": "return cmdDiff(newStreamingClient(), cfg, args[0], args[1],",
       "kind": "seam",
-      "seam_reason": "Dispatch into cmdDiff. Its three sends are the diff hops above; the dispatch itself adds no route."
+      "seam_reason": "Dispatch into cmdDiff. It sends NOTHING by default — the internal link is a pure function of the two addresses — and exactly one GET when --external asks the server to mint the signed one (ocagent-diff-share-link-mint below)."
     },
     {
       "id": "ocagent-upload-dispatch-hop",

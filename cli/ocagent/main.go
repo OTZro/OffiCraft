@@ -54,7 +54,7 @@ var planeASubcommands = []struct{ name, help string }{
 	{"suicide", "self-terminate: kill my own tmux session (OC_SESSION) → SSE drops → offline"},
 	{"download", "fetch a chat attachment blob to a local file (streaming; --out <dir>)"},
 	{"upload", "stream a local file into the attachment store (prints the att id; --mime <type>)"},
-	{"diff", "mint a compare attachment from two files or document versions (prints the att id)"},
+	{"diff", "print a compare-screen URL for two attachment ids / document versions (--external mints a no-login link)"},
 	{"clean", "get rid of a file or folder I made: quarantines it under my workdir (never rm)"},
 	// Listed because --help is where a person or an agent goes to ask "can this
 	// CLI tell me which build it is?". Kept out of the synopsis, `version` was
@@ -181,20 +181,25 @@ func realMain(argv []string, env func(string) string, in io.Reader, out io.Write
 		return cmdUpload(newStreamingClient(), cfg, args[0], *mimeType, out, os.Stderr)
 
 	case "diff":
-		// The compare attachment (T-59): two file paths in, one attachment id
-		// out. Three uploads happen behind this — the two documents and the
-		// pair that names them — because the pair can only be written once the
-		// two ids exist, and an agent assembling that by hand is where the ids
-		// get transposed. See diff.go.
+		// A comparison is a URL (T-59): two ADDRESSES in, one link out. It
+		// uploads no files (owner 2026-09-03: 「我希望的是使用 diff 時，都是直接
+		// 給連結 id, 這個不負責上傳檔案」) and, without --external, makes no
+		// request at all — the plain link is a pure function of the two
+		// addresses. See diff.go.
 		fs := flag.NewFlagSet("ocagent diff", flag.ContinueOnError)
 		fs.SetOutput(out)
-		beforeLabel := fs.String("label-before", "", "column heading for the first file (default: its name)")
-		afterLabel := fs.String("label-after", "", "column heading for the second file (default: its name)")
+		// `ocagent diff --help` is the ONE authority on this subcommand's
+		// spelling: the seed teaches when and why to use it and points here for
+		// the exact syntax, so anything removed from the seed has to be here.
+		fs.Usage = func() { diffUsage(out) }
+		beforeLabel := fs.String("label-before", "", "column heading for the before side (default: the screen's own)")
+		afterLabel := fs.String("label-after", "", "column heading for the after side (default: the screen's own)")
+		external := fs.Bool("external", false, "mint the server-signed link that opens with no login (permanent, unrevocable)")
 		if err := fs.Parse(rest); err != nil {
 			return 2
 		}
 		// Same reason as upload: stdlib flag stops at the first positional, so
-		// re-parse what follows the two paths.
+		// re-parse what follows the two sides.
 		args := fs.Args()
 		if len(args) >= 2 {
 			if err := fs.Parse(args[2:]); err != nil {
@@ -203,13 +208,11 @@ func realMain(argv []string, env func(string) string, in io.Reader, out io.Write
 		}
 		if len(args) < 2 || fs.NArg() != 0 {
 			fmt.Fprintln(out, "[ocagent] diff: exactly two arguments are required: <before> <after>")
-			fmt.Fprintln(out, "usage: ocagent diff <before> <after> [--label-before <text>] [--label-after <text>]")
-			fmt.Fprintln(out, "  each side is a FILE PATH, or doc:<kind>/<key>/<at>/<field> naming one field of")
-			fmt.Fprintln(out, "  a document, where <at> is current, seed or a version id from list_document_history")
+			diffUsage(out)
 			return 2
 		}
 		return cmdDiff(newStreamingClient(), cfg, args[0], args[1],
-			*beforeLabel, *afterLabel, out, os.Stderr)
+			*beforeLabel, *afterLabel, *external, out, os.Stderr)
 
 	case "clean":
 		// The ONE entry for "get rid of this file/folder I made" (owner

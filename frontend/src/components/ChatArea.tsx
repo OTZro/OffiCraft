@@ -413,9 +413,9 @@ export function ChatArea({
         // in this file builds kind:"attachment"; the two that exist build
         // "message" and "staged-image"). It is here so that reviving the branch
         // cannot silently lose the attachment's TYPE: without a mime the
-        // overlay falls back to markdown, and a compare attachment would spill
-        // its pointer JSON on screen instead of drawing the comparison — with
-        // nothing going red. Keeping the field costs one line; discovering the
+        // overlay falls back to markdown, and a file whose type matters would
+        // be drawn as the wrong thing — with nothing going red. Keeping the
+        // field costs one line; discovering the
         // omission costs a reader believing a wrong screen.
         mime?: string;
       }

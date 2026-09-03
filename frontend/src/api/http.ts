@@ -41,6 +41,7 @@ import type {
   DocumentHistoryView,
   DocumentRevisionView,
   DocumentSeedView,
+  DiffPairView,
   RoleSummaryView,
   RoleDefView,
   BootstrapView,
@@ -154,6 +155,8 @@ import {
 import type { WireReplyCard } from "./wire";
 import { ownerToken, setToken } from "./auth";
 import { ApiError, parseRetryAfter } from "./errors";
+import { fetchDiffPair } from "./diff";
+import type { DiffParams } from "../lib/diffLink";
 import { client, handleUnauthorized } from "./client";
 
 // Auth is cross-cutting and lives in ONE place each: owner-JWT sourcing
@@ -2634,6 +2637,15 @@ export const httpApi: Api = {
       }),
     );
     return toDocumentSeed(wire);
+  },
+
+  async getDiff(params: DiffParams): Promise<DiffPairView> {
+    // GET /api/diff?before=&after=[&label_before=][&label_after=][&sig=] — the
+    // whole comparison in one answer. Hand-written rather than routed through
+    // the typed client, because the signed flavour is answered with NO session
+    // and must not be able to log the owner out; api/diff.ts owns that reason
+    // and the response shape.
+    return fetchDiffPair(params);
   },
 
   async restoreDocumentHistory(

@@ -38,6 +38,7 @@ import os
 import pathlib
 import struct
 import time
+import urllib.parse
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -367,6 +368,47 @@ def _check_share_link_shape(ctx: HCtx, r: httpx.Response) -> None:
     assert url.startswith(f"/api/chat/attachment/{att_id}?sig="), url
     sig = url.split("sig=", 1)[1]
     assert sig and "&" not in sig, f"malformed sig segment: {url}"
+
+
+def _diff_pair_path(ctx: HCtx) -> str:
+    att_id, _payload = ctx.attachment()
+    return "/api/diff?" + urllib.parse.urlencode({"before": att_id, "after": att_id})
+
+
+def _check_diff_pair(ctx: HCtx, r: httpx.Response) -> None:
+    att_id, _payload = ctx.attachment()
+    d = r.json()
+    for name in ("before", "after"):
+        side = d[name]
+        assert side["address"] == att_id, side
+        assert side["gone"] is False, side
+        # The side carries the RESOLVED content and the stored mime — not a
+        # second address the reader would have to fetch. (The fixture is a PNG,
+        # so `text` is those bytes as a string; what is pinned here is that the
+        # field is present and the mime came along, not the bytes.)
+        assert isinstance(side["text"], str) and side["text"], side
+        assert side["mime"] == "image/png", side
+
+
+def _check_diff_share_link(ctx: HCtx, r: httpx.Response) -> None:
+    """The minted link is SERVER-RELATIVE, carries the same four parameters, and
+    reads the pair with NO credential at all — the whole point of the external
+    flavour."""
+    att_id, _payload = ctx.attachment()
+    url = r.json()["url"]
+    assert url.startswith("/diff?"), url
+    query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+    assert query["before"] == [att_id] and query["after"] == [att_id], query
+    assert query.get("sig") and query["sig"][0], f"no signature on the external link: {url}"
+
+    signed = "/api/diff?" + urllib.parse.urlparse(url).query
+    anon = ctx.client.get(signed)
+    assert anon.status_code == 200, f"credential-less read failed: {anon.status_code} {anon.text}"
+    assert anon.json()["before"]["address"] == att_id, anon.text
+
+    tampered = signed.replace("sig=" + query["sig"][0], "sig=" + query["sig"][0][:-1] + "X")
+    bad = ctx.client.get(tampered)
+    assert bad.status_code == 401, f"a tampered sig must be 401: {bad.status_code} {bad.text}"
 
 
 def _seeded_chat_path(template: str) -> Callable[[HCtx], str]:
@@ -1340,6 +1382,11 @@ HAPPY: dict[str, Happy] = {
     ),
     "GET /api/chat/attachments": Happy(
         path=_seeded_chat_path("/api/chat/attachments"), check=_nonempty_list
+    ),
+    "GET /api/diff": Happy(path=_diff_pair_path, check=_check_diff_pair),
+    "GET /api/diff/share-link": Happy(
+        path=lambda ctx: _diff_pair_path(ctx).replace("/api/diff?", "/api/diff/share-link?", 1),
+        check=_check_diff_share_link,
     ),
     "POST /api/chat/attachments": Happy(
         identity="agent",
@@ -3329,65 +3376,6 @@ def test_upload_ref_rejections(hctx: HCtx) -> None:
         headers=headers,
     )
     assert r.status_code == 400 and "20 MB" in r.text, f"{r.status_code} {r.text}"
-
-
-def test_compare_attachment_shape_is_enforced_at_the_upload_seam(hctx: HCtx) -> None:
-    """T-59: ``application/vnd.officraft.diff`` is the ONE declared mime whose
-    BODY is checked instead of taken on trust, so that "it was accepted" and
-    "it will draw" cannot come apart.
-
-    A side names EXACTLY ONE of a stored blob (``attachment_id``) or one field
-    of a document at one point in time (``doc``: kind/key/at/field, where ``at``
-    is ``current``, ``seed`` or a revision id). Only the SHAPE is judged —
-    whether an address still resolves is a read-time fact, the same posture the
-    blob side has always had.
-
-    Black-box on purpose: this pins the accepted wire, which is what a client
-    written against the spec is entitled to, and it is the face the in-process
-    Go tests cannot speak for.
-    """
-    headers = _auth(hctx.agent.token)
-    upload = "/api/chat/attachments?mime=application/vnd.officraft.diff&filename=c.diff"
-
-    def post(body: object) -> httpx.Response:
-        return hctx.client.post(upload, content=json.dumps(body).encode(), headers=headers)
-
-    blob = {"attachment_id": "att-0123456789ab"}
-    doc = {"kind": "lessons", "key": "mira", "at": "12", "field": "text"}
-
-    for name, pair in (
-        ("two blobs", {"before": blob, "after": {"attachment_id": "att-fedcba987654"}}),
-        ("a revision against the live document",
-         {"before": {"doc": doc}, "after": {"doc": {**doc, "at": "current"}}}),
-        ("the shipped default against a blob",
-         {"before": {"doc": {**doc, "at": "seed"}}, "after": blob}),
-    ):
-        r = post(pair)
-        assert r.status_code == 200, f"{name}: {r.status_code} {r.text}"
-
-    for name, pair in (
-        ("a side naming both shapes", {"before": {**blob, "doc": doc}, "after": blob}),
-        ("a side naming neither", {"before": {}, "after": blob}),
-        ("an at that is not a version", {"before": {"doc": {**doc, "at": "latest"}}, "after": blob}),
-        ("an address segment that traverses",
-         {"before": {"doc": {**doc, "key": "../../api/version"}}, "after": blob}),
-        # Whitespace is not invisible: the blob is stored verbatim, so a padded
-        # address is one the reader can never resolve.
-        ("a padded at", {"before": {"doc": {**doc, "at": " current "}}, "after": blob}),
-        ("a padded attachment_id",
-         {"before": {"attachment_id": " att-0123456789ab "}, "after": blob}),
-    ):
-        r = post(pair)
-        assert r.status_code == 400, f"{name}: {r.status_code} {r.text}"
-
-    # The check is keyed on the DECLARED type, never on what the bytes look
-    # like — an ordinary .json attachment must not be held to the diff shape.
-    r = hctx.client.post(
-        "/api/chat/attachments?mime=application/json&filename=c.json",
-        content=json.dumps({"before": {}}).encode(),
-        headers=headers,
-    )
-    assert r.status_code == 200, f"plain json: {r.status_code} {r.text}"
 
 
 def test_chat_scrollback_cursor_page_never_marks_read(hctx: HCtx) -> None:

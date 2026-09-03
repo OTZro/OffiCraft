@@ -9,13 +9,11 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"net/url"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -355,202 +353,6 @@ func decodeChatAttachment(dataB64, filename, mimeType string) (*ChatAttachment, 
 	return resolveChatAttachment(raw, filename, resolved)
 }
 
-// chatAttachmentDiffMime marks a DIFF attachment: not a document, but a
-// POINTER PAIR naming the two blobs a reader wants compared (owner 2026-09-03,
-// c-95717eb161b3 — 「可以指定兩個文件位置，就可以跳出我們這個 diff 的畫面 …
-// 實際上是兩個文件連結」). Links rather than copies, so the two sides stay
-// openable on their own and nothing is stored twice.
-//
-// The type is carried by the MIME and nothing else. Not the filename, not the
-// extension, not a marker inside the label: those are read by eyes, and this
-// repo already has one identifier — `ta-` in chat text — that nothing parses
-// and everyone tracks by hand.
-//
-// ⚠️ NO `+json` SUFFIX, though that is the conventional spelling for a vendor
-// JSON type, and the reason is measured rather than stylistic: the upload seam
-// takes the type in a QUERY PARAMETER (`?mime=`), where `+` decodes to a SPACE.
-// `ocagent` escapes it (url.Values.Encode), but anything hand-built — a curl
-// line copied out of a doc, a test — stores the blob under
-// "application/vnd.officraft.diff json" and answers 200. The type is then
-// wrong, nothing complains, and the compare screen simply never opens. Dropping
-// one character deletes that failure mode instead of documenting it.
-const chatAttachmentDiffMime = "application/vnd.officraft.diff"
-
-// diffAttachmentDoc names one side that is a DOCUMENT rather than a blob
-// (T-59, owner 2026-09-03 on rc-8bf26b440e6e). Nothing is copied: a retained
-// revision already has an address of its own and a reader can fetch it, which
-// is the whole reason this is a reference and not a second stored copy.
-//
-// `at` is one of three things and stays a single string: "current" (the live
-// document — a LIVE pointer, so the same attachment shows a different
-// comparison later, which the reader is told on screen), "seed" (the shipped
-// default, i.e. 初始版本), or a retained revision's id in decimal.
-//
-// `field` is REQUIRED, and that is a property of the data rather than a choice:
-// a revision stores a MAP of fields, not one text. Of the eighteen kinds
-// exactly one (task_manual) carries more than a single field, and it already
-// has two single-field siblings — so requiring the name costs almost every
-// caller nothing and removes the guessing for the one that matters. The server
-// does NOT carry a kind→field table to default it from: that table lives in the
-// reader (where adding a kind fails to compile) and the names are answerable at
-// runtime from list_document_history.
-type diffAttachmentDoc struct {
-	Kind  string `json:"kind"`
-	Key   string `json:"key"`
-	At    string `json:"at"`
-	Field string `json:"field"`
-}
-
-// One side of a diff attachment: EITHER a stored blob or a document reference,
-// never both and never neither. `label` is what the compare screen puts above
-// that column; empty means the caller had nothing better than the filename.
-type diffAttachmentSide struct {
-	AttachmentID string             `json:"attachment_id,omitempty"`
-	Doc          *diffAttachmentDoc `json:"doc,omitempty"`
-	Label        string             `json:"label,omitempty"`
-}
-
-type diffAttachmentEnvelope struct {
-	Before diffAttachmentSide `json:"before"`
-	After  diffAttachmentSide `json:"after"`
-}
-
-// diffAttachmentSideID is the SHAPE a minted blob id actually has ("att-" +
-// newHexID(12), see the mint below) — anchored, so it matches the whole string
-// or nothing.
-//
-// A prefix test is not enough, and the gap is not cosmetic. T-59's independent
-// review fed the prefix version "att-" (empty id, the easiest possible typo:
-// copying an id and losing the tail) and "att-/../../api/version", and BOTH
-// were accepted with a 200. The second one is the one that bites: the FE builds
-// the side URL by concatenation, so the browser normalises that away to a
-// different endpoint entirely and the compare screen draws an unrelated JSON
-// response as "before" — a confident wrong answer, with the reader's token
-// pinned to a query on a route that never expected one. Same-origin GETs only,
-// but the screen lying is enough.
-//
-// This guard exists so "it was accepted" and "it will draw" cannot come apart;
-// a shape it cannot even name is outside that promise. The FE escapes the id as
-// well, because a blob stored before this guard existed still reaches it.
-var diffAttachmentSideID = regexp.MustCompile(`^att-[0-9a-f]{12}$`)
-
-// diffAttachmentAddrSegment constrains the three parts of a DOCUMENT address
-// (kind / key / field) by CHARACTER SET rather than by membership in a list.
-//
-// The character set is the point. Each part is spliced into a URL path by the
-// reader, so the same normalisation that turned "att-/../../api/version" into a
-// different endpoint applies here — and a document address has three places to
-// try it instead of one. Excluding "/", "%", "?" and "#" removes that class
-// outright, and ".."/"." are refused by name because they traverse without
-// containing any excluded character.
-//
-// It is deliberately NOT a list of known kinds. This validator's promise is
-// that the address is SAYABLE, not that it resolves — the same promise the
-// attachment_id side makes, where the blob's existence is likewise a read-time
-// fact. A kind list here would be a second copy of an enumeration that goes
-// stale the moment a new editable document ships, with nothing to go red
-// (CLAUDE.md's rule against fixed enumerations in prose applies to code that
-// re-lists them too). An address that names no document is a 400/404 at read
-// time, which the compare screen reports as the honest "this side is gone".
-var diffAttachmentAddrSegment = regexp.MustCompile(`^[A-Za-z0-9._:@+-]+$`)
-
-// The two reserved values of a document side's `at`. They are constants rather
-// than literals because the reader matches the same two words, and a typo in
-// either place is a side that silently falls through to "not a revision id".
-const (
-	diffAttachmentAtCurrent = "current"
-	diffAttachmentAtSeed    = "seed"
-)
-
-// diffAttachmentRevision matches the third form of `at`: a retained revision's
-// id. The id is an int64 on the wire everywhere else (the route takes it as a
-// path segment), and it travels here as its decimal spelling so that `at` stays
-// ONE string field. The alternative — a field that is sometimes a number and
-// sometimes one of two words — would be a union type on a frozen wire, which
-// costs every generator and every reader more than this costs.
-var diffAttachmentRevision = regexp.MustCompile(`^[1-9][0-9]{0,18}$`)
-
-// validateDiffAttachment refuses a diff blob whose two sides could never be
-// resolved, so that "it was accepted" and "it will draw" cannot come apart. It
-// checks SHAPE only, deliberately: whether the two blobs still exist is not a
-// property of this request — a blob can be collected later, and a task artifact
-// whose blob is gone already reads as honestly empty rather than as an error.
-// Checking existence here would buy one class of typo at the cost of a second
-// validation site that the inline-base64 path would have to grow too.
-//
-// T-59 second round: a side may instead name a DOCUMENT (a retained revision,
-// the live content, or the shipped default). Same rule, same reason — the
-// address must be sayable, not resolvable.
-func validateDiffAttachment(raw []byte) error {
-	var env diffAttachmentEnvelope
-	if err := json.Unmarshal(raw, &env); err != nil {
-		return chatBadRequest{"a diff attachment must be a JSON object naming its before and after sides"}
-	}
-	for _, side := range []struct {
-		name string
-		side diffAttachmentSide
-	}{{"before", env.Before}, {"after", env.After}} {
-		if err := validateDiffAttachmentSide(side.name, side.side); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// validateDiffAttachmentSide judges ONE side. The two shapes are exclusive on
-// purpose: a side carrying both a blob id and a document address does not say
-// which one the reader should draw, and silently preferring one would make the
-// other a value nobody ever sees.
-func validateDiffAttachmentSide(name string, side diffAttachmentSide) error {
-	// EVERY match below is against the value AS STORED, never a trimmed copy.
-	// The blob is kept verbatim (the acceptance test pins the round-trip byte
-	// for byte), so validating a trimmed copy would judge a string the reader
-	// never sees: " att-0123456789ab " would be accepted here and then fetched
-	// with its spaces, and " lessons" would be a kind no reader can resolve —
-	// accepted and undrawable, which is the exact split this validator exists
-	// to prevent. TrimSpace survives ONLY in the "did you name anything at all"
-	// test, where an all-blank value and an absent one deserve the same
-	// sentence.
-	id := side.AttachmentID
-	switch {
-	case strings.TrimSpace(id) == "" && side.Doc == nil:
-		return chatBadRequest{"a diff attachment's " + name +
-			" side must name either an attachment_id or a doc"}
-	case strings.TrimSpace(id) != "" && side.Doc != nil:
-		return chatBadRequest{"a diff attachment's " + name +
-			" side names both an attachment_id and a doc — it must name exactly one"}
-	case side.Doc == nil:
-		if !diffAttachmentSideID.MatchString(id) {
-			return chatBadRequest{"a diff attachment's " + name +
-				" attachment_id must be a stored blob id (att-…), got " + id}
-		}
-		return nil
-	}
-
-	doc := *side.Doc
-	for _, part := range []struct{ what, value string }{
-		{"kind", doc.Kind}, {"key", doc.Key}, {"field", doc.Field},
-	} {
-		if strings.TrimSpace(part.value) == "" {
-			return chatBadRequest{"a diff attachment's " + name + " doc must name its " + part.what}
-		}
-		// "." and ".." pass the character set and traverse anyway, so they are
-		// refused by name rather than by pattern.
-		if part.value == "." || part.value == ".." ||
-			!diffAttachmentAddrSegment.MatchString(part.value) {
-			return chatBadRequest{"a diff attachment's " + name + " doc " + part.what +
-				" is not a usable address segment, got " + part.value}
-		}
-	}
-	if doc.At != diffAttachmentAtCurrent && doc.At != diffAttachmentAtSeed &&
-		!diffAttachmentRevision.MatchString(doc.At) {
-		return chatBadRequest{"a diff attachment's " + name + " doc at must be \"" +
-			diffAttachmentAtCurrent + "\", \"" + diffAttachmentAtSeed +
-			"\" or a retained revision id, got " + doc.At}
-	}
-	return nil
-}
-
 // resolveChatAttachment builds a storable blob from RAW bytes: mime (declared
 // → sniff), the size caps, the pasted-image filename default, and a fresh id.
 // The shared tail of the base64 decode path and the streaming upload path —
@@ -562,14 +364,6 @@ func resolveChatAttachment(raw []byte, filename, mimeType string) (*ChatAttachme
 	resolved := strings.TrimSpace(mimeType)
 	if resolved == "" {
 		resolved = sniffAttachmentMime(raw)
-	}
-	// Here rather than in either caller: this is the shared tail, so the chat
-	// composer, the reply card's question and answer faces and the streaming
-	// upload all get the same refusal without any of them wiring it up.
-	if resolved == chatAttachmentDiffMime {
-		if err := validateDiffAttachment(raw); err != nil {
-			return nil, err
-		}
 	}
 	isImage := strings.HasPrefix(resolved, "image/")
 	if isImage && len(raw) > chatAttachmentImageMaxBytes {

@@ -289,15 +289,20 @@ func requireAuth(secret []byte, ownerIatFloor func() int64, lookup func(id strin
 	})
 }
 
-// shareSigGate is the third auth path on the ONE ShareSig-flagged route (the
-// attachment blob GET): a bearer credential of any kind (header or ?token=)
-// always takes the normal authed chain — a present-but-invalid token stays a
-// 401 and NEVER falls through to the sig. Only a credential-less request may
-// present ?sig=; a valid sig (HMAC over exactly the path's attachment_id —
-// sharesig.go) serves the RAW handler, which by construction reads only that
-// one blob; a bad sig is 401; no sig at all falls to the authed chain's
+// shareSigGate is the third auth path on a ShareSig-flagged route: a bearer
+// credential of any kind (header or ?token=) always takes the normal authed
+// chain — a present-but-invalid token stays a 401 and NEVER falls through to
+// the sig. Only a credential-less request may present ?sig=; a valid sig serves
+// the RAW handler; a bad sig is 401; no sig at all falls to the authed chain's
 // "missing credentials" 401.
-func shareSigGate(secret []byte, raw, authed http.Handler) http.Handler {
+//
+// WHAT a valid sig means is the ROW's business, not this gate's: the row hands
+// in the verifier (RouteSpec.ShareSig), which reads its subject out of the
+// request and checks it against its OWN domain-separated key — the attachment
+// blob GET signs its path's attachment_id, GET /api/diff signs both addresses
+// and both labels. One gate, one precedence ladder, per-row subjects; every
+// other row never consults sigs at all.
+func shareSigGate(secret []byte, verify shareSigVerifier, raw, authed http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if extractToken(r) != "" {
 			authed.ServeHTTP(w, r)
@@ -308,7 +313,7 @@ func shareSigGate(secret []byte, raw, authed http.Handler) http.Handler {
 			authed.ServeHTTP(w, r)
 			return
 		}
-		if len(secret) == 0 || !verifyShareSig(secret, r.PathValue("attachment_id"), sig) {
+		if len(secret) == 0 || !verify(secret, r, sig) {
 			writeError(w, http.StatusUnauthorized, "invalid signature")
 			return
 		}
@@ -341,8 +346,8 @@ func buildHandler(specs []RouteSpec, secret []byte, lookup func(id string) (*Mem
 				h = requirePrincipalClass(spec.Requires, lookup, h)
 			}
 			h = requireAuth(secret, ownerIatFloor, lookup, h)
-			if spec.ShareSig {
-				h = shareSigGate(secret, spec.Handler, h)
+			if spec.ShareSig != nil {
+				h = shareSigGate(secret, spec.ShareSig, spec.Handler, h)
 			}
 		}
 		mux.Handle(spec.Method+" "+spec.Path, h)

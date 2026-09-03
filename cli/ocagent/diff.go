@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,153 +13,51 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// diff: ocagent diff <before> <after> [--label-before X] [--label-after Y]
+// diff: ocagent diff <before> <after> [--label-before X] [--label-after Y] [--external]
 // ---------------------------------------------------------------------------
 //
-// The agent-facing half of the compare attachment (T-59, owner 2026-09-03:
-// 「可以指定兩個文件位置，就可以跳出我們這個 diff 的畫面」). Point it at two
-// files, get back one attachment id to hang on a message, a reply card or a
-// task artifact; the owner clicks it and lands in the compare screen.
+// A COMPARISON IS A URL (T-59, owner 2026-09-03: 「可以指定兩個文件位置，就可以跳
+// 出我們這個 diff 的畫面」). Name two things that already have an address, get a
+// link back; paste the link to whoever needs to see the difference. It is not
+// an attachment any more — nothing is stored, so there is no id to hang on a
+// message and nothing to keep in step with the two sides.
 //
-// WHY A SUBCOMMAND RATHER THAN "the agent writes the JSON itself". The pointer
-// pair is three uploads that have to happen in order, and the two ids it names
-// only exist after the first two land. An agent doing that by hand types the
-// ids into a JSON literal from the output of two earlier commands — a step that
-// is easy, boring and silently wrong when it goes wrong (the pair is accepted,
-// and one side simply never resolves). The friction is also the thing that
-// decides whether a feature is used at all, and this one is worth nothing if
-// agents find it annoying.
+// TWO FLAVOURS. By default this prints the INTERNAL link: no signature, opened
+// by anyone who can already sign in to this station. --external asks the server
+// to mint the signed one, which needs NO login at all — permanent, unrevocable,
+// so mint it only for a reader who has no account.
 //
-// The BYTES ARE NEVER COPIED into the pair: it stores the two blob ids, so the
-// two documents stay individually openable and nothing is stored twice.
+// THE INTERNAL LINK COSTS NO REQUEST. It is a pure function of the two
+// addresses, so this subcommand normally talks to nobody: it can answer while
+// the station is unreachable, and it cannot fail halfway.
 //
-// Stdout mirrors `upload` so the two are scriptable the same way:
-//   line 1: the compare attachment's id
-//   line 2: its light-ref JSON {id, mime, filename}
-// Exit codes are upload's, unchanged: 0 ok, 1 transport/filesystem,
+// THIS SUBCOMMAND UPLOADS NOTHING (owner 2026-09-03: 「我希望的是使用 diff 時，
+// 都是直接給連結 id, 這個不負責上傳檔案」). A side is EITHER a stored blob id
+// (`att-…`, what `ocagent upload` prints) or a document address
+// (`doc:<kind>/<key>/<at>/<field>`) — nothing else. Getting bytes into the
+// store stays `ocagent upload`'s one job: the common case is that the thing to
+// compare is ALREADY in the system (a task artifact, an attachment someone
+// sent, a document), and a `diff` that insisted on paths would force a
+// pointless re-upload of it.
+//
+// stdout: ONE line, the URL. Exit codes are upload's: 0 ok, 1 transport,
 // 2 usage, 3 auth, 4 rejected by the server, 5 anything else.
 
-const diffAttachmentMime = "application/vnd.officraft.diff"
-
-// uploadedRef is the light ref the attachments route mints for a stored blob.
-type uploadedRef struct {
-	ID       string `json:"id"`
-	Mime     string `json:"mime"`
-	Filename string `json:"filename"`
-	// The response body verbatim — stdout line 2 is the SERVER's JSON, not a
-	// re-serialisation of the three fields above, so a field this build does not
-	// know about still reaches whoever is reading the output.
-	raw string
-}
-
-// postAttachment streams one body into POST /api/chat/attachments and returns
-// the minted ref. Extracted from cmdUpload so `diff` cannot grow a second,
-// slightly different copy of the auth, query-building and exit-code contract —
-// `verb` is only there so a diagnostic names the subcommand the reader ran.
+// ── the address spelling ────────────────────────────────────────────────────
 //
-// `size` is passed to Content-Length; -1 leaves it unset for an in-memory body.
-func postAttachment(
-	client httpClient, cfg Config, verb string,
-	body io.Reader, size int64, filename, mimeType string,
-	errOut io.Writer,
-) (uploadedRef, int) {
-	query := url.Values{}
-	if name := strings.TrimSpace(filename); name != "" && name != "." && name != string(filepath.Separator) {
-		query.Set("filename", name)
-	}
-	if declared := strings.TrimSpace(mimeType); declared != "" {
-		query.Set("mime", declared)
-	}
-	// url.Values.Encode escapes the media type, which matters: a `+` reaches the
-	// server as a SPACE when a query is pasted together by hand.
-	reqURL := cfg.Base + "/api/chat/attachments?" + query.Encode()
-
-	req, err := http.NewRequest(http.MethodPost, reqURL, body)
-	if err != nil {
-		fmt.Fprintf(errOut, "[ocagent] %s: bad request for %q: %v\n", verb, filename, err)
-		return uploadedRef{}, 1
-	}
-	if size >= 0 {
-		req.ContentLength = size
-	}
-	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Authorization", "Bearer "+cfg.Token)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		fmt.Fprintf(errOut, "[ocagent] %s: request failed (network): %v\n", verb, err)
-		return uploadedRef{}, 1
-	}
-	defer resp.Body.Close()
-
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-	detail := strings.TrimSpace(string(raw))
-
-	switch {
-	case resp.StatusCode == http.StatusOK:
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		fmt.Fprintf(errOut, "[ocagent] %s: auth rejected (HTTP %d) for %q: %s\n",
-			verb, resp.StatusCode, filename, detail)
-		return uploadedRef{}, 3
-	case resp.StatusCode == http.StatusBadRequest:
-		fmt.Fprintf(errOut, "[ocagent] %s: server rejected %q (HTTP 400): %s\n",
-			verb, filename, detail)
-		return uploadedRef{}, 4
-	default:
-		fmt.Fprintf(errOut, "[ocagent] %s: unexpected HTTP %d for %q: %s\n",
-			verb, resp.StatusCode, filename, detail)
-		return uploadedRef{}, 5
-	}
-
-	var ref uploadedRef
-	if err := json.Unmarshal(raw, &ref); err != nil || ref.ID == "" {
-		fmt.Fprintf(errOut, "[ocagent] %s: 200 but unparseable ref body: %s\n", verb, detail)
-		return uploadedRef{}, 5
-	}
-	ref.raw = detail
-	return ref, 0
-}
-
-// uploadOneFile streams a path through postAttachment, reporting the
-// filesystem faults as upload's exit code 1.
-func uploadOneFile(
-	client httpClient, cfg Config, verb, path, mimeType string, errOut io.Writer,
-) (uploadedRef, int64, int) {
-	f, err := os.Open(path)
-	if err != nil {
-		fmt.Fprintf(errOut, "[ocagent] %s: cannot open %s: %v\n", verb, path, err)
-		return uploadedRef{}, 0, 1
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		fmt.Fprintf(errOut, "[ocagent] %s: cannot stat %s: %v\n", verb, path, err)
-		return uploadedRef{}, 0, 1
-	}
-	if info.IsDir() {
-		fmt.Fprintf(errOut, "[ocagent] %s: %s is a directory, not a file\n", verb, path)
-		return uploadedRef{}, 0, 1
-	}
-	ref, code := postAttachment(client, cfg, verb, f, info.Size(),
-		filepath.Base(path), mimeType, errOut)
-	return ref, info.Size(), code
-}
-
-// docSidePrefix marks an argument as a DOCUMENT ADDRESS rather than a file
-// path: `doc:<kind>/<key>/<at>/<field>` (T-59 second round). Four segments,
-// split on "/" — the one character a kind, key, `at` or field may never contain
-// (the server's address charset excludes it precisely so a reader can splice
-// these into a URL path), which is what makes the split unambiguous.
+// 🔴 THIS IS A COPY, AND THE SERVER IS THE AUTHORITY.
+// server/ocserverd/diffaddr.go defines the spelling; this copy exists so a
+// mistyped side costs one local sentence in the member's own vocabulary instead
+// of a round trip whose refusal does not say WHICH of the two arguments to look
+// at — and, since --external is the only flavour that talks to the server at
+// all, so that the unsigned path is judged too rather than not at all.
 //
-// A prefix rather than a heuristic because the alternative is guessing, and the
-// guess would be silent when it is wrong. If a FILE of that literal name
-// exists, `diff` refuses instead of picking one meaning — see docSide.
+// The two modules cannot import each other, so the copy is confronted against
+// the authority through bin/tests/fixtures/diff-side-addresses.tsv, which both
+// mirror tests read (diff_mirror_test.go here, diffaddr_mirror_test.go there).
+// Change the spelling in one place and that fixture reddens the other by name.
 const docSidePrefix = "doc:"
 
-// The three reserved spellings and the address charset, mirroring the server's
-// validateDiffAttachmentSide. Kept in sync BY HAND and on purpose: see the
-// pre-flight note in docSide for why the CLI has to know this at all.
 const (
 	docAtCurrent = "current"
 	docAtSeed    = "seed"
@@ -169,146 +66,243 @@ const (
 var (
 	docAddrSegment = regexp.MustCompile(`^[A-Za-z0-9._:@+-]+$`)
 	docAtRevision  = regexp.MustCompile(`^[1-9][0-9]{0,18}$`)
+	blobSideID     = regexp.MustCompile(`^att-[0-9a-f]{12}$`)
 )
 
-// docSide turns one argument into a side of the pair. It returns the side's
-// JSON object, or nil when the argument is an ordinary path the caller should
-// upload.
+// ── the page URL ────────────────────────────────────────────────────────────
 //
-// The label is deliberately LEFT EMPTY for a document side, where a file side
-// defaults to its filename: the reader already has a better heading than
-// anything this process could write — 「目前存檔內容」/「初始版本」/「版本 #id」
-// in the reader's own language — and a label written here would override it in
-// English for everyone.
-func docSide(arg, givenLabel string, errOut io.Writer) (map[string]any, int, bool) {
+// 🔴 ALSO A COPY of server/ocserverd/api_diff.go's diffPagePath / diffParam*.
+// The server mints the EXTERNAL link, so it owns this spelling; this copy is
+// what lets the internal link be built without asking. diff_mirror_test.go
+// confronts these five literals against that file's source.
+const (
+	diffPagePath        = "/diff"
+	diffParamBefore     = "before"
+	diffParamAfter      = "after"
+	diffParamLabelBefor = "label_before"
+	diffParamLabelAfter = "label_after"
+)
+
+// sideRefusal judges ONE argument and returns the sentence to print when it is
+// not a side at all ("" = it is one).
+//
+// Every match is against the value AS GIVEN, never a trimmed copy: a padded
+// address is one the server cannot resolve either, so accepting it here would
+// only move the confusion later.
+func sideRefusal(arg, which string) string {
 	if !strings.HasPrefix(arg, docSidePrefix) {
-		return nil, 0, false
-	}
-	if _, err := os.Stat(arg); err == nil {
-		fmt.Fprintf(errOut, "[ocagent] diff: %q is both a document address and a real file — "+
-			"pass ./%s to mean the file.\n", arg, arg)
-		return nil, 2, true
+		if blobSideID.MatchString(arg) {
+			return ""
+		}
+		if looksLikeAPath(arg) {
+			return fmt.Sprintf("the %s side %q is a file path, and diff does not upload files.\n"+
+				"  Put the file in the store first, then pass the id it prints:\n"+
+				"      ocagent upload %s          → prints an id like att-0123456789ab\n"+
+				"      ocagent diff <before id> <after id>\n"+
+				"  If what you want to compare is already in the system (a task artifact, an\n"+
+				"  attachment someone sent you), you already have its id — no upload needed.\n"+
+				"  A side is a stored attachment id (att-…) or doc:<kind>/<key>/<at>/<field>.",
+				which, arg, arg)
+		}
+		return fmt.Sprintf("the %s side %q is neither a stored attachment id "+
+			"(att- plus 12 hex digits, what `ocagent upload` prints) nor a document address "+
+			"(doc:<kind>/<key>/<at>/<field>).", which, arg)
 	}
 	parts := strings.Split(strings.TrimPrefix(arg, docSidePrefix), "/")
 	if len(parts) != 4 {
-		fmt.Fprintf(errOut, "[ocagent] diff: %q is not a document address — "+
-			"it is doc:<kind>/<key>/<at>/<field>, where <at> is current, seed or a version id.\n", arg)
-		return nil, 2, true
+		return fmt.Sprintf("%q is not a document address — it is "+
+			"doc:<kind>/<key>/<at>/<field>, where <at> is current, seed or a version id.", arg)
 	}
-	for i, part := range parts {
-		if strings.TrimSpace(part) == "" {
-			fmt.Fprintf(errOut, "[ocagent] diff: %q leaves part %d of the document address empty.\n",
-				arg, i+1)
-			return nil, 2, true
+	for i, what := range []string{"kind", "key", "", "field"} {
+		if what == "" {
+			continue
 		}
-	}
-	// The address is judged HERE, before a byte is uploaded, and that is the
-	// whole reason this duplicates a constraint the server also enforces.
-	// Deferring to the server means learning the address was bad only when the
-	// PAIR is posted — after both documents are already stored — and there is
-	// no blob GC, so every typo would leave a file nothing can ever reach and
-	// nothing will ever collect. The server stays the authority; this is a
-	// pre-flight whose only job is to keep the mint all-or-nothing.
-	for i, part := range []string{parts[0], parts[1], parts[3]} {
-		what := [...]string{"kind", "key", "field"}[i]
+		part := parts[i]
+		if part == "" {
+			return fmt.Sprintf("%q leaves its %s empty.", arg, what)
+		}
 		// "." and ".." contain no excluded character but traverse anyway.
 		if part == "." || part == ".." || !docAddrSegment.MatchString(part) {
-			fmt.Fprintf(errOut, "[ocagent] diff: %q has a %s that is not a usable "+
-				"address segment: %q\n", arg, what, part)
-			return nil, 2, true
+			return fmt.Sprintf("%q has a %s that is not a usable address segment: %q", arg, what, part)
 		}
 	}
 	if at := parts[2]; at != docAtCurrent && at != docAtSeed && !docAtRevision.MatchString(at) {
-		fmt.Fprintf(errOut, "[ocagent] diff: %q has an <at> of %q — it must be %s, %s, "+
-			"or a version id from list_document_history.\n", arg, at, docAtCurrent, docAtSeed)
-		return nil, 2, true
+		return fmt.Sprintf("%q has an <at> of %q — it must be %s, %s, "+
+			"or a version id from list_document_history.", arg, at, docAtCurrent, docAtSeed)
 	}
-	side := map[string]any{"doc": map[string]string{
-		"kind": parts[0], "key": parts[1], "at": parts[2], "field": parts[3],
-	}}
-	if trimmed := strings.TrimSpace(givenLabel); trimmed != "" {
-		side["label"] = trimmed
-	}
-	return side, 0, true
+	return ""
 }
 
-// cmdDiff implements `ocagent diff`. Up to three uploads: each side that is a
-// FILE is uploaded, then the pair that names both.
+// looksLikeAPath is the test behind the ONE error message that has to teach the
+// new flow. It is deliberately generous: every argument that reaches it has
+// already failed to be a blob id and a document address, so the only question
+// left is which sentence helps more — and a member who typed something with a
+// slash, a dot-extension or a name that is really on disk was reaching for the
+// old file-path contract.
+func looksLikeAPath(arg string) bool {
+	if strings.ContainsAny(arg, `/\`) || strings.HasPrefix(arg, "~") {
+		return true
+	}
+	if filepath.Ext(arg) != "" {
+		return true
+	}
+	_, err := os.Stat(arg)
+	return err == nil
+}
+
+// diffQuery builds the page query. Empty labels are LEFT OUT rather than sent
+// blank — mirrors the server's diffPageQuery, which the external flavour uses.
+func diffQuery(before, after, labelBefore, labelAfter string) string {
+	q := url.Values{diffParamBefore: {before}, diffParamAfter: {after}}
+	if labelBefore != "" {
+		q.Set(diffParamLabelBefor, labelBefore)
+	}
+	if labelAfter != "" {
+		q.Set(diffParamLabelAfter, labelAfter)
+	}
+	return q.Encode()
+}
+
+// cmdDiff implements `ocagent diff`. Prints ONE line: the URL.
 func cmdDiff(
 	client httpClient, cfg Config,
-	beforePath, afterPath, beforeLabel, afterLabel string,
+	before, after, beforeLabel, afterLabel string, external bool,
+	out, errOut io.Writer,
+) int {
+	// BOTH sides are judged before anything else, so a bad second argument
+	// costs a message rather than a link naming one good side and one bad one.
+	for _, side := range []struct{ arg, which string }{{before, "before"}, {after, "after"}} {
+		if msg := sideRefusal(side.arg, side.which); msg != "" {
+			fmt.Fprintf(errOut, "[ocagent] diff: %s\n", msg)
+			return 2
+		}
+	}
+	if cfg.Base == "" {
+		fmt.Fprint(errOut, "[ocagent] diff: no OC_BASE configured — there is no station to link to.\n")
+		return 2
+	}
+	if !external {
+		fmt.Fprintln(out, cfg.Base+diffPagePath+"?"+
+			diffQuery(before, after, strings.TrimSpace(beforeLabel), strings.TrimSpace(afterLabel)))
+		return 0
+	}
+	return mintExternalDiffLink(client, cfg, before, after,
+		strings.TrimSpace(beforeLabel), strings.TrimSpace(afterLabel), out, errOut)
+}
+
+// mintExternalDiffLink asks the server for the SIGNED link. Only the server can
+// mint it — the signature is an HMAC under a key this process never holds — so
+// this is the one flavour that costs a request.
+func mintExternalDiffLink(
+	client httpClient, cfg Config, before, after, labelBefore, labelAfter string,
 	out, errOut io.Writer,
 ) int {
 	if cfg.Token == "" {
-		fmt.Fprint(errOut, "[ocagent] diff: no OC_TOKEN configured — cannot make an authed upload.\n")
+		fmt.Fprint(errOut, "[ocagent] diff: no OC_TOKEN configured — minting an external link is an authed call.\n")
 		return 3
 	}
-
-	// The label is what the compare screen writes above each column, so a FILE
-	// side defaults to the file's own name rather than to nothing: two
-	// unlabelled columns are the state the owner already complained about being
-	// unable to read.
-	label := func(given, path string) string {
-		if trimmed := strings.TrimSpace(given); trimmed != "" {
-			return trimmed
-		}
-		return filepath.Base(path)
+	query := url.Values{diffParamBefore: {before}, diffParamAfter: {after}}
+	if labelBefore != "" {
+		query.Set(diffParamLabelBefor, labelBefore)
 	}
-	// Both sides are resolved BEFORE anything is uploaded: a malformed document
-	// address on the second side must not leave the first side's bytes sitting
-	// in the store with nothing pointing at them (there is no GC yet).
-	beforeDoc, code, isDoc := docSide(beforePath, beforeLabel, errOut)
-	if isDoc && code != 0 {
-		return code
+	if labelAfter != "" {
+		query.Set(diffParamLabelAfter, labelAfter)
 	}
-	afterDoc, code, isAfterDoc := docSide(afterPath, afterLabel, errOut)
-	if isAfterDoc && code != 0 {
-		return code
-	}
-
-	uploadSide := func(path, given string) (map[string]any, int) {
-		ref, size, code := uploadOneFile(client, cfg, "diff", path, "", errOut)
-		if code != 0 {
-			return nil, code
-		}
-		fmt.Fprintf(errOut, "[ocagent] diff: %s (%d bytes) → %s\n",
-			filepath.Base(path), size, ref.ID)
-		return map[string]any{"attachment_id": ref.ID, "label": label(given, path)}, 0
-	}
-
-	beforeSide := beforeDoc
-	if beforeSide == nil {
-		if beforeSide, code = uploadSide(beforePath, beforeLabel); code != 0 {
-			return code
-		}
-	}
-	afterSide := afterDoc
-	if afterSide == nil {
-		if afterSide, code = uploadSide(afterPath, afterLabel); code != 0 {
-			return code
-		}
-	}
-
-	pair, err := json.Marshal(map[string]any{"before": beforeSide, "after": afterSide})
+	// The route is built into a variable rather than spelled at the call, which
+	// is download.go's shape too: it keeps this a plain bodyless GET for
+	// bin/uplink-guard.py rather than a callsite that looks like a send.
+	reqURL := cfg.Base + "/api/diff/share-link?" + query.Encode()
+	req, err := http.NewRequest(http.MethodGet, reqURL, nil)
 	if err != nil {
-		fmt.Fprintf(errOut, "[ocagent] diff: cannot build the pair: %v\n", err)
+		fmt.Fprintf(errOut, "[ocagent] diff: bad request: %v\n", err)
 		return 1
 	}
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+cfg.Token)
 
-	sideName := func(arg string, isDoc bool) string {
-		if isDoc {
-			return strings.TrimPrefix(arg, docSidePrefix)
-		}
-		return filepath.Base(arg)
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Fprintf(errOut, "[ocagent] diff: request failed (network): %v\n", err)
+		return 1
 	}
-	name := sideName(beforePath, beforeDoc != nil) + " → " + sideName(afterPath, afterDoc != nil)
-	ref, code := postAttachment(client, cfg, "diff",
-		bytes.NewReader(pair), int64(len(pair)), name, diffAttachmentMime, errOut)
-	if code != 0 {
-		return code
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	detail := strings.TrimSpace(string(raw))
+
+	switch {
+	case resp.StatusCode == http.StatusOK:
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		fmt.Fprintf(errOut, "[ocagent] diff: auth rejected (HTTP %d): %s\n", resp.StatusCode, detail)
+		return 3
+	case resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity:
+		fmt.Fprintf(errOut, "[ocagent] diff: server rejected the pair (HTTP %d): %s\n", resp.StatusCode, detail)
+		return 4
+	default:
+		fmt.Fprintf(errOut, "[ocagent] diff: unexpected HTTP %d: %s\n", resp.StatusCode, detail)
+		return 5
 	}
-	fmt.Fprintf(errOut, "[ocagent] diff: %s → %s\n", name, ref.ID)
-	fmt.Fprintln(out, ref.ID)
-	fmt.Fprintln(out, ref.raw)
+
+	var minted struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(raw, &minted); err != nil || minted.URL == "" {
+		fmt.Fprintf(errOut, "[ocagent] diff: 200 but unparseable link body: %s\n", detail)
+		return 5
+	}
+	// The server mints a SERVER-RELATIVE path and the caller absolutizes it —
+	// the same posture get_chat_attachment_share_link has, and the reason is
+	// that the server does not know which origin this reader reaches it on.
+	fmt.Fprintln(out, cfg.Base+minted.URL)
 	return 0
+}
+
+// diffUsage prints the complete reference for the subcommand.
+//
+// This text is the SINGLE AUTHORITY on the parameters and on how a side is
+// spelled. The global context (seeds/system_interaction.md) deliberately
+// carries only when and why to reach for a comparison, plus the judgement calls
+// a member cannot read off a syntax line, and points here for the rest — one
+// fact, one place, and the place that ships with the binary rather than the one
+// that can drift a release behind it.
+func diffUsage(w io.Writer) {
+	fmt.Fprint(w, `usage: ocagent diff <before> <after> [--label-before <text>] [--label-after <text>] [--external]
+
+Prints a URL: the before/after compare screen for those two things. Paste it to
+whoever needs to see the difference. Nothing is stored and nothing is uploaded.
+
+Each side must ALREADY have an address, in one of two forms:
+
+  att-0123456789ab               a stored attachment id — what `+"`ocagent upload`"+`
+                                 prints, and what a task artifact or an
+                                 attachment someone sent you already is.
+
+  doc:<kind>/<key>/<at>/<field>  one field of a system document.
+                                   <kind>/<key>  the same two `+"`list_document_history`"+` takes
+                                   <at>          current (the live content) | seed (the
+                                                 shipped default) | a version id from
+                                                 `+"`list_document_history`"+`
+                                   <field>       the field name inside that version, also
+                                                 from `+"`list_document_history`"+` (most
+                                                 documents carry exactly one)
+
+To compare a LOCAL FILE, put it in the store first and pass the id it prints:
+
+  ocagent upload ./before.md          → att-…
+  ocagent diff <before id> <after id>
+
+--label-before / --label-after set that column's heading. A side with no label
+gets the compare screen's own heading; do NOT label a doc: side, which the
+screen already names in the reader's own language.
+
+--external asks the server to mint a SIGNED link instead: it opens with no login
+at all, has no expiry and cannot be revoked, so mint it only for a reader who
+has no account on this station. Without it you get the plain link, which any
+signed-in reader opens and which costs no request at all.
+
+An address that no longer resolves is not an error here: the screen says that
+side is gone and still draws the other one.
+
+stdout: one line, the URL.
+`)
 }

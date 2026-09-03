@@ -801,9 +801,9 @@ export const en: Dict = {
       close: "Close preview",
       loading: "Loading preview…",
       error: "Could not load the preview",
-      // T-59 — a compare attachment whose side names a document. The default
+      // T-59 — a comparison whose side names a document. The default
       // column headings for a side that carried no label of its own, plus the
-      // marker that says a side is LIVE: the same attachment opened next month
+      // marker that says a side is LIVE: the same link opened next month
       // shows a different comparison, and the reader has to be able to see that
       // from the screen rather than infer it.
       diffSideCurrent: "Current saved content",

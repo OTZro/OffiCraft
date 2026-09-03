@@ -18,6 +18,7 @@ import {
   isMarkdownAttachment,
 } from "./MarkdownPreviewOverlay";
 import { AlertTriangleIcon } from "./icons";
+import { zh } from "../i18n/locales/zh";
 
 describe("isMarkdownAttachment", () => {
   it("accepts markdown mimes and .md/.markdown filenames", () => {
@@ -542,320 +543,39 @@ describe("MarkdownPreviewOverlay 複製分享連結 (T-d10b)", () => {
     expect(failed.innerHTML).toBe(warning.innerHTML);
   });
 
-  // T-59 — the COMPARE attachment. Its bytes are a pointer pair, so the overlay
-  // makes three fetches (the pair, then the two blobs it names) and hands the
-  // two texts to the SAME DiffView the document version history uses.
-  describe("compare attachment", () => {
-    const PAIR = JSON.stringify({
-      before: { attachment_id: "att-old", label: "9/2 21:12" },
-      after: { attachment_id: "att-new", label: "目前存檔內容" },
-    });
+  // T-59 — the COMPARE mode. A comparison stopped being an attachment the day
+  // it became a url, so this overlay no longer resolves anything for it: it
+  // hosts `DiffScreen` (which owns the read and its own tests) and, because
+  // there is no blob involved, offers none of the blob actions.
+  describe("compare mode", () => {
+    const params = { before: "att-0123456789ab", after: "att-fedcba987654" };
 
-    /** Answer per blob id; a null body is a blob that will not load. */
-    const serve = (bodies: Record<string, string | null>) =>
-      vi.fn(async (input: unknown) => {
-        const asked = String(input);
-        for (const [id, body] of Object.entries(bodies)) {
-          if (!asked.includes(id)) continue;
-          return body === null
-            ? { ok: false, status: 404, text: async () => "" }
-            : { ok: true, text: async () => body };
-        }
-        throw new Error("unexpected fetch: " + asked);
-      }) as unknown as typeof fetch;
+    it("hosts the compare screen and offers no blob actions with it", async () => {
+      globalThis.fetch = vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          before: { text: "alpha\nbravo", label: "改動前", gone: false },
+          after: { text: "alpha\nBRAVO", label: "改動後", gone: false },
+        }),
+      })) as unknown as typeof fetch;
 
-    const openCompare = () =>
       render(
         <I18nProvider>
           <MarkdownPreviewOverlay
-            title="change.diff"
-            url="/api/chat/attachment/att-pair"
-            attachmentId="att-pair"
-            mime="application/vnd.officraft.diff"
+            title="逐行比對"
+            diffParams={params}
             onClose={() => {}}
           />
         </I18nProvider>,
       );
 
-    it("resolves both sides and compares them in the shared diff surface", async () => {
-      globalThis.fetch = serve({
-        "att-pair": PAIR,
-        "att-old": "alpha\nbravo\ncharlie",
-        "att-new": "alpha\nBRAVO\ncharlie",
-      });
-
-      openCompare();
-
-      await waitFor(() => expect(screen.getByTestId("md-preview-diff")).toBeTruthy());
-      // The changed line appears on both sides — i.e. a real comparison of the
-      // two RESOLVED blobs, not of the pointer pair's own JSON.
-      expect(screen.getByText("bravo")).toBeTruthy();
-      expect(screen.getByText("BRAVO")).toBeTruthy();
-      // The pointer pair's own text must never be what gets compared.
-      expect(screen.queryByText(/attachment_id/)).toBeNull();
-
-      // WHICH SIDE IS WHICH. Presence alone survives the two sides being
-      // swapped, and a swap is the failure that lies loudest: the reader sees
-      // the new version struck out and the old one added, and concludes the
-      // change did the opposite of what it did. Assert the direction, not just
-      // that both texts arrived.
-      const diff = screen.getByTestId("md-preview-diff");
-      expect(diff.querySelector('[data-kind="removed"] .diff-view__text')?.textContent).toBe("bravo");
-      expect(diff.querySelector('[data-kind="added"] .diff-view__text')?.textContent).toBe("BRAVO");
-      // …and the labels travel with their own side.
-      expect(diff.querySelector(".diff-view__label--before")?.textContent).toContain("9/2 21:12");
-      expect(diff.querySelector(".diff-view__label--after")?.textContent).toContain("目前存檔內容");
-    });
-
-    // A pair whose second blob is gone must say so. Rendering the half it DID
-    // get would draw every line of the surviving side as a deletion — a
-    // confident, wrong answer to "what changed".
-    it("reports a failure when one of the two sides cannot be loaded", async () => {
-      globalThis.fetch = serve({
-        "att-pair": PAIR,
-        "att-old": "alpha\nbravo",
-        "att-new": null,
-      });
-
-      openCompare();
-
-      // The line names WHICH failure this is. "無法載入預覽" would be true of a
-      // document that simply would not load; a comparison missing one half is a
-      // different fact about a different object, and the reader can act on the
-      // difference (a pruned revision is not worth retrying).
-      await waitFor(() =>
-        expect(
-          screen.getByText("這個比較有一側已經不在了，畫不出來。"),
-        ).toBeTruthy(),
-      );
-      expect(screen.queryByTestId("md-preview-diff")).toBeNull();
-      // Nothing of the SURVIVING side reaches the screen. Drawing it alone
-      // marks every one of its lines as deleted — a confident wrong answer, not
-      // a partial one.
-      expect(screen.queryByText("bravo")).toBeNull();
-      expect(screen.queryByText("alpha")).toBeNull();
-    });
-
-    // T-59 second round (owner on rc-8bf26b440e6e): a side may name ONE FIELD
-    // OF A DOCUMENT instead of a blob. Nothing is copied — the revision already
-    // has an address — so these sides are read through the same three faces the
-    // version-history screen uses, and `field` picks the same slice on each.
-    const docPair = (before: unknown, after: unknown) =>
-      JSON.stringify({ before, after });
-
-    it("compares a retained revision against the live document", async () => {
-      globalThis.fetch = serve({
-        "att-pair": docPair(
-          { doc: { kind: "lessons", key: "mira", at: "12", field: "text" } },
-          { doc: { kind: "lessons", key: "mira", at: "current", field: "text" } },
-        ),
-      });
-      vi.spyOn(api, "getDocumentRevision").mockResolvedValue({
-        id: 12,
-        content: { text: "alpha\nbravo" },
-      });
-      vi.spyOn(api, "getLessons").mockResolvedValue({
-        roleKey: "mira",
-        text: "alpha\nBRAVO",
-        capChars: 60000,
-      } as Awaited<ReturnType<typeof api.getLessons>>);
-
-      openCompare();
-
-      await waitFor(() => expect(screen.getByTestId("md-preview-diff")).toBeTruthy());
-      expect(screen.getByText("bravo")).toBeTruthy();
-      expect(screen.getByText("BRAVO")).toBeTruthy();
-      // The ADDRESS reached the reader intact: the revision was asked for by
-      // kind, key and id, not by some default this screen picked.
-      expect(api.getDocumentRevision).toHaveBeenCalledWith("lessons", "mira", 12);
-
-      // A side carrying no label of its own gets the reader's own heading — and
-      // the `current` side says it is LIVE, because the same attachment opened
-      // next month compares against a different document. Without this the two
-      // columns are indistinguishable and the reader cannot tell that one of
-      // them moves.
-      expect(screen.getByText("版本 #12")).toBeTruthy();
-      // The live side says so, AND says when it was read — a screenshot of this
-      // screen outlives the moment, so "現在" alone stops being true the second
-      // it is shared.
-      const live = screen.getByText(/^目前存檔內容（讀取於 .+，之後會不一樣）$/);
-      expect(live).toBeTruthy();
-      expect(live.textContent).not.toContain("讀取於，");
-    });
-
-    it("compares the shipped default against an uploaded file", async () => {
-      globalThis.fetch = serve({
-        "att-pair": docPair(
-          { doc: { kind: "global_context", key: "global", at: "seed", field: "text" } },
-          { attachment_id: "att-new", label: "我的版本" },
-        ),
-        "att-new": "alpha\nBRAVO",
-      });
-      vi.spyOn(api, "getDocumentSeed").mockResolvedValue({
-        kind: "global_context",
-        key: "global",
-        content: { text: "alpha\nbravo" },
-      });
-
-      openCompare();
-
-      await waitFor(() => expect(screen.getByTestId("md-preview-diff")).toBeTruthy());
-      // The two shapes are exclusive PER SIDE, not per attachment: an uploaded
-      // file compares against a document.
-      expect(screen.getByText("bravo")).toBeTruthy();
-      expect(screen.getByText("BRAVO")).toBeTruthy();
-      expect(screen.getByText("初始版本")).toBeTruthy();
-      expect(screen.getByText("我的版本")).toBeTruthy();
-    });
-
-    // A field the document does not carry is the same miss as a pruned
-    // revision: the address named something that is not there. It must NOT
-    // resolve to "" — that would draw every line of the other side as added.
-    it("reports a side as gone when the document has no such field", async () => {
-      globalThis.fetch = serve({
-        "att-pair": docPair(
-          { doc: { kind: "lessons", key: "mira", at: "12", field: "sop_md" } },
-          { attachment_id: "att-new" },
-        ),
-        "att-new": "alpha",
-      });
-      vi.spyOn(api, "getDocumentRevision").mockResolvedValue({
-        id: 12,
-        content: { text: "alpha\nbravo" },
-      });
-
-      openCompare();
-
-      await waitFor(() =>
-        expect(
-          screen.getByText("這個比較有一側已經不在了，畫不出來。"),
-        ).toBeTruthy(),
-      );
-      expect(screen.queryByTestId("md-preview-diff")).toBeNull();
-      expect(screen.queryByText("alpha")).toBeNull();
-    });
-
-    // The OTHER arm. Without these two the distinction is undefended and will
-    // collapse back into one message: "this comparison lost a half" and "this
-    // file would not load" are facts about different objects, and only the
-    // second is worth retrying.
-    it("reports an ordinary load failure when the pointer pair itself is gone", async () => {
-      globalThis.fetch = serve({ "att-pair": null });
-
-      openCompare();
-
-      await waitFor(() => expect(screen.getByText("無法載入預覽")).toBeTruthy());
-      expect(
-        screen.queryByText("這個比較有一側已經不在了，畫不出來。"),
-      ).toBeNull();
-      expect(screen.queryByTestId("md-preview-diff")).toBeNull();
-    });
-
-    it("reports an ordinary load failure when the blob is not a pointer pair", async () => {
-      globalThis.fetch = serve({ "att-pair": "# just a document, typed as a diff" });
-
-      openCompare();
-
-      await waitFor(() => expect(screen.getByText("無法載入預覽")).toBeTruthy());
-      expect(
-        screen.queryByText("這個比較有一側已經不在了，畫不出來。"),
-      ).toBeNull();
-    });
-
-    // The retention window is short and the server prunes on its own, so an
-    // attachment that named a revision WILL eventually point at nothing. That
-    // is the expiry the design accepted (rather than copying the text into a
-    // blob that nothing would ever collect), so it has to read as an honest
-    // absence rather than as a broken screen.
-    it("reports a side as gone when the revision has been pruned", async () => {
-      globalThis.fetch = serve({
-        "att-pair": docPair(
-          { doc: { kind: "lessons", key: "mira", at: "12", field: "text" } },
-          { attachment_id: "att-new" },
-        ),
-        "att-new": "alpha",
-      });
-      vi.spyOn(api, "getDocumentRevision").mockRejectedValue(new Error("http 404"));
-
-      openCompare();
-
-      await waitFor(() =>
-        expect(
-          screen.getByText("這個比較有一側已經不在了，畫不出來。"),
-        ).toBeTruthy(),
-      );
-      expect(screen.queryByTestId("md-preview-diff")).toBeNull();
-      expect(screen.queryByText("alpha")).toBeNull();
-    });
-
-    // The server takes an id up to 19 digits; JS loses exactness first. A
-    // rounded id would fetch a NEIGHBOURING revision — a real document, drawn
-    // confidently, that is not the one the attachment names.
-    it("reports a side as gone when the revision id is beyond exact range", async () => {
-      globalThis.fetch = serve({
-        "att-pair": docPair(
-          { doc: { kind: "lessons", key: "mira", at: "9007199254740993", field: "text" } },
-          { attachment_id: "att-new" },
-        ),
-        "att-new": "alpha",
-      });
-      const revision = vi.spyOn(api, "getDocumentRevision");
-
-      openCompare();
-
-      await waitFor(() =>
-        expect(
-          screen.getByText("這個比較有一側已經不在了，畫不出來。"),
-        ).toBeTruthy(),
-      );
-      expect(revision).not.toHaveBeenCalled();
-    });
-
-    // The server validates that the address is SAYABLE, never that the kind is
-    // one this build knows — a kind list there would be a second enumeration
-    // going stale silently. So the reader is where an unknown kind is caught,
-    // and it is caught as "this side is gone", not as a crash.
-    it("reports a side as gone when the kind is not one this cockpit knows", async () => {
-      globalThis.fetch = serve({
-        "att-pair": docPair(
-          { doc: { kind: "some_future_kind", key: "x", at: "current", field: "text" } },
-          { attachment_id: "att-new" },
-        ),
-        "att-new": "alpha",
-      });
-
-      openCompare();
-
-      await waitFor(() =>
-        expect(
-          screen.getByText("這個比較有一側已經不在了，畫不出來。"),
-        ).toBeTruthy(),
-      );
-      expect(screen.queryByTestId("md-preview-diff")).toBeNull();
-    });
-
-    // The type is the MIME. A text file that happens to be NAMED like a diff is
-    // still a text file — keying on the extension would make the compare screen
-    // open on documents that carry no pointer pair at all.
-    it("does not treat a text attachment named like a diff as a comparison", async () => {
-      globalThis.fetch = serve({ "att-doc": "# just a document" });
-
-      render(
-        <I18nProvider>
-          <MarkdownPreviewOverlay
-            title="change.diff"
-            url="/api/chat/attachment/att-doc"
-            attachmentId="att-doc"
-            mime="text/markdown"
-            onClose={() => {}}
-          />
-        </I18nProvider>,
-      );
-
-      await waitFor(() =>
-        expect(screen.getByRole("heading", { name: "just a document" })).toBeTruthy(),
-      );
-      expect(screen.queryByTestId("md-preview-diff")).toBeNull();
+      await waitFor(() => expect(screen.getByTestId("diff-screen")).toBeTruthy());
+      // No blob, so nothing to download and nothing to mint a file-level share
+      // link for — the url the reader clicked IS the shareable thing, and a
+      // second link here would point at a file that does not exist.
+      expect(screen.queryByText(zh.chat.mdPreview.download)).toBeNull();
+      expect(screen.queryByLabelText(zh.chat.copyShareLink)).toBeNull();
+      expect(screen.queryByText(zh.chat.mdPreview.openInNewTab)).toBeNull();
     });
   });
 });

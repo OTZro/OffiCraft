@@ -29,9 +29,22 @@
 //               target="_blank" rel="noopener noreferrer"). A SECOND, opt-in
 //               link class exists for the 使用說明 doc page only: repo-relative
 //               `*.md` targets resolved through `resolveDocLink` into IN-APP
-//               navigation (T-68f1) — see the prop's doc comment.
+//               navigation (T-68f1) — see the prop's doc comment. A THIRD class
+//               is our own compare url (`/diff?before=…&after=…`, T-59): still
+//               an ordinary <a> that passed the allowlist above, but a plain
+//               left click on it opens the comparison in place instead of
+//               navigating — see `ExternalOrDiffLink` below.
 
-import { Fragment, useLayoutEffect, useRef, type ReactNode } from "react";
+import {
+  Fragment,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from "react";
+import { diffParamsFromHref } from "../lib/diffLink";
+import { useDiffOpener } from "../hooks/useDiffOpener";
 
 interface MarkdownProps {
   source: string;
@@ -129,6 +142,54 @@ interface InlineOpts {
   tableSizing?: "content-aware";
 }
 
+/** An http/https/mailto link — and, when it happens to be one of OUR OWN
+ * compare urls and the studio is around to host it, the THIRD link class.
+ *
+ * SECURITY: this is NOT a loosening of anything. The external-scheme allowlist
+ * (`SAFE_URL_RE`) has already said yes before this component is reached; every
+ * link it renders is a link the renderer was going to render anyway. What is
+ * added is a CLICK HANDLER on same-origin `/diff?…` links, and three things
+ * have to be true for it to fire — same origin, exactly the /diff path, and
+ * params that parse as two addresses (lib/diffLink.ts). Anything else keeps the
+ * ordinary anchor, which is also what happens outside the studio, where
+ * `useDiffOpener()` answers null.
+ *
+ * IT STAYS A REAL ANCHOR. `href` and `target` are unchanged, so copy-link,
+ * middle-click, ⌘/ctrl-click and 「open in new tab」 all still do exactly what
+ * the reader expects — the handler only swallows the PLAIN left click, which is
+ * the one that would otherwise throw away the page they are reading. A
+ * <button> here (the doc-link class's shape) would take all four of those away,
+ * and this link is one people are meant to be able to copy and paste onward.
+ */
+function ExternalOrDiffLink({ href, label }: { href: string; label: string }) {
+  const openDiff = useDiffOpener();
+  const params = useMemo(() => diffParamsFromHref(href), [href]);
+  const intercept =
+    openDiff !== null && params !== null
+      ? (e: ReactMouseEvent<HTMLAnchorElement>) => {
+          // Every modified click is a deliberate "open this somewhere else" and
+          // must be left alone. React only fires onClick for the primary
+          // button, but the check is written out rather than assumed.
+          if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
+            return;
+          }
+          e.preventDefault();
+          openDiff(params);
+        }
+      : undefined;
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={intercept}
+      data-diff-link={intercept ? "" : undefined}
+    >
+      {label}
+    </a>
+  );
+}
+
 // Split one line of text into inline nodes: `code` spans, **bold** runs, and
 // [text](url) links, everything else literal. Code takes precedence (its
 // content is not re-parsed).
@@ -180,11 +241,7 @@ function renderInline(text: string, opts?: InlineOpts): ReactNode[] {
           }
           return <Fragment key={i}>{part}</Fragment>;
         }
-        return (
-          <a key={i} href={target} target="_blank" rel="noopener noreferrer">
-            {label}
-          </a>
-        );
+        return <ExternalOrDiffLink key={i} href={target} label={label} />;
       }
       return <Fragment key={i}>{part}</Fragment>;
     });

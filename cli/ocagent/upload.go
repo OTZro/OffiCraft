@@ -1,8 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 )
 
 // ---------------------------------------------------------------------------
@@ -43,6 +49,86 @@ import (
 //   4 rejected (400 — over the size cap, empty file)
 //   5 any other unexpected HTTP status
 
+// uploadedRef is the light ref the attachments route mints for a stored blob.
+type uploadedRef struct {
+	ID       string `json:"id"`
+	Mime     string `json:"mime"`
+	Filename string `json:"filename"`
+	// The response body verbatim — stdout line 2 is the SERVER's JSON, not a
+	// re-serialisation of the three fields above, so a field this build does not
+	// know about still reaches whoever is reading the output.
+	raw string
+}
+
+// postAttachment streams one body into POST /api/chat/attachments and returns
+// the minted ref. `verb` is only there so a diagnostic names the subcommand the
+// reader ran — it used to have a second caller in `diff`, which no longer
+// uploads anything (T-59: a comparison is a URL, not a stored blob).
+//
+// `size` is passed to Content-Length; -1 leaves it unset for an in-memory body.
+func postAttachment(
+	client httpClient, cfg Config, verb string,
+	body io.Reader, size int64, filename, mimeType string,
+	errOut io.Writer,
+) (uploadedRef, int) {
+	query := url.Values{}
+	if name := strings.TrimSpace(filename); name != "" && name != "." && name != string(filepath.Separator) {
+		query.Set("filename", name)
+	}
+	if declared := strings.TrimSpace(mimeType); declared != "" {
+		query.Set("mime", declared)
+	}
+	// url.Values.Encode escapes the media type, which matters: a `+` reaches the
+	// server as a SPACE when a query is pasted together by hand.
+	reqURL := cfg.Base + "/api/chat/attachments?" + query.Encode()
+
+	req, err := http.NewRequest(http.MethodPost, reqURL, body)
+	if err != nil {
+		fmt.Fprintf(errOut, "[ocagent] %s: bad request for %q: %v\n", verb, filename, err)
+		return uploadedRef{}, 1
+	}
+	if size >= 0 {
+		req.ContentLength = size
+	}
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+cfg.Token)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Fprintf(errOut, "[ocagent] %s: request failed (network): %v\n", verb, err)
+		return uploadedRef{}, 1
+	}
+	defer resp.Body.Close()
+
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	detail := strings.TrimSpace(string(raw))
+
+	switch {
+	case resp.StatusCode == http.StatusOK:
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		fmt.Fprintf(errOut, "[ocagent] %s: auth rejected (HTTP %d) for %q: %s\n",
+			verb, resp.StatusCode, filename, detail)
+		return uploadedRef{}, 3
+	case resp.StatusCode == http.StatusBadRequest:
+		fmt.Fprintf(errOut, "[ocagent] %s: server rejected %q (HTTP 400): %s\n",
+			verb, filename, detail)
+		return uploadedRef{}, 4
+	default:
+		fmt.Fprintf(errOut, "[ocagent] %s: unexpected HTTP %d for %q: %s\n",
+			verb, resp.StatusCode, filename, detail)
+		return uploadedRef{}, 5
+	}
+
+	var ref uploadedRef
+	if err := json.Unmarshal(raw, &ref); err != nil || ref.ID == "" {
+		fmt.Fprintf(errOut, "[ocagent] %s: 200 but unparseable ref body: %s\n", verb, detail)
+		return uploadedRef{}, 5
+	}
+	ref.raw = detail
+	return ref, 0
+}
+
 // cmdUpload implements `ocagent upload`. On success stdout carries the minted
 // attachment id then the server's light-ref JSON; diagnostics go to `errOut`.
 func cmdUpload(client httpClient, cfg Config, path, mimeType string, out, errOut io.Writer) int {
@@ -52,9 +138,6 @@ func cmdUpload(client httpClient, cfg Config, path, mimeType string, out, errOut
 		fmt.Fprint(errOut, "[ocagent] upload: no OC_TOKEN configured — cannot make an authed upload.\n")
 		return 3
 	}
-	// The streaming, auth and exit-code contract lives in postAttachment
-	// (diff.go) — `diff` posts three attachments and must not carry a second,
-	// slightly different copy of it.
 	ref, size, code := uploadOneFile(client, cfg, "upload", path, mimeType, errOut)
 	if code != 0 {
 		return code
@@ -64,4 +147,32 @@ func cmdUpload(client httpClient, cfg Config, path, mimeType string, out, errOut
 	fmt.Fprintln(out, ref.ID)
 	fmt.Fprintln(out, ref.raw)
 	return 0
+}
+
+// uploadOneFile streams a path through postAttachment, reporting the
+// filesystem faults as upload's exit code 1.
+//
+// This is the ONE place in the CLI that turns a path into stored bytes:
+// `diff` names addresses and reads no files at all (owner 2026-09-03).
+func uploadOneFile(
+	client httpClient, cfg Config, verb, path, mimeType string, errOut io.Writer,
+) (uploadedRef, int64, int) {
+	f, err := os.Open(path)
+	if err != nil {
+		fmt.Fprintf(errOut, "[ocagent] %s: cannot open %s: %v\n", verb, path, err)
+		return uploadedRef{}, 0, 1
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		fmt.Fprintf(errOut, "[ocagent] %s: cannot stat %s: %v\n", verb, path, err)
+		return uploadedRef{}, 0, 1
+	}
+	if info.IsDir() {
+		fmt.Fprintf(errOut, "[ocagent] %s: %s is a directory, not a file\n", verb, path)
+		return uploadedRef{}, 0, 1
+	}
+	ref, code := postAttachment(client, cfg, verb, f, info.Size(),
+		filepath.Base(path), mimeType, errOut)
+	return ref, info.Size(), code
 }

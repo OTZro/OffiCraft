@@ -10,7 +10,7 @@
 // serve url + display title. Shared by the chat attachment strip AND the task
 // artifact popover — one preview surface, not two.
 //
-// THREE SOURCE MODES (one surface, still not three):
+// FOUR SOURCE MODES (one surface, still not four):
 //   - `url`      — a stored blob, fetched as text (or rendered as an image when
 //                  its mime says so). It carries a REQUIRED `attachmentId`, so
 //                  the header keeps both blob actions: the copyable share link
@@ -26,6 +26,12 @@
 //                  real file, so 下載 is honest — but it has no blob id yet, so
 //                  there is nothing for a share link to point at and none is
 //                  rendered.
+//   - `diffParams` — a COMPARISON, named by the two addresses a /diff url spells
+//                  (T-59). No blob, so no 下載 and no file-level share link: the
+//                  url the reader clicked IS the shareable thing, and minting a
+//                  second link for a comparison that is not a file would be a
+//                  link to nothing. The body is `DiffScreen` — the same compare
+//                  screen the standalone /diff page draws.
 //
 // T-7e68 — ZOOM MUST AFFECT LAYOUT. A `transform: scale()` on the <img> paints
 // bigger pixels but leaves the layout box the original size, so the wrap's
@@ -56,16 +62,11 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "../i18n";
-import { api } from "../api";
-import {
-  DocLiveContentUnavailable,
-  isDocumentKind,
-  readLiveDocumentContent,
-} from "../lib/docLiveContent";
 import { authedAttachmentUrl } from "../api/http";
 import { attachmentShareLinkUrl, copyAttachmentShareLink } from "../lib/shareLink";
+import type { DiffParams } from "../lib/diffLink";
 import { useEscapeLayer } from "../lib/useEscapeLayer";
-import { DiffView, type DiffMode } from "./DiffView";
+import { DiffScreen } from "./DiffScreen";
 import { Markdown } from "./Markdown";
 import "./md-preview.css";
 import {
@@ -136,6 +137,7 @@ type MarkdownPreviewOverlayProps = {
       mime?: string;
       source?: never;
       imageSrc?: never;
+      diffParams?: never;
     }
   | {
       /** Markdown text the caller already holds — rendered as-is, no fetch. */
@@ -145,6 +147,7 @@ type MarkdownPreviewOverlayProps = {
       attachmentId?: never;
       mime?: never;
       imageSrc?: never;
+      diffParams?: never;
     }
   | {
       /** Image bytes the caller already holds (`data:` URI) — a staged composer
@@ -155,6 +158,21 @@ type MarkdownPreviewOverlayProps = {
       attachmentId?: never;
       mime?: never;
       source?: never;
+      diffParams?: never;
+    }
+  | {
+      /** A COMPARISON, addressed by the two sides the compare url named (T-59).
+       * There is no blob here at all — a comparison stopped being a file the
+       * day it became a url — so there is nothing to download and nothing to
+       * mint a file-level share link for: the url the reader clicked IS the
+       * shareable thing. The body is `DiffScreen`, the same compare screen the
+       * standalone page draws. */
+      diffParams: DiffParams;
+      url?: never;
+      attachmentId?: never;
+      mime?: never;
+      source?: never;
+      imageSrc?: never;
     }
 );
 
@@ -165,20 +183,12 @@ export function MarkdownPreviewOverlay({
   attachmentId,
   mime,
   imageSrc,
+  diffParams,
   source: inlineSource,
   onClose,
 }: MarkdownPreviewOverlayProps) {
   const { t } = useI18n();
   const [fetched, setFetched] = useState<string | null>(null);
-  /** The two sides of a compare attachment, once BOTH have arrived. Held as one
-   * value rather than two so there is no render in which one side is text and
-   * the other is still null — that would draw a diff against nothing. */
-  const [diffPair, setDiffPair] = useState<{
-    before: string;
-    after: string;
-    beforeLabel?: string;
-    afterLabel?: string;
-  } | null>(null);
   const [failed, setFailed] = useState(false);
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
@@ -191,31 +201,16 @@ export function MarkdownPreviewOverlay({
   // null = no link to offer (not minted yet, or the mint failed): the anchor is
   // then absent rather than pointing at a URL that would 404.
   const [shareHref, setShareHref] = useState<string | null>(null);
-  // A compare that could not be drawn because ONE SIDE is not there (a
-  // reclaimed blob, a pruned revision, a field the document no longer carries).
-  // Separate from `failed` so the screen can say which of the two happened —
-  // "this document would not load" and "one half of the comparison is gone" are
-  // different facts about different objects.
-  const [diffSideGone, setDiffSideGone] = useState(false);
-  /** Which single side of a compare is being read on its own, or null while the
-   * comparison itself is on screen (owner 2026-09-03, c-944088dceab0: 「兩份應
-   * 該都要是連結」). It is a VIEW of the pair already in hand — not a second
-   * fetch — so the text shown here is byte-for-byte the text the diff was drawn
-   * from; going and re-reading a live side would let the two disagree. */
-  const [diffSide, setDiffSide] = useState<"before" | "after" | null>(null);
-  /** 單欄 / 兩欄對照, held HERE rather than inside DiffView, because opening one
-   * side unmounts it — see the `mode` prop's note in DiffView. Coming back from
-   * a side must land the reader in the layout they left. */
-  const [diffMode, setDiffMode] = useState<DiffMode>("unified");
   // The text to render. An inline source is authoritative and synchronous — it
   // never passes through the loading/error states, which only describe a fetch.
   const image = imageSrc !== undefined || (mime?.startsWith("image/") ?? false);
   const previewableText = isPreviewableTextAttachment(mime ?? "text/markdown", title);
-  // A compare attachment IS renderable here — it just needs two fetches instead
-  // of one — so it must not fall into `unavailable`, which is the "this overlay
-  // cannot draw it, offer the tab instead" state.
-  const diff = url !== undefined && isDiffAttachment(mime ?? "");
-  const unavailable = url !== undefined && !image && !previewableText && !diff;
+  // A comparison is not a stored blob at all — it carries no `url`, so none of
+  // the blob branches below (fetch, download, share link, "open in a tab") can
+  // fire for it, and it must not fall into `unavailable`, which is the "this
+  // overlay cannot draw these bytes" state.
+  const diff = diffParams !== undefined;
+  const unavailable = url !== undefined && !image && !previewableText;
   // T-36 — WHOSE CALL IS "opens in a tab"? THE SERVER'S. This mirrors
   // api_chat.go's isPreviewableMime, which is what decides between
   // `Content-Disposition: inline` and `attachment` on the serve route. Offering
@@ -317,161 +312,8 @@ export function MarkdownPreviewOverlay({
   // Fetch the markdown text once (the authed blob URL — same ?token= gate the
   // download/thumbnail paths use). A non-ok response / network error surfaces
   // the honest error state, never a blank render.
-  // The compare attachment takes THREE fetches, not one: the pointer pair, then
-  // the two blobs it names. Its own effect rather than a branch inside the one
-  // below, because the failure it has to report is different — "one of the two
-  // sides is gone" is not "this document would not load", and a compare with
-  // one side missing must not quietly render as a diff against nothing.
   useEffect(() => {
-    if (!diff || url === undefined) return;
-    let alive = true;
-    setDiffPair(null);
-    setFailed(false);
-    setDiffSideGone(false);
-    // encodeURIComponent, not concatenation: the id is data the pair carries,
-    // and a blob stored before the server started checking the id's SHAPE can
-    // still hold "att-/../../api/version". Concatenated, the browser normalises
-    // that into a DIFFERENT endpoint and this screen draws that response as
-    // "before" — a confident wrong answer, with the reader's token appended to
-    // a route that never expected one. Escaped, a malformed id can only 404.
-    const sideURL = (id: string) =>
-      authedAttachmentUrl("/api/chat/attachment/" + encodeURIComponent(id));
-    const text = async (u: string) => {
-      const response = await fetch(u);
-      if (!response.ok) throw new Error(`http ${response.status}`);
-      return response.text();
-    };
-    // When the live side was read, in the reader's own locale. Minutes, not
-    // seconds: the point is "this was a moment, and it has passed", and a
-    // second-precision stamp would only invite someone to trust it as an
-    // identity for the content.
-    const readAt = () =>
-      new Date().toLocaleString(undefined, {
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-    // One side, resolved to the text to compare and the heading to write above
-    // it. A side that names a DOCUMENT is read through the same three faces the
-    // version-history screen uses, and its content map is keyed by the field
-    // names a retained revision carries — so `field` picks the same slice on
-    // every one of the three.
-    //
-    // EVERY failure in here — a reclaimed blob, a pruned revision, a missing
-    // field, a kind this build does not know — is rethrown as one type, because
-    // downstream they are one fact: this side is not there. Failures OUTSIDE
-    // here (the pair itself 404s, the blob is not a pointer pair) are
-    // deliberately NOT that type; see the catch below.
-    const resolveSide = async (side: {
-      attachment_id?: string;
-      doc?: DiffAttachmentDoc;
-      label?: string;
-    }): Promise<{ text: string; label?: string }> => {
-      if (side.attachment_id !== undefined) {
-        return {
-          text: await text(sideURL(side.attachment_id)).catch((e: unknown) => {
-            throw new DocLiveContentUnavailable(`before/after blob: ${String(e)}`);
-          }),
-          label: side.label,
-        };
-      }
-      const doc = side.doc!;
-      if (!isDocumentKind(doc.kind)) {
-        throw new DocLiveContentUnavailable(`unknown document kind ${doc.kind}`);
-      }
-      let content: Record<string, string>;
-      let fallbackLabel: string;
-      const read = async <T,>(p: Promise<T>): Promise<T> =>
-        p.catch((e: unknown) => {
-          throw new DocLiveContentUnavailable(
-            `${doc.kind}/${doc.key}@${doc.at}: ${String(e)}`
-          );
-        });
-      if (doc.at === DIFF_SIDE_AT_CURRENT) {
-        content = await read(readLiveDocumentContent(doc.kind, doc.key));
-        fallbackLabel = t.chat.mdPreview.diffSideCurrent;
-      } else if (doc.at === DIFF_SIDE_AT_SEED) {
-        content = (await read(api.getDocumentSeed(doc.kind, doc.key))).content;
-        fallbackLabel = t.chat.mdPreview.diffSideSeed;
-      } else {
-        // The server accepts up to 19 digits (the id is an int64 on the wire);
-        // JS numbers stop being exact well before that, and an id silently
-        // rounded to a NEIGHBOUR is the one failure mode worse than not
-        // resolving at all — it would draw a real revision that is not the one
-        // the attachment names.
-        const id = Number(doc.at);
-        if (!Number.isSafeInteger(id)) {
-          throw new DocLiveContentUnavailable(`revision id out of exact range: ${doc.at}`);
-        }
-        content = (await read(api.getDocumentRevision(doc.kind, doc.key, id))).content;
-        fallbackLabel = t.chat.mdPreview.diffSideRevision(doc.at);
-      }
-      const slice = content[doc.field];
-      // A field the document does not carry is the same kind of miss as a
-      // pruned revision: the address named something that is not there. Drawing
-      // "" against the other side would mark every one of its lines as added.
-      if (slice === undefined) {
-        throw new DocLiveContentUnavailable(
-          `${doc.kind}/${doc.key}@${doc.at} has no field ${doc.field}`
-        );
-      }
-      const label = side.label ?? fallbackLabel;
-      return {
-        text: slice,
-        // "current" is a LIVE pointer: the same attachment opened next month
-        // compares against a different document. The reader has to be able to
-        // see that on screen rather than infer it, and the column heading is
-        // where "what is this side" already lives — so it is marked there
-        // rather than in a new element the compare screen would have to grow.
-        //
-        // The READ TIME rides along because the marker leaves this screen: a
-        // screenshot of the comparison, or a share link someone opens later,
-        // carries the heading but not the moment. "as of now" is only true
-        // while you are looking at it; a stamped time stays true afterwards.
-        label:
-          doc.at === DIFF_SIDE_AT_CURRENT
-            ? t.chat.mdPreview.diffSideLive(label, readAt())
-            : label,
-      };
-    };
-    (async () => {
-      const pair = parseDiffAttachment(await text(authedAttachmentUrl(url)));
-      if (pair === null) throw new Error("not a compare attachment");
-      // Both sides land as ONE state: there must be no render where one side
-      // has text and the other is still null, because that draws every line of
-      // the survivor as deleted.
-      const [before, after] = await Promise.all([
-        resolveSide(pair.before),
-        resolveSide(pair.after),
-      ]);
-      if (alive) {
-        setDiffPair({
-          before: before.text,
-          after: after.text,
-          beforeLabel: before.label,
-          afterLabel: after.label,
-        });
-      }
-    })().catch((e) => {
-      if (alive) {
-        setFailed(true);
-        // ONLY a side that could not be resolved earns the "one side is gone"
-        // sentence. The pointer pair failing to load, or a blob that is not a
-        // pointer pair at all, is "this document would not load" — a fact about
-        // a different object, and one the reader CAN act on differently (a
-        // pruned revision is not worth retrying; a network blip is).
-        setDiffSideGone(e instanceof DocLiveContentUnavailable);
-      }
-      console.warn("MarkdownPreviewOverlay: compare load failed", e);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [diff, url, t]);
-
-  useEffect(() => {
-    if (url === undefined || image || unavailable || diff) return;
+    if (url === undefined || image || unavailable) return;
     let alive = true;
     setFetched(null);
     setFailed(false);
@@ -767,27 +609,12 @@ export function MarkdownPreviewOverlay({
   // layer for exactly its lifetime; whatever opened it (a popover, a gallery,
   // a chat thread) sits below and does not see the key.
   const rootRef = useRef<HTMLDivElement>(null);
-  /* Esc follows the same way out the 「回到比較」 button offers: one side open
-   * means Esc goes BACK to the comparison, not out of the overlay. The css note
-   * beside that button says closing would make the reader re-open the
-   * attachment and find their layout again — a keyboard user was getting
-   * exactly that. */
-  useEscapeLayer(() => {
-    if (diffSide !== null) setDiffSide(null);
-    else onClose();
-  }, rootRef);
-
-  /* The reader's CHOICES (which side is open, which layout) reset only when the
-   * attachment being read actually changes — deliberately a different effect
-   * from the one that fetches the pair, whose deps include `t`. `t` changes
-   * identity on a language or theme switch, so resetting there would throw a
-   * reader out of 兩欄對照 (and out of a side they were reading) for changing
-   * the UI language: the same "the control I pressed un-pressed itself"
-   * this whole round is about. */
-  useEffect(() => {
-    setDiffSide(null);
-    setDiffMode("unified");
-  }, [diff, url]);
+  /* A comparison reading ONE of its sides on its own answers Esc itself, with a
+   * layer NESTED inside this one (DiffScreen) — Esc there goes back to the
+   * comparison rather than out of the overlay, and this handler never sees the
+   * key while that pane is open. That is escapeLayers' whole job; neither side
+   * has to know about the other. */
+  useEscapeLayer(onClose, rootRef);
 
   // 🔴 A DIALOG THE KEYBOARD NEVER ENTERS IS NOT A DIALOG. Measured before this
   // existed: open the overlay from any of its three entry points and
@@ -1087,55 +914,14 @@ export function MarkdownPreviewOverlay({
                 : t.chat.mdPreview.unavailable}
             </div>
           ) : failed ? (
-            <div className="md-preview__status">
-              {diffSideGone ? t.chat.mdPreview.diffSideGone : t.chat.mdPreview.error}
-            </div>
+            <div className="md-preview__status">{t.chat.mdPreview.error}</div>
           ) : diff ? (
-            /* The compare screen is DiffView and only DiffView — the same one
-             * the document version history uses. A second diff renderer here
-             * would be a second authority on the owner's six 2026-07-31
-             * rulings, and the two would start to drift. */
-            diffPair === null ? (
-              <div className="md-preview__status">{t.chat.mdPreview.loading}</div>
-            ) : diffSide !== null ? (
-              /* ONE side, on its own. `pre` and not Markdown on purpose: what a
-               * side IS here is the exact text that went into the comparison,
-               * and rendering it would hide the very whitespace and markers the
-               * reader came to check. */
-              <div className="md-preview__side" data-testid="md-preview-diff-side">
-                <button
-                  type="button"
-                  className="md-preview__side-back"
-                  data-testid="md-preview-diff-side-back"
-                  onClick={() => setDiffSide(null)}
-                >
-                  {t.chat.mdPreview.diffSideBack}
-                </button>
-                <div
-                  className="md-preview__side-title"
-                  data-testid="md-preview-diff-side-title"
-                >
-                  {(diffSide === "before"
-                    ? diffPair.beforeLabel
-                    : diffPair.afterLabel) ??
-                    (diffSide === "before" ? t.diff.beforeLabel : t.diff.afterLabel)}
-                </div>
-                <pre className="md-preview__text">
-                  {diffSide === "before" ? diffPair.before : diffPair.after}
-                </pre>
-              </div>
-            ) : (
-              <DiffView
-                before={diffPair.before}
-                after={diffPair.after}
-                beforeLabel={diffPair.beforeLabel}
-                afterLabel={diffPair.afterLabel}
-                onOpenSide={setDiffSide}
-                mode={diffMode}
-                onModeChange={setDiffMode}
-                testId="md-preview-diff"
-              />
-            )
+            /* The compare screen is DiffScreen and only DiffScreen — the
+             * same one the standalone /diff page draws, which is in turn
+             * DiffView and only DiffView. A second compare renderer here would
+             * be a second authority on the owner's six 2026-07-31 rulings, and
+             * the two would start to drift. */
+            <DiffScreen params={diffParams} />
           ) : source === null ? (
             <div className="md-preview__status">{t.chat.mdPreview.loading}</div>
           ) : (
@@ -1216,91 +1002,4 @@ export function looksInteractiveInNewTab(mime: string, filename: string): boolea
  * narrow: HTML/PDF and arbitrary text/* remain outside this preview contract. */
 export function isPreviewableTextAttachment(mime: string, filename: string): boolean {
   return isMarkdownAttachment(mime, filename) || /\.(txt|log)$/i.test(filename);
-}
-
-/** The compare attachment (T-59): its bytes are not a document at all but a
- * PAIR OF POINTERS at the two blobs to put side by side — owner 2026-09-03,
- * 「可以指定兩個文件位置，就可以跳出我們這個 diff 的畫面」.
- *
- * Keyed on the MIME alone, exactly as the server types it, and NOT on the
- * filename: a `.diff` extension on an ordinary text file must keep opening as
- * text, and a compare attachment named anything at all must still compare. */
-export const DIFF_ATTACHMENT_MIME = "application/vnd.officraft.diff";
-
-export function isDiffAttachment(mime: string): boolean {
-  return mime.split(";")[0]!.trim().toLowerCase() === DIFF_ATTACHMENT_MIME;
-}
-
-/** A side that names ONE FIELD OF A DOCUMENT at one point in time, instead of
- * a stored blob (T-59 second round, owner on rc-8bf26b440e6e). Nothing is
- * copied: a retained revision already has an address of its own.
- *
- * `at` is one of three things and stays a single string — "current" (the live
- * document, a LIVE pointer), "seed" (the shipped default) or a retained
- * revision's id in decimal. `field` is required because a revision holds a MAP
- * of fields, not one text; the kind→field table lives HERE, in the reader
- * (`docHistoryFields.ts`, total over DocumentKind so a new kind fails to
- * compile), which is why the server carries none. */
-interface DiffAttachmentDoc {
-  kind: string;
-  key: string;
-  at: string;
-  field: string;
-}
-
-/** One side of a compare attachment, as the server stores it: EITHER a stored
- * blob or a document reference, never both and never neither. */
-interface DiffAttachmentSide {
-  attachment_id?: string;
-  doc?: DiffAttachmentDoc;
-  label?: string;
-}
-
-/** The reserved spellings of a document side's `at`. Same two words the server
- * matches; a typo in either place is a side that silently falls through to
- * "not a revision id". */
-export const DIFF_SIDE_AT_CURRENT = "current";
-export const DIFF_SIDE_AT_SEED = "seed";
-
-function parseDiffSide(side: unknown): DiffAttachmentSide | null {
-  if (typeof side !== "object" || side === null) return null;
-  const { attachment_id, doc, label } = side as DiffAttachmentSide;
-  // Exactly one of the two shapes — the same rule the server enforces at
-  // upload. Accepting both here would make one of the two a value the reader
-  // silently ignores, and which one is ignored would be invisible on screen.
-  if (attachment_id && doc) return null;
-  if (attachment_id) return { attachment_id, label };
-  if (
-    doc &&
-    typeof doc.kind === "string" &&
-    typeof doc.key === "string" &&
-    typeof doc.at === "string" &&
-    typeof doc.field === "string" &&
-    doc.kind !== "" &&
-    doc.key !== "" &&
-    doc.at !== "" &&
-    doc.field !== ""
-  ) {
-    return { doc, label };
-  }
-  return null;
-}
-
-/** Parse the pointer pair. Returns null for anything that is not one — the
- * server refuses these at upload, so a null here means a blob stored before
- * that guard existed, or one hand-written past it. */
-export function parseDiffAttachment(
-  raw: string
-): { before: DiffAttachmentSide; after: DiffAttachmentSide } | null {
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null) return null;
-    const { before, after } = parsed as { before?: unknown; after?: unknown };
-    const b = parseDiffSide(before);
-    const a = parseDiffSide(after);
-    if (b === null || a === null) return null;
-    return { before: b, after: a };
-  } catch {
-    return null;
-  }
 }

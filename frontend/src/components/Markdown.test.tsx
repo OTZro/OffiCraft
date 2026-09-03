@@ -223,6 +223,31 @@ describe("Markdown", () => {
     expect(c.textContent).toContain("[click me](javascript:alert(1))");
   });
 
+  // T-59 — the compare url is a THIRD link class, and its whole promise is
+  // that it does not stop being an ordinary link. Interception is the studio's
+  // (see DiffModalHost.test.tsx); what is pinned HERE is that the renderer
+  // hands out a real anchor either way, so copy-link, middle-click and
+  // open-in-new-tab keep working, and that nothing is intercepted where there
+  // is no studio to intercept it.
+  describe("compare urls (T-59)", () => {
+    const href = `${window.location.origin}/diff?before=att-0123456789ab&after=att-fedcba987654`;
+
+    it("stays a real anchor with the same href, target and rel as any other link", () => {
+      const c = renderMd(`[比較](${href})`);
+      const a = c.querySelector("a");
+      expect(a?.getAttribute("href")).toBe(href);
+      expect(a?.getAttribute("target")).toBe("_blank");
+      expect(a?.getAttribute("rel")).toBe("noopener noreferrer");
+    });
+
+    it("intercepts nothing outside the studio: no provider, no click handler", () => {
+      const c = renderMd(`[比較](${href})`);
+      // Marked only where the click IS swallowed — the standalone compare page
+      // renders markdown too, and a compare link there must navigate.
+      expect(c.querySelector("a")?.hasAttribute("data-diff-link")).toBe(false);
+    });
+  });
+
   // T-84c8 — the `breaks` option. Chat needs Enter to mean "new line"; every
   // other call site needs standard markdown soft-wrap. Both halves are pinned
   // because the DEFAULT is what protects the pre-existing call sites.

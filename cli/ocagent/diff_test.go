@@ -2,324 +2,255 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
-// capturedUpload is one POST /api/chat/attachments the CLI made, in order.
-type capturedUpload struct {
-	mime     string
-	filename string
-	body     string
-}
+// Two stored ids of the exact shape the server accepts, so a test that means
+// "a real blob id" cannot accidentally pass on a shape the server would refuse.
+const (
+	beforeID = "att-0123456789ab"
+	afterID  = "att-ba9876543210"
+)
 
-// diffServer mints a fresh id per upload and records what arrived, so a test
-// can assert BOTH the order of the three posts and that the pair names the ids
-// the server actually handed back — the transposition this subcommand exists to
-// prevent is invisible to any check that only looks at the last request.
-func diffServer(t *testing.T) (*httptest.Server, *[]capturedUpload) {
+// runDiff drives the subcommand with a client that FAILS if it is used. The
+// plain flavour must not talk to the server at all, so a request here is the
+// assertion failing, not a fixture missing.
+func runDiff(t *testing.T, cfg Config, args ...string) (int, string, string) {
 	t.Helper()
-	var seen []capturedUpload
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		q := r.URL.Query()
-		seen = append(seen, capturedUpload{
-			mime:     q.Get("mime"),
-			filename: q.Get("filename"),
-			body:     string(body),
-		})
-		id := "att-" + string(rune('a'+len(seen)-1))
-		w.WriteHeader(200)
-		_, _ = w.Write([]byte(`{"id":"` + id + `","mime":"` + q.Get("mime") +
-			`","filename":"` + q.Get("filename") + `"}`))
-	}))
-	t.Cleanup(srv.Close)
-	return srv, &seen
+	var out, errOut bytes.Buffer
+	client := http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		t.Fatalf("diff made a request it should not have: %s", r.URL)
+		return nil, nil
+	})}
+	before, after := args[0], args[1]
+	rc := cmdDiff(&client, cfg, before, after, "", "", false, &out, &errOut)
+	return rc, out.String(), errOut.String()
 }
 
-func TestDiffUploadsBothFilesThenAPairNamingTheirIDs(t *testing.T) {
-	srv, seen := diffServer(t)
-	beforePath := writeTempFile(t, "old.txt", []byte("alpha\nbravo\n"))
-	afterPath := writeTempFile(t, "new.txt", []byte("alpha\nBRAVO\n"))
+type roundTripFunc func(*http.Request) (*http.Response, error)
 
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// The whole contract in one assertion: two addresses in, ONE url out, and not a
+// single byte of network traffic. The plain link is a pure function of its two
+// sides, which is what lets a member produce one while the station is
+// unreachable.
+func TestDiffPrintsTheInternalURLWithoutTalkingToTheServer(t *testing.T) {
+	rc, out, errOut := runDiff(t, Config{Base: "https://oc.example"}, beforeID, afterID)
+	if rc != 0 {
+		t.Fatalf("rc = %d, want 0 (%s)", rc, errOut)
+	}
+	want := "https://oc.example/diff?after=" + afterID + "&before=" + beforeID + "\n"
+	if out != want {
+		t.Errorf("stdout = %q, want %q", out, want)
+	}
+}
+
+// The sides ride the query PERCENT-ENCODED, so a document address — which
+// carries "/" and ":" — survives as one value rather than becoming extra path
+// segments the reader would resolve somewhere else entirely.
+func TestDiffEncodesADocumentSideIntoOneQueryValue(t *testing.T) {
+	doc := "doc:lessons/mira/current/text"
+	rc, out, errOut := runDiff(t, Config{Base: "https://oc.example"}, doc, afterID)
+	if rc != 0 {
+		t.Fatalf("rc = %d, want 0 (%s)", rc, errOut)
+	}
+	parsed, err := url.Parse(strings.TrimSpace(out))
+	if err != nil {
+		t.Fatalf("printed a url that does not parse: %v (%q)", err, out)
+	}
+	if parsed.Path != "/diff" {
+		t.Errorf("path = %q, want /diff — the address must not leak into the path", parsed.Path)
+	}
+	if got := parsed.Query().Get("before"); got != doc {
+		t.Errorf("before = %q, want %q", got, doc)
+	}
+}
+
+func TestDiffPutsTheLabelsOnTheURLOnlyWhenGiven(t *testing.T) {
 	var out, errOut bytes.Buffer
-	cfg := Config{Base: srv.URL, Token: "tok"}
-	if rc := cmdDiff(srv.Client(), cfg, beforePath, afterPath, "", "", &out, &errOut); rc != 0 {
+	rc := cmdDiff(nil, Config{Base: "https://oc.example"}, beforeID, afterID,
+		"v1", "", false, &out, &errOut)
+	if rc != 0 {
 		t.Fatalf("rc = %d, want 0 (%s)", rc, errOut.String())
 	}
-
-	if len(*seen) != 3 {
-		t.Fatalf("want three uploads (two documents then the pair), got %d", len(*seen))
+	q, _ := url.Parse(strings.TrimSpace(out.String()))
+	if got := q.Query().Get("label_before"); got != "v1" {
+		t.Errorf("label_before = %q, want v1", got)
 	}
-	// The two documents go up as themselves — no declared type, so the server
-	// keeps its own sniffing, exactly as `upload` with no --mime.
-	if (*seen)[0].body != "alpha\nbravo\n" || (*seen)[0].mime != "" {
-		t.Errorf("first upload = %+v, want the before file's bytes untyped", (*seen)[0])
-	}
-	if (*seen)[1].body != "alpha\nBRAVO\n" || (*seen)[1].mime != "" {
-		t.Errorf("second upload = %+v, want the after file's bytes untyped", (*seen)[1])
-	}
-
-	// The pair is typed, and it is a POINTER PAIR: the documents' bytes must not
-	// appear in it a second time.
-	pair := (*seen)[2]
-	if pair.mime != diffAttachmentMime {
-		t.Errorf("pair mime = %q, want %q", pair.mime, diffAttachmentMime)
-	}
-	type side struct {
-		AttachmentID string `json:"attachment_id"`
-		Label        string `json:"label"`
-	}
-	var got struct {
-		Before side `json:"before"`
-		After  side `json:"after"`
-	}
-	if err := json.Unmarshal([]byte(pair.body), &got); err != nil {
-		t.Fatalf("pair body is not JSON: %v (%s)", err, pair.body)
-	}
-	if got.Before.AttachmentID != "att-a" || got.After.AttachmentID != "att-b" {
-		t.Errorf("pair names %q/%q, want the ids the server minted (att-a/att-b) in that order",
-			got.Before.AttachmentID, got.After.AttachmentID)
-	}
-	// Unlabelled columns are the state the owner could not read; the file's own
-	// name is the default rather than nothing.
-	if got.Before.Label != "old.txt" || got.After.Label != "new.txt" {
-		t.Errorf("labels = %q/%q, want the two basenames", got.Before.Label, got.After.Label)
-	}
-
-	// stdout mirrors `upload`: the id, then the server's own ref JSON.
-	lines := bytes.Split(bytes.TrimRight(out.Bytes(), "\n"), []byte("\n"))
-	if len(lines) != 2 || string(lines[0]) != "att-c" {
-		t.Errorf("stdout = %q, want the pair's id then its ref JSON", out.String())
+	// An unlabelled side carries NO parameter at all — that is what makes the
+	// compare screen write its own localized heading rather than a blank one.
+	if _, present := q.Query()["label_after"]; present {
+		t.Errorf("an unlabelled side must not appear on the url: %s", out.String())
 	}
 }
 
-func TestDiffLabelsOverrideTheFileNames(t *testing.T) {
-	srv, seen := diffServer(t)
-	var out, errOut bytes.Buffer
-	cfg := Config{Base: srv.URL, Token: "tok"}
-	rc := cmdDiff(srv.Client(), cfg,
-		writeTempFile(t, "a.txt", []byte("x")),
-		writeTempFile(t, "b.txt", []byte("y")),
-		"9/2 21:12", "目前存檔內容", &out, &errOut)
-	if rc != 0 {
-		t.Fatalf("rc = %d (%s)", rc, errOut.String())
+// The one error message that has to teach the new flow: `diff` never uploads,
+// so a path is refused with the two commands that DO work.
+func TestDiffRefusesAFilePathAndSaysToUploadItFirst(t *testing.T) {
+	rc, out, errOut := runDiff(t, Config{Base: "https://oc.example"}, "./before.md", afterID)
+	if rc != 2 {
+		t.Fatalf("rc = %d, want 2", rc)
 	}
-	type side struct {
-		Label string `json:"label"`
+	if out != "" {
+		t.Errorf("stdout must stay empty on a refusal, got %q", out)
 	}
-	var got struct {
-		Before side `json:"before"`
-		After  side `json:"after"`
+	for _, want := range []string{"does not upload files", "ocagent upload ./before.md", "att-"} {
+		if !strings.Contains(errOut, want) {
+			t.Errorf("message does not mention %q:\n%s", want, errOut)
+		}
 	}
-	if err := json.Unmarshal([]byte((*seen)[2].body), &got); err != nil {
+}
+
+// A bare filename with no slash and no extension is still a path when a file of
+// that name is really there — the member typed what they were looking at.
+func TestDiffRefusesAnExistingFileEvenWithoutAPathLikeName(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "notes"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got.Before.Label != "9/2 21:12" || got.After.Label != "目前存檔內容" {
-		t.Errorf("labels = %q/%q, want the given headings", got.Before.Label, got.After.Label)
+	t.Chdir(dir)
+	rc, _, errOut := runDiff(t, Config{Base: "https://oc.example"}, "notes", afterID)
+	if rc != 2 || !strings.Contains(errOut, "does not upload files") {
+		t.Fatalf("rc = %d, want 2 with the upload-first message:\n%s", rc, errOut)
 	}
 }
 
-// A pair whose sides never uploaded would be a compare attachment that can
-// never draw. The run has to stop at the failure, not carry on and mint one.
-func TestDiffStopsBeforeMintingAPairWhenASideFails(t *testing.T) {
-	var seen int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seen++
-		if seen == 2 {
-			w.WriteHeader(400)
-			_, _ = w.Write([]byte(`{"error":{"message":"attachment is empty"}}`))
-			return
+func TestDiffRefusesAnArgumentThatIsNeitherAnIDNorADocumentAddress(t *testing.T) {
+	for _, arg := range []string{"att-", "att-0123456789", "att-0123456789AB", "nonsense"} {
+		rc, _, errOut := runDiff(t, Config{Base: "https://oc.example"}, beforeID, arg)
+		if rc != 2 {
+			t.Errorf("%q: rc = %d, want 2", arg, rc)
 		}
+		if !strings.Contains(errOut, "after side") {
+			t.Errorf("%q: the message must name WHICH side is wrong:\n%s", arg, errOut)
+		}
+	}
+}
+
+func TestDiffRejectsAMalformedDocumentAddress(t *testing.T) {
+	for name, arg := range map[string]string{
+		"too few segments":  "doc:lessons/mira/current",
+		"too many":          "doc:lessons/mira/current/text/extra",
+		"an empty segment":  "doc:lessons//current/text",
+		"a traversing key":  "doc:lessons/../current/text",
+		"an at that is not": "doc:lessons/mira/latest/text",
+		"a zero revision":   "doc:lessons/mira/0/text",
+		"a padded at":       "doc:lessons/mira/ current /text",
+	} {
+		rc, out, errOut := runDiff(t, Config{Base: "https://oc.example"}, arg, afterID)
+		if rc != 2 {
+			t.Errorf("%s (%q): rc = %d, want 2", name, arg, rc)
+		}
+		if out != "" {
+			t.Errorf("%s: printed a url for an address it refused: %q", name, out)
+		}
+		if !strings.Contains(errOut, "diff:") {
+			t.Errorf("%s: no diagnostic:\n%s", name, errOut)
+		}
+	}
+}
+
+// `doc:` is judged as an ADDRESS even when a file of that name is sitting
+// there: the prefix is the member saying which of the two vocabularies they
+// meant, and a filesystem probe must not overrule it.
+func TestDiffNamesADocumentEvenWhenAFileOfThatNameExists(t *testing.T) {
+	dir := t.TempDir()
+	addr := "doc:lessons/mira/current/text"
+	if err := os.MkdirAll(filepath.Join(dir, "doc:lessons/mira/current"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, addr), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	rc, out, errOut := runDiff(t, Config{Base: "https://oc.example"}, addr, afterID)
+	if rc != 0 {
+		t.Fatalf("rc = %d, want 0 (%s)", rc, errOut)
+	}
+	if !strings.Contains(out, url.QueryEscape(addr)) {
+		t.Errorf("the document address did not reach the url: %q", out)
+	}
+}
+
+// --external is the ONLY flavour that costs a request, and the link it prints
+// is the server's server-relative path with this reader's own origin in front —
+// the same posture get_chat_attachment_share_link has.
+func TestDiffExternalMintsTheSignedLinkAndAbsolutizesIt(t *testing.T) {
+	var asked *url.URL
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = r.URL
 		w.WriteHeader(200)
-		_, _ = w.Write([]byte(`{"id":"att-a","mime":"text/plain","filename":"a.txt"}`))
+		_, _ = w.Write([]byte(`{"url":"/diff?after=` + afterID + `&before=` + beforeID + `&sig=SIG"}`))
 	}))
 	t.Cleanup(srv.Close)
 
 	var out, errOut bytes.Buffer
-	cfg := Config{Base: srv.URL, Token: "tok"}
-	rc := cmdDiff(srv.Client(), cfg,
-		writeTempFile(t, "a.txt", []byte("x")),
-		writeTempFile(t, "b.txt", []byte("y")),
-		"", "", &out, &errOut)
-
-	if rc != 4 {
-		t.Errorf("rc = %d, want 4 (the server rejected a side)", rc)
+	rc := cmdDiff(srv.Client(), Config{Base: srv.URL, Token: "tok"},
+		beforeID, afterID, "", "", true, &out, &errOut)
+	if rc != 0 {
+		t.Fatalf("rc = %d, want 0 (%s)", rc, errOut.String())
 	}
-	if seen != 2 {
-		t.Errorf("%d requests made, want 2 — the pair must not be posted after a side failed", seen)
+	if asked == nil || asked.Path != "/api/diff/share-link" {
+		t.Fatalf("asked %v, want the mint route", asked)
 	}
-	if out.Len() != 0 {
-		t.Errorf("stdout = %q, want nothing: there is no attachment to name", out.String())
+	if got := asked.Query().Get("before"); got != beforeID {
+		t.Errorf("mint request before = %q, want %q", got, beforeID)
+	}
+	want := srv.URL + "/diff?after=" + afterID + "&before=" + beforeID + "&sig=SIG\n"
+	if out.String() != want {
+		t.Errorf("stdout = %q, want %q", out.String(), want)
 	}
 }
 
-func TestDiffRefusesWithoutAToken(t *testing.T) {
+func TestDiffExternalRefusesWithoutAToken(t *testing.T) {
 	var out, errOut bytes.Buffer
-	rc := cmdDiff(http.DefaultClient, Config{Base: "http://unused"},
-		"a.txt", "b.txt", "", "", &out, &errOut)
+	rc := cmdDiff(nil, Config{Base: "https://oc.example"}, beforeID, afterID, "", "", true, &out, &errOut)
 	if rc != 3 {
-		t.Errorf("rc = %d, want 3 (no token)", rc)
+		t.Fatalf("rc = %d, want 3", rc)
+	}
+	if !strings.Contains(errOut.String(), "OC_TOKEN") {
+		t.Errorf("message must name the missing credential:\n%s", errOut.String())
 	}
 }
 
-// T-59 second round: a side may name ONE FIELD OF A DOCUMENT instead of a file
-// (`doc:<kind>/<key>/<at>/<field>`). Nothing is uploaded for such a side — the
-// document already has an address — so the whole point is that the number of
-// uploads goes DOWN, and that the pair carries the address verbatim.
-func TestDiffNamesADocumentSideWithoutUploadingAnything(t *testing.T) {
-	srv, seen := diffServer(t)
-	afterPath := writeTempFile(t, "new.txt", []byte("alpha\nBRAVO\n"))
-
+func TestDiffExternalReportsTheServersRefusal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(422)
+		_, _ = w.Write([]byte(`{"error":{"message":"the before side: unsayable"}}`))
+	}))
+	t.Cleanup(srv.Close)
 	var out, errOut bytes.Buffer
-	cfg := Config{Base: srv.URL, Token: "tok"}
-	rc := cmdDiff(srv.Client(), cfg, "doc:lessons/mira/12/text", afterPath, "", "", &out, &errOut)
-	if rc != 0 {
-		t.Fatalf("rc = %d, want 0 (%s)", rc, errOut.String())
+	rc := cmdDiff(srv.Client(), Config{Base: srv.URL, Token: "tok"},
+		beforeID, afterID, "", "", true, &out, &errOut)
+	if rc != 4 {
+		t.Fatalf("rc = %d, want 4", rc)
 	}
-
-	// TWO posts, not three: the document side is a reference, and re-uploading
-	// a copy of it is exactly what this shape exists to avoid.
-	if len(*seen) != 2 {
-		t.Fatalf("want two uploads (the file, then the pair), got %d", len(*seen))
-	}
-	pair := (*seen)[1]
-	if pair.mime != diffAttachmentMime {
-		t.Errorf("pair mime = %q, want %q", pair.mime, diffAttachmentMime)
-	}
-	var got struct {
-		Before struct {
-			Doc struct {
-				Kind  string `json:"kind"`
-				Key   string `json:"key"`
-				At    string `json:"at"`
-				Field string `json:"field"`
-			} `json:"doc"`
-			AttachmentID string `json:"attachment_id"`
-			Label        string `json:"label"`
-		} `json:"before"`
-		After struct {
-			AttachmentID string `json:"attachment_id"`
-			Label        string `json:"label"`
-		} `json:"after"`
-	}
-	if err := json.Unmarshal([]byte(pair.body), &got); err != nil {
-		t.Fatalf("pair body is not JSON: %v (%s)", err, pair.body)
-	}
-	if got.Before.Doc.Kind != "lessons" || got.Before.Doc.Key != "mira" ||
-		got.Before.Doc.At != "12" || got.Before.Doc.Field != "text" {
-		t.Errorf("document side = %+v, want the four segments verbatim", got.Before.Doc)
-	}
-	// Exactly one shape per side: a document side that also carried a blob id
-	// would be refused by the server, and one that carried a label would
-	// override the reader's own localized heading (「版本 #12」/「目前存檔內容」)
-	// with something written here in one language.
-	if got.Before.AttachmentID != "" || got.Before.Label != "" {
-		t.Errorf("document side = %+v, want no attachment_id and no label", got.Before)
-	}
-	// The file side is unaffected: still uploaded, still labelled by its name.
-	if got.After.AttachmentID != "att-a" || got.After.Label != "new.txt" {
-		t.Errorf("file side = %+v, want the minted id and the basename", got.After)
+	if !strings.Contains(errOut.String(), "unsayable") {
+		t.Errorf("the server's own words must reach the member:\n%s", errOut.String())
 	}
 }
 
-func TestDiffLabelsADocumentSideOnlyWhenAskedTo(t *testing.T) {
-	srv, seen := diffServer(t)
-
-	var out, errOut bytes.Buffer
-	cfg := Config{Base: srv.URL, Token: "tok"}
-	rc := cmdDiff(srv.Client(), cfg,
-		"doc:global_context/global/seed/text", "doc:global_context/global/current/text",
-		"出廠", "", &out, &errOut)
-	if rc != 0 {
-		t.Fatalf("rc = %d, want 0 (%s)", rc, errOut.String())
-	}
-	// Both sides are references: ONE post, the pair itself.
-	if len(*seen) != 1 {
-		t.Fatalf("want one upload (the pair alone), got %d", len(*seen))
-	}
-	var got struct {
-		Before struct {
-			Label string `json:"label"`
-		} `json:"before"`
-		After struct {
-			Label string `json:"label"`
-		} `json:"after"`
-	}
-	if err := json.Unmarshal([]byte((*seen)[0].body), &got); err != nil {
-		t.Fatalf("pair body is not JSON: %v", err)
-	}
-	if got.Before.Label != "出廠" {
-		t.Errorf("before label = %q, want the one given", got.Before.Label)
-	}
-	if got.After.Label != "" {
-		t.Errorf("after label = %q, want none so the reader writes its own", got.After.Label)
-	}
-}
-
-// A malformed address must be caught BEFORE anything is uploaded: there is no
-// blob GC yet, so a first side that went up while the second was rejected is a
-// file nothing will ever point at and nothing will ever collect.
-func TestDiffRejectsAMalformedDocumentAddressBeforeUploadingAnything(t *testing.T) {
-	for _, tc := range []struct{ name, arg string }{
-		{"too few segments", "doc:lessons/mira/current"},
-		{"too many segments", "doc:lessons/mira/current/text/extra"},
-		{"an empty segment", "doc:lessons//current/text"},
-		// The three below are refused by the CHARSET, not by the segment count.
-		// Without that check the address only fails when the PAIR is posted —
-		// by which time the other side's bytes are already stored, and there is
-		// no blob GC to collect them.
-		{"a key that traverses", "doc:lessons/../current/text"},
-		{"a space inside a segment", "doc:lessons/mi ra/current/text"},
-		{"a percent inside a segment", "doc:lessons/mira/current/te%xt"},
-		{"an at that names no version", "doc:lessons/mira/latest/text"},
-		{"an at that is zero", "doc:lessons/mira/0/text"},
+// --help is the SINGLE AUTHORITY on the parameters (seeds/system_interaction.md
+// deliberately carries none of them and points here), so anything a member
+// cannot find here has nowhere else to be found.
+func TestDiffUsageIsCompleteEnoughToBeTheOnlyAuthority(t *testing.T) {
+	var b bytes.Buffer
+	diffUsage(&b)
+	for _, want := range []string{
+		"att-0123456789ab", "doc:<kind>/<key>/<at>/<field>",
+		"current", "seed", "list_document_history",
+		"--label-before", "--label-after", "--external",
+		"ocagent upload", "no login",
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			srv, seen := diffServer(t)
-			beforePath := writeTempFile(t, "old.txt", []byte("alpha\n"))
-
-			var out, errOut bytes.Buffer
-			cfg := Config{Base: srv.URL, Token: "tok"}
-			if rc := cmdDiff(srv.Client(), cfg, beforePath, tc.arg, "", "", &out, &errOut); rc != 2 {
-				t.Fatalf("rc = %d, want 2 (usage) — %s", rc, errOut.String())
-			}
-			if len(*seen) != 0 {
-				t.Fatalf("want nothing uploaded, got %d post(s): %+v", len(*seen), *seen)
-			}
-		})
-	}
-}
-
-// The prefix is only ambiguous if a REAL PATH spells the same four segments —
-// which needs directories, since no single filename may contain "/". Rare, and
-// therefore exactly the case where picking a meaning silently would be worst:
-// the reader would get a comparison against a document they never named, or a
-// file they never named, with no way to tell which from the output.
-func TestDiffRefusesWhenADocumentAddressIsAlsoARealFile(t *testing.T) {
-	srv, seen := diffServer(t)
-	t.Chdir(t.TempDir())
-	if err := os.MkdirAll("doc:lessons/mira/current", 0o755); err != nil {
-		t.Fatalf("cannot build the colliding path: %v", err)
-	}
-	if err := os.WriteFile("doc:lessons/mira/current/text", []byte("alpha\n"), 0o644); err != nil {
-		t.Fatalf("cannot build the colliding path: %v", err)
-	}
-
-	var out, errOut bytes.Buffer
-	cfg := Config{Base: srv.URL, Token: "tok"}
-	if rc := cmdDiff(srv.Client(), cfg, "doc:lessons/mira/current/text",
-		"doc:global_context/global/current/text", "", "", &out, &errOut); rc != 2 {
-		t.Fatalf("rc = %d, want 2 (usage) — %s", rc, errOut.String())
-	}
-	if len(*seen) != 0 {
-		t.Fatalf("want nothing uploaded, got %d post(s)", len(*seen))
-	}
-	if !bytes.Contains(errOut.Bytes(), []byte("both a document address and a real file")) {
-		t.Errorf("stderr = %q, want it to name the ambiguity", errOut.String())
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("usage never mentions %q — the seed points here for it", want)
+		}
 	}
 }

@@ -551,33 +551,3 @@
   font-variant-numeric: tabular-nums;
   color: var(--color-text-muted);
 }
-
-/* ── 單獨看比較的某一側 (owner 2026-09-03, c-944088dceab0) ──────────────────
- * The reader got here from INSIDE the comparison, so the way out is back to it,
- * not out of the overlay — closing would make them re-open the attachment and
- * find the mode they were in again. */
-.md-preview__side {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-width: 0;
-}
-.md-preview__side-back {
-  align-self: flex-start;
-  padding: 4px 10px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-pill, 999px);
-  background: var(--color-surface-sunken);
-  color: var(--color-text);
-  font-size: 12px;
-  cursor: pointer;
-}
-.md-preview__side-back:hover {
-  border-color: var(--color-accent);
-}
-.md-preview__side-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--color-text);
-  overflow-wrap: anywhere;
-}
