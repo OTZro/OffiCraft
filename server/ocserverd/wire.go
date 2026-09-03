@@ -1776,8 +1776,8 @@ type taskDTO struct {
 	// get_task_step, a caller reading "index" is told to go to
 	// list_task_artifacts, and one string cannot name both destinations.
 	ArtifactsDetailLevel string `json:"artifacts_detail_level"`
-	ProgressDone  int    `json:"progress_done"`
-	ProgressTotal int    `json:"progress_total"`
+	ProgressDone         int    `json:"progress_done"`
+	ProgressTotal        int    `json:"progress_total"`
 	// CloseoutReported flips true once the executor reports the close-out
 	// follow-ups done (report_task_closeout; §6.3 — terminal tasks only).
 	CloseoutReported bool `json:"closeout_reported"`
@@ -2304,8 +2304,8 @@ func newTaskDTO(t Task, steps []TaskStep, deps []string, cardStatus map[string]s
 		// the one that keeps serving the fat rows.
 		ArtifactsDetailLevel: taskArtifactsDetailLevelIndex,
 		ProgressDone:         done,
-		ProgressTotal:    total,
-		CloseoutReported: t.CloseoutTS > 0,
+		ProgressTotal:        total,
+		CloseoutReported:     t.CloseoutTS > 0,
 		// Artifacts default to [] — the handler (taskDTOOf) folds the resolved
 		// set in after this pure projection, since resolving file/image blob
 		// metadata needs a DAL lookup that does not belong in a pure builder.
