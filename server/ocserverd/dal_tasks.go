@@ -1106,8 +1106,10 @@ type OutsourceWorker struct {
 	// (mfRestartAfterStop, dal_member_patch.go), so memberWholeRow carries it into
 	// PutMember's SET list — which means every PutOutsourceWorker is a write of
 	// this column. While the projection did not carry it, memberFromWorker rebuilt
-	// the Member with the zero value and each of the 13 non-test PutOutsourceWorker
-	// call sites wrote restart_after_stop=0 over whatever was there. A handler
+	// the Member with the zero value and EVERY non-test PutOutsourceWorker call
+	// site wrote restart_after_stop=0 over whatever was there. (Do not trust a
+	// count in a comment — this sentence said "13" and was wrong in both
+	// directions: 12 before this package, 14 after. Count them.) A handler
 	// stamping the intent would have had it erased by the very next worker write,
 	// with NOTHING going red: the owner presses 重新聚焦 on a stopped worker, gets
 	// a 200, and the worker never comes up.
