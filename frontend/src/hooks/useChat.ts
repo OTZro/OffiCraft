@@ -1164,7 +1164,12 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   //     answers "the record current NOW", so that line cannot be written.
   //
   // `loadAround` itself has neither an acquire nor a release to get wrong.
-  // See latch-inventory.md §3.
+  //
+  // (An earlier generation pointed here at a `latch-inventory.md`. That file was
+  // never in this repo — it lived in a contractor's scratch directory and its
+  // copy still describes an API this file no longer has. The rule it carried is
+  // the one stated above and in lib/conversationLatches; there is nothing else
+  // to go and read.)
   const withAnchorFetch = useCallback(
     async <T,>(body: () => Promise<T>): Promise<T> => {
       const release = conv.latches.acquire("anchorFetch");
