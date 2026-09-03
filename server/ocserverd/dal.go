@@ -318,7 +318,12 @@ func scanMember(row interface{ Scan(...any) error }) (Member, error) {
 //     uniqueness scan (api_roles.go) wants the union of ALL codenames, or a
 //     new staff member can be minted onto a contractor's name; the role-delete
 //     cascade (api_roles.go) is already narrowed by `RoleKey != role` and an
-//     outsource row's RoleKey is always "" (dal_tasks.go); the chat unread
+//     outsource row's RoleKey is always "" (dal_tasks.go) — that last one is a
+//     NAMED DEBT, not a safety argument: it holds only while contractors have
+//     no role, and the day they get one this handler hard-deletes a live
+//     contractor together with its whole chat, unconfirmed. It is pinned so it
+//     fails loudly instead of silently
+//     (role_delete_contractor_t14i6_test.go); the chat unread
 //     badge (api_chat.go) is already narrowed by RosterStatus, which is the
 //     same predicate workerStatusFromMember calls "released".
 //
