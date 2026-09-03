@@ -426,6 +426,25 @@ func TestDrainChat_MarkReadRejected_WarnsOncePerProcess(t *testing.T) {
 	if c := strings.Count(out.String(), "mark-read"); c != 1 {
 		t.Fatalf("a rejected receipt warned %d times, want exactly 1; out = %q", c, out.String())
 	}
+	// 🔴 THE WARNING MUST NOT WEAR THE TRANSPORT HEAD. A codex member does not
+	// read this pane: cli/ocwarden/codex_session.go filters every line starting
+	// `[ocagent] listen:` out of the model's turn as transport diagnostics. This
+	// warning is the only sign that a ✓ is永遠不會亮 — spelled with that head it
+	// would be swallowed on the codex side and printed on the claude side, with
+	// both suites still green. So the first column is asserted, not just the count.
+	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		if !strings.Contains(line, "mark-read") {
+			continue
+		}
+		if !strings.HasPrefix(line, agentLinePrefix) {
+			t.Fatalf("the warning must start at column 0 with %q; got %q", agentLinePrefix, line)
+		}
+		if strings.HasPrefix(line, agentLinePrefix+"listen:") {
+			t.Fatalf("the warning must NOT start with %q — the codex sidecar drops that "+
+				"prefix as transport noise, so the warning would reach a codex member "+
+				"never at all; got %q", agentLinePrefix+"listen:", line)
+		}
+	}
 
 	srv.setList("[" + strings.Join([]string{
 		tsMsg("m1", "boss", "kyle", now-30),
