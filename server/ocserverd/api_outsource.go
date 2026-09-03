@@ -493,6 +493,11 @@ func (s *apiServer) HandleRefocusOutsourceWorkerApiOutsourceWorkersIdRefocusPost
 	worker.RefocusOp = proj.RefocusOp
 	worker.StoppingSince = proj.StoppingSince // a new epoch never inherits a stale latch
 	worker.StoppedSince = proj.StoppedSince
+	if err := s.persistWorkerWindDownAnchors(*worker); err != nil {
+		s.outsourceMu.Unlock()
+		internalError(w, err)
+		return
+	}
 	if err := s.dal.PutOutsourceWorker(*worker); err != nil {
 		s.outsourceMu.Unlock()
 		internalError(w, err)
@@ -586,6 +591,11 @@ func (s *apiServer) HandleAcceleratedStopOutsourceWorkerApiOutsourceWorkersIdAcc
 		return
 	}
 	worker.RefocusOp = refocusOpAcceleratedStop
+	if err := s.persistWorkerWindDownAnchors(*worker); err != nil {
+		s.outsourceMu.Unlock()
+		internalError(w, err)
+		return
+	}
 	if err := s.dal.PutOutsourceWorker(*worker); err != nil {
 		s.outsourceMu.Unlock()
 		internalError(w, err)
@@ -679,6 +689,11 @@ func (s *apiServer) HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost(w htt
 	// (stopEpochAnchor, api_members.go), which is where the reason a forced
 	// epoch's anchor must not move is written down.
 	worker.StoppingSince = stopEpochAnchor(memberFromWorker(*worker), nowSecs())
+	if err := s.persistWorkerWindDownAnchors(*worker); err != nil {
+		s.outsourceMu.Unlock()
+		internalError(w, err)
+		return
+	}
 	if err := s.dal.PutOutsourceWorker(*worker); err != nil {
 		s.outsourceMu.Unlock()
 		internalError(w, err)
@@ -738,6 +753,11 @@ func (s *apiServer) HandleForceStopOutsourceWorkerApiOutsourceWorkersIdForceStop
 	worker.ForcedStopAt = forcedAt
 	if worker.StoppingSince <= 0.0 || worker.StoppingSince > forcedAt {
 		worker.StoppingSince = forcedAt
+	}
+	if err := s.persistWorkerWindDownAnchors(*worker); err != nil {
+		s.outsourceMu.Unlock()
+		internalError(w, err)
+		return
 	}
 	if err := s.dal.PutOutsourceWorker(*worker); err != nil {
 		s.outsourceMu.Unlock()
@@ -852,11 +872,21 @@ func (s *apiServer) HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost
 	worker.RefocusOp = ""
 	worker.StoppingSince = 0.0
 	worker.StoppedSince = 0.0
-	// The whole-row write still carries desired_state and the four anchors above;
-	// only the receipt has moved out (T-55), and it is written right after, gated
-	// on having actually been stamped. Order carries no convergence argument
-	// here: the gate is hub liveness, not a stored value, so nothing an early
-	// landing could close.
+	// The whole-row write still carries desired_state; WHICH columns it no longer
+	// carries is not restated here — this sentence has already gone stale twice as
+	// T-55 moved one batch after another, so the answer lives in exactly one place
+	// now: singleColumnOwnedFields, which is also what reddens if a column goes
+	// back. The four anchors above and the receipt each have their own writer, and
+	// both run before the row write.
+	//
+	// The receipt's order carries no convergence argument here (its gate is hub
+	// liveness, not a stored value). The ANCHORS' order does — see
+	// persistMemberWindDownAnchors.
+	if err := s.persistWorkerWindDownAnchors(*worker); err != nil {
+		s.outsourceMu.Unlock()
+		internalError(w, err)
+		return
+	}
 	if err := s.dal.PutOutsourceWorker(*worker); err != nil {
 		s.outsourceMu.Unlock()
 		internalError(w, err)

@@ -478,6 +478,7 @@ func TestForceStopWorker_KillsAndHoldsDown(t *testing.T) {
 	w, _ := api.dal.GetOutsourceWorker(workerID)
 	w.RefocusSince = 900
 	_ = api.dal.PutOutsourceWorker(*w)
+	seedWorkerAnchors(t, api, *w)
 
 	rec := postWorker(t, api, workerID, "force-stop", nil,
 		api.HandleForceStopOutsourceWorkerApiOutsourceWorkersIdForceStopPost)
@@ -1017,6 +1018,7 @@ func TestCollectWorkerHandover_NoKillTarget_RollsBackEpochForFSMRescue(t *testin
 	w, _ := api.dal.GetOutsourceWorker(workerID)
 	w.RefocusSince = now - 10 // grace window open, deadline NOT yet passed
 	_ = api.dal.PutOutsourceWorker(*w)
+	seedWorkerAnchors(t, api, *w)
 	api.hub.DrainWardenCommands(ServerSelfHost)
 
 	api.outsourceMu.Lock()
@@ -1113,6 +1115,7 @@ func TestAutoHandoverWorker_LoopBreak(t *testing.T) {
 	w, _ := api.dal.GetOutsourceWorker(workerID)
 	w.RefocusSince = now - 100 // handover in flight
 	_ = api.dal.PutOutsourceWorker(*w)
+	seedWorkerAnchors(t, api, *w)
 
 	// (a) still the OLD session (boot_ts before the stamp) → marker stays set.
 	api.gauge.Set(workerID, map[string]any{"boot_ts": now - 200})
@@ -1129,6 +1132,7 @@ func TestAutoHandoverWorker_LoopBreak(t *testing.T) {
 	w.StoppingSince = now - 80
 	w.StoppedSince = now - 60
 	_ = api.dal.PutOutsourceWorker(*w)
+	seedWorkerAnchors(t, api, *w)
 	api.gauge.Set(workerID, map[string]any{"boot_ts": now - 50})
 	w, _ = api.dal.GetOutsourceWorker(workerID)
 	workerTickPass(t, api, w.ID, now)
@@ -1165,6 +1169,7 @@ func stampWorkerRefocus(t *testing.T, api *apiServer, workerID string, since flo
 	if err := api.dal.PutOutsourceWorker(*w); err != nil {
 		t.Fatalf("stamp refocus: %v", err)
 	}
+	seedWorkerAnchors(t, api, *w)
 }
 
 // TestAutoHandoverWorker_GraceTimeout_ForceCollects (T-ea82 form ②): a worker

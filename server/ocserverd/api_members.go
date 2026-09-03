@@ -70,6 +70,40 @@ func (s *apiServer) persistMemberOpReceipt(m Member, trigger string) error {
 	return nil
 }
 
+// persistMemberWindDownAnchors stores the four wind-down anchor columns of an
+// ALREADY-STAMPED member row through their sole writer (T-55).
+//
+// 🔴 CALL IT BEFORE THE WHOLE-ROW WRITE, WHICH IS THE OPPOSITE ORDER FROM
+// persistMemberOpReceipt NEXT DOOR — and the difference is load-bearing, not
+// tidiness. putMember fans the member delta, and publishMemberPatch says what
+// keys on that delta: the wind-down / recycle hook in cli/ocagent
+// (shouldWindDown). These four columns ARE what that hook reads. Fan the delta
+// first and the agent refetches a row whose anchors have not landed yet, reads
+// "no wind-down in progress", and carries on — a wrong answer produced by
+// nothing but ordering, on a path where the retry is the agent never stopping.
+// A receipt has no such reader, which is why the receipt may land after.
+//
+// ⚠️ SO DO NOT "UNIFY" THE TWO. Reordering this to match the receipt reintroduces
+// that race and NOTHING GOES RED: every test still sees both writes land.
+//
+// On a row that does not exist yet the UPDATE is a clean no-op and PutMember's
+// INSERT carries the four itself, so the order is correct for a new row too.
+func (s *apiServer) persistMemberWindDownAnchors(m Member) error {
+	return s.dal.SetMemberWindDownAnchors(m.ID, m.StoppingSince, m.StoppedSince,
+		m.RefocusSince, m.RefocusOp)
+}
+
+// persistWorkerWindDownAnchors is the outsource face of the call above. It reads
+// the four columns straight off the worker rather than going through
+// memberFromWorker, which mints activated_ts as a side effect — a projection this
+// call has no business triggering. There is no second table behind it:
+// DAL.PutOutsourceWorker IS PutMember(memberFromWorker(w)), so a worker row is a
+// member row with kind='outsource' and these four columns are the same columns.
+func (s *apiServer) persistWorkerWindDownAnchors(w OutsourceWorker) error {
+	return s.dal.SetMemberWindDownAnchors(w.ID, w.StoppingSince, w.StoppedSince,
+		w.RefocusSince, w.RefocusOp)
+}
+
 // publishMemberPatch fans the member delta and nothing else. It is putMember's
 // wire half, split out so a SINGLE-COLUMN writer (AddMemberBankedCost and the
 // setters beside it) can keep the push a caller used to get for free from the
@@ -874,6 +908,10 @@ func (s *apiServer) HandleUpdateMemberApiMembersMemberIdPatch(w http.ResponseWri
 			stampMemberOpReceipt(m, memberHeldDownReceipt(memberOpModel), nowSecs())
 		}
 	}
+	if err := s.persistMemberWindDownAnchors(*m); err != nil {
+		internalError(w, err)
+		return
+	}
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
 		return
@@ -915,7 +953,13 @@ func (s *apiServer) HandleUpdateMemberApiMembersMemberIdPatch(w http.ResponseWri
 	// the two orders fail differently. The wind-down epoch armed above is what
 	// makes a launch-intent change TAKE EFFECT (T-b6d9: without it the member
 	// runs on the old model until something unrelated respawns it), and it lands
-	// with the whole-row write. Put the setters first and a failure here leaves
+	// EARLIER STILL: the four anchors it is made of left the whole-row write in
+	// T-55's third batch, so persistMemberWindDownAnchors carries it and runs
+	// ahead of that write, not with it. (This sentence said "with the whole-row
+	// write" until that batch, which was true when it was written and is the
+	// third time one line here has gone stale as the columns moved — the
+	// standing answer to "which writer carries what" is
+	// singleColumnOwnedFields, not a sentence.) Put the setters first and a failure here leaves
 	// the new model stored with NO epoch — the exact bug T-b6d9 fixed, arriving
 	// through a different door, and nothing ever converges it. This way round, a
 	// failure leaves the epoch open with the OLD value: the member winds down and
@@ -992,6 +1036,10 @@ func (s *apiServer) HandleActivateMemberApiMembersMemberIdActivatePost(w http.Re
 			internalError(w, err)
 			return
 		}
+	}
+	if err := s.persistMemberWindDownAnchors(*m); err != nil {
+		internalError(w, err)
+		return
 	}
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
@@ -1133,6 +1181,10 @@ func (s *apiServer) HandleRelocateMemberApiMembersMemberIdRelocatePost(w http.Re
 	heldDown := !windDown && m.DesiredState == DesiredStateOffline
 	if heldDown {
 		stampMemberOpReceipt(m, memberHeldDownReceipt(memberOpRelocate), nowSecs())
+	}
+	if err := s.persistMemberWindDownAnchors(*m); err != nil {
+		internalError(w, err)
+		return
 	}
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
@@ -1310,6 +1362,10 @@ func (s *apiServer) HandleDeactivateMemberApiMembersMemberIdDeactivatePost(w htt
 	// offboardKindOf answers soft for desired-offline without consulting the
 	// anchor's age.
 	m.StoppingSince = stopEpochAnchor(*m, nowSecs())
+	if err := s.persistMemberWindDownAnchors(*m); err != nil {
+		internalError(w, err)
+		return
+	}
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
 		return
@@ -1361,6 +1417,10 @@ func (s *apiServer) HandleForceStopMemberApiMembersMemberIdForceStopPost(w http.
 	// cockpit can both see it; PutMember persists it forward-only with max(), so
 	// a stale snapshot cannot erase the record.
 	m.ForcedStopAt = nowSecs()
+	if err := s.persistMemberWindDownAnchors(*m); err != nil {
+		internalError(w, err)
+		return
+	}
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
 		return
@@ -1450,6 +1510,10 @@ func (s *apiServer) HandleAcceleratedStopMemberApiMembersMemberIdAcceleratedStop
 		return
 	}
 	m.RefocusOp = refocusOpAcceleratedStop
+	if err := s.persistMemberWindDownAnchors(*m); err != nil {
+		internalError(w, err)
+		return
+	}
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
 		return
@@ -1492,6 +1556,10 @@ func (s *apiServer) HandleRefocusMemberApiMembersMemberIdRefocusPost(w http.Resp
 			"refocus is 停止 and this member is already further along the "+
 				"wind-down ladder (下線 → 加速 → 強制); a later stage is never "+
 				"replaced by an earlier one")
+		return
+	}
+	if err := s.persistMemberWindDownAnchors(*m); err != nil {
+		internalError(w, err)
 		return
 	}
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
@@ -1637,6 +1705,10 @@ func (s *apiServer) HandleReportWakingApiSelfWakingPost(w http.ResponseWriter, r
 	if body.Model != nil {
 		m.ActualModel = *body.Model
 	}
+	if err := s.persistMemberWindDownAnchors(*m); err != nil {
+		internalError(w, err)
+		return
+	}
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
 		return
@@ -1663,6 +1735,10 @@ func (s *apiServer) HandleReportStoppingApiSelfStoppingPost(w http.ResponseWrite
 	}
 	if m.StoppingSince <= 0.0 {
 		m.StoppingSince = nowSecs()
+	}
+	if err := s.persistMemberWindDownAnchors(*m); err != nil {
+		internalError(w, err)
+		return
 	}
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
@@ -1716,6 +1792,10 @@ func (s *apiServer) HandleReportStoppedApiSelfStoppedPost(w http.ResponseWriter,
 	recycleKill := m.StoppedSince <= 0.0
 	if m.StoppedSince <= 0.0 {
 		m.StoppedSince = nowSecs()
+	}
+	if err := s.persistMemberWindDownAnchors(*m); err != nil {
+		internalError(w, err)
+		return
 	}
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
@@ -1816,6 +1896,10 @@ func (s *apiServer) HandleRestartSelfApiSelfRefocusPost(w http.ResponseWriter, r
 			"restart_self is 停止 and you are already further along the "+
 				"wind-down ladder (下線 → 加速 → 強制); finish the close-out you "+
 				"were given instead")
+		return
+	}
+	if err := s.persistMemberWindDownAnchors(*m); err != nil {
+		internalError(w, err)
 		return
 	}
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {

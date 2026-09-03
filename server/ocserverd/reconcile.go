@@ -1458,6 +1458,10 @@ func (s *apiServer) armDecidedHandover(memberID string, decision reconcileDecisi
 	if !s.armMemberOwnerOpHandover(fresh, decision.ArmHandoverOp) {
 		return // it logged which gate refused; the next tick re-decides
 	}
+	if err := s.persistMemberWindDownAnchors(*fresh); err != nil {
+		reconcileLog("%s: %s wind-down ANCHOR write failed, row write not attempted: %v",
+			memberID, decision.ArmHandoverOp, err)
+	}
 	if err := s.putMember(*fresh, triggerServer); err != nil {
 		reconcileLog("%s: %s wind-down arm persist failed: %v",
 			memberID, decision.ArmHandoverOp, err)
@@ -2344,6 +2348,10 @@ func (s *apiServer) stampContextHighRecycle(members []Member, now float64) {
 				"wind-down ladder backwards from %s", m.ID, op, m.RefocusOp)
 			continue
 		}
+		if err := s.persistMemberWindDownAnchors(*m); err != nil {
+			reconcileLog("recycle: auto-stamp ANCHOR write failed for %s: %v", m.ID, err)
+			continue
+		}
 		if err := s.putMember(*m, triggerServer); err != nil {
 			reconcileLog("recycle: auto-stamp persist failed for %s: %v", m.ID, err)
 			continue
@@ -2486,6 +2494,10 @@ func (s *apiServer) stampTokenExpiryWinddown(members []Member, now float64) {
 				"the wind-down ladder backwards from %s", m.ID, m.RefocusOp)
 			continue
 		}
+		if err := s.persistMemberWindDownAnchors(*m); err != nil {
+			reconcileLog("recycle: token-expiry ANCHOR write failed for %s: %v", m.ID, err)
+			continue
+		}
 		if err := s.putMember(*m, triggerServer); err != nil {
 			reconcileLog("recycle: token-expiry stamp persist failed for %s: %v", m.ID, err)
 			continue
@@ -2560,6 +2572,10 @@ func (s *apiServer) clearRecycleMarkersOnRespawn(members []Member) {
 		m.RefocusOp = ""
 		m.StoppedSince = 0.0
 		m.StoppingSince = 0.0
+		if err := s.persistMemberWindDownAnchors(*m); err != nil {
+			reconcileLog("recycle: loop-break ANCHOR write failed for %s: %v", m.ID, err)
+			continue
+		}
 		if err := s.putMember(*m, triggerServer); err != nil {
 			reconcileLog("recycle: loop-break persist failed for %s: %v", m.ID, err)
 			continue
@@ -2719,6 +2735,10 @@ func (s *apiServer) clearStaleStoppingOnOnline(members []Member, now float64) {
 			continue
 		}
 		m.StoppingSince = 0.0
+		if err := s.persistMemberWindDownAnchors(*m); err != nil {
+			reconcileLog("revive: stale-stopping ANCHOR write failed for %s: %v", m.ID, err)
+			continue
+		}
 		if err := s.putMember(*m, triggerServer); err != nil {
 			reconcileLog("revive: stale-stopping clear persist failed for %s: %v", m.ID, err)
 			continue
