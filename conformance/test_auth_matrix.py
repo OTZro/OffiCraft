@@ -1518,11 +1518,14 @@ MATRIX: dict[str, Route] = {
         body={"url": "https://example.com/pr/2", "label": "conf PR v2"},
     ),
     "GET /api/tasks/{task_id}/artifact/{artifact_id}/history": Route(
-        # T-60: the version list is cockpit-only (off MCP) but sits behind the
-        # SAME executor guard as the writes — a caller who may not touch this
-        # task's deliverables may not read what they used to be either.
+        # T-60: the version list is cockpit-only (off MCP) and, unlike the three
+        # write verbs on the same set, carries NO executor guard — agent B reads
+        # agent A's version list (200). Owner ruling: GET /api/tasks/{task_id}
+        # makes no caller distinction at all and its response already carries the
+        # artifact set, so gating the history would leave one door refusing what
+        # the other hands over. The route floor (agent) is unchanged, so the
+        # below-floor cells are still the derived 403.
         requires="agent",
-        overrides={"agent_other": 403},
         path=lambda ctx, _i: "/api/tasks/{}/artifact/{}/history".format(
             *_matrix_task_artifact(ctx)),
     ),

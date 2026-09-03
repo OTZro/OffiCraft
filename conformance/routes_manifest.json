@@ -925,13 +925,6 @@
   },
   {
     "auth": "gated",
-    "mcp_tool": "replace_task_artifact",
-    "method": "POST",
-    "path": "/api/tasks/{task_id}/artifact/{artifact_id}/replace",
-    "requires": "agent"
-  },
-  {
-    "auth": "gated",
     "mcp_tool": null,
     "method": "GET",
     "path": "/api/tasks/{task_id}/artifact/{artifact_id}/history",
@@ -1230,5 +1223,12 @@
     "method": "POST",
     "path": "/api/outsource-workers/{id}/force-stop",
     "requires": "admin_agent"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": "replace_task_artifact",
+    "method": "POST",
+    "path": "/api/tasks/{task_id}/artifact/{artifact_id}/replace",
+    "requires": "agent"
   }
 ]
