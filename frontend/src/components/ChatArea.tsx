@@ -264,7 +264,19 @@ type ChatSession = {
    * walk fetches for itself takes the reactor's 「有新訊息到了」 branch — the
    * preview strip announces a message a hundred rows back and the unread
    * divider re-anchors on it. So: a jump that starts fetching, and 回到最新,
-   * both end the previous walk. See `endForwardWalk`. */
+   * both end the previous walk. See `endForwardWalk`. 🔴 FOUR hand-over points
+   * clear it, and only THREE of them are pinned by an assertion — deleting the
+   * clear in the jump's DOM-hit branch, or the one in 回到最新, or the
+   * `movedUp > 1` half of the direction test, each reddens exactly one case.
+   * The other two are DELIBERATELY unpinned and this is the record of why, so
+   * the next reader does not mistake the sentence above for coverage: the clear
+   * taken before `loadAround` goes out is, once the miss branch also clears,
+   * a second line of defence over a window in which `loadNewer` cannot issue
+   * anything anyway (the anchor latch holds it); and the clear in the miss
+   * branch cannot be observed from this file's seams, because a miss leaves the
+   * thread unchanged and the next commit that could show it is driven by a
+   * scroll event that itself either re-arms or clears. Both were reached by
+   * READING, not by a red test. */
   forwardWalkArmed: boolean;
   /** The scrollTop the last scroll event was measured at — the ONLY way to tell
    * a reader who moved from a box that grew under one who did not (T-48).
@@ -1247,6 +1259,14 @@ export function ChatArea({
           // Only when the thread really is empty — a miss with history already
           // loaded still just lands where it always did.
           if (messages.length === 0) void resetToLatest();
+          // The FOURTH hand-over, and the one the sentence above used to be
+          // false about (F-A, 第十八輪): this line moves the viewport to the
+          // bottom, so it ends the walk exactly like the other three do. The
+          // clear at the top of this branch happened BEFORE `loadAround` went
+          // out; a reader who reached the bottom of the old window during those
+          // hundreds of milliseconds re-armed it (see the scroll handler), and
+          // the miss would then hand the viewport over with a live arm on it.
+          endForwardWalk();
           endRef.current?.scrollIntoView();
         });
       }

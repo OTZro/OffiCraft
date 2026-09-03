@@ -418,6 +418,34 @@ describe("ChatReplyCard", () => {
     expect(queryByPlaceholderText("輸入回覆…")).toBeNull();
   });
 
+  it("a WAITING-hinted card seeded with this session's own ANSWERED copy paints the answer in the FIRST frame (no mount-small-then-grow)", async () => {
+    // The other direction of the same disagreement: the seed is this session's
+    // own newer write (answered here, while the carrying message still says
+    // waiting). It is refetched, but it MUST still be painted — withholding it
+    // mounts the row at its collapsed height and grows it once the read lands,
+    // which is the +254px shift seeding exists to remove.
+    putReplyCard(
+      mkCard({
+        status: "answered",
+        answeredTs: Date.now() / 1000 - 60,
+        answer: { optionIdxs: [1], text: "", attachments: [] },
+      })
+    );
+    const getSpy = vi.spyOn(api, "getReplyCard");
+    getSpy.mockImplementation(() => new Promise(() => {}));
+
+    const { queryByTestId } = renderHinted("waiting");
+
+    expect(
+      queryByTestId("final-answer"),
+      "the settled seed was withheld, so the row mounts without a body and grows when the refetch lands (+254px)",
+    ).not.toBeNull();
+    expect(queryByTestId("final-answer")!.textContent).toBe(
+      "你選的AI 建議先不要",
+    );
+    expect(getSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("a collapsed ANSWERED-hinted card ignores an unrelated reply_card SSE delta WITHOUT fetching (seeded statusRef — T-cdf4 extended)", async () => {
     __injectMockReplyCard(
       mkCard({

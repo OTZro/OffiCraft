@@ -560,6 +560,163 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
     ).toBeNull();
   });
 
+  it("走廊還在走的時候跳到畫面上已經有的一則,走廊當場結束 —— 不准把讀的人一路拖回活尾巴", async () => {
+    // 🔴 F-A 的第三個清除點,而且是唯一一條只有它守得住的路(第十八輪 B-3)。
+    // 上一條(「上一趟走廊走完之後再跳一次」)是一條「或」型護欄:目標不在 DOM
+    // 裡,所以 `loadAround` 之前那一次清除、和視窗落地之後找到那一列的這一次
+    // 清除,兩者任何一個都夠 —— 實測拿掉其中任何一個,這個檔案照樣全綠。
+    // 這一條把目標挑在**已經握在手上的那一段**:根本不必抓,`loadAround` 那一支
+    // 清除點連跑都不會跑,只剩 `scrollIntoView` 前面那一次。
+    //
+    // 而且傷害是實的:跳轉發生在走廊**走到一半**,`hasNewer` 仍為真 —— 一個沒
+    // 清掉的 armed 會在下一頁落地時立刻續走,把剛剛才被放到 a80 的讀者一路拖
+    // 回 a199。
+    seed(A, "a", 200, 100);
+    // 進房的一對視窗是第 1、2 通;第 3 通是走廊的第一頁,第 4 通按住 ——
+    // 走廊就停在半路,跳轉在這個空檔發生。
+    holdWindowsFrom = 4;
+    const { container, rerender } = render(view(alice, "a100"));
+    await waitFor(() =>
+      expect(container.querySelector('[data-msg-id="a100"]')).not.toBeNull(),
+    );
+    const box = container.querySelector(".chat__messages")! as HTMLElement;
+    const ROW = 81;
+    const CH = 369;
+    Object.defineProperty(box, "clientHeight", { get: () => CH });
+    Object.defineProperty(box, "scrollHeight", {
+      get: () => box.querySelectorAll(".chat__msg").length * ROW,
+    });
+    box.scrollTop = box.scrollHeight - CH;
+    fireEvent.scroll(box);
+    await waitFor(() => expect(windowCalls.length).toBe(4));
+
+    // 跳到 a80 —— 進房那一頁就載進來的一列,還在 DOM 裡。
+    expect(container.querySelector('[data-msg-id="a80"]')).not.toBeNull();
+    rerender(view(alice, "a80"));
+    await waitFor(() =>
+      expect(scrolls.some((s) => s.on === "a80")).toBe(true),
+    );
+
+    // 放開被按住的那一頁 —— 它一落地就是自動連鎖重新評估的那一拍。
+    holdWindowsFrom = Infinity;
+    await act(async () => {
+      holdWindows?.();
+      holdWindows = null;
+      await new Promise((r) => setTimeout(r, 200));
+    });
+
+    expect(
+      windowCalls.length,
+      "跳轉已經把視窗交出去了,走廊不准再自己撈下一頁",
+    ).toBe(4);
+    expect(
+      bubbles(container),
+      "沒有人捲動,走廊不准把跳轉落點到活尾巴之間的每一頁都拉進 DOM",
+    ).not.toContain("a199");
+  });
+
+  it("走廊還在走的時候按下回到最新,走廊當場結束 —— 不准在活尾巴的請求後面繼續自己往前撈", async () => {
+    // 🔴 F-A 的第四個清除點,而它原本一支測試都沒有(第十八輪 B-4:把
+    // `jumpToLatest` 裡那一次清除拿掉,這個檔案全綠)。
+    //
+    // 傷害看得見:回到最新在 `hasNewer` 為真時是**先抓活尾巴**再落地,那一趟
+    // 是一個網路來回。這段空檔裡 `hasNewer` 還是真的,而走廊手上那一頁隨時會
+    // 落地 —— 一個沒清掉的 armed 於是在讀者已經說了「帶我去最新」之後,繼續
+    // 一頁一頁把中間的歷史撈進來,跟活尾巴那一頁搶同一條線。
+    seed(A, "a", 200, 100);
+    holdWindowsFrom = 4;
+    const { container } = render(view(alice, "a100"));
+    await waitFor(() =>
+      expect(container.querySelector('[data-msg-id="a100"]')).not.toBeNull(),
+    );
+    const box = container.querySelector(".chat__messages")! as HTMLElement;
+    const ROW = 81;
+    const CH = 369;
+    Object.defineProperty(box, "clientHeight", { get: () => CH });
+    Object.defineProperty(box, "scrollHeight", {
+      get: () => box.querySelectorAll(".chat__msg").length * ROW,
+    });
+    box.scrollTop = box.scrollHeight - CH;
+    fireEvent.scroll(box);
+    await waitFor(() => expect(windowCalls.length).toBe(4));
+
+    // 活尾巴那一頁按在空中 —— 這就是「回到最新已經按下去、但還沒落地」的那一格。
+    holdPlain = () => {};
+    const arrow = container.querySelector(
+      '[data-testid="chat-jump-latest"]',
+    ) as HTMLElement;
+    expect(arrow, "錨點視窗裡最新那一則不在畫面上,箭頭必須在").not.toBeNull();
+    fireEvent.click(arrow);
+
+    // 放開走廊按住的那一頁,讓自動連鎖有東西可以重新評估。
+    holdWindowsFrom = Infinity;
+    await act(async () => {
+      holdWindows?.();
+      holdWindows = null;
+      await new Promise((r) => setTimeout(r, 200));
+    });
+
+    expect(
+      windowCalls.length,
+      "回到最新就是走廊的終點,它按下去之後不准再多一頁往新的視窗請求",
+    ).toBe(4);
+
+    // 收尾:讓活尾巴那一頁落地,別把一個未完成的請求留給下一條測試。
+    await act(async () => {
+      holdPlain?.();
+      holdPlain = null;
+      await new Promise((r) => setTimeout(r, 0));
+    });
+  });
+
+  it("走廊走到一半、上方的內容長高把底部推遠時,不准當成「人往回捲」而靜靜停掉", async () => {
+    // 🔴 上一條(縮短)的鏡像,而且它是 `8af92bca` 在治的那個病本人(第十八輪
+    // B-8:把停手判準裡「畫面確實往上走」那一半拿掉、只留下高度差那一半,這個
+    // 檔案全綠 —— 沒有任何東西釘住它)。
+    //
+    // 停手的判準是兩件事的合取:畫面**往上走**了,而且那一段不是箱子自己變矮
+    // 造成的。少了前一半,任何「箱子變高」都會被算成一段等量的「人往回捲」:
+    // 貼一頁 / 圖片解碼完 / 卡片展開讓 `scrollHeight` 長高 2400,而讀的人一根
+    // 手指都沒動,`movedUp - shrank` 就是 +2400 —— 走廊當場被誤判成「人走了」而
+    // 停手。停在半路、沒有 spinner、沒有結束標記(CI run 33794983804,rows
+    // 32 → 61 之後靜止)。
+    seed(A, "a", 200, 100);
+    holdWindowsFrom = 4;
+    const { container } = render(view(alice, "a100"));
+    await waitFor(() =>
+      expect(container.querySelector('[data-msg-id="a100"]')).not.toBeNull(),
+    );
+    const box = container.querySelector(".chat__messages")! as HTMLElement;
+    const ROW = 81;
+    const CH = 369;
+    // 上方長出來的高度,由測試自己控制 —— 就是那張卡片展開的那幾百 px。
+    let grown = 0;
+    Object.defineProperty(box, "clientHeight", { get: () => CH });
+    Object.defineProperty(box, "scrollHeight", {
+      get: () => box.querySelectorAll(".chat__msg").length * ROW + grown,
+    });
+    // 人捲到底 —— 走廊從這裡起跑,而且從此不再有任何人為的捲動。
+    box.scrollTop = box.scrollHeight - CH;
+    fireEvent.scroll(box);
+    await waitFor(() => expect(windowCalls.length).toBe(4));
+
+    // 第一頁已經貼在視窗下方 ⇒ 人離底部一個螢幕以上(補不回來的那一格)。
+    // 此刻上方長高 2400,而 `scrollTop` 一動也不動。
+    grown = 2400;
+    fireEvent.scroll(box);
+
+    // 放開被按住的那一頁,讓連鎖有東西可以重新評估。
+    holdWindowsFrom = Infinity;
+    await act(async () => {
+      holdWindows?.();
+      holdWindows = null;
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // 走廊照樣走得完 —— 沒有人往回捲過。
+    await waitFor(() => expect(bubbles(container)).toContain("a199"));
+  });
+
   it("走廊走到一半、上方的內容縮短把畫面往回拉時,不准當成「人往回捲」而靜靜停掉", async () => {
     // 🟠 F-C(獨立審查第四輪;他標明這是推理、沒有重現 —— 這條測試把它變成量得
     // 到的)。停的訊號是方向,但 `scrollTop` 變小不是只有人做得到:視窗**上方**

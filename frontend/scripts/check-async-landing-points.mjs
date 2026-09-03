@@ -893,9 +893,13 @@ function importedFrom(decl) {
  * `threadTypeProbe`). The anchor is therefore the MODULE SPECIFIER `"react"`
  * plus the EXPORTED name, both read off the import that declared the binding.
  * A hook re-exported through a local barrel is out of reach that way, and so is
- * a call whose callee resolves to nothing at all — for the latter the old
- * literal test stays on as a floor, because losing coverage is the one
- * direction this rule may not move in. */
+ * a call whose callee resolves to nothing at all — so the old literal name test
+ * stays on as a floor, ORed with the resolution rather than reached only when
+ * nothing resolved, because losing coverage is the one direction this rule may
+ * not move in. A barrel import resolves to a declaration, just not one of the
+ * recognised ones, and it was the `decls.length === 0` shape of this floor that
+ * let `export { useState } from "react"` through (measured: old script rc=1,
+ * new rc=0 on the same tree). */
 function reactHookOf(callee, checker, depth = 0) {
   if (depth > 8) return null;
   if (ts.isPropertyAccessExpression(callee)) {
@@ -915,11 +919,6 @@ function reactHookOf(callee, checker, depth = 0) {
   }
   if (!ts.isIdentifier(callee)) return null;
   const decls = checker.getSymbolAtLocation(callee)?.getDeclarations?.() ?? [];
-  // Resolved to nothing (a global, an unresolvable module). Fall back to the
-  // name — over-approximating is the safe direction, and this is exactly the
-  // set the rule already covered before it learned to resolve anything.
-  if (decls.length === 0)
-    return REACT_HOOKS.test(callee.text) ? callee.text : null;
   for (const d of decls) {
     if (ts.isImportSpecifier(d)) {
       // `import { useState as useStore }` — `propertyName` is `useState`.
@@ -933,7 +932,12 @@ function reactHookOf(callee, checker, depth = 0) {
       if (via) return via;
     }
   }
-  return null;
+  // THE FLOOR, and it is an OR — not a fallback for `decls.length === 0`. A
+  // callee that resolves to a declaration this function does not recognise (a
+  // local re-export barrel, a global, an unresolvable module) still fires on
+  // its NAME, because that is the set the rule covered before it learned to
+  // resolve anything, and losing coverage is the one direction it may not move.
+  return REACT_HOOKS.test(callee.text) ? callee.text : null;
 }
 
 /** How many callees rule 7 resolved to a React hook over the whole walk. Zero
@@ -1598,7 +1602,7 @@ for (const file of files) {
   if (hits.length > 0 && where !== THREAD_STATE_OWNER) {
     problems.push(
       `${where} declares the chat thread's own state (${hits.join(", ")}).\n  Only ${THREAD_STATE_OWNER} may hold it. Every write to the thread must go through its commit / mergeHistory / clear doors, because those are what await the page's WAITING reply cards before the rows reach the view — a second setter is a second way to paint messages whose cards are still in the air, and the scroll target then moves under the reader (measured +254px at 1280).\n  Both halves are RESOLVED, not spelled. The shape is asked of the TYPE CHECKER (identity against \`ChatMessage\` in src/api/adapter.ts), so no annotation, an inferred literal, an alias or an import rename makes no difference; the callee is resolved back to the import that declared it, so \`React.useState(x)\`, \`const us = useState; us(x)\` and \`import { useState as useStore }\` all fire (measured).
-  IT DOES NOT FIRE ON, and this list is exhaustive: (1) a thread whose messages are not \`ChatMessage\` — a locally redeclared twin, \`unknown[]\`; (2) a thread whose property is not literally named \`messages\` (\`{ rows: ChatMessage[] }\` passes); (3) a React hook reached through a local re-export barrel — the callee is anchored on the module specifier "react" plus the exported name, not on symbol identity with @types/react, because this script must run over a tree with no node_modules. See declaresThreadState for why each anchor is where it is.`,
+  IT DOES NOT FIRE ON, and this list is exhaustive: (1) a thread whose messages are not \`ChatMessage\` — a locally redeclared twin, \`unknown[]\`; (2) a thread whose property is not literally named \`messages\` (\`{ rows: ChatMessage[] }\` passes); (3) a React hook reached through a local re-export barrel AND renamed on the way (\`useState\` re-exported as \`useStore\`) — the resolved anchor is the module specifier "react" plus the exported name, not symbol identity with @types/react, because this script must run over a tree with no node_modules, and a barrel is out of that anchor's reach; the barrel keeping the hook's own name still fires, on the literal-name floor the resolution is ORed with. See declaresThreadState for why each anchor is where it is.`,
     );
   }
 }

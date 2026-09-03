@@ -11,6 +11,7 @@ import { execFileSync } from "node:child_process";
 import {
   cpSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -351,6 +352,38 @@ describe("check-async-landing-points", () => {
     expect(out).toContain("hooks/useChat.ts declares the chat thread's own state");
   });
 
+  // 🔴 THE FLOOR UNDER THE RESOLUTION (independent review A-1). A barrel that
+  // re-exports the hook under its own name resolves to a declaration rule 7
+  // does not recognise — not to nothing — so a floor that only ran when
+  // NOTHING resolved left this second setter green, while the literal test it
+  // replaced reddened it. The floor is ORed with the resolution for that.
+  it("reddens on a second thread state reached through a local re-export barrel", () => {
+    const { code, out } = run((edit, src) => {
+      writeFileSync(
+        join(src, "hooks", "reactCompat.ts"),
+        'export { useState } from "react";\n',
+      );
+      edit("hooks/useChat.ts", (code) =>
+        code
+          .replace(
+            'import { useCallback, useEffect, useRef, useState } from "react";',
+            'import { useCallback, useEffect, useRef } from "react";\n' +
+              'import { useState } from "./reactCompat";',
+          )
+          .replace(
+            AFTER,
+            AFTER +
+              "\n" +
+              SECOND_THREAD +
+              "  const [xthread, setXThread] = useState(EMPTY2);\n" +
+              "  void xthread; void setXThread;",
+          ),
+      );
+    });
+    expect(code, out).not.toBe(0);
+    expect(out).toContain("hooks/useChat.ts declares the chat thread's own state");
+  });
+
   // 🟠 THE RESIDUE, ASSERTED AS A RESIDUE. Renaming the property is the one of
   // review F-D's four spellings that still passes, and it passes ON PURPOSE:
   // firing on any property that holds ChatMessage[] would redden every list in
@@ -371,6 +404,33 @@ describe("check-async-landing-points", () => {
     );
     expect(code, out).toBe(0);
     expect(out).toContain("[async-landing] ok");
+  });
+
+  // 🟠 THE CALLEE HALF, ASSERTED AS NON-VACUOUS. `reactHookOf` returning null
+  // everywhere leaves rule 7 matching no call site at all, and a rule matching
+  // nothing passes every file — which is how the hand-maintained list this
+  // census replaced used to die. Rename every hook in the tree and the script
+  // must say so rather than print ok.
+  it("reddens when no callee in the walk resolves to a React hook, instead of passing that half vacuously", () => {
+    const { code, out } = run((_edit, src) => {
+      const renameHooks = (dir: string) => {
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          const p = join(dir, entry.name);
+          if (entry.isDirectory()) renameHooks(p);
+          else if (/\.tsx?$/.test(entry.name))
+            writeFileSync(
+              p,
+              readFileSync(p, "utf8").replace(
+                /\buse(State|Reducer|Ref)\b/g,
+                "useZ$1",
+              ),
+            );
+        }
+      };
+      renameHooks(src);
+    });
+    expect(code, out).not.toBe(0);
+    expect(out).toContain("rule 7 resolved NO callee anywhere in the walk");
   });
 
   it("reddens when a SECOND component calls useQuotedMessageOverlay (R14-1.6)", () => {
