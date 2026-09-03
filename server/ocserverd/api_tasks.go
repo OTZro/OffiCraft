@@ -871,7 +871,8 @@ func (s *apiServer) resumeTasksFor(actor string, cards map[string]ReplyCard) ([]
 		if err != nil {
 			return nil, 0, err
 		}
-		currentID, currentName := "", ""
+		// current step: the shared rule (domain.CurrentStep), not a local copy.
+		currentID, currentName := CurrentStep(steps)
 		detailChars := 0
 		answered := []resumeAnsweredCardStepDTO{}
 		for _, st := range steps {
@@ -889,11 +890,6 @@ func (s *apiServer) resumeTasksFor(actor string, cards map[string]ReplyCard) ([]
 						CardID:   st.ReplyCardID,
 					})
 				}
-			}
-			// current = the first non-TERMINAL step: a superseded row is
-			// frozen replan history, never the working node (T-1aea).
-			if currentID == "" && !StepIsTerminal(st.Status) {
-				currentID, currentName = st.ID, st.Name
 			}
 			detailChars += len([]rune(st.Name)) + len([]rune(st.DoD))
 		}
@@ -999,6 +995,14 @@ func (s *apiServer) HandleListTasksApiTasksGet(w http.ResponseWriter, r *http.Re
 		internalError(w, err)
 		return
 	}
+	// The current-step pointer (id + name only) — a second grouped query, NOT a
+	// per-task ListTaskSteps: this endpoint is uncapped, so the step read has to
+	// cost one statement for the whole population. dod text stays out.
+	currentByTask, err := s.dal.AllTaskCurrentStep()
+	if err != nil {
+		internalError(w, err)
+		return
+	}
 	depsByTask, err := s.dal.AllTaskDeps()
 	if err != nil {
 		internalError(w, err)
@@ -1042,7 +1046,8 @@ func (s *apiServer) HandleListTasksApiTasksGet(w http.ResponseWriter, r *http.Re
 		}
 		p := progressByTask[t.ID]
 		out = append(out, newTaskListItemDTO(
-			t, depsByTask[t.ID], p.Done, p.Total, artifactCountByTask[t.ID], byID))
+			t, depsByTask[t.ID], p.Done, p.Total, artifactCountByTask[t.ID], byID,
+			currentByTask[t.ID]))
 	}
 	writeJSON(w, http.StatusOK, out)
 }

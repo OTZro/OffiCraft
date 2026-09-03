@@ -1717,6 +1717,16 @@ type taskListItemDTO struct {
 	DepTasks      []taskDepRefDTO `json:"dep_tasks"`
 	ProgressDone  int             `json:"progress_done"`
 	ProgressTotal int             `json:"progress_total"`
+	// CurrentStepID / CurrentStepName point at the step the task is ON right
+	// now — the FIRST non-terminal step in timeline order (domain.CurrentStep,
+	// the same rule the wake snapshot's resumeTaskDTO uses). Both are "" when
+	// the plan is empty or every step has finished; that empty is honest and
+	// must not be read as "the first step". CurrentStepID is the key into the
+	// single-step read, so a list row no longer needs a get_task round trip
+	// just to say what is being worked on. The light list still carries no step
+	// ROWS (no dod text) — only these two display fields.
+	CurrentStepID   string `json:"current_step_id"`
+	CurrentStepName string `json:"current_step_name"`
 	// ArtifactCount is the number of pinned deliverables (T-3dc5) — the collapsed
 	// card's 「產物 N」 badge; 0 (the zero value) when none, so the badge hides.
 	// The light list never loads the artifact rows themselves (get_task folds
@@ -2154,8 +2164,10 @@ func newTaskArtifactDTO(a TaskArtifact, att *ChatAttachment) taskArtifactDTO {
 }
 
 // newTaskListItemDTO projects one task + its deps + pre-counted step progress
-// onto the LIGHT list wire (GET /api/tasks). done/total come from
-// dal.AllTaskStepProgress (a grouped COUNT) so the list never loads step rows;
+// + its pre-resolved current step onto the LIGHT list wire (GET /api/tasks).
+// done/total come from dal.AllTaskStepProgress (a grouped COUNT) and current
+// from dal.AllTaskCurrentStep (one grouped window query, id/name only), so the
+// list still never loads step rows;
 // closed_ts serialises null while open, exactly like newTaskDTO.
 //
 // byID is the caller's map of the WHOLE task population (the handler builds it
@@ -2167,6 +2179,7 @@ func newTaskArtifactDTO(a TaskArtifact, att *ChatAttachment) taskArtifactDTO {
 // cost zero extra queries (T-a3e4).
 func newTaskListItemDTO(
 	t Task, deps []string, done, total, artifactCount int, byID map[string]Task,
+	current TaskCurrentStep,
 ) taskListItemDTO {
 	if deps == nil {
 		deps = []string{}
@@ -2194,6 +2207,11 @@ func newTaskListItemDTO(
 		DepTasks:           newTaskDepRefDTOs(deps, byID),
 		ProgressDone:       done,
 		ProgressTotal:      total,
+		// current comes from dal.AllTaskCurrentStep (one grouped query for the
+		// whole population) — its zero value IS "no current step", which is the
+		// right answer for an empty or fully-finished plan.
+		CurrentStepID:   current.ID,
+		CurrentStepName: current.Name,
 	}
 	if t.ClosedTS > 0 {
 		ts := t.ClosedTS

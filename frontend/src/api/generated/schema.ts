@@ -3617,8 +3617,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List tasks (?executor=&type=&status=, or statuses=[…] for a SET of states — every filter given is ANDed; LIGHT list items — id/task_no/title/type_key/status/priority/executor/creator_id/progress/timestamps/deps + dep_tasks, WITHOUT steps/description/inputs). Ask for the states you actually want (`statuses: ["not_started", "in_progress"]`) instead of listing everything and filtering yourself — the whole history is a large answer. `statuses` also accepts "reassigning", which matches the handover LOCK rather than the status column. `dep_tasks` already carries each blocker's task_no/title/status, so a blocked task needs no follow-up get_task just to name what it is waiting for. Call get_task for a task's full detail (steps, description, inputs).
-         * @description List tasks (LIGHT ``TaskListItemDTO`` projection — the fields the 任務清單 card renders collapsed; ``steps``/``description``/``inputs`` are NOT included, fetch the full task with ``GET /api/tasks/{task_id}``). ``progress_done``/``progress_total`` are still counted. Optional exact-match filters: ``?executor=`` (an executor id, or the special values ``outsource`` / ``unassigned``), ``?type=`` (a type_key), ``?status=`` (the six-state closed set; anything else is a 400). ``?statuses=`` (repeatable, T-a3e4) is the SET form the cockpit's 狀態 dropdown speaks — see its own description. Every filter present is ANDed. Partitioning (未結束/已結束) and priority ordering are the FE's.
+         * List tasks (?executor=&type=&status=, or statuses=[…] for a SET of states — every filter given is ANDed; LIGHT list items — id/task_no/title/type_key/status/priority/executor/creator_id/progress/timestamps/deps + dep_tasks + current_step_id/current_step_name, WITHOUT steps/description/inputs). Ask for the states you actually want (`statuses: ["not_started", "in_progress"]`) instead of listing everything and filtering yourself — the whole history is a large answer. `statuses` also accepts "reassigning", which matches the handover LOCK rather than the status column. `dep_tasks` already carries each blocker's task_no/title/status, so a blocked task needs no follow-up get_task just to name what it is waiting for. `current_step_id`/`current_step_name` name the step each task is ON right now: the FIRST step in plan order that is neither done nor superseded — the same step the wake snapshot points at. BOTH ARE THE EMPTY STRING in exactly two cases — the task has no plan yet (no steps at all), or every step has finished — and that empty means THERE IS NO CURRENT STEP; never read it as "the first step". `current_step_id` is the key the per-step calls take (update_step_status, update_step_note, patch_step_note), so acting on the step being worked on no longer needs a get_task round trip just to learn its id. The list still carries NO step rows (no dod text) — only those two fields; call get_task for a task's full detail (steps, description, inputs).
+         * @description List tasks (LIGHT ``TaskListItemDTO`` projection — the fields the 任務清單 card renders collapsed; ``steps``/``description``/``inputs`` are NOT included, fetch the full task with ``GET /api/tasks/{task_id}``). ``progress_done``/``progress_total`` are still counted, and so are ``current_step_id``/``current_step_name`` — the step each task is on right now (the first step that is neither done nor superseded; both are "" when the plan is empty or every step has finished), resolved in ONE grouped query, id and name only, never the step rows. Optional exact-match filters: ``?executor=`` (an executor id, or the special values ``outsource`` / ``unassigned``), ``?type=`` (a type_key), ``?status=`` (the six-state closed set; anything else is a 400). ``?statuses=`` (repeatable, T-a3e4) is the SET form the cockpit's 狀態 dropdown speaks — see its own description. Every filter present is ANDed. Partitioning (未結束/已結束) and priority ordering are the FE's.
          */
         get: operations["handle_list_tasks_api_tasks_get"];
         put?: never;
@@ -8985,7 +8985,7 @@ export interface components {
         };
         /**
          * TaskListItemDTO
-         * @description One task in the LIGHT list projection (``GET /api/tasks`` / MCP ``list_tasks``): the fields the 任務清單 card needs to render collapsed. Drops the heavy per-task detail (``steps``, ``description``, ``inputs``) which the list never shows collapsed — fetch the full ``TaskDTO`` with ``GET /api/tasks/{task_id}`` (MCP ``get_task``) to read those. ``progress_done``/``progress_total`` are still counted (from step leaves) so the card's progress bar renders without the steps payload. ``creator_id`` is the verified token sub of the task's creator (a member id, an outsource worker id, or the literal "owner"); "" on rows created before the column existed.
+         * @description One task in the LIGHT list projection (``GET /api/tasks`` / MCP ``list_tasks``): the fields the 任務清單 card needs to render collapsed. Drops the heavy per-task detail (``steps``, ``description``, ``inputs``) which the list never shows collapsed — fetch the full ``TaskDTO`` with ``GET /api/tasks/{task_id}`` (MCP ``get_task``) to read those. ``progress_done``/``progress_total`` are still counted (from step leaves) so the card's progress bar renders without the steps payload. ``current_step_id``/``current_step_name`` are the same kind of pre-resolved summary — the step the task is on right now, resolved server-side in ONE grouped query over the whole population (never a per-task step read), carrying only the step's id and name and never its ``dod``. ``creator_id`` is the verified token sub of the task's creator (a member id, an outsource worker id, or the literal "owner"); "" on rows created before the column existed.
          */
         TaskListItemDTO: {
             /**
@@ -9005,6 +9005,18 @@ export interface components {
              * @default
              */
             creator_id: string;
+            /**
+             * Current Step Id
+             * @description The id of the step the task is ON right now: the FIRST step, in plan order (``order_idx``, then ``id``), that is neither ``done`` nor ``superseded`` — the same rule ``ResumeTaskDTO.current_step_id`` (the wake snapshot) follows, so the list and the snapshot can never disagree about which node is being worked on. "" in exactly two cases: the task has NO steps at all (nothing planned yet), or every step has reached a terminal state. That empty means THERE IS NO CURRENT STEP and must not be laundered into the first step of the plan. It is the id the per-step calls take (``POST /api/tasks/{task_id}/steps/{step_id}/status`` and the note writes), which is why the light list can carry it without carrying step ROWS: the caller gets the address without the ``dod`` text. additive-optional.
+             * @default
+             */
+            current_step_id: string;
+            /**
+             * Current Step Name
+             * @description The ``name`` of the step ``current_step_id`` points at — the display half of the same pointer, so the collapsed card can print 「目前:<步驟名>」 without a follow-up ``get_task``. "" exactly when ``current_step_id`` is "" (empty plan, or every step finished); the two are always empty or non-empty together. additive-optional.
+             * @default
+             */
+            current_step_name: string;
             /**
              * Dedupe Key
              * @default
