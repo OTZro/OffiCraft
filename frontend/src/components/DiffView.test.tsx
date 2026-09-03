@@ -388,4 +388,35 @@ describe("DiffView", () => {
     // Order matters: clicking the RED heading must not open the green side.
     expect(opened).toEqual(["before", "after"]);
   });
+  /* Controlled means the HOST decides: the click is reported, and nothing moves
+   * until the host says so.
+   *
+   * MUTANTS, both run: making the component read its own state INSTEAD of the
+   * prop (and keep writing it) goes red here — `expected 'split' to be
+   * 'unified'`. Leaving the stray local write in place ON ITS OWN does NOT, and
+   * that is worth stating rather than hiding: while the prop is supplied the
+   * shadow copy is never read, so it is a shape problem, not an observable one.
+   * This guard pins what a reader can see. */
+  it("does not change layout on its own while the host controls the mode", () => {
+    const seen: string[] = [];
+    const { getByTestId, container } = render(
+      <I18nProvider>
+        <DiffView
+          before={"alpha\nbravo"}
+          after={"alpha\nBRAVO"}
+          mode="unified"
+          onModeChange={(m) => seen.push(m)}
+        />
+      </I18nProvider>
+    );
+
+    fireEvent.click(getByTestId("diff-view-mode-split"));
+    // The host heard about it…
+    expect(seen).toEqual(["split"]);
+    // …and nothing moved until the host says so.
+    expect(container.querySelector(".diff-view")?.getAttribute("data-mode")).toBe(
+      "unified"
+    );
+    expect(container.querySelector(".diff-view__row--split")).toBeNull();
+  });
 });

@@ -328,8 +328,6 @@ export function MarkdownPreviewOverlay({
     setDiffPair(null);
     setFailed(false);
     setDiffSideGone(false);
-    setDiffSide(null);
-    setDiffMode("unified");
     // encodeURIComponent, not concatenation: the id is data the pair carries,
     // and a blob stored before the server started checking the id's SHAPE can
     // still hold "att-/../../api/version". Concatenated, the browser normalises
@@ -769,7 +767,27 @@ export function MarkdownPreviewOverlay({
   // layer for exactly its lifetime; whatever opened it (a popover, a gallery,
   // a chat thread) sits below and does not see the key.
   const rootRef = useRef<HTMLDivElement>(null);
-  useEscapeLayer(onClose, rootRef);
+  /* Esc follows the same way out the 「回到比較」 button offers: one side open
+   * means Esc goes BACK to the comparison, not out of the overlay. The css note
+   * beside that button says closing would make the reader re-open the
+   * attachment and find their layout again — a keyboard user was getting
+   * exactly that. */
+  useEscapeLayer(() => {
+    if (diffSide !== null) setDiffSide(null);
+    else onClose();
+  }, rootRef);
+
+  /* The reader's CHOICES (which side is open, which layout) reset only when the
+   * attachment being read actually changes — deliberately a different effect
+   * from the one that fetches the pair, whose deps include `t`. `t` changes
+   * identity on a language or theme switch, so resetting there would throw a
+   * reader out of 兩欄對照 (and out of a side they were reading) for changing
+   * the UI language: the same "the control I pressed un-pressed itself"
+   * this whole round is about. */
+  useEffect(() => {
+    setDiffSide(null);
+    setDiffMode("unified");
+  }, [diff, url]);
 
   // 🔴 A DIALOG THE KEYBOARD NEVER ENTERS IS NOT A DIALOG. Measured before this
   // existed: open the overlay from any of its three entry points and

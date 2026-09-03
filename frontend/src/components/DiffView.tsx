@@ -165,8 +165,12 @@ export function DiffView({
   const { t, msg } = useI18n();
   const [uncontrolledMode, setUncontrolledMode] = useState<DiffMode>("unified");
   const mode = modeProp ?? uncontrolledMode;
+  /* Controlled means CONTROLLED: when the host owns `mode`, this writes nothing
+   * of its own. Keeping a shadow copy would leave two answers to "which layout
+   * am I in" that agree only while the host happens to echo every change back —
+   * exactly the half-truth this component is being fixed for. */
   const setMode = (next: DiffMode) => {
-    setUncontrolledMode(next);
+    if (modeProp === undefined) setUncontrolledMode(next);
     onModeChange?.(next);
   };
   const { maxLines } = options ?? {};
@@ -333,9 +337,7 @@ export function DiffView({
           ))}
         </div>
       </div>
-      <div
-        className={`diff-view__scroll${mode === "split" ? " diff-view__scroll--split" : ""}`}
-      >
+      <div className="diff-view__scroll">
         <table
           className={`diff-view__table${mode === "split" ? " diff-view__table--split" : ""}`}
           aria-label={t.diff.ariaLabel}

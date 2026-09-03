@@ -236,8 +236,21 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.diff-view__scroll--split {
-  overflow-x: hidden;
+/* 🔴 NOT `overflow-x: hidden`, and the difference is a phone.
+ *
+ * `table-layout: fixed` makes the two halves share the panel, but the four
+ * gutters are fixed at ~152px together — so on a 240px box the two text columns
+ * get 21px each, and hiding the overflow would leave the reader pressed against
+ * an unreadable screen with no way out. That is the SAME failure this fix is
+ * for (a 兩欄對照 that cannot be read), delivered by squeezing instead of by
+ * pushing off-screen, and it would break the rule this repo already wrote for
+ * itself: when the table is wider than its box, scrolling that box must
+ * actually move it.
+ *
+ * So: the columns get a floor, and below that floor the panel scrolls. Wide
+ * screens never reach the floor and see no scrollbar at all. */
+.diff-view__table--split {
+  min-width: 36em;
 }
 
 /* A side heading that CAN be opened on its own is a real button. It keeps the

@@ -210,3 +210,30 @@ test("returning from a side keeps the comparison layout the reader chose", async
 
   await expect(page.getByTestId("md-preview-diff")).toHaveAttribute("data-mode", "split");
 });
+
+/* Esc offers the SAME way out the 「回到比較」 button does. The stylesheet beside
+ * that button already argues why closing is wrong here — the reader would have
+ * to re-open the attachment and find their layout again — and a keyboard user
+ * was getting exactly that, because Esc went straight to onClose.
+ *
+ * MUTANT (run, verified red): put `onClose` back as the bare Esc handler → the
+ * single-side pane stays open and the comparison never comes back. */
+test("Esc from a single side goes BACK to the comparison, not out", async ({
+  mount,
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.route("**/api/chat/attachment/**", (route) => {
+    const url = route.request().url();
+    const body = url.includes("att-0123456789ab") ? BEFORE : AFTER;
+    return route.fulfill({ status: 200, contentType: "text/plain", body });
+  });
+
+  await mount(<DiffAttachmentOverlayStory />);
+  await page.getByTestId("diff-view-side-before").click();
+  await expect(page.getByTestId("md-preview-diff-side")).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("md-preview-diff")).toBeVisible();
+  await expect(page.getByTestId("md-preview-diff-side")).toHaveCount(0);
+});
