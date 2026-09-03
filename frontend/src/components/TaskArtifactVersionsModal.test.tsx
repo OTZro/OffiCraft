@@ -7,11 +7,12 @@
 // opens, never a row this client was already holding — the stale-cache case
 // below hands the two different content and requires the server's to win.
 //
-// The rest pins the three shapes a "difference" takes, because they are three
-// different screens rather than one screen with holes: two texts go to the
-// shared DiffView, a link prints its old and new url, and anything else becomes
-// a 前/後 toggle over one viewing area. A non-text response is never read as
-// text — the body is dropped unread.
+// The 差異 option now exists ONLY for two texts (owner 2026-09-03,
+// c-5d9766b7f0a0: 「好像只有文字檔需要有差異那個選項」), so the rest of this file
+// pins two separate things: that a text pair — including the octet-stream .md
+// report the mime alone would call opaque — really reaches the shared DiffView,
+// and that the 內容 pane still shows every other kind what it always showed.
+// A non-text response is still never read as text — the body is dropped unread.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
@@ -163,15 +164,21 @@ describe("TaskArtifactVersionsModal", () => {
     expect(mockedApi.getTask).toHaveBeenCalledWith("t-1");
   });
 
-  it("says the artifact is gone rather than diffing against the last thing it knew", async () => {
+  // The artifact was un-pinned from another surface while this was opening, so
+  // there is no 「目前版本」 to read. The retained version is still readable; the
+  // current row says out loud that it is gone rather than showing the last thing
+  // this client happened to know.
+  it("says the current version is gone while still reading the retained one", async () => {
     mockedApi.listTaskArtifactVersions.mockResolvedValue([mkVersion({})]);
     mockedApi.getTask.mockResolvedValue(mkTask([]));
     stubFetch({ "/api/chat/attachment/att-old": { mime: "text/plain", text: "one\n" } });
     openModal();
 
-    fireEvent.click(await screen.findByTestId("ta-versions-pane-diff"));
-    await waitFor(() => expect(screen.getByTestId("ta-versions-unpinned")).toBeTruthy());
-    expect(screen.queryByTestId("ta-versions-diff")).toBeNull();
+    await waitFor(() =>
+      expect(screen.getByTestId("ta-versions-content-text").textContent).toBe("one\n"),
+    );
+    fireEvent.click(screen.getByTestId("ta-versions-row-live"));
+    expect(screen.getByTestId("ta-versions-unpinned")).toBeTruthy();
   });
 
   it("compares two text files through the shared DiffView", async () => {
@@ -294,7 +301,7 @@ describe("TaskArtifactVersionsModal", () => {
 
   // The other side of the same rule: the fallback is a CLOSED list of textual
   // extensions, not "octet-stream means try reading it".
-  it("still reads no bytes for an octet-stream .bin the name cannot vouch for", async () => {
+  it("calls an octet-stream .bin opaque and reads none of its bytes", async () => {
     mockedApi.listTaskArtifactVersions.mockResolvedValue([
       mkVersion({ label: "core.bin", filename: "" }),
     ]);
@@ -307,15 +314,12 @@ describe("TaskArtifactVersionsModal", () => {
     });
     openModal();
 
-    fireEvent.click(await screen.findByTestId("ta-versions-pane-diff"));
-    await waitFor(() => expect(screen.getByTestId("ta-versions-diff-sides")).toBeTruthy());
-    expect(screen.getByTestId("ta-versions-before-opaque")).toBeTruthy();
-    expect(screen.queryByTestId("ta-versions-diff")).toBeNull();
+    await waitFor(() => expect(screen.getByTestId("ta-versions-content-opaque")).toBeTruthy());
     expect(readText).not.toHaveBeenCalled();
     expect(cancel).toHaveBeenCalled();
   });
 
-  it("prints the old url and the new one for a link artifact", async () => {
+  it("shows a link version's own url and fetches nothing to do it", async () => {
     mockedApi.listTaskArtifactVersions.mockResolvedValue([
       mkVersion({ kind: "link", url: "https://x/pr/1", filename: "", attachmentId: "" }),
     ]);
@@ -333,41 +337,32 @@ describe("TaskArtifactVersionsModal", () => {
     const { cancel } = stubFetch({});
     openModal();
 
-    fireEvent.click(await screen.findByTestId("ta-versions-pane-diff"));
-    await waitFor(() => expect(screen.getByTestId("ta-versions-diff-urls")).toBeTruthy());
-    expect(screen.getByTestId("ta-versions-before-link").textContent).toBe("https://x/pr/1");
-    expect(screen.getByTestId("ta-versions-after-link").textContent).toBe("https://x/pr/2");
+    await waitFor(() =>
+      expect(screen.getByTestId("ta-versions-content-link").textContent).toBe("https://x/pr/1"),
+    );
+    fireEvent.click(screen.getByTestId("ta-versions-row-live"));
+    await waitFor(() =>
+      expect(screen.getByTestId("ta-versions-content-link").textContent).toBe("https://x/pr/2"),
+    );
     // A link is not a blob: nothing was fetched to answer this.
     expect(globalThis.fetch).not.toHaveBeenCalled();
     expect(cancel).not.toHaveBeenCalled();
   });
 
-  it("gives a non-text file a before/after toggle and never reads its bytes as text", async () => {
-    mockedApi.listTaskArtifactVersions.mockResolvedValue([
-      mkVersion({ label: "report.pdf", filename: "report.pdf" }),
-    ]);
-    mockedApi.getTask.mockResolvedValue(
-      mkTask([mkArtifact({ label: "report.pdf", filename: "report.pdf" })]),
-    );
-    const { cancel, readText } = stubFetch({
-      "/api/chat/attachment/att-old": { mime: "application/pdf" },
-      "/api/chat/attachment/att-live": { mime: "application/pdf" },
-    });
-    openModal();
+  // DELETED: the 前/後 toggle over one viewing area, which this file used to
+  // exercise with a pair of application/pdf versions. The toggle no longer
+  // exists, and nothing was written in its place.
+  //
+  // 🔴 WHAT IS NOW UNGUARDED, so nobody reads the file above and assumes
+  // otherwise: an `application/pdf` pair reaching the 差異 tab again — because
+  // someone widened `diffable` past "both sides read as text", or dropped one
+  // side's half of that test — would not redden anything here. Neither would
+  // that pair losing its 內容-pane 「無法顯示」 notice, or its bytes being
+  // downloaded to be thrown away, for a mime the RESPONSE (not the name) calls
+  // non-text: the .bin case above only covers the name-cannot-vouch half of
+  // that rule, and no case covers the mime half.
 
-    fireEvent.click(await screen.findByTestId("ta-versions-pane-diff"));
-    await waitFor(() => expect(screen.getByTestId("ta-versions-diff-sides")).toBeTruthy());
-    expect(screen.getByTestId("ta-versions-before-opaque")).toBeTruthy();
-    expect(screen.queryByTestId("ta-versions-diff")).toBeNull();
-
-    fireEvent.click(screen.getByTestId("ta-versions-side-after"));
-    expect(screen.getByTestId("ta-versions-after-opaque")).toBeTruthy();
-
-    expect(readText).not.toHaveBeenCalled();
-    expect(cancel).toHaveBeenCalled();
-  });
-
-  it("shows an image version as an image on both sides of the toggle", async () => {
+  it("shows each image version under its own src", async () => {
     mockedApi.listTaskArtifactVersions.mockResolvedValue([
       mkVersion({ kind: "image", url: "/api/chat/attachment/att-shot1", filename: "shot1.png" }),
     ]);
@@ -384,12 +379,17 @@ describe("TaskArtifactVersionsModal", () => {
     stubFetch({});
     openModal();
 
-    fireEvent.click(await screen.findByTestId("ta-versions-pane-diff"));
-    await waitFor(() => expect(screen.getByTestId("ta-versions-before-image")).toBeTruthy());
-    fireEvent.click(screen.getByTestId("ta-versions-side-after"));
-    expect(
-      screen.getByTestId("ta-versions-after-image").getAttribute("src"),
-    ).toBe("/api/chat/attachment/att-shot2");
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("ta-versions-content-image").getAttribute("src"),
+      ).toBe("/api/chat/attachment/att-shot1"),
+    );
+    fireEvent.click(screen.getByTestId("ta-versions-row-live"));
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("ta-versions-content-image").getAttribute("src"),
+      ).toBe("/api/chat/attachment/att-shot2"),
+    );
     // An image is displayed by the browser; this panel does not fetch it itself.
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
@@ -418,10 +418,14 @@ describe("TaskArtifactVersionsModal", () => {
     await waitFor(() =>
       expect(screen.getByTestId("ta-versions-content-text").textContent).toBe("live"),
     );
-    // The current version has nothing to be compared with — and says so instead
-    // of diffing it against itself.
-    fireEvent.click(screen.getByTestId("ta-versions-pane-diff"));
-    expect(screen.getByTestId("ta-versions-diff-live")).toBeTruthy();
+    // DROPPED from this case: the 「這就是目前版本，沒有可比對的對象」 notice, which
+    // was what the 差異 tab said when the current version was selected. That
+    // notice no longer exists.
+    //
+    // 🔴 WHAT IS NOW UNGUARDED: the current version being offered a comparison
+    // against itself. If the 差異 tab reappears while the live row is selected —
+    // or the pane fails to fall back to 內容 when the reader switches to that row
+    // from an open diff — no test here says a word.
   });
 
   // `label` is optional on the wire and nothing makes an agent send one, so the

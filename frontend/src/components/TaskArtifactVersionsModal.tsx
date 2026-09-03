@@ -84,7 +84,6 @@ import "./task-artifact-versions.css";
 
 type Pane = "content" | "diff";
 /** Which side of a non-text comparison the single viewing area is showing. */
-type Side = "before" | "after";
 
 /** What one version's bytes turned out to BE. `opaque` is the honest answer for
  * a file this surface cannot render or compare — it is never collapsed into
@@ -214,7 +213,6 @@ export function TaskArtifactVersionsModal({
   const [failed, setFailed] = useState(false);
   const [selected, setSelected] = useState<number | "live" | null>(null);
   const [pane, setPane] = useState<Pane>("content");
-  const [side, setSide] = useState<Side>("before");
   const nowTs = Date.now() / 1000;
 
   // 🔴 The `+` side comes from the SERVER, in the same breath as the journal —
@@ -252,7 +250,6 @@ export function TaskArtifactVersionsModal({
     typeof selected === "number"
       ? (versions?.find((v) => v.id === selected) ?? null)
       : null;
-  const kind = live?.kind ?? selectedVersion?.kind;
 
   // The NAME each side is read under — the blob's own filename first, the label
   // second, on BOTH sides. A retained version's filename is that version's own
@@ -272,6 +269,28 @@ export function TaskArtifactVersionsModal({
         : "",
   );
   const livePayload = usePayload(live?.kind, live?.url, liveName);
+
+  /**
+   * Whether the 差異 tab exists AT ALL for what is on screen.
+   *
+   * 🔴 owner 2026-09-03 (c-5d9766b7f0a0): 「好像只有文字檔需要有差異那個選項」.
+   * The test is the PAYLOAD, not the kind: a file whose bytes do not read as
+   * text (a pdf, a zip) used to get a tab whose only content was "nothing to
+   * compare" — a dead end the reader had to click to discover. An image and a
+   * link never get one either.
+   */
+  const diffable =
+    selected !== "live" &&
+    live !== null &&
+    selectedPayload.state === "text" &&
+    livePayload.state === "text";
+
+  // The tab can disappear underneath the pane — pick another version, or let a
+  // still-loading side resolve to something unreadable — so the pane follows it
+  // back rather than leaving the body blank.
+  useEffect(() => {
+    if (!diffable) setPane("content");
+  }, [diffable]);
 
   // Word-for-word the live side's fallback chain below, and that is the point:
   // a version's `label` is empty unless an agent chose to send one, while its
@@ -350,83 +369,36 @@ export function TaskArtifactVersionsModal({
     }
   }
 
-  /** The 差異 pane. Three screens, one per artifact shape — see the header. */
+  /**
+   * The 差異 pane. ONE screen: a line diff of two texts.
+   *
+   * 🔴 owner 2026-09-03 (c-5d9766b7f0a0, verbatim): 「好像只有文字檔需要有差異
+   * 那個選項」. So the pane is not reached at all unless BOTH sides read as text
+   * — see `diffable` — and the older shapes this function used to carry (a
+   * link's two urls, an image's before/after toggle, and the "nothing to
+   * compare" notices) are gone rather than unreachable. A dead branch that
+   * still renders is the one a reader trusts.
+   */
   function diffBody() {
-    if (selected === "live") {
-      return (
-        <p className="ta-versions__notice" data-testid="ta-versions-diff-live">
-          {t.tasks.artifacts.versionsDiffLive}
-        </p>
-      );
+    if (selectedPayload.state !== "text" || livePayload.state !== "text") {
+      // Unreachable while `diffable` gates the tab; kept as a total function
+      // rather than a cast, and deliberately silent.
+      return null;
     }
-    if (live === null) {
-      return (
-        <p className="ta-versions__notice" data-testid="ta-versions-unpinned">
-          {t.tasks.artifacts.versionsUnpinned}
-        </p>
-      );
-    }
-    const beforeLabel = selectedVersion
-      ? msg.taskArtifactVersionLabel(
-          formatAbsolute(selectedVersion.createdTs, nowTs),
-        )
-      : t.tasks.artifacts.versionsUnnamed;
-    const afterLabel = t.tasks.artifacts.versionsCurrent;
-
-    if (kind === "link") {
-      return (
-        <div className="ta-versions__urls" data-testid="ta-versions-diff-urls">
-          <div className="ta-versions__url-row">
-            <span className="ta-versions__url-side">{beforeLabel}</span>
-            {payloadBlock(selectedPayload, "ta-versions-before")}
-          </div>
-          <div className="ta-versions__url-row">
-            <span className="ta-versions__url-side">{afterLabel}</span>
-            {payloadBlock(livePayload, "ta-versions-after")}
-          </div>
-        </div>
-      );
-    }
-
-    if (selectedPayload.state === "text" && livePayload.state === "text") {
-      return (
-        <DiffView
-          before={selectedPayload.text}
-          after={livePayload.text}
-          beforeLabel={beforeLabel}
-          afterLabel={afterLabel}
-          testId="ta-versions-diff"
-        />
-      );
-    }
-
-    // Not two texts: the same viewing area, one side at a time. It is also the
-    // screen a still-loading or unreadable side lands on, which is why the
-    // toggle is rendered before the body rather than in place of it.
     return (
-      <div className="ta-versions__sides" data-testid="ta-versions-diff-sides">
-        <div
-          className="ta-versions__side-tabs"
-          role="group"
-          aria-label={t.tasks.artifacts.versionsSideLabel}
-        >
-          {(["before", "after"] as Side[]).map((which) => (
-            <button
-              key={which}
-              type="button"
-              className={`ta-versions__side-tab${side === which ? " ta-versions__side-tab--on" : ""}`}
-              data-testid={`ta-versions-side-${which}`}
-              aria-pressed={side === which}
-              onClick={() => setSide(which)}
-            >
-              {which === "before" ? beforeLabel : afterLabel}
-            </button>
-          ))}
-        </div>
-        {side === "before"
-          ? payloadBlock(selectedPayload, "ta-versions-before")
-          : payloadBlock(livePayload, "ta-versions-after")}
-      </div>
+      <DiffView
+        before={selectedPayload.text}
+        after={livePayload.text}
+        beforeLabel={
+          selectedVersion
+            ? msg.taskArtifactVersionLabel(
+                formatAbsolute(selectedVersion.createdTs, nowTs),
+              )
+            : t.tasks.artifacts.versionsUnnamed
+        }
+        afterLabel={t.tasks.artifacts.versionsCurrent}
+        testId="ta-versions-diff"
+      />
     );
   }
 
@@ -474,6 +446,7 @@ export function TaskArtifactVersionsModal({
             {t.tasks.artifacts.versionsTitle}
           </span>
           <div className="ta-versions__actions">
+            {diffable && (
             <div
               className="ta-versions__tabs"
               role="group"
@@ -494,6 +467,7 @@ export function TaskArtifactVersionsModal({
                 </button>
               ))}
             </div>
+            )}
             <button
               type="button"
               className="ta-versions__close"
@@ -560,11 +534,6 @@ export function TaskArtifactVersionsModal({
             )}
           </ul>
           <div className="ta-versions__body" data-pane={pane}>
-            {pane === "diff" && !failed && versions !== null && (
-              <p className="ta-versions__diff-note">
-                {t.tasks.artifacts.versionsDiffNote}
-              </p>
-            )}
             {body()}
           </div>
         </div>
