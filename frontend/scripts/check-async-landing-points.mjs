@@ -295,16 +295,16 @@ const REGISTRY = [
   {
     file: "lib/replyCardCache.ts",
     kind: "await",
-    count: 3,
+    count: 2,
     verdict:
-      "prefillWaitingCards' own await on the settle/deadline race, the per-card GET inside it, and the LAZY `await import(\"../api\")` — static there would pull the api layer into the module registry from src/test/setup.ts, before any test file's own vi.mock, and silently un-mock the prefill (measured: the real mock backend answered 404). Keyed by globally-unique card id and it only ever WRITES a card into the shared table, so a fetch that lands after the screen has moved on can at worst warm the cache for a card nobody is showing — never overwrite one room's value with another's",
+      "prefillWaitingCards' own await on the settle/deadline race and the LAZY `await import(\"../api\")` (the per-card GET is a `.then` chain since review F4, so it can be registered in `inFlight` synchronously — an `await` there would let a second commit slip in before the entry existed and issue a duplicate GET) — static there would pull the api layer into the module registry from src/test/setup.ts, before any test file's own vi.mock, and silently un-mock the prefill (measured: the real mock backend answered 404). Keyed by globally-unique card id and it only ever WRITES a card into the shared table, so a fetch that lands after the screen has moved on can at worst warm the cache for a card nobody is showing — never overwrite one room's value with another's",
   },
   {
     file: "lib/replyCardCache.ts",
     kind: ".then/.catch/.finally",
-    count: 1,
+    count: 4,
     verdict:
-      "the allSettled arm feeding the deadline race; it resolves a value nobody stores — the cards were written by the per-card task itself",
+      "the allSettled arm feeding the deadline race (it resolves a value nobody stores), plus the per-card read's own three arms: `.then` writes the card into the shared table, `.catch` records the id as abandoned and re-throws so allSettled still settles, `.finally` drops it from `inFlight`. All three are keyed by the globally-unique card id and none reads a conversation, so landing after the screen has moved on can at worst warm — or give up on — a card nobody is showing",
   },
   {
     file: "lib/replyCardCache.ts",
@@ -648,6 +648,18 @@ const MODULE_STATE = [
     name: "cards",
     verdict:
       "keyed by the globally-unique reply-card id (`rc-…`), which names the same card in every room — the same property that makes useWorkerCodenames' cache safe. It holds one card's own server-rendered value and nothing derived from a conversation, so there is no room's value in it to cross over; `ChatReplyCard` writes back on both its read and its write paths so a remount cannot seed a pre-answer copy",
+  },
+  {
+    file: "lib/replyCardCache.ts",
+    name: "inFlight",
+    verdict:
+      "one in-flight read per card id, same global key as `cards` — it exists so a second commit naming an id already in the air attaches to that promise instead of leaving another un-cancelled GET behind (the deadline bounds the wait, not the request). Entries are deleted in the read's own `finally`, so nothing outlives the request and no room's value is in it",
+  },
+  {
+    file: "lib/replyCardCache.ts",
+    name: "abandoned",
+    verdict:
+      "card ids whose read FAILED, same global key again — the negative memory that stops every later commit re-asking for a 404 and paying the full deadline again. A deadline is not a failure and never lands here. It holds ids, not conversation state, and an id names the same card in every room",
   },
   {
     file: "lib/chatDraftStore.ts",

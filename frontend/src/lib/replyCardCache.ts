@@ -33,6 +33,27 @@ import type { ChatMessage, ReplyCard } from "../api/adapter";
 // how many cards one session actually looks at.
 const cards = new Map<string, ReplyCard>();
 
+// 🔴 THE TWO TABLES THAT KEEP A BAD ID FROM COSTING FOREVER (T-48, review F4).
+// `cards` alone has no memory of failure: an id whose GET rejected, or whose
+// GET was still in the air when the deadline fired, never lands in it — so the
+// NEXT commit asks for it again, waits the full deadline again, and leaves a
+// second un-cancelled GET behind it (the AbortController bounds the WAIT, not
+// the REQUEST — see below). A room whose one card 404s therefore paid 1500ms on
+// every commit, and its in-flight GETs accumulated without bound.
+//
+//   · `inFlight` — one promise per id. A second commit naming the same id
+//     ATTACHES to that promise instead of issuing a second GET, so the number
+//     of outstanding requests is bounded by the number of distinct ids, not by
+//     the number of commits.
+//   · `abandoned` — ids whose fetch has actually FAILED. They are not asked for
+//     again for the life of the page: the card simply loads the way it did
+//     before this module existed (the row grows a frame late), which is the
+//     defect we started from and strictly better than holding every future
+//     commit for 1500ms. A DEADLINE is NOT a failure and does not land here —
+//     that request is still in the air and may yet fill the cache.
+const inFlight = new Map<string, Promise<void>>();
+const abandoned = new Set<string>();
+
 // 🔴 THE LIVENESS DEADLINE, AND WHY IT IS NOT OPTIONAL. Every commit point in
 // `useChat` now awaits this function, so a `getReplyCard` that never answers
 // would hold the WHOLE THREAD off the screen — an empty room, which is this
@@ -72,19 +93,24 @@ export function putReplyCard(card: ReplyCard): void {
  * because a card id names one card for the life of the page. */
 export function resetReplyCardCache(): void {
   cards.clear();
+  inFlight.clear();
+  abandoned.clear();
 }
 
 /** Which cards this page of messages needs BEFORE it may be painted: the
- * WAITING ones (they are the only ones that grow on arrival) that are not
- * already in hand. Exported for the guards, which must be able to say what the
- * denominator was. */
+ * WAITING ones (they are the only ones that grow on arrival) that are neither
+ * already in hand nor already given up on. Exported for the guards, which must
+ * be able to say what the denominator was.
+ *
+ * An id may still be IN FLIGHT and appear here — that is correct, and `prefill`
+ * attaches to the existing request rather than starting a second one. */
 export function pendingWaitingCardIds(messages: ChatMessage[]): string[] {
   const ids: string[] = [];
   const seen = new Set<string>();
   for (const m of messages) {
     if (m.replyCardStatus !== "waiting") continue;
     const id = m.replyCardId;
-    if (!id || cards.has(id) || seen.has(id)) continue;
+    if (!id || cards.has(id) || abandoned.has(id) || seen.has(id)) continue;
     seen.add(id);
     ids.push(id);
   }
@@ -102,7 +128,9 @@ export function pendingWaitingCardIds(messages: ChatMessage[]): string[] {
  * cancelled — they simply stop being waited on, and if they land later they
  * still populate the cache for the next render, which is free. Saying this
  * plainly rather than letting the AbortController imply cancellation: the
- * controller is the deadline token, and that is all it is. */
+ * controller is the deadline token, and that is all it is. What keeps those
+ * un-cancelled requests from PILING UP is `inFlight`, not the controller: a
+ * commit naming an id that is already in the air waits on the same promise. */
 export async function prefillWaitingCards(
   messages: ChatMessage[],
 ): Promise<void> {
@@ -124,9 +152,26 @@ export async function prefillWaitingCards(
     REPLY_CARD_PREFILL_DEADLINE_MS,
   );
   const all = Promise.allSettled(
-    ids.map(async (id) => {
-      const card = await api.getReplyCard(id);
-      cards.set(card.id, card);
+    ids.map((id) => {
+      const already = inFlight.get(id);
+      if (already) return already;
+      const read = api
+        .getReplyCard(id)
+        .then((card) => {
+          cards.set(card.id, card);
+        })
+        .catch((e) => {
+          // Give up on this id for the life of the page. Recorded BEFORE the
+          // rejection is re-thrown so `allSettled` still sees a settled
+          // promise and the other cards on the page are unaffected.
+          abandoned.add(id);
+          throw e;
+        })
+        .finally(() => {
+          inFlight.delete(id);
+        });
+      inFlight.set(id, read);
+      return read;
     }),
   );
   const deadline = new Promise<void>((resolve) => {
