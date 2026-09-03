@@ -11,12 +11,18 @@ import (
 //
 // The merged lifecycle tick (lifecycle_tick.go) runs two halves over two row
 // populations: runReconcileTick over dal.ListMembers, runOutsourceTick over
-// dal.ListOutsourceWorkers. The only reason a single row cannot enter both
-// halves in one tick is a SQL string — ListMembers is `FROM member WHERE kind
-// != 'outsource'` (dal.go) — and an outsource worker IS a member row
-// (PutOutsourceWorker → PutMember; there is no second table). Lift that clause
-// and one ACTIVE desired-online worker row was measured taking a `start` from
-// enqueueWardenFrame AND a `start` from notifyWorkerSpawn in the SAME tick.
+// dal.ListOutsourceWorkers. An outsource worker IS a member row
+// (PutOutsourceWorker → PutMember; there is no second table), so the two
+// populations OVERLAP at the source and something has to separate them.
+//
+// 🔴 THAT SOMETHING USED TO BE A SQL STRING — ListMembers was `FROM member WHERE
+// kind != 'outsource'` (dal.go) — AND IT IS NOT ANY MORE. T-14 項目 6 deleted the
+// clause; what separates the halves today is the driver guard each one asks at
+// the head of its own loop. That is not a smaller wall, but it IS a deletable
+// one, which is the whole reason this file and the identity-gate ledger both
+// exist. With the clause lifted and no guard, one ACTIVE desired-online worker
+// row was measured taking a `start` from enqueueWardenFrame AND a `start` from
+// notifyWorkerSpawn in the SAME tick.
 //
 // lifecycleTickDriverFor re-sites that split out of the query and into a named
 // total predicate. This test is what makes the re-siting worth doing: it turns
@@ -88,9 +94,11 @@ func (c lifecycleDriverCell) member() Member {
 // driverExpectedByPopulation is the SECOND, INDEPENDENT statement of the split
 // — read off the two snapshot readers rather than off lifecycleTickDriverFor:
 //
-//   - dal.ListMembers  → `FROM member WHERE kind != 'outsource'` → every row
-//     whose kind is not the literal "outsource" reaches runReconcileTick, and
-//     no row whose kind IS "outsource" ever does.
+//   - dal.ListMembers → the WHOLE member table since T-14 項目 6, narrowed at
+//     runReconcileTick's own loop head: every row whose kind is not the literal
+//     "outsource" reaches the staff half's decide pass, and no row whose kind IS
+//     "outsource" ever does. Read the guard, not the query — the query stopped
+//     being the answer when the clause was deleted.
 //   - dal.ListOutsourceWorkers → the kind='outsource' rows, ALL of them:
 //     assigned, active and released, held down or not. Rows this half then
 //     declines are declined inside its own switch, never handed onward.
@@ -158,9 +166,10 @@ func TestLifecycleTickDriver_EveryRowHasExactlyOneDriver(t *testing.T) {
 		case claimedByReconcile && claimedByOutsource:
 			t.Errorf("%s is claimed by BOTH runReconcileTick and runOutsourceTick — "+
 				"exactly one half must drive a row (lifecycleTickDriverFor, "+
-				"lifecycle_roster.go). Two halves on one row is the double-dispatch "+
-				"the `WHERE kind != 'outsource'` clause in dal.ListMembers is "+
-				"currently the only thing preventing.", c)
+				"lifecycle_roster.go). Two halves on one row is the measured "+
+				"double-dispatch that dal.ListMembers' `WHERE kind != 'outsource'` "+
+				"used to prevent and that THIS PREDICATE prevents now — the clause is "+
+				"gone (T-14 項目 6).", c)
 		case !claimedByReconcile && !claimedByOutsource:
 			t.Errorf("%s is claimed by NEITHER runReconcileTick nor runOutsourceTick "+
 				"(lifecycleTickDriverFor returned %q) — exactly one half must drive a "+
@@ -172,10 +181,11 @@ func TestLifecycleTickDriver_EveryRowHasExactlyOneDriver(t *testing.T) {
 		if want := driverExpectedByPopulation(c.kind); got != want {
 			t.Errorf("%s is claimed by %s, but %s must drive it — "+
 				"lifecycleTickDriverFor disagrees with the population that actually "+
-				"reaches each half (dal.ListMembers is `WHERE kind != 'outsource'`; "+
-				"dal.ListOutsourceWorkers is every kind='outsource' row). This step is "+
-				"a pure re-siting of that split and is not permitted to move a row to "+
-				"the other half.",
+				"reaches each half (runReconcileTick keeps the rows this predicate "+
+				"sends to driverReconcile; dal.ListOutsourceWorkers is every "+
+				"kind='outsource' row). The re-siting of the old `WHERE kind != "+
+				"'outsource'` was pure and is not permitted to move a row to the "+
+				"other half.",
 				c, string(got), string(want))
 		}
 	}
