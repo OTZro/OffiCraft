@@ -255,8 +255,17 @@ export function LatestRowInViewStory({
       // it would stop tracking the layout the moment someone changed the gap,
       // and nothing would say so. Half, because that is the largest clip the
       // tolerance could ever be argued up to on gap grounds and still be wrong.
-      const gap = parseFloat(getComputedStyle(box).rowGap || "0") || 0;
-      box.scrollTop -= Math.max(2, gap / 2);
+      // 🔴 NO SILENT FALLBACK. A `|| 0` here plus a floor would quietly turn
+      // this case into a 2px clip the moment `rowGap` stopped resolving, and a
+      // 2px clip passes almost any tolerance — the guard would keep reporting
+      // green while measuring nothing (independent review #19, F7). If the gap
+      // cannot be read, the probe says so and the assertion fails on it.
+      const gap = parseFloat(getComputedStyle(box).rowGap);
+      if (!Number.isFinite(gap) || gap <= 0) {
+        setProbe(JSON.stringify({ error: `rowGap unreadable: ${gap}` }));
+        return;
+      }
+      box.scrollTop -= gap / 2;
     } else box.scrollTop = 0;
     const last = rows[rows.length - 1].getBoundingClientRect();
     setProbe(

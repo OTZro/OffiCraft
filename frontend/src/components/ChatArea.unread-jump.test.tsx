@@ -858,7 +858,18 @@ describe("③ jump-to-origin (跳到原訊息, B3)", () => {
         mkMsg("a1", "b", "owner", 100),
         mkMsg("a2", "b", "owner", 101),
       ];
-      const { container } = renderChat(0, "a1");
+      const view = renderChat(0, "a1");
+      const { container } = view;
+      const rerender = (id: string) =>
+        view.rerender(
+          <I18nProvider>
+            <ChatArea
+              member={mkMember(0)}
+              members={[mkMember(0)]}
+              jumpToMsgId={id}
+            />
+          </I18nProvider>,
+        );
       expect(callbacks.length).toBeGreaterThan(0);
 
       // Positive control: while the reader has not moved, it still re-centres.
@@ -880,6 +891,16 @@ describe("③ jump-to-origin (跳到原訊息, B3)", () => {
       const beforeWalk = scrollCalls.length;
       callbacks[callbacks.length - 1]();
       expect(scrollCalls.length).toBe(beforeWalk);
+
+      // 🔴 …but the NEXT jump gets its protection back. Nothing else clears the
+      // armed flag, so without a reset here the second jump into the same room
+      // has no re-centring at all — not weaker, zero: a ResizeObserver delivers
+      // one callback on observe() by spec, so the new observer's first firing
+      // would disconnect itself (independent review #19, F1).
+      rerender("a2");
+      const beforeSecond = scrollCalls.length;
+      callbacks[callbacks.length - 1]();
+      expect(scrollCalls.length).toBe(beforeSecond + 1);
     } finally {
       globalThis.ResizeObserver = Real;
     }

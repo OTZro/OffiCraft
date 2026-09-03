@@ -245,7 +245,12 @@ type ChatSession = {
    * In the visit record, not a ref: a walk belongs to the conversation it was
    * started in, and the next one starts unarmed. The walk's OTHER stop — an
    * anchor that yields nothing — is `useChat`'s, for the reason written beside
-   * the effect. */
+   * the effect.
+   *
+   * It now has a SECOND reader, and this note said one for a while: the
+   * jump-to-origin re-center observer lets go once this is set, because the
+   * walk appends into the very row it watches. Landing a new anchor clears it
+   * again — see both sites rather than trusting this sentence. */
   forwardWalkArmed: boolean;
 };
 
@@ -1166,6 +1171,17 @@ export function ChatArea({
       return;
     }
     session.jumpConsumed = jumpToMsgId;
+    // 🔴 A NEW ANCHOR ENDS THE PREVIOUS WALK, and saying so here is what keeps
+    // the re-center protection from being a one-visit thing (independent review
+    // #19, F1). The observer below lets go once `forwardWalkArmed` is set, and
+    // nothing else ever clears it — so on a SECOND jump into the same room the
+    // protection was not merely weaker, it was zero: a ResizeObserver delivers
+    // one callback on `observe()` by spec, so the new observer's very first
+    // firing disconnected itself (measured: 0 re-centres where 1 was expected).
+    // Landing a new anchor is not "the reader scrolled", so this needs none of
+    // the reader-versus-programmatic-scroll telling-apart that the walk's other
+    // open end still waits on.
+    session.forwardWalkArmed = false;
     setJumpNotice(null);
     // The jump owns the initial viewport — mark entry positioning done.
     session.initialPositioned = true;
