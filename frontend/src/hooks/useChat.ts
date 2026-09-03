@@ -512,6 +512,24 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   // down to the same held rows — its result is a superset of the one we drop.
   // `ChatArea.groupMessages` "only partitions, never reorders", so array order
   // IS screen order: a late commit is not a cosmetic race.
+  // 🔴 THE FORWARD WALK'S ONLY STOP THAT IS NOT `hasNewer` (T-48). Holds the
+  // anchor id whose forward page came back carrying nothing this thread did not
+  // already have — the shape a DUPLICATE anchor request produces (measured: two
+  // `?start_id=` requests 8ms apart on the same id, because `threadRef` only
+  // catches up on the next render).
+  //
+  // Why it lives HERE and not in the caller that drives the walk: "did that ask
+  // actually go out" is knowledge this function has and nobody else does. A
+  // caller-side "I already asked from this row" bound looks identical but is
+  // WRONG, and measured wrong — an ask dropped by the same-direction mutex below
+  // never reached the network, yet marked that row as asked, so when the
+  // in-flight page landed with nothing new the walk stopped for good at 61 of 80
+  // rows. Refusing HERE cannot make that mistake: a refused ask is one that this
+  // function itself already answered.
+  //
+  // It is cleared by every commit that changes what "forward" means — a page
+  // that appends rows, and each of the three paths that replace the thread.
+  const forwardExhaustedRef = useRef<string | null>(null);
   const loadSeqRef = useRef(0);
   const committedSeqRef = useRef(0);
   // The entry anchor, mirrored for the subscription effect below. Read in the
@@ -717,6 +735,9 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       // to be earned.
       //
       committedSeqRef.current = seq;
+      // A new window (or a merged newest page) changes what "forward" means —
+      // whatever anchor was marked exhausted no longer describes this thread.
+      forwardExhaustedRef.current = null;
       setThread((prev) => ({
         messages: next,
         hasMore: next.length >= CHAT_PAGE_SIZE,
@@ -773,6 +794,9 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     // room now, so a refresh started before the switch commits into a component
     // React has already discarded.
     committedSeqRef.current = seq;
+    // A new window (or a merged newest page) changes what "forward" means —
+    // whatever anchor was marked exhausted no longer describes this thread.
+    forwardExhaustedRef.current = null;
     setThread((prev) => mergeLatestPage(prev, next, fill, gap));
     // ⚠️ THIS PULL NO LONGER HAS A CAUSE, AND SAYING SO IS THE POINT (T-48).
     // It used to read: "listChat itself marks the owner's read watermark
@@ -910,6 +934,9 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
             if (!r.joined) gap = true;
           }
           committedSeqRef.current = seq;
+          // A new window (or a merged newest page) changes what "forward" means —
+          // whatever anchor was marked exhausted no longer describes this thread.
+          forwardExhaustedRef.current = null;
           // MERGE the newest page into whatever is already loaded for this
           // peer (see mergeLatestPage) — replacing would eat the scrollback.
           setThread((prev) => mergeLatestPage(prev, next, fill, gap));
@@ -1096,6 +1123,10 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     const cur = threadRef.current;
     if (cur.messages.length === 0 || !cur.hasNewer)
       return;
+    // Already answered for this row: the page from here held nothing new, and
+    // nothing has changed since. Asking again is the busy loop.
+    if (forwardExhaustedRef.current === cur.messages[cur.messages.length - 1].id)
+      return;
     const release = conv.latches.acquire("loadingNewer");
     if (!release) return;
     // 🔴 THE GENERATION TICKET THIS WALK WENT WITHOUT (T-48, F2). `loadingNewer`
@@ -1125,6 +1156,15 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       // page continues no longer exists. Drop it whole.
       if (seq < committedSeqRef.current) return;
       committedSeqRef.current = seq;
+      // ⚠️ ASKED HERE, NOT INSIDE THE UPDATER. React does not run an updater
+      // when `setThread` is called — it runs it during the next render, which
+      // is AFTER this function has finished. A first cut of this read its
+      // answer out of the updater and always got "nothing landed yet", so the
+      // marker below was cleared instead of set and the walk asked from the
+      // same anchor twice (measured, in the guard for exactly this). The live
+      // thread mirror gives the same answer, now, without touching the merge.
+      const held = new Set(threadRef.current.messages.map((m) => m.id));
+      const addsNothing = page.every((m) => held.has(m.id));
       setThread((prev) => {
         const have = new Set(prev.messages.map((m) => m.id));
         const fresh = page.filter((m) => !have.has(m.id));
@@ -1136,6 +1176,10 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
           hasNewer: page.length >= CHAT_PAGE_SIZE,
         };
       });
+      // The walk's own stop sign, decided by the page that just landed: the
+      // anchor we asked from is exhausted when its page held nothing new; a
+      // page that did carry rows clears whatever was marked before.
+      forwardExhaustedRef.current = addsNothing ? newest.id : null;
     } catch (e) {
       console.warn("useChat: loadNewer failed", e);
     } finally {
@@ -1250,6 +1294,9 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
         // Refusing turns it into the ordinary miss, which is what it is.
         if (!window.some((m) => m.id === msgId)) return "missing";
         committedSeqRef.current = seq;
+        // A new window (or a merged newest page) changes what "forward" means —
+        // whatever anchor was marked exhausted no longer describes this thread.
+        forwardExhaustedRef.current = null;
         setThread((prev) => ({
           messages: window,
           // A full older page means history may continue above it; a full newer

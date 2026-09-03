@@ -20,6 +20,7 @@
 import { test, expect } from "@playwright/experimental-ct-react";
 import {
   ChatBottomAffordanceStory,
+  LatestRowInViewStory,
   NewMsgPreviewHeightStory,
 } from "./stories/ChatBottomAffordanceStory";
 import { LIGHT_PACK } from "./stories/chatBottomAffordanceFixtures";
@@ -80,6 +81,50 @@ function flatten(layers: string[]): string {
 const WIDTHS = [390, 1280];
 
 for (const width of WIDTHS) {
+  test(`width ${width}: ⑤ 「最新那一則在不在視野內」量的是那一列，不是盒子的底部`, async ({
+    mount,
+    page,
+  }) => {
+    // 🔴 出貨時壞掉的就是這一格(T-48)。`.chat__messages` 是 gap 的 flex 欄，
+    // 最後一列下面還有一個零高哨兵，所以**盒子的可捲底部不是最新那一列的底部**。
+    // 舊的判準問的是盒子(`scrollHeight - scrollTop - clientHeight <= 4px`)，於是
+    // 在一個最新訊息完整可見的畫面上答「還沒到最新」，回到最新的箭頭按了不會走。
+    // 真瀏覽器 12/12 次量到 distance=12/11 而 rowBottomGap=+0.13/-0.50。
+    //
+    // 這一條把那個差別本身釘住:落在 `scrollToLatest` 的落點上，
+    //   · `distance` 必須 > 0    ← 盒子底下真的還有版面(這是版面事實，不是常數)
+    //   · `rowBottomGap` ≈ 0     ← 而最新那一列已經完整在視野裡
+    //   · `inView` 必須 true     ← 產品的判準要跟得上眼睛
+    // 把 `isLatestRowInView` 換回任何一種「盒子捲到底了沒」的寫法，第三行就紅。
+    // 沒有任何一個數字被寫死成 gap 的大小:gap 改成 40px，這條照樣成立。
+    await page.setViewportSize({ width, height: 600 });
+    const bottom = await mount(<LatestRowInViewStory at="bottom" />);
+    const landed = JSON.parse(
+      await bottom.getByTestId("latest-probe").innerText(),
+    );
+    expect(
+      landed.distance,
+      "前提:盒子的底部在最新那一列底下 —— 沒有這段版面就沒有這個 bug，這條也就沒有在量東西",
+    ).toBeGreaterThan(0);
+    expect(
+      Math.abs(landed.rowBottomGap),
+      "落點:最新那一列的底邊貼齊視窗底邊",
+    ).toBeLessThanOrEqual(1);
+    expect(
+      landed.inView,
+      "最新那一列完整在視野裡 ⇒ 判準必須說「在」，否則箭頭永遠不會走",
+    ).toBe(true);
+
+    await bottom.unmount();
+    const top = await mount(<LatestRowInViewStory at="top" />);
+    const away = JSON.parse(await top.getByTestId("latest-probe").innerText());
+    expect(
+      away.inView,
+      "捲到最上面 ⇒ 最新那一列在視野外，判準必須說「不在」(否則它只是永遠回 true)",
+    ).toBe(false);
+  });
+
+
   test(`width ${width}: ① 箭頭是圓的，貼在訊息面板右下角、輸入框正上方`, async ({
     mount,
     page,

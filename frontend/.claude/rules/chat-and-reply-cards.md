@@ -54,7 +54,7 @@ custom 不讀 hour、minute、day_of_week、day_of_month，也不把自己摘要
 
 ## 聊天與 composer
 
-進房時先在 render 同步 snapshot member.unreadCount，再由明確的 mark-read 清 watermark（listChat 不再有這個副作用，T-48）；第一則未讀是對方送給 owner 的未讀訊息中最早的一則，顯示 divider 並保留於本 session。房內新訊息只有在 owner 不在 near-bottom 時顯示 LINE 式預覽列（寄件者＋一行內容），點擊落在**最新那一則**（T-48 前是落在第一則未見，下面還壓著沒看到的訊息），並在版面穩定後校正落點；必須真的捲到底才清除。不在底部且**沒有**新訊息時顯示回到底部箭頭，兩者不同時出現（箭頭讓位給預覽列，owner rc-72054864ff88）。
+進房時先在 render 同步 snapshot member.unreadCount，再由明確的 mark-read 清 watermark（listChat 不再有這個副作用，T-48）；第一則未讀是對方送給 owner 的未讀訊息中最早的一則，顯示 divider 並保留於本 session。房內新訊息只有在 owner 不在 near-bottom 時顯示 LINE 式預覽列（寄件者＋一行內容），點擊落在**最新那一則**（T-48 前是落在第一則未見，下面還壓著沒看到的訊息），並在版面穩定後校正落點；必須真的捲到底才清除。**最新那一則不在視野內**且**沒有**新訊息時顯示回到最新箭頭，兩者不同時出現（箭頭讓位給預覽列，owner rc-72054864ff88）。⚠️ 判準量的是**最新那一列的底邊**（`lib/scrollToLatest` 的 `isLatestRowInView`），不是「容器捲到底了沒」：`.chat__messages` 是 gap 的 flex 欄且最後一列下面還有零高哨兵，所以容器底部永遠在最新那一列底下一個 gap，用容器問會在最新訊息完整可見時答「不在」（T-48：按了箭頭它不會消失，每一次）。任何把它換回 `scrollHeight - scrollTop - clientHeight <= 某個常數` 的寫法都會把那個 bug 帶回來，而且 gap 一改就沒有人會紅。
 
 ChatArea、ReplyComposer、TaskCard 訊息框都是 textarea，送出決策只由 lib/composerKeys.ts 的 enterShouldSend 提供：桌面 Enter 送出、Shift+Enter 換行；手機 Enter 換行、按鈕送出；IME composing 永不送出。autosize 上限 132px，超出由 textarea 自己捲動。
 
@@ -108,7 +108,7 @@ hash route #office/chat/<id>/msg/<msgId> 只做一次定位與 highlight。產�
 
 `loadAround` 回的是**三態**（`JumpOutcome`），不是 bool：`found` / `missing`（404、失敗、或**存在但屬於別條對話**——server 解析錨點不套 participant 過濾，那種 id 兩個請求都回 200＋空陣列，採用它會把聊天室寫成空白）/ `superseded`（被更晚的載入超車，**訊息還在**）。**不要把 superseded 併回 missing**：那會對著一則還在的訊息說「可能已經被清掉了」，而且跳轉閂已經用掉，沒有重試也沒有按鈕。三態各有自己的畫面語言（`chat.jumpTargetMissing` / `chat.jumpTargetInterrupted`），重排有上限。
 
-錨點視窗期間 `hasNewer=true`，這時**不標已讀**（`mayMarkRead`）、**不跑週期性/SSE 的最新頁載入**（把活尾巴併進歷史視窗會造出一段沒人撈過卻被畫成相鄰的縫）。回到活尾巴的路有兩條：往下捲 `loadNewer`（有世代票，晚到的一頁要丟掉，不然歷史會被接在最新後面而且 `hasNewer` 會翻回 true ⇒ 那條對話從此不標已讀）、或 `resetToLatest`（**取代**不是合併，並且負責解除 anchor 的載入 hold-off——不解除的話那間房從此不再刷新）。
+錨點視窗期間 `hasNewer=true`，這時**不標已讀**（`mayMarkRead`）、**不跑週期性/SSE 的最新頁載入**（把活尾巴併進歷史視窗會造出一段沒人撈過卻被畫成相鄰的縫）。往新的那條鏈是 **level-triggered**：捲到底由捲動事件**起頭**，但每一頁落地之後由一個 effect **重新評估**（還在底部 且 `hasNewer`）決定要不要再撈一頁——不能只靠捲動事件，因為一頁貼上去之後畫面已經在底部，不會再有事件（T-48：實測停在 61/80 列、空等 10 秒不動、補一次捲動立刻補齊）。它的界是「最新那一列的 id 沒變就不再問」，涵蓋請求失敗與整頁都是已有列兩種沒有進展的結局；捲動事件那條路刻意**不看**這個界，那是人可以按的重試。回到活尾巴的路有兩條：往下捲 `loadNewer`（有世代票，晚到的一頁要丟掉，不然歷史會被接在最新後面而且 `hasNewer` 會翻回 true ⇒ 那條對話從此不標已讀）、或 `resetToLatest`（**取代**不是合併，並且負責解除 anchor 的載入 hold-off——不解除的話那間房從此不再刷新）。
 
 回覆卡的 red badge 與聊天未讀互不清除；任務關聯卡共用卡身，只顯示任務標題與查看詳情連結。
 

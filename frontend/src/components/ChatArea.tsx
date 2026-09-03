@@ -34,7 +34,7 @@ import { useWindowActive } from "../hooks/useWindowActive";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { enterShouldSend } from "../lib/composerKeys";
 import { chatBottomAffordance } from "../lib/chatBottomAffordance";
-import { scrollToLatest } from "../lib/scrollToLatest";
+import { scrollToLatest, isLatestRowInView } from "../lib/scrollToLatest";
 import { AttachmentStrip } from "./AttachmentStrip";
 import { Avatar } from "./Avatar";
 import { avatarKindForMember } from "../lib/avatarKind";
@@ -231,6 +231,22 @@ type ChatSession = {
    * live tail — this ticket's own failure shape, arriving from the previous
    * conversation's button press. */
   pendingLatestScroll: boolean;
+  /** 🔴 THE FORWARD WALK'S ARMING FLAG (T-48). The walk pages from an anchor
+   * window towards the live tail, and it is CONTINUED by the effect that
+   * re-evaluates after each page lands rather than by the next scroll event —
+   * see that effect for why an edge cannot carry this loop.
+   *
+   *   • `forwardWalkArmed` — the READER started this walk by scrolling to the
+   *     bottom. Nothing else arms it, so arriving at an anchor window whose
+   *     target happens to sit near the bottom does not quietly drag the reader
+   *     off to the live tail; the walk only ever continues something they
+   *     asked for.
+   *
+   * In the visit record, not a ref: a walk belongs to the conversation it was
+   * started in, and the next one starts unarmed. The walk's OTHER stop — an
+   * anchor that yields nothing — is `useChat`'s, for the reason written beside
+   * the effect. */
+  forwardWalkArmed: boolean;
 };
 
 function freshChatSession(unreadCount: number): ChatSession {
@@ -248,6 +264,7 @@ function freshChatSession(unreadCount: number): ChatSession {
     autoJumpRetries: 0,
     seedConsumed: null,
     pendingLatestScroll: false,
+    forwardWalkArmed: false,
   };
 }
 
@@ -854,12 +871,6 @@ export function ChatArea({
   // Threshold (px) within which the viewport counts as "at the bottom" for
   // auto-follow and the read watermark.
   const NEAR_BOTTOM_PX = 80;
-  // ① A MUCH TIGHTER SLACK, and it is not the same number for a reason: this
-  // one answers "is the NEWEST MESSAGE on screen", which is what the arrow is
-  // for, while 80px answers "is the owner still following along". Reusing the
-  // 80 would hide the arrow with the newest message's bottom 80px cut off. The
-  // 4px covers sub-pixel scroll positions only.
-  const AT_LATEST_PX = 4;
   function onMessagesScroll() {
     const el = messagesRef.current;
     if (!el) return;
@@ -880,15 +891,20 @@ export function ChatArea({
     // so the row being read does not move. `hasNewer` flips false when the walk
     // reaches the live tail, and the ordinary newest-window refresh resumes.
     if (nowNearBottom && hasNewer) {
+      // Arms the continuation below: from here on, a landed page re-asks by
+      // itself until the walk reaches the live tail.
+      session.forwardWalkArmed = true;
       void loadNewer();
     }
     // ① The arrow's condition, and it is a DIFFERENT question from
     // `nowNearBottom`: auto-follow may forgive 80px, but the owner asked for
-    // the arrow whenever the newest message is not in the viewport. The newest
-    // row is the last content in this box, so "any content still below the
-    // fold" IS "the newest row is cut off" — up to the 12px flex gap that
-    // follows it, which the slack absorbs.
-    setLatestInView(distance <= AT_LATEST_PX);
+    // the arrow whenever the NEWEST MESSAGE is not in the viewport. So it is
+    // measured on that row, not on `distance` — this box also contains the flex
+    // gap and the `endRef` sentinel that sit BELOW the newest row, and counting
+    // those as "content still below the fold" is what kept the arrow on screen
+    // after the jump had already put the newest message fully in view. See
+    // `isLatestRowInView`.
+    setLatestInView(isLatestRowInView(el));
     // Crossing into the bottom band = the owner has now read to the latest → mark
     // the newest message read (monotonic server-side; safe to fire repeatedly).
     //
@@ -1227,7 +1243,10 @@ export function ChatArea({
       // message is on screen, and the unread run — if one was open — is being
       // read right now.
       setNewMsgPreview(null);
-      setLatestInView(true);
+      // Measured, not assumed: the scroll above is what makes the newest row
+      // visible, so the row itself is the one thing worth asking (T-48).
+      const box = messagesRef.current;
+      setLatestInView(box ? isLatestRowInView(box) : true);
       session.unreadRunOpen = false;
       return;
     }
@@ -1284,7 +1303,7 @@ export function ChatArea({
     // Landing on the divider usually leaves the newest message below the fold —
     // that is the whole point of landing there — so the arrow must be able to
     // come up immediately, without waiting for the owner to scroll first.
-    setLatestInView(distance <= AT_LATEST_PX);
+    setLatestInView(isLatestRowInView(box));
     // NOTE: the run deliberately stays OPEN even when a short thread lands at
     // the bottom here — every real "the owner saw it" path (a bottom-crossing
     // scroll, or an at-bottom auto-follow) closes it; closing on this
@@ -1320,7 +1339,12 @@ export function ChatArea({
     if (!el) return;
     // The strip's message is exactly what we are going to look at.
     setNewMsgPreview(null);
-    setLatestInView(true);
+    // 🔴 NO OPTIMISTIC `setLatestInView(true)` HERE, and that absence is a fix
+    // (T-48). Guessing the answer before the scroll happened made the arrow
+    // blink out for 10–40ms and then come back when the scroll event measured
+    // the truth — which is how the e2e assertion for "the arrow is gone"
+    // sometimes passed against a product where it never went away. The answer
+    // is now taken from the layout below, after the landing, and nowhere else.
     session.nearBottom = true;
     session.unreadRunOpen = false;
     // 🔴 THE ARROW / THE PREVIEW STRIP ENDS AN IN-FLIGHT JUMP (T-48). Both mean
@@ -1344,6 +1368,7 @@ export function ChatArea({
     }
     jumpSettleRef.current?.();
     jumpSettleRef.current = scrollToLatest(el);
+    setLatestInView(isLatestRowInView(el));
   }
   // Declared AFTER the scroll-position reactor above so it runs last in the
   // commit: the reactor's own at-bottom auto-follow does a plain
@@ -1356,11 +1381,59 @@ export function ChatArea({
     if (!el) return;
     jumpSettleRef.current?.();
     jumpSettleRef.current = scrollToLatest(el);
-    setLatestInView(true);
+    setLatestInView(isLatestRowInView(el));
     session.nearBottom = true;
   }, [messages]);
   // A pending correction must not outlive the conversation it was aiming at.
   useEffect(() => () => jumpSettleRef.current?.(), []);
+
+  // 🔴 THE FORWARD WALK IS LEVEL-TRIGGERED, NOT EDGE-TRIGGERED (T-48).
+  //
+  // `onMessagesScroll` starts the walk, and until this effect existed a scroll
+  // event was also the ONLY thing that could continue it. That is the wrong
+  // shape for this loop, because the condition it tests outlives the event that
+  // delivered it: once a forward page is appended the viewport is ALREADY at
+  // the bottom, so there is nothing left to generate the next scroll event, and
+  // `hasNewer` sits there true with nobody asking again.
+  //
+  // Measured on the pre-fix code (200 executions of the walk flow): the reds
+  // stopped at `rows: 61` of 80 with `distance: 0` — at the very bottom of the
+  // box, more to fetch, no request in flight — and 10 further seconds changed
+  // nothing, while ONE more scroll event completed the walk instantly. Nothing
+  // was broken except that the condition had no edge left to ride on. To the
+  // owner that is a conversation which appears to end in the middle: no
+  // spinner, no end marker, just 19 messages that are never mentioned again.
+  //
+  // So the question is asked again every time the thread changes — a landed
+  // page re-asks by existing, which is what "level-triggered" means here.
+  //
+  // ⚠️ AND IT IS BOUNDED, which is the other half of the fix. Three stops, and
+  // the walk must not be able to spin between them:
+  //   • `hasNewer` false — the walk reached the live tail (the normal ending);
+  //   • the owner scrolled away from the bottom — not their intent any more;
+  //   • NO PROGRESS — and that stop is NOT here, it is inside `loadNewer`,
+  //     which refuses a second forward page from an anchor whose page came back
+  //     with nothing new. Measured, because this effect had that bound first
+  //     and it was wrong: an ask dropped by the same-direction mutex (another
+  //     forward page still in flight, a duplicate-anchor request measured 8ms
+  //     apart) never reached the network, but a caller-side "I asked from this
+  //     row" bound recorded it anyway, so the walk stopped for good at 61 of 80
+  //     rows — the very stall this effect exists to end, re-created one layer
+  //     up. Only the loader knows whether an ask went out, so only the loader
+  //     may decide that asking again is pointless. Here, a landed page is
+  //     always worth re-asking on: nothing changes unless something landed.
+  // A failed request stops the walk simply by not landing anything (there is no
+  // re-render to re-evaluate), and a reader who scrolls again is the retry.
+  useEffect(() => {
+    if (!session.forwardWalkArmed || !hasNewer || messages.length === 0) return;
+    const el = messagesRef.current;
+    if (!el) return;
+    // Declared after the auto-follow effect above, so this reads the geometry
+    // the append has already settled into rather than the one before it.
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distance > NEAR_BOTTOM_PX) return;
+    void loadNewer();
+  }, [messages, hasNewer, loadNewer, session]);
 
   // ①② WHICH bottom affordance is on screen — at most ONE, ever (owner: the
   // preview strip 讓位 rule). Derived in one place so the exclusion is a single

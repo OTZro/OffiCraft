@@ -117,6 +117,55 @@ function renderChat(unreadCount: number, jumpToMsgId?: string) {
 // element was asked to scroll into view, with what options.
 let scrollCalls: { el: Element; args: unknown }[] = [];
 
+/** jsdom has no layout, so the ARROW's question — is the newest ROW inside the
+ * viewport — has to be modelled as well as the box's scroll numbers. This
+ * models the simplest box there is: nothing in it but rows, the last row's
+ * bottom edge sitting exactly at the bottom of the scrollable content. So a
+ * viewport `distance` px from the bottom of the box is also `distance` px from
+ * the bottom of the newest row, which is the arithmetic every case below was
+ * written against.
+ *
+ * 🔴 THE SHIPPED BOX IS NOT THAT BOX — it has a 12px flex gap and a sentinel
+ * under the last row, so the two distances differ by 12 — and that difference
+ * is the bug this models the fix for. The case that pins it does not use this
+ * helper's assumption; it sets the row bottom itself
+ * (見「捲到底部但最後一列下面還有 12px 版面空隙」). */
+function stubLayout() {
+  const rect = (bottom: number) =>
+    ({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 0,
+      width: 0,
+      height: bottom,
+      bottom,
+      toJSON: () => ({}),
+    }) as DOMRect;
+  Element.prototype.getBoundingClientRect = function (this: Element) {
+    if (this.classList.contains("chat__messages")) {
+      return rect((this as HTMLElement).clientHeight);
+    }
+    const box = this.closest(".chat__messages") as HTMLElement | null;
+    if (!box || !this.hasAttribute("data-msg-id")) return rect(0);
+    const rows = box.querySelectorAll("[data-msg-id]");
+    if (rows[rows.length - 1] !== this) return rect(0);
+    const trailing = rowTrailingGap;
+    const distance = box.scrollHeight - box.scrollTop - box.clientHeight;
+    return rect(box.clientHeight + distance - trailing);
+  };
+}
+/** How much of the box's bottom `distance` is layout BELOW the newest row —
+ * `.chat__messages`' flex gap plus the zero-height `endRef` sentinel — rather
+ * than the newest row being cut off. The exact number is not the point and
+ * production reads nothing like it: any non-zero value must give the same
+ * answers, because the box's bottom and the newest row's bottom are simply not
+ * the same edge. It is 12 here because that is what the shipped stylesheet
+ * measures, so these cases run the geometry the owner actually sees. */
+const TRAILING_LAYOUT_PX = 12;
+let rowTrailingGap = TRAILING_LAYOUT_PX;
+
 /** Define the scroll viewport's geometry so onScroll's near-bottom math is
  * driven honestly: distance = scrollHeight - scrollTop - clientHeight. */
 function setScrollGeometry(
@@ -153,11 +202,27 @@ beforeEach(() => {
   loadNewer.mockClear();
   hasNewer = false;
   scrollCalls = [];
+  rowTrailingGap = TRAILING_LAYOUT_PX;
+  stubLayout();
   Element.prototype.scrollIntoView = function (
     this: Element,
     args?: unknown,
   ) {
     scrollCalls.push({ el: this, args });
+    // …and MOVE THE VIEWPORT, because where it lands is half of what the arrow
+    // is asking about. jsdom's own scrollIntoView does nothing at all, so a
+    // component that scrolls to the newest row and then measures whether the
+    // newest row is visible would be measuring the position it started from —
+    // and a test asserting "the arrow is gone" would only be able to pass on an
+    // optimistic guess, which is exactly the shape T-48 removed. `block: "end"`
+    // puts the target's bottom edge flush with the viewport's, leaving whatever
+    // layout follows it (the flex gap, the sentinel) still below the fold.
+    const box = this.closest?.(".chat__messages") as HTMLElement | null;
+    if (!box) return;
+    const bottom = box.scrollHeight - box.clientHeight;
+    box.scrollTop = this.hasAttribute("data-msg-id")
+      ? Math.max(0, bottom - rowTrailingGap)
+      : bottom;
   } as typeof Element.prototype.scrollIntoView;
   messages = [];
 });
@@ -307,6 +372,25 @@ describe("① 回到最新箭頭 + ② 新訊息預覽列", () => {
     });
     fireEvent.scroll(list);
     expect(container.querySelector("[data-testid='chat-jump-latest']")).toBeNull();
+
+    // 🔴 AND THE ONE THAT WAS SHIPPED BROKEN (T-48): the box does not end where
+    // the newest row ends. `.chat__messages` puts a flex gap and a zero-height
+    // sentinel under the last row, so a viewport with the newest message
+    // FLUSH AGAINST ITS BOTTOM still reports `TRAILING_LAYOUT_PX` of box left
+    // below — and the arrow used to come back for it, permanently, every time
+    // 回到最新 landed. Measured in the browser 12/12 runs at both widths.
+    // Nothing here says what that layout is worth: raise TRAILING_LAYOUT_PX to
+    // 40 and this case must still pass, because the question is about the row.
+    setScrollGeometry(list, {
+      scrollHeight: 1000,
+      clientHeight: 800,
+      scrollTop: 200 - TRAILING_LAYOUT_PX,
+    });
+    fireEvent.scroll(list);
+    expect(
+      container.querySelector("[data-testid='chat-jump-latest']"),
+      "最新那一則整列都在視窗裡 ⇒ 沒有「回到最新」這回事",
+    ).toBeNull();
   });
 
   it("scrolled up + new inbound → ONE preview strip that REPLACES its content, never a second one, and the arrow gives way to it", () => {

@@ -7,6 +7,8 @@
 // 手寫的：外殼要照 <ChatArea> 的實際巢狀（.chat > .chat__body > .chat__messages，
 // 箭頭是 .chat__body 的絕對定位子元素；預覽列是 .chat__composer 的第一個子元素，
 // 回覆橫幅緊接在後）。外殼一旦寫錯，量到的是一個不會出貨的版面。
+import { useLayoutEffect, useRef, useState } from "react";
+import { isLatestRowInView } from "../../src/lib/scrollToLatest";
 import { ChatJumpLatestButton } from "../../src/components/ChatJumpLatestButton";
 import { ChatNewMsgPreview } from "../../src/components/ChatNewMsgPreview";
 import { I18nProvider, useI18n } from "../../src/i18n";
@@ -72,6 +74,10 @@ export function ChatBottomAffordanceStory({
                 </div>
               </div>
             ))}
+            {/* ChatArea 的零高哨兵。它不是裝飾:因為它在,最後一則訊息下面就永遠
+              * 還有一個 flex gap,盒子的底部於是不等於最新那一列的底部 —— 那正是
+              * ① 曾經壞掉的地方。外殼少了它,量到的是一個不會出貨的版面。 */}
+            <div className="chat__scroll-anchor" aria-hidden />
           </div>
           {arrow && <ChatJumpLatestButton onClick={() => {}} />}
         </div>
@@ -212,5 +218,70 @@ function JumpMissRow({ text, retry }: { text: string; retry: boolean }) {
         ×
       </button>
     </div>
+  );
+}
+
+/**
+ * 「最新那一則在不在視野內」這個判準,跑在**真的版面**上(production 的
+ * `isLatestRowInView` + production 的 office.css)。
+ *
+ * 🔴 jsdom 量不到這一條,而這一條就是 ① 出貨時壞掉的那一格:`.chat__messages` 的
+ * flex gap 加上零高哨兵,讓盒子的可捲底部落在最新那一列底下 12px。用盒子底部回答
+ * 「最新那一則在不在視野內」,在一個最新訊息完整可見的畫面上答「不在」,箭頭於是
+ * 永遠不走。這個 story 把兩個答案一起吐出來:`distance`(盒子還剩多少)與
+ * `inView`(產品的判準),讓 guard 可以斷言它們**不是同一件事**。
+ */
+export function LatestRowInViewStory({
+  at = "bottom",
+}: { at?: "bottom" | "top" } = {}) {
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [probe, setProbe] = useState("");
+  useLayoutEffect(() => {
+    const box = boxRef.current;
+    if (!box) return;
+    const rows = box.querySelectorAll<HTMLElement>("[data-msg-id]");
+    // 落點跟 `scrollToLatest` 逐字相同 —— guard 量的必須是產品真的會停的地方。
+    if (at === "bottom") rows[rows.length - 1].scrollIntoView({ block: "end" });
+    else box.scrollTop = 0;
+    const last = rows[rows.length - 1].getBoundingClientRect();
+    setProbe(
+      JSON.stringify({
+        distance: Number(
+          (box.scrollHeight - box.scrollTop - box.clientHeight).toFixed(2),
+        ),
+        rowBottomGap: Number(
+          (last.bottom - box.getBoundingClientRect().bottom).toFixed(2),
+        ),
+        inView: isLatestRowInView(box),
+      }),
+    );
+  }, [at]);
+  return (
+    <Shell>
+      <div className="chat" style={{ flex: 1, minWidth: 0 }}>
+        <div className="chat__body">
+          <div className="chat__messages" ref={boxRef} data-testid="chat-messages">
+            {Array.from({ length: 30 }, (_, i) => (
+              <div className="chat__msg" data-msg-id={`c-${i}`} key={i}>
+                <div className="chat__msg-line">
+                  <div className="chat__msg-content">
+                    <div className="chat__msg-bubble">
+                      <div className="chat__msg-text doc-md">訊息 {i}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+            <div className="chat__scroll-anchor" aria-hidden />
+          </div>
+        </div>
+        <footer className="chat__composer">
+          <div className="chat__composer-row">
+            <textarea className="chat__input" rows={1} defaultValue="" />
+          </div>
+        </footer>
+      </div>
+      <div data-testid="latest-probe">{probe}</div>
+    </Shell>
   );
 }

@@ -212,5 +212,29 @@ test.describe('B9 · unread — badge, entry divider anchor, 進房 mark-read, f
       timeout: 10_000,
     });
     await expect(page.getByTestId('chat-jump-latest')).toBeHidden();
+
+    // 🔴 而且要**待得住**。上面那一行是輪詢的:只要在某一格取樣到「不在」就
+    // PASS,所以在一個「箭頭消失 10–40ms 又長回來」的產品上,它有時候會綠 ——
+    // 實測 30 次跑紅 16 次,綠的那幾次時間軸上看得到箭頭 17ms 後就回來了。
+    // 讓版面完全靜止之後再問一次,並且把幾何一起釘住:最新那一列的底邊已經在
+    // 視窗裡(容器底下還有 flex gap 與哨兵,所以 `distance` 本來就不會是 0),
+    // 這種情況下畫面上不該有任何「回到最新」。
+    await page.waitForTimeout(3000);
+    const settled = await thread.evaluate((el) => {
+      const rows = el.querySelectorAll('[data-msg-id]');
+      const r = rows[rows.length - 1].getBoundingClientRect();
+      return {
+        distance: Math.round(el.scrollHeight - el.scrollTop - el.clientHeight),
+        lastRowBottomGap: Number((r.bottom - el.getBoundingClientRect().bottom).toFixed(2)),
+      };
+    });
+    expect(
+      settled.lastRowBottomGap,
+      `最新那一列必須完整在視窗裡(量到 ${JSON.stringify(settled)})`,
+    ).toBeLessThanOrEqual(1);
+    await expect(
+      page.getByTestId('chat-jump-latest'),
+      `版面靜止之後箭頭必須還是不在 —— 量到 ${JSON.stringify(settled)}`,
+    ).toHaveCount(0);
   });
 });

@@ -41,6 +41,10 @@ let holdWindows: null | (() => void) = null;
 /** Makes the held pair end in a REJECTION rather than a page, i.e. the
  * `"unreachable"` ending of `loadAround` (a 502, a dropped connection). */
 let windowsFail = false;
+/** 讓「往新」那一頁回一整頁**已經握在手上的列**(滿頁 ⇒ `hasNewer` 仍為 true,
+ * 但一列都沒有新的)。這就是重複錨點請求真的會拿回來的東西,也是自動連鎖唯一
+ * 可能空轉的形狀。 */
+let windowStale = false;
 /** Same, for the plain newest page — so 回到最新's own fetch can be left in the
  * air across a conversation switch. */
 let holdPlain: null | (() => void) = null;
@@ -104,6 +108,9 @@ vi.mock("../api", () => ({
         (m) => m.id === (anchor.endId ?? anchor.startId),
       );
       if (at < 0) return [];
+      if (windowStale && anchor.startId) {
+        return all.slice(Math.max(0, at - limit + 1), at + 1);
+      }
       // Inclusive both ways, mirroring the server: `end_id` is the context
       // ABOVE the anchor, `start_id` the context BELOW.
       return anchor.endId
@@ -193,6 +200,7 @@ beforeEach(() => {
   holdWindows = null;
   holdPlain = null;
   windowsFail = false;
+  windowStale = false;
   scrolls = [];
   localStorage.clear();
   Element.prototype.scrollIntoView = vi.fn(function (
@@ -237,6 +245,86 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
     ]);
     // 落點也對:只撈了那一則附近的一個視窗,不是整條線。
     expect(bubbles(container)).toContain(targetId);
+    expect(bubbles(container)).not.toContain("a79");
+  });
+
+  it("一次捲到底就一路走回最新那一則 —— 一頁落地之後不必再有第二個捲動事件", async () => {
+    // 🔴 T-48:往新的連鎖曾經是 edge-triggered 的。捲到錨點視窗底部會撈一頁,
+    // 貼上去之後**畫面已經在底部**,不會再有捲動事件,於是沒有人再問一次 ——
+    // `hasNewer` 還是 true,卻永遠停在半路。真瀏覽器上是產品自己的 auto-follow
+    // 偶爾補出下一個事件才走得完(200 次執行紅 2 次,紅的每一次都精準停在
+    // rows=61、空等 10 秒不動、補一次捲動立刻補齊)。
+    //
+    // jsdom 沒有版面,`scrollIntoView` 不會產生任何捲動事件 —— 也就是說,這裡
+    // **必然**是那個「唯一觸發被吃掉」的世界。所以這一條不是機率題:連鎖是
+    // level-triggered 才走得到 a79,是 edge-triggered 就停在第一頁。
+    seed(A, "a", 80, 100);
+    const { container } = render(view(alice, "a3"));
+    await waitFor(() =>
+      expect(container.querySelector('[data-msg-id="a3"]')).not.toBeNull(),
+    );
+    const windowSpan = bubbles(container).length;
+    expect(windowSpan).toBeLessThan(80);
+
+    // 使用者捲到底,就這一下,之後什麼事件都不再送。
+    fireEvent.scroll(container.querySelector(".chat__messages")!);
+
+    await waitFor(() => expect(bubbles(container)).toContain("a79"));
+    // 而且每一頁都從**上一頁的最後一列**接下去:同一個錨點不會被自動連鎖重複問。
+    const forward = windowCalls
+      .filter((c) => c.anchor.startId)
+      .map((c) => c.anchor.startId);
+    expect(new Set(forward).size).toBe(forward.length);
+  });
+
+  it("那一頁一列新的都沒有時,自動連鎖停下來,不會拿同一個錨點空轉", async () => {
+    // ⚠️ level-triggered 的另一半,而且是它唯一會失控的形狀。往新的一頁回來
+    // 「滿頁、但整頁都是已經握著的列」(重複錨點請求真的會拿回這個)時:
+    // `hasNewer` 仍為 true、`setThread` 仍換上一個新物件 ⇒ 連鎖被重新評估 ⇒
+    // 沒有界的話它會用同一個錨點永遠打下去,而畫面上一列都不會多。
+    // 界就是「最新那一列的 id 沒變就不再問」。
+    seed(A, "a", 80, 100);
+    const { container } = render(view(alice, "a3"));
+    await waitFor(() =>
+      expect(container.querySelector('[data-msg-id="a3"]')).not.toBeNull(),
+    );
+    // 錨點視窗照常落地(否則 `hasNewer` 根本不會是 true,就沒有連鎖可以量);
+    // 從這裡開始,往新的每一頁都回一整頁已經握著的列。
+    windowStale = true;
+    const entry = windowCalls.length;
+    fireEvent.scroll(container.querySelector(".chat__messages")!);
+    await waitFor(() => expect(windowCalls.length).toBe(entry + 1));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 200));
+    });
+    expect(
+      windowCalls.length,
+      "沒有進展就不准再問 —— 同一個錨點打第二次是空轉的第一圈",
+    ).toBe(entry + 1);
+    expect(
+      windowCalls[windowCalls.length - 1].anchor.startId,
+      "而且那一次問的就是上一頁的最後一列",
+    ).toBe("a32");
+    expect(bubbles(container)).not.toContain("a79");
+  });
+
+  it("往新那一頁失敗時,自動連鎖不會忙著重打", async () => {
+    // 失敗的結局也是「沒有進展」:`loadNewer` 吞掉錯誤、`thread` 一動也不動,
+    // 於是連鎖沒有東西可以重新評估。人再捲一次仍然可以重試 —— 那條路是捲動
+    // 事件,它刻意不看這個界。
+    seed(A, "a", 80, 100);
+    const { container } = render(view(alice, "a3"));
+    await waitFor(() =>
+      expect(container.querySelector('[data-msg-id="a3"]')).not.toBeNull(),
+    );
+    windowsFail = true;
+    const entry = windowCalls.length;
+    fireEvent.scroll(container.querySelector(".chat__messages")!);
+    await waitFor(() => expect(windowCalls.length).toBe(entry + 1));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 200));
+    });
+    expect(windowCalls.length).toBe(entry + 1);
     expect(bubbles(container)).not.toContain("a79");
   });
 
