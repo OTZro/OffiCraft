@@ -260,9 +260,9 @@ const REGISTRY = [
   {
     file: "components/ChatArea.tsx",
     kind: "setTimeout/setInterval",
-    count: 2,
+    count: 1,
     verdict:
-      "highlight clear + centring settle; cleared in the effect cleanup, and the state they write dies with the room",
+      "highlight clear; cleared in the effect cleanup, and the state it writes dies with the room. The centring settle timer that used to be the second one was deleted with the jump's re-center loop (T-48, owner rc-6c27f486ef9d)",
   },
   {
     file: "components/ChatArea.tsx",
@@ -270,12 +270,6 @@ const REGISTRY = [
     count: 1,
     verdict:
       "the composer's own draft-TEXT subscription (R14-1.3), onto this peer's slice; a failed send's words are written to the store and this is what puts them back on screen. React unsubscribes on unmount, and the room is this mount",
-  },
-  {
-    file: "components/ChatArea.tsx",
-    kind: "Observer",
-    count: 1,
-    verdict: "centring ResizeObserver; disconnected in the same cleanup",
   },
   {
     file: "hooks/useChat.ts",
@@ -474,20 +468,6 @@ const REGISTRY = [
     kind: "subscribe",
     count: 1,
     verdict: "route subscribers; same",
-  },
-  {
-    file: "lib/scrollToLatest.ts",
-    kind: "setTimeout/setInterval",
-    count: 1,
-    verdict:
-      "settle timer; writes scrollTop on an element handed in by the caller, and the caller clears it",
-  },
-  {
-    file: "lib/scrollToLatest.ts",
-    kind: "Observer",
-    count: 1,
-    verdict:
-      "ResizeObserver on that same element; disconnected by the same caller",
   },
   {
     file: "lib/shareLink.ts",

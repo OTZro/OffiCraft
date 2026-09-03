@@ -247,10 +247,10 @@ type ChatSession = {
    * anchor that yields nothing — is `useChat`'s, for the reason written beside
    * the effect.
    *
-   * It now has a SECOND reader, and this note said one for a while: the
-   * jump-to-origin re-center observer lets go once this is set, because the
-   * walk appends into the very row it watches. Landing a new anchor clears it
-   * again — see both sites rather than trusting this sentence. */
+   * ONE writer, ONE reader, and that is the whole of it since T-48 deleted the
+   * jump's re-center observer: the observer used to read this flag as a bypass
+   * ("the reader walked away, stop re-centring"), and landing a new anchor had
+   * to clear it again. Neither exists now. */
   forwardWalkArmed: boolean;
 };
 
@@ -1171,64 +1171,23 @@ export function ChatArea({
       return;
     }
     session.jumpConsumed = jumpToMsgId;
-    // 🔴 A NEW ANCHOR ENDS THE PREVIOUS WALK, and saying so here is what keeps
-    // the re-center protection from being a one-visit thing (independent review
-    // #19, F1). The observer below lets go once `forwardWalkArmed` is set, and
-    // nothing else ever clears it — so on a SECOND jump into the same room the
-    // protection was not merely weaker, it was zero: a ResizeObserver delivers
-    // one callback on `observe()` by spec, so the new observer's very first
-    // firing disconnected itself (measured: 0 re-centres where 1 was expected).
-    // Landing a new anchor is not "the reader scrolled", so this needs none of
-    // the reader-versus-programmatic-scroll telling-apart that the walk's other
-    // open end still waits on.
-    session.forwardWalkArmed = false;
     setJumpNotice(null);
     // The jump owns the initial viewport — mark entry positioning done.
     session.initialPositioned = true;
     session.prevIds = new Set(messages.map((m) => m.id));
-    {
-      el.scrollIntoView({ block: "center" });
-      // Located mid-thread → not at the bottom; a later arrival must not yank.
-      session.nearBottom = false;
-      // …and the newest message is somewhere below, so the arrow belongs here.
-      setLatestInView(false);
-      setHighlightMsgId(jumpToMsgId);
-      // Async content above the target (images decoding to their real height,
-      // inline reply cards refetching) reflows AFTER this paint-time scroll and
-      // shoves the centered row off-screen — worst on short mobile viewports.
-      // A ResizeObserver on the scroll viewport never fires (its own box is
-      // clamped by flex + overflow); watch the in-flow content rows, whose
-      // height actually grows, and re-center until the highlight window closes.
-      const scroller = messagesRef.current;
-      if (scroller) {
-        const ro = new ResizeObserver(() => {
-          // 🔴 …but NOT once the reader has walked away from the target. The
-          // forward walk appends into the very row this observer watches (80
-          // messages on one day are ONE `.chat__day-group`), so a landed page
-          // is a resize, and re-centring then yanks the viewport from the
-          // bottom back to the jump target. Measured from a CI trace of the
-          // real failure: scrollTop 117 → 2702 → 117, one forward request and
-          // then silence, the thread frozen at 61 of 80 rows. `nearBottom`
-          // goes false with the viewport, auto-follow stops, and the walk's
-          // continuation reads a distance that is no longer the reader's — so
-          // it stops for good, with no spinner and no end marker. This
-          // observer's job is to fight async reflow under a stationary reader;
-          // a reader who has scrolled to the bottom and started the walk has
-          // said that is no longer where they want to be.
-          if (session.forwardWalkArmed) {
-            ro.disconnect();
-            return;
-          }
-          el.scrollIntoView({ block: "center" });
-        });
-        for (const row of Array.from(scroller.children)) ro.observe(row);
-        const settle = window.setTimeout(() => ro.disconnect(), 2600);
-        return () => {
-          window.clearTimeout(settle);
-          ro.disconnect();
-        };
-      }
-    }
+    el.scrollIntoView({ block: "center" });
+    // Located mid-thread → not at the bottom; a later arrival must not yank.
+    session.nearBottom = false;
+    // …and the newest message is somewhere below, so the arrow belongs here.
+    setLatestInView(false);
+    setHighlightMsgId(jumpToMsgId);
+    // ⚠️ CONTENT ABOVE THE TARGET THAT LOADS LATE WILL PUSH IT OFF SCREEN,
+    // and nothing here corrects for that any more (T-48, owner
+    // rc-6c27f486ef9d 「拿掉。圖片／卡片展開把目標擠走我接受」). A
+    // ResizeObserver used to re-centre for 2.6s; measured cost of removing
+    // it: the target ends up ~400-419px below the fold on a 394-433px
+    // viewport — a whole screen — and the highlight pulse goes with it.
+    // The owner named that cost and took it. Do not add a compensator.
   }, [jumpToMsgId, messages, loadAround, resetToLatest, jumpRetry]);
 
   // The jump highlight is a transient flash — clear it after the CSS pulse so
@@ -1355,22 +1314,9 @@ export function ChatArea({
   // still marked — by the 「以下是未讀訊息」 divider, which stays where it is —
   // so nothing was lost by moving the landing to the end of the block.
   //
-  // The landing is CORRECTED after the layout settles (lib/scrollToLatest):
-  // images above the target decode to their real height after this frame and
-  // shove the row straight back out of view.
-  // ⚠️ NOT in the session record, and the reason is narrower than it looks
-  // (R5-5 corrected a wrong one that used to stand here). Nothing cancels this
-  // on a conversation switch — the peer block above has never called it — so
-  // "keeping the handle buys us a cancel on switch" was simply false. The real
-  // reason is the UNMOUNT cleanup below: in the record, that cleanup would read
-  // the NEW conversation's `null` and leave the previous one's ResizeObserver
-  // and 2.6s timer alive past unmount. The lifetime that matters here is the
-  // COMPONENT's, not the conversation's.
-  // (What a switch leaves running is harmless: `scrollToLatest` captured a row
-  // that is detached by then, so `scrollIntoView` is a no-op and the observed
-  // children are gone. The two places that start a new correction cancel the
-  // previous one first, which is what actually keeps them from stacking.)
-  const jumpSettleRef = useRef<(() => void) | null>(null);
+  // ⚠️ THE LANDING IS NOT CORRECTED AFTERWARDS (T-48, owner rc-6c27f486ef9d).
+  // `scrollToLatest` scrolls once and returns nothing; content above that grows
+  // late will push the row back out of view, and that is the signed trade-off.
   function jumpToLatest() {
     const el = messagesRef.current;
     if (!el) return;
@@ -1403,8 +1349,7 @@ export function ChatArea({
       void resetToLatest();
       return;
     }
-    jumpSettleRef.current?.();
-    jumpSettleRef.current = scrollToLatest(el);
+    scrollToLatest(el);
     setLatestInView(isLatestRowInView(el));
   }
   // Declared AFTER the scroll-position reactor above so it runs last in the
@@ -1416,13 +1361,10 @@ export function ChatArea({
     session.pendingLatestScroll = false;
     const el = messagesRef.current;
     if (!el) return;
-    jumpSettleRef.current?.();
-    jumpSettleRef.current = scrollToLatest(el);
+    scrollToLatest(el);
     setLatestInView(isLatestRowInView(el));
     session.nearBottom = true;
   }, [messages]);
-  // A pending correction must not outlive the conversation it was aiming at.
-  useEffect(() => () => jumpSettleRef.current?.(), []);
 
   // 🔴 THE FORWARD WALK IS LEVEL-TRIGGERED, NOT EDGE-TRIGGERED (T-48).
   //

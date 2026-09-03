@@ -360,11 +360,12 @@ test.describe('T-48 · 錨點視窗中有新訊息進來,點預覽列跳下去',
     // ③ 🔑 接回活尾巴之後,普通的預覽列路徑要**完全正常** —— 這一格才是 owner
     //    問的那句話。捲上去(讓最新那一則離開視窗)、對方再開口。
     //
-    // ⚠️ 要先等 scrollToLatest 的 2600ms 修正窗關掉:那段期間任何一次 reflow
-    // (往上捲觸發 loadOlder、圖片解碼)都會把畫面**再拉回底部**,於是新訊息落地
-    // 時 near-bottom 仍為真、走的是自動跟隨而不是預覽列 —— 測試會因為一個與被測
-    // 行為無關的理由變紅。捲的幅度也刻意只夠讓最新那一則離開視窗,不捲到頂,
-    // 免得順帶把 loadOlder 也牽進來。
+    // ⚠️ 這個 waitForTimeout 原本是在等 `scrollToLatest` 的 2600ms 修正窗關掉
+    // (那段期間任何一次 reflow 都會把畫面再拉回底部,於是新訊息落地時 near-bottom
+    // 仍為真、走的是自動跟隨而不是預覽列)。那個修正窗已經在 T-48 刪掉了
+    // (owner rc-6c27f486ef9d),所以這裡不再有東西會把畫面拉回去 —— 留著只是讓
+    // 版面(圖片解碼、卡片補撈)自己停下來再量。捲的幅度也刻意只夠讓最新那一則
+    // 離開視窗,不捲到頂,免得順帶把 loadOlder 也牽進來。
     await page.waitForTimeout(3000);
     await thread.evaluate((el) => {
       el.scrollTop = el.scrollHeight - el.clientHeight - 600;

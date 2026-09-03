@@ -1,55 +1,41 @@
-// lib/scrollToLatest.ts — land the chat thread on its NEWEST message and STAY
-// there while the layout settles (T-48 ③).
+// lib/scrollToLatest.ts — land the chat thread on its NEWEST message.
 //
-// Two defects it exists to close, both measured in the isolated environment:
+// The defect it exists to close, measured in the isolated environment:
+// THE OLD TARGET WAS THE WRONG ROW. The 「有新訊息」 chip scrolled to
+// `newMsgAnchorId` — the FIRST unseen message — so a burst of ten arrivals left
+// the reader on message 1 with five more still below the fold. The divider
+// marks where the unread block STARTS; the jump is for reaching the END of it.
 //
-//  1. THE OLD TARGET WAS THE WRONG ROW. The 「有新訊息」 chip scrolled to
-//     `newMsgAnchorId` — the FIRST unseen message — so a burst of ten arrivals
-//     left the reader on message 1 with five more still below the fold. The
-//     divider marks where the unread block STARTS; the jump is for reaching the
-//     END of it.
+// ⚠️ NOT SMOOTH, deliberately. An animation is interrupted and restarted by
+// every reflow, which reads as the thread lurching. The hash jump is instant
+// for the same reason.
 //
-//  2. THE LANDING WAS NEVER CORRECTED. The chip used
-//     `scrollIntoView({ behavior: "smooth" })` and stopped there. Anything above
-//     the target that grows AFTER the scroll — an image decoding to its real
-//     height, an inline reply card refetching — pushes the row straight back out
-//     of view, and the smooth animation makes the miss look like the scroll
-//     simply went somewhere else. The hash-route jump (ChatArea's `jumpToMsgId`
-//     reactor) already solved this with a ResizeObserver that re-settles until
-//     the layout stops moving; this is that same discipline, extracted so both
-//     entry points share it rather than one of them having it.
+// 🔴 IT DOES NOT CORRECT THE LANDING, AND THAT IS A SIGNED DECISION (T-48,
+// owner rc-6c27f486ef9d 「拿掉。圖片／卡片展開把目標擠走我接受」). This function
+// used to hold a ResizeObserver that re-scrolled for 2.6s so that content above
+// the target growing late — an image decoding to its real height, an inline
+// reply card refetching — could not push the row back out of view. Measured
+// cost of removing it: the newest row ends up 418px below the fold on a 433px
+// viewport. The owner named that cost and took it.
 //
-// ⚠️ NOT SMOOTH, deliberately. The correction re-scrolls; an animation would be
-// interrupted and restarted by every reflow, which reads as the thread lurching.
-// The hash jump is instant for the same reason.
-
-/** How long the landing keeps being re-corrected. Same window as the hash
- * jump's highlight — long enough for images and lazy cards, short enough that
- * an owner who scrolls away afterwards is never yanked back. */
-const SETTLE_MS = 2600;
+// ⇒ DO NOT ADD A CORRECTION LOOP BACK HERE. Three attempts died on the same
+// rock: a loop that writes `scrollTop` cannot tell its own re-scroll from the
+// reader's, so it either yanks a reader who has moved on or gives up on the
+// case it was written for.
+//
+// (The module used to name a third source, "markdown 重排". It was never real —
+// measured 0px across code blocks, tables and long quotes, byte-identical at
+// t+0/+300ms/+2300ms — so it is not repeated here.)
 
 /**
  * Scroll `scroller` so the LAST `[data-msg-id]` row it contains is fully
- * visible, then keep it that way for {@link SETTLE_MS} as content reflows.
- * Returns a disposer; calling it stops the correction early.
+ * visible. One scroll, no follow-up: see the note above.
  */
-export function scrollToLatest(scroller: HTMLElement): () => void {
+export function scrollToLatest(scroller: HTMLElement): void {
   const rows = scroller.querySelectorAll<HTMLElement>("[data-msg-id]");
   const latest = rows[rows.length - 1];
-  if (!latest) return () => {};
-  const settle = () => latest.scrollIntoView({ block: "end" });
-  settle();
-  // A ResizeObserver on the viewport itself never fires — its box is clamped by
-  // the flex column — so watch the in-flow children, whose height is what
-  // actually grows. Same choice, and the same reason, as the hash jump's.
-  if (typeof ResizeObserver === "undefined") return () => {};
-  const ro = new ResizeObserver(settle);
-  for (const child of Array.from(scroller.children)) ro.observe(child);
-  const timer = window.setTimeout(() => ro.disconnect(), SETTLE_MS);
-  return () => {
-    window.clearTimeout(timer);
-    ro.disconnect();
-  };
+  if (!latest) return;
+  latest.scrollIntoView({ block: "end" });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
