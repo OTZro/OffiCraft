@@ -247,6 +247,42 @@ describe("check-async-landing-points", () => {
     expect(out).toContain("path aliases the walk cannot resolve");
   });
 
+  // Rule 7 — the thread's setter has ONE home. Both mutants are second thread
+  // states in `useChat`; the second carries NO type annotation at all, which is
+  // what the previous, text-matching version of the rule let through (census
+  // green, tsc green — independent review F2).
+  it("reddens on a second useState<Thread> outside lib/threadCommit.ts", () => {
+    const { code, out } = run((edit) =>
+      edit("hooks/useChat.ts", (code) =>
+        code.replace(
+          "  const [peerLastReadTs, setPeerLastReadTs] = useState(0);",
+          "  const [peerLastReadTs, setPeerLastReadTs] = useState(0);\n" +
+            '  const [t2, setT2] = useState<import("../lib/threadCommit").Thread>({ messages: [], hasMore: true, gapSuspected: false, hasNewer: false });\n' +
+            "  void t2; void setT2;",
+        ),
+      ),
+    );
+    expect(code, out).not.toBe(0);
+    expect(out).toContain("hooks/useChat.ts declares the chat thread's own state");
+  });
+
+  it("reddens on a second thread state that never spells the word Thread", () => {
+    const { code, out } = run((edit) =>
+      edit("hooks/useChat.ts", (code) =>
+        code.replace(
+          "  const [peerLastReadTs, setPeerLastReadTs] = useState(0);",
+          "  const [peerLastReadTs, setPeerLastReadTs] = useState(0);\n" +
+            "  const EMPTY2 = { messages: [] as ChatMessage[], hasMore: true, gapSuspected: false, hasNewer: false };\n" +
+            "  const [xthread, setXThread] = useState(EMPTY2);\n" +
+            "  const paintRaw = (msgs: ChatMessage[]) => setXThread((p) => ({ ...p, messages: msgs }));\n" +
+            "  void xthread; void paintRaw;",
+        ),
+      ),
+    );
+    expect(code, out).not.toBe(0);
+    expect(out).toContain("hooks/useChat.ts declares the chat thread's own state");
+  });
+
   it("reddens when a SECOND component calls useQuotedMessageOverlay (R14-1.6)", () => {
     // The overlay carries no room stamp of its own: it relies on ChatArea being
     // unmounted by a room switch. A caller keyed on a card id is not.

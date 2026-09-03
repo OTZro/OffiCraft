@@ -740,42 +740,154 @@ const MODULE_STATE = [
  * of the latch type, and enforced the same way: not by asking whether a call
  * site is careful, but by making the careless form unwritable.
  *
+ * 🟠 "UNWRITABLE" IS A CLAIM WITH A BOUNDARY, AND IT IS WRITTEN DOWN. The rule
+ * asks the TYPE CHECKER whether a `useState`/`useReducer`/`useRef` holds
+ * something with `messages: ChatMessage[]` in it (or a React setter for such a
+ * thing), so no spelling — no annotation at all, a renamed import, an alias, an
+ * inferred object literal — gets past it. What DOES get past it is a thread
+ * whose messages are not `ChatMessage`: a locally redeclared twin of that
+ * interface, or `unknown[]`. See `declaresThreadState` for why the anchor is
+ * there and not somewhere looser.
+ *
  * It runs over the WALK, so a new hook the chat surface starts calling is
  * covered without anybody adding it to a list. */
 const THREAD_STATE_OWNER = "lib/threadCommit.ts";
 
-/** Does this file declare React state over `Thread`, or a setter for one?
+/** Does this file declare React state over the chat thread, or a setter for one?
  *
- * By AST rather than by line, for the reason the module-state census moved:
- * `useState<Thread>(` and `useState<\n  Thread\n>(` are the same declaration and
- * a line pattern sees two different strings. Three shapes count:
- *   1. `useState<Thread>(…)` / `useState<Thread | null>(…)` — the call itself;
- *   2. a `useRef`/`useState` whose type argument mentions `Thread` in a SETTER
- *      position (`Dispatch<SetStateAction<Thread>>`), i.e. somebody stashed the
- *      setter to hand it around;
- *   3. any binding annotated `Dispatch<SetStateAction<Thread…>>`.
+ * 🔴 IT ASKS THE TYPE CHECKER, NOT THE TEXT (T-48, independent review F2). This
+ * used to match on the SPELLING of a type annotation: a `useState`/`useReducer`/
+ * `useRef` whose type argument text matched `/\bThread\b/`, or a binding
+ * annotated `SetStateAction<…Thread…>`. All three shapes therefore needed
+ * somebody to have WRITTEN the word `Thread`, and the screen does not consume
+ * that name — it consumes `messages: ChatMessage[]`. So the rule's own claim
+ * ("the careless form is unwritable") was only true of the annotated form:
  *
- * Over-approximating is the safe direction here — a false positive is one line
- * of argument in review, a false negative is the defect back. */
+ *     const EMPTY2 = { messages: [] as ChatMessage[], hasMore: true,
+ *                      gapSuspected: false, hasNewer: false };
+ *     const [xthread, setXThread] = useState(EMPTY2);
+ *
+ * was a second thread state with a second setter, and both this census and
+ * `tsc --noEmit` passed it. (Measured, in `useChat.ts`, before this rewrite.)
+ *
+ * What it asks now is a question about the TYPE, which no spelling can dodge:
+ *   · `carriesThread` — does this type structurally have a property `messages`
+ *     whose type is an array of the `ChatMessage` INTERFACE ITSELF (type
+ *     identity against `api/adapter.ts`, not a name match)? An inferred object
+ *     literal, a type alias, an import rename, `typeof EMPTY2` and a hand-
+ *     written `{ messages: ChatMessage[]; … }` are all the same type here.
+ *   · …or is it a REACT SETTER for such a type — a call signature whose first
+ *     parameter is a union of that shape and of a function returning it, which
+ *     is what `Dispatch<SetStateAction<T>>` IS structurally. Written that
+ *     narrowly on purpose: a plain updater `(prev: Thread) => Thread` is NOT a
+ *     union and so does not fire, which keeps every `commit(seq, next)` call
+ *     site in `useChat` out of the rule.
+ *
+ * 🟠 WHAT IT STILL DOES NOT CATCH, SAID PLAINLY. A thread state whose messages
+ * are held under a DIFFERENT element type — a locally declared interface with
+ * the same fields, or `unknown[]`/`any[]` — is invisible to it, because
+ * `ChatMessage` is where this rule anchors identity. That residue is a
+ * deliberate floor, not an oversight: anything the chat surface can actually
+ * render has to come out of `api/adapter`, and a check with no anchor at all
+ * would fire on every `messages` in the tree.
+ *
+ * Over-approximating is otherwise the safe direction — a false positive is one
+ * line of argument in review, a false negative is the defect back. */
+function threadTypeProbe() {
+  if (threadProbe) return threadProbe;
+  // ONE program over the walked files. React's own types need not resolve (a
+  // temp-tree run under ASYNC_LANDING_SRC has no node_modules beside it) — the
+  // rule reads the type ARGUMENT or the type of the INITIAL VALUE, both of
+  // which are the caller's own code and resolve through relative imports.
+  const program = ts.createProgram(
+    files,
+    {
+      target: ts.ScriptTarget.Latest,
+      jsx: ts.JsxEmit.Preserve,
+      module: ts.ModuleKind.ESNext,
+      moduleResolution: ts.ModuleResolutionKind.Bundler,
+      skipLibCheck: true,
+      noEmit: true,
+      strict: true,
+    },
+  );
+  const checker = program.getTypeChecker();
+  const adapter = program.getSourceFile(join(SRC, "api", "adapter.ts"));
+  let chatMessage = null;
+  for (const st of adapter?.statements ?? []) {
+    if (ts.isInterfaceDeclaration(st) && st.name.text === "ChatMessage") {
+      chatMessage = checker.getTypeAtLocation(st);
+    }
+  }
+  threadProbe = { program, checker, chatMessage };
+  return threadProbe;
+}
+let threadProbe = null;
+
 function declaresThreadState(file) {
+  const { program, checker, chatMessage } = threadTypeProbe();
+  const source = program.getSourceFile(file);
+  if (!source || !chatMessage) return [];
+
+  const isChatMessageArray = (t) => {
+    if (!t) return false;
+    const el = checker.getElementTypeOfArrayType?.(t);
+    return !!el && el === chatMessage;
+  };
+  /** The thread's own shape: `messages: ChatMessage[]`, however spelled. */
+  const isThreadShape = (t) => {
+    if (!t || typeof t.getProperty !== "function") return false;
+    const p = t.getProperty("messages");
+    if (!p) return false;
+    return isChatMessageArray(checker.getTypeOfSymbolAtLocation(p, source));
+  };
+  /** `Dispatch<SetStateAction<thread>>`, structurally: one call signature whose
+   * first parameter is a union holding BOTH the value and an updater for it. */
+  const isThreadSetter = (t) => {
+    if (!t || typeof t.getCallSignatures !== "function") return false;
+    return t.getCallSignatures().some((sig) => {
+      const p = sig.getParameters()[0];
+      if (!p) return false;
+      const pt = checker.getTypeOfSymbolAtLocation(p, source);
+      if (!pt.isUnion?.()) return false;
+      const parts = pt.types;
+      return (
+        parts.some(isThreadShape) &&
+        parts.some((c) =>
+          (c.getCallSignatures?.() ?? []).some((s) =>
+            isThreadShape(checker.getReturnTypeOfSignature(s)),
+          ),
+        )
+      );
+    });
+  };
+  const carriesThread = (t) => isThreadShape(t) || isThreadSetter(t);
+
   const hits = [];
-  const mentionsThread = (t) =>
-    !!t && /\bThread\b/.test(t.getText(ast(file)));
-  eachNode(ast(file), (n) => {
+  eachNode(source, (n) => {
     if (
       ts.isCallExpression(n) &&
       ts.isIdentifier(unwrap(n.expression)) &&
-      /^use(State|Reducer|Ref)$/.test(unwrap(n.expression).text) &&
-      (n.typeArguments ?? []).some(mentionsThread)
+      /^use(State|Reducer|Ref)$/.test(unwrap(n.expression).text)
     ) {
-      hits.push(`${unwrap(n.expression).text}<…Thread…>`);
+      const types = [
+        ...(n.typeArguments ?? []).map((a) => checker.getTypeFromTypeNode(a)),
+        ...n.arguments.map((a) => checker.getTypeAtLocation(a)),
+      ];
+      if (types.some(carriesThread)) {
+        hits.push(
+          `${unwrap(n.expression).text}(…) over a { messages: ChatMessage[] } shape`,
+        );
+      }
     }
     if (
-      (ts.isVariableDeclaration(n) || ts.isParameter(n) || ts.isPropertySignature(n)) &&
+      (ts.isVariableDeclaration(n) ||
+        ts.isParameter(n) ||
+        ts.isPropertySignature(n)) &&
       n.type &&
-      /SetStateAction\s*<[^>]*\bThread\b/.test(n.type.getText(ast(file)))
+      isThreadSetter(checker.getTypeFromTypeNode(n.type))
     ) {
-      hits.push(`a Dispatch<SetStateAction<Thread>> binding`);
+      hits.push(`a React setter for that shape, stashed in a binding`);
     }
   });
   return [...new Set(hits)];
@@ -1361,9 +1473,14 @@ for (const file of files) {
   const hits = declaresThreadState(file);
   if (hits.length > 0 && where !== THREAD_STATE_OWNER) {
     problems.push(
-      `${where} declares the chat thread's own state (${hits.join(", ")}).\n  Only ${THREAD_STATE_OWNER} may hold it. Every write to the thread must go through its commit / mergeHistory / clear doors, because those are what await the page's WAITING reply cards before the rows reach the view — a second setter is a second way to paint messages whose cards are still in the air, and the scroll target then moves under the reader (measured +254px at 1280).`,
+      `${where} declares the chat thread's own state (${hits.join(", ")}).\n  Only ${THREAD_STATE_OWNER} may hold it. Every write to the thread must go through its commit / mergeHistory / clear doors, because those are what await the page's WAITING reply cards before the rows reach the view — a second setter is a second way to paint messages whose cards are still in the air, and the scroll target then moves under the reader (measured +254px at 1280).\n  This test is on the TYPE, not on the annotation's text: it fires however the shape is spelled, including with no annotation at all. It does NOT fire on a thread whose messages are not \`ChatMessage\` (a locally redeclared twin, \`unknown[]\`) — that residue is named in declaresThreadState.`,
     );
   }
+}
+if (threadTypeProbe().chatMessage === null) {
+  problems.push(
+    `rule 7 could not resolve the \`ChatMessage\` interface from src/api/adapter.ts, so its structural test compares against nothing and every file passes it vacuously. Point it at wherever the chat message type lives now.`,
+  );
 }
 if (declaresThreadState(join(SRC, "lib", "threadCommit.ts")).length === 0) {
   problems.push(
