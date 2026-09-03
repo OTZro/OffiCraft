@@ -54,6 +54,7 @@ var planeASubcommands = []struct{ name, help string }{
 	{"suicide", "self-terminate: kill my own tmux session (OC_SESSION) → SSE drops → offline"},
 	{"download", "fetch a chat attachment blob to a local file (streaming; --out <dir>)"},
 	{"upload", "stream a local file into the attachment store (prints the att id; --mime <type>)"},
+	{"diff", "upload two files and mint a compare attachment the owner can open (prints the att id)"},
 	{"clean", "get rid of a file or folder I made: quarantines it under my workdir (never rm)"},
 	// Listed because --help is where a person or an agent goes to ask "can this
 	// CLI tell me which build it is?". Kept out of the synopsis, `version` was
@@ -178,6 +179,35 @@ func realMain(argv []string, env func(string) string, in io.Reader, out io.Write
 			return 2
 		}
 		return cmdUpload(newStreamingClient(), cfg, args[0], *mimeType, out, os.Stderr)
+
+	case "diff":
+		// The compare attachment (T-59): two file paths in, one attachment id
+		// out. Three uploads happen behind this — the two documents and the
+		// pair that names them — because the pair can only be written once the
+		// two ids exist, and an agent assembling that by hand is where the ids
+		// get transposed. See diff.go.
+		fs := flag.NewFlagSet("ocagent diff", flag.ContinueOnError)
+		fs.SetOutput(out)
+		beforeLabel := fs.String("label-before", "", "column heading for the first file (default: its name)")
+		afterLabel := fs.String("label-after", "", "column heading for the second file (default: its name)")
+		if err := fs.Parse(rest); err != nil {
+			return 2
+		}
+		// Same reason as upload: stdlib flag stops at the first positional, so
+		// re-parse what follows the two paths.
+		args := fs.Args()
+		if len(args) >= 2 {
+			if err := fs.Parse(args[2:]); err != nil {
+				return 2
+			}
+		}
+		if len(args) < 2 || fs.NArg() != 0 {
+			fmt.Fprintln(out, "[ocagent] diff: exactly two arguments are required: <before> <after>")
+			fmt.Fprintln(out, "usage: ocagent diff <before> <after> [--label-before <text>] [--label-after <text>]")
+			return 2
+		}
+		return cmdDiff(newStreamingClient(), cfg, args[0], args[1],
+			*beforeLabel, *afterLabel, out, os.Stderr)
 
 	case "clean":
 		// The ONE entry for "get rid of this file/folder I made" (owner

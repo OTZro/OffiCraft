@@ -1,14 +1,8 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
-	"os"
-	"path/filepath"
-	"strings"
 )
 
 // ---------------------------------------------------------------------------
@@ -58,84 +52,16 @@ func cmdUpload(client httpClient, cfg Config, path, mimeType string, out, errOut
 		fmt.Fprint(errOut, "[ocagent] upload: no OC_TOKEN configured — cannot make an authed upload.\n")
 		return 3
 	}
-
-	f, err := os.Open(path)
-	if err != nil {
-		fmt.Fprintf(errOut, "[ocagent] upload: cannot open %s: %v\n", path, err)
-		return 1
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		fmt.Fprintf(errOut, "[ocagent] upload: cannot stat %s: %v\n", path, err)
-		return 1
-	}
-	if info.IsDir() {
-		fmt.Fprintf(errOut, "[ocagent] upload: %s is a directory, not a file\n", path)
-		return 1
-	}
-
-	query := url.Values{}
-	if name := filepath.Base(path); name != "" && name != "." && name != string(filepath.Separator) {
-		query.Set("filename", name)
-	}
-	if strings.TrimSpace(mimeType) != "" {
-		query.Set("mime", strings.TrimSpace(mimeType))
-	}
-	reqURL := cfg.Base + "/api/chat/attachments?" + query.Encode()
-
-	// An *os.File body streams: the transport reads from disk chunk by chunk
-	// and stamps Content-Length from the explicit ContentLength below.
-	req, err := http.NewRequest(http.MethodPost, reqURL, f)
-	if err != nil {
-		fmt.Fprintf(errOut, "[ocagent] upload: bad request for %q: %v\n", path, err)
-		return 1
-	}
-	req.ContentLength = info.Size()
-	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Authorization", "Bearer "+cfg.Token)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		fmt.Fprintf(errOut, "[ocagent] upload: request failed (network): %v\n", err)
-		return 1
-	}
-	defer resp.Body.Close()
-
-	// The response is a small JSON ref either way — bounded read for hygiene.
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-	detail := strings.TrimSpace(string(raw))
-
-	switch {
-	case resp.StatusCode == http.StatusOK:
-		// fall through to the success path below
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		fmt.Fprintf(errOut, "[ocagent] upload: auth rejected (HTTP %d) for %q: %s\n",
-			resp.StatusCode, path, detail)
-		return 3
-	case resp.StatusCode == http.StatusBadRequest:
-		fmt.Fprintf(errOut, "[ocagent] upload: server rejected %q (HTTP 400): %s\n",
-			path, detail)
-		return 4
-	default:
-		fmt.Fprintf(errOut, "[ocagent] upload: unexpected HTTP %d for %q: %s\n",
-			resp.StatusCode, path, detail)
-		return 5
-	}
-
-	var ref struct {
-		ID       string `json:"id"`
-		Mime     string `json:"mime"`
-		Filename string `json:"filename"`
-	}
-	if err := json.Unmarshal(raw, &ref); err != nil || ref.ID == "" {
-		fmt.Fprintf(errOut, "[ocagent] upload: 200 but unparseable ref body: %s\n", detail)
-		return 5
+	// The streaming, auth and exit-code contract lives in postAttachment
+	// (diff.go) — `diff` posts three attachments and must not carry a second,
+	// slightly different copy of it.
+	ref, size, code := uploadOneFile(client, cfg, "upload", path, mimeType, errOut)
+	if code != 0 {
+		return code
 	}
 	fmt.Fprintf(errOut, "[ocagent] upload: %s (%d bytes, %s) → %s\n",
-		ref.Filename, info.Size(), ref.Mime, ref.ID)
+		ref.Filename, size, ref.Mime, ref.ID)
 	fmt.Fprintln(out, ref.ID)
-	fmt.Fprintln(out, detail)
+	fmt.Fprintln(out, ref.raw)
 	return 0
 }
