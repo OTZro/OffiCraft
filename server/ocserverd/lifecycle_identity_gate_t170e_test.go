@@ -231,6 +231,17 @@ var identityKindFieldsNotOverloaded = map[string]bool{
 // name matching nothing would not fail loudly, it would just shrink the scan.
 var identitySeamFuncs = map[string]bool{
 	"isOutsourceMember": true,
+	// 🔴 T-14 項目 6. lifecycleTickDriverFor answers "which half of the merged
+	// lifecycle tick drives this row" — a population question, answered on the
+	// caller's behalf, with no comparison and no kind constant at the call site.
+	// Shapes A–C all walk straight past `if lifecycleTickDriverFor(m) !=
+	// driverReconcile`, which is why the PR that introduced the function shipped
+	// with a parity test that guards the FUNCTION and nothing that could notice
+	// either CALLER disappearing: both guards were deleted by hand and the whole
+	// suite stayed green (measured by review, 2026-09-03). Listing the function
+	// here puts each call site in the ledger, so deleting one turns its entry
+	// into a stale key and the gate names it.
+	"lifecycleTickDriverFor": true,
 }
 
 // ── the exclusion list ──────────────────────────────────────────────────────
@@ -507,6 +518,39 @@ var identityGateLedger = map[string]string{
 		"spawn/stop candidate, it is the thing that EXECUTES them — unless it is being " +
 		"uninstalled, which is the one case the reconcile tick must still drive. A " +
 		"machine-vs-person axis, not the 正職／外包 one.",
+	"lifecycle_roster.go :: lifecycleTickDriverFor :: m.Kind == KindOutsource": "" +
+		"WHICH HALF of the merged tick drives the row — NOT whether the row is treated " +
+		"differently. This is the 正職／外包 split that already exists and has never been " +
+		"written down: it is a side effect of dal.ListMembers being `WHERE kind != " +
+		"'outsource'`, which is today the ONLY thing keeping one row out of both FSMs " +
+		"in a single tick. T-14 項目 6 merges that clause away; this expression is the " +
+		"same split re-sited into a named total predicate FIRST, so the invariant " +
+		"becomes falsifiable (TestLifecycleTickDriver_EveryRowHasExactlyOneDriver) " +
+		"instead of implicit in a query. It adds no differentiated TREATMENT — both " +
+		"halves run the same shared formalities and the same entry filter — so the " +
+		"owner's 2026-08-26 question is answered by: this branch is the routing that " +
+		"the two-executor split needs while it exists, and deleting it is the follow-up " +
+		"card (retire the outsource half), not this step.",
+	"reconcile.go :: runReconcileTick :: lifecycleTickDriverFor(m)": "" +
+		"the staff half ASKING the driver question — 「這一列是不是我的」 — at the head " +
+		"of its candidate loop, before the entry filter and before any formality. It " +
+		"introduces no differentiated TREATMENT: every row it keeps then runs the same " +
+		"shared entry filter and the same shared pass list a worker runs. It is on the " +
+		"record as a seam CALL rather than as a kind comparison because that is what " +
+		"it is — the kind branch itself lives once, in lifecycleTickDriverFor, and this " +
+		"entry is the record that this half asks it. 🔴 THIS ENTRY IS ALSO THE TOOTH: " +
+		"deleting the guard makes this key stale and the gate fails by name, which is " +
+		"the property the PR text claimed and the parity test could not deliver (it " +
+		"guards the predicate, not its callers).",
+	"outsource_sched.go :: runOutsourceTick :: lifecycleTickDriverFor(memberFromWorker(w))": "" +
+		"the outsource half asking the same driver question about the same population, " +
+		"through memberFromWorker — the worker row IS a member row, so both halves ask " +
+		"ONE predicate rather than each spelling its own kind test. Asked on the raw " +
+		"roster read, at the head of the producer, so that a row this half does not own " +
+		"is dropped before runWorkerLifecyclePasses stamps it and before it can consume " +
+		"the parallel cap; the guard used to sit below those, which was harmless only " +
+		"while it was a no-op. Same tooth as the reconcile entry above: delete the " +
+		"guard and this key goes stale.",
 	"lifecycle_roster.go :: lifecycleRosterPasses :: m.Kind != KindOutsource": "" +
 		"recycle_loop_break's AppliesTo — THE one declared staff-only formality, and " +
 		"the mechanism working as designed: a worker already has a loop-break in " +
@@ -1498,11 +1542,23 @@ var lifecycleProducerLoopRulings = map[string]producerLoopRuling{
 			"candidate filter had been overlooked. That is the mechanism working, and " +
 			"it is the reason the count is part of the ruling rather than a bare key.",
 	},
+	"runOutsourceTick :: for _, w := range all": {
+		Count: 1,
+		Why: "THE driver filter (T-14 項目 6): which half of the merged lifecycle tick " +
+			"owns each row, asked on the raw ListOutsourceWorkers read before any pass " +
+			"or decision touches it — the twin of runReconcileTick's `for _, m := range " +
+			"all`. It builds the candidate set and does not touch rows; it stamps " +
+			"nothing and is not a formality. A no-op while ListOutsourceWorkers is " +
+			"kind='outsource'-only, and the wall that keeps the split falsifiable once " +
+			"that WHERE clause is merged away.",
+	},
 	"runOutsourceTick :: for _, w := range workers": {
 		Count: 2,
 		Why: "two passes over the worker snapshot: the live-count/codename fold (read " +
 			"only, feeds the parallel cap), and the per-worker FSM dispatch AFTER " +
-			"runWorkerLifecyclePasses. The second is this producer's terminal loop, the " +
+			"runWorkerLifecyclePasses — both now run over the DRIVER-FILTERED set " +
+			"built by `for _, w := range all` above. The second is this producer's " +
+			"terminal loop, the " +
 			"twin of runReconcileTick's decide pass. 🔴 If you are about to add a stamp " +
 			"to either of them, it is a pre-decide formality and belongs in " +
 			"lifecycleRosterPasses so 正職 gets it too.",
