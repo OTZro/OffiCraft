@@ -3996,8 +3996,8 @@ export const mockApi: Api = {
 
   async removeTaskArtifact(taskId: string, artifactId: string): Promise<void> {
     // Mirrors handle_remove_task_artifact (T-3dc5): the owner/admin un-pin.
-    // Closed task → 409 (T-2654: the deliverable set is frozen in BOTH
-    // directions, so un-pin is refused exactly like add). Unknown artifact →
+    // Closed task → 409 (T-2654: the deliverable set is frozen in EVERY
+    // direction, so un-pin is refused exactly like add and replace). Unknown artifact →
     // 404, wrong-task ownership → 400. The blob is left intact (the mock has no
     // blob store to touch). The 409 must come BEFORE the artifact lookup, same
     // as the server — a mock that deletes where production refuses is worse

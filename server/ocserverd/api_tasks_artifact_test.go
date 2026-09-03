@@ -234,7 +234,7 @@ func TestAddArtifactOnTerminalTaskIs409(t *testing.T) {
 
 // TestRemoveArtifactOnTerminalTaskIs409 is the symmetric twin of
 // TestAddArtifactOnTerminalTaskIs409 (owner ruling 2026-07-25, T-2654): a closed
-// task's deliverable set is frozen in BOTH directions. The add-only freeze made
+// task's deliverable set is frozen in EVERY direction. The add-only freeze made
 // un-pin an unrecoverable loss — a deliverable could be taken off a closed card
 // and never put back. The open-task remove below is the positive control, so a
 // mutant that freezes un-pin unconditionally reddens too.

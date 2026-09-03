@@ -61,7 +61,7 @@ func mustBlobGone(t *testing.T, d *DAL, id, why string) {
 // A file uploaded in a chat message and then PINNED onto a task card as a
 // deliverable: removing the member deletes the message, but the task_artifact
 // row survives (artifact rows have no cascade, and a terminal task's set is
-// frozen in both directions) — so the blob is still referenced and must live.
+// frozen in every direction) — so the blob is still referenced and must live.
 //
 // On 2e74953 the survivor scan read chat_message.meta and both reply_card
 // columns only, so this blob was cascaded and the task card was left holding a

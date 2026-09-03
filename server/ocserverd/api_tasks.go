@@ -2840,8 +2840,8 @@ func (s *apiServer) HandleReportTaskCloseoutApiTasksTaskIdCloseoutPost(w http.Re
 // ── C.4 artifact set (T-3dc5) ────────────────────────────────────────────────
 
 // POST /api/tasks/{task_id}/artifact — the executing agent pins one deliverable
-// onto the task's artifact set (MCP add_task_artifact). Append-only and
-// repeatable. file/image reference a chat_attachment blob (attachment_id from a
+// onto the task's artifact set (MCP add_task_artifact). This verb only ADDS and
+// is repeatable; swapping what an existing pin points at is ReplaceTaskArtifact. file/image reference a chat_attachment blob (attachment_id from a
 // prior POST /api/chat/attachments — one blob mechanism, not two); link carries
 // a bare url (no upload). Guard order: 400 closed-set kind → 404 task → 403 not
 // the executor (admin excepted, §14) → 409 terminal → 400 missing/dangling ref.
@@ -2927,11 +2927,14 @@ func (s *apiServer) HandleAddTaskArtifactApiTasksTaskIdArtifactPost(w http.Respo
 // the task's executor may remove its own deliverables, admin/owner may remove on
 // any task (§14). Guard order: 404 task → 403 not the executor → 409 the task is
 // closed → 404 artifact → 400 the artifact belongs to a different task. The
-// referenced blob is left intact (it may be shared with a chat message; the blob
-// store has no delete path).
+// LIVE row's blob is left intact (it may be shared with a chat message), but the
+// delete does not stop at the live row: DeleteTaskArtifact also drops every
+// retained version of this artifact and collects the blobs only those versions
+// referenced (see dal_task_artifacts.go).
 //
-// The 409 is the SYMMETRIC twin of add's freeze (owner ruling 2026-07-25, T-2654):
-// a closed task's deliverable set is frozen in BOTH directions. It used to be
+// The 409 is the SYMMETRIC twin of add's freeze (owner ruling 2026-07-25, T-2654),
+// and since T-60 replace eats it too: a closed task's deliverable set is frozen in
+// EVERY direction. It used to be
 // add-only, which made un-pin an unrecoverable data loss — the deliverable could
 // be removed from a closed card and never put back. Like add's, this guard sits
 // after the permission check, so admin/owner are not exempt either.

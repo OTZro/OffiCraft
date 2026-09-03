@@ -1270,7 +1270,7 @@ func refIDsFromJSON(blob string, into map[string]bool) {
 // out from under that referrer with no error and no receipt. The failure mode
 // this closed was exactly that: a deliverable pinned on a task card went to a
 // dead link when the chat message it was uploaded in was removed — and a
-// terminal task's artifact set is frozen in both directions, so it could not
+// terminal task's artifact set is frozen in every direction, so it could not
 // be re-attached.
 //
 // ⚠️ Honest limit — this scan is NOT a general GC. It only ever considers the
@@ -1399,7 +1399,7 @@ func collectSurvivingBlobRefs(tx *sql.Tx, into map[string]bool) error {
 
 	// 4. task artifacts (T-62a8) — a deliverable pinned onto a task card.
 	//    task_artifact rows have no cascade of their own and a terminal
-	//    task's set is frozen in both directions, so this reference is the
+	//    task's set is frozen in every direction, so this reference is the
 	//    strongest one in the schema: dropping its blob is unrecoverable.
 	//    The filter keeps LINK artifacts (no blob, attachment_id '') from
 	//    voting for a nonexistent empty-id blob.

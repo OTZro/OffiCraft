@@ -1,7 +1,7 @@
 // T-2654 — the 移除 affordance disappears once a task closes.
 //
-// The server freezes a closed task's deliverable set in BOTH directions (add
-// AND remove 409). Before this, the card kept offering 移除 on closed cards, so
+// The server freezes a closed task's deliverable set in EVERY direction (add,
+// remove AND replace 409). Before this, the card kept offering 移除 on closed cards, so
 // the only thing standing between owner and a dead-end click was the API. The
 // mock made it worse: it had no terminal guard at all, so the fake cockpit
 // DELETED where production refuses — a UI change checked against the mock would

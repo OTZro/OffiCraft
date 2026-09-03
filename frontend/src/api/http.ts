@@ -1773,7 +1773,8 @@ export const httpApi: Api = {
     // TaskArtifactReceiptDTO. The owner/admin un-pin (T-3dc5); unknown
     // task/artifact → 404, wrong-task → 400 (both throw via the client
     // middleware). The write answers with a bounded receipt (T-a98d), not the
-    // task; the caller refetches. The blob itself is left intact.
+    // task; the caller refetches. The live blob is left intact, but the artifact's
+    // retained versions (and the blobs only they referenced) are deleted with it.
     unwrap(
       await client.DELETE("/api/tasks/{task_id}/artifact/{artifact_id}", {
         params: { path: { task_id: taskId, artifact_id: artifactId } },

@@ -2108,7 +2108,8 @@ export interface Api {
    * agent PINS via MCP but does not remove). The write answers with a bounded
    * receipt (T-a98d), so nothing is returned here — refetch, or take the SSE
    * delta. Unknown task/artifact → 404, wrong-task → 400 (both throw
-   * ApiError). The referenced blob is left intact.
+   * ApiError). The live blob is left intact, but every retained version of the
+   * artifact is deleted with it, along with the blobs only those versions used.
    */
   removeTaskArtifact(taskId: string, artifactId: string): Promise<void>;
 

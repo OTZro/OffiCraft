@@ -105,8 +105,8 @@ func (d *DAL) AllTaskArtifactCounts() (map[string]int, error) {
 }
 
 // PutTaskArtifact inserts one artifact row (the SSE delta is the handler's
-// job). Registration is append-only — an id is minted per call, so this is an
-// INSERT, not an upsert (no natural update path for a pinned deliverable).
+// job). Registration mints an id per call, so this is an INSERT, not an upsert;
+// the update path for an existing pin is ReplaceTaskArtifact, which keeps the id.
 func (d *DAL) PutTaskArtifact(a TaskArtifact) error {
 	_, err := d.wdb.Exec(`
 		INSERT INTO task_artifact (`+taskArtifactColumns+`)
