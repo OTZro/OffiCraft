@@ -428,6 +428,69 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
     expect(new Set(forward).size).toBe(forward.length);
   });
 
+  it("一頁貼上去把底部推遠時,連鎖照樣走得完 —— 動的是版面,不是人", async () => {
+    // 🔴 這一條是 CI run 33794983804(macos-e2e、390 寬)紅的那一格。連鎖曾經在
+    // 每一頁落地之後**重新量一次幾何**,而往新的一頁是**貼在下面**的:30 列一
+    // 落地,底部就退開一個螢幕以上,於是「還在底部嗎」必然答不是,連鎖當場停手。
+    // 它之所以大多數時候還是走得完,只是因為 auto-follow 的 `scrollIntoView`
+    // 通常在同一拍先把畫面拉回底部;那個順序一旦沒發生,走廊就死在半路 ——
+    // 實測 rows 32 → 61、scrollTop 凍在 2702(貼上去之前的最大值,證明畫面沒被
+    // 拉回去)、一個 `?start_id=` 之後五秒內再無請求。
+    //
+    // jsdom 的每一個長度都是 0,所以舊碼在這裡永遠量到 distance=0 而綠 —— 這條
+    // 測試自己鋪一份版面(列高 81、視窗 369,就是那台 390 寬量到的幾何),並且
+    // **絕不替畫面捲動**:`scrollTop` 從頭到尾就是人捲到底的那一個值。
+    seed(A, "a", 80, 100);
+    const { container } = render(view(alice, "a3"));
+    await waitFor(() =>
+      expect(container.querySelector('[data-msg-id="a3"]')).not.toBeNull(),
+    );
+    const box = container.querySelector(".chat__messages")! as HTMLElement;
+    const ROW = 81;
+    const CH = 369;
+    Object.defineProperty(box, "clientHeight", { get: () => CH });
+    Object.defineProperty(box, "scrollHeight", {
+      get: () => box.querySelectorAll(".chat__msg").length * ROW,
+    });
+    box.scrollTop = box.scrollHeight - CH;
+    fireEvent.scroll(box);
+
+    await waitFor(() => expect(bubbles(container)).toContain("a79"));
+  });
+
+  it("人往回捲就停 —— 那才是「不是你的意思了」", async () => {
+    // 上一條的另一半,而且是同一個判準的另一個方向:把幾何的界拿掉之後,走廊還是
+    // 要停得下來。停的訊號是**畫面往上走**(只有人做得到 —— 貼一頁只會把底部往
+    // 下推),不是「離底部很遠」。
+    seed(A, "a", 80, 100);
+    const { container } = render(view(alice, "a3"));
+    await waitFor(() =>
+      expect(container.querySelector('[data-msg-id="a3"]')).not.toBeNull(),
+    );
+    const box = container.querySelector(".chat__messages")! as HTMLElement;
+    const ROW = 81;
+    const CH = 369;
+    Object.defineProperty(box, "clientHeight", { get: () => CH });
+    Object.defineProperty(box, "scrollHeight", {
+      get: () => box.querySelectorAll(".chat__msg").length * ROW,
+    });
+    box.scrollTop = box.scrollHeight - CH;
+    fireEvent.scroll(box);
+    await waitFor(() => expect(bubbles(container).length).toBeGreaterThan(32));
+    // 人往回捲一整個螢幕:從這裡開始不准再自己往前走。
+    box.scrollTop = 0;
+    fireEvent.scroll(box);
+    const asked = windowCalls.length;
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 200));
+    });
+    expect(
+      windowCalls.length,
+      "人已經離開底部,走廊不准再自己撈下一頁",
+      ).toBe(asked);
+    expect(bubbles(container)).not.toContain("a79");
+  });
+
   it("那一頁一列新的都沒有時,自動連鎖停下來,不會拿同一個錨點空轉", async () => {
     // ⚠️ level-triggered 的另一半,而且是它唯一會失控的形狀。往新的一頁回來
     // 「滿頁、但整頁都是已經握著的列」(重複錨點請求真的會拿回這個)時:

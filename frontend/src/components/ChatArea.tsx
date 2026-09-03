@@ -252,6 +252,12 @@ type ChatSession = {
    * ("the reader walked away, stop re-centring"), and landing a new anchor had
    * to clear it again. Neither exists now. */
   forwardWalkArmed: boolean;
+  /** The scrollTop the last scroll event was measured at — the ONLY way to tell
+   * a reader who moved from a box that grew under one who did not (T-48).
+   * A forward page is APPENDED, so it raises `scrollHeight` and leaves
+   * `scrollTop` alone: the same 「離底部很遠」 reading means opposite things
+   * depending on which of the two moved, and only this remembers which. */
+  lastScrollTop: number;
 };
 
 function freshChatSession(unreadCount: number): ChatSession {
@@ -270,6 +276,7 @@ function freshChatSession(unreadCount: number): ChatSession {
     seedConsumed: null,
     pendingLatestScroll: false,
     forwardWalkArmed: false,
+    lastScrollTop: 0,
   };
 }
 
@@ -887,6 +894,15 @@ export function ChatArea({
     }
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
     const nowNearBottom = distance <= NEAR_BOTTOM_PX;
+    // 🔴 THE WALK'S 「不是你的意思了」 STOP, AND IT IS A DIRECTION, NOT A
+    // DISTANCE (T-48). The reader leaving the bottom is a scroll that moves the
+    // viewport UP; an appended page moves the BOTTOM DOWN and the reader not at
+    // all. Measuring that as "they left" is what killed the walk on CI — see
+    // the continuation effect below.
+    if (session.forwardWalkArmed && el.scrollTop < session.lastScrollTop - 1) {
+      session.forwardWalkArmed = false;
+    }
+    session.lastScrollTop = el.scrollTop;
     // Near the BOTTOM of an ANCHOR WINDOW → pull one page FORWARDS (T-48 ③).
     // The exact mirror of the top branch above, and the reason the jump can
     // afford to fetch only two pages: the owner walks out of the window in the
@@ -1437,7 +1453,20 @@ export function ChatArea({
   // ⚠️ AND IT IS BOUNDED, which is the other half of the fix. Three stops, and
   // the walk must not be able to spin between them:
   //   • `hasNewer` false — the walk reached the live tail (the normal ending);
-  //   • the owner scrolled away from the bottom — not their intent any more;
+  //   • the owner scrolled away from the bottom — not their intent any more,
+  //     and that stop is `onMessagesScroll`'s, decided by the DIRECTION the
+  //     viewport moved. It used to be here, as 「the box is now more than
+  //     NEAR_BOTTOM_PX from its bottom」, and that re-asked the question the
+  //     append had just changed the answer to: a page of 30 rows lands BELOW
+  //     the fold, so the distance is a screenful by construction and the walk
+  //     survived only while the auto-follow scroll happened to have run first.
+  //     Measured on CI run 33794983804 (macos-e2e, 390px): rows 32 → 61,
+  //     scrollTop frozen at 2702 — the pre-append maximum, so the follow never
+  //     ran — one `?start_id=` request and not one more in the 5s that
+  //     followed. The same rows=61 the author's own 200-run measurement had
+  //     already reported as a 1% flake before this effect existed. jsdom
+  //     reports every one of those lengths as 0, which is why no unit test
+  //     could see it;
   //   • NO PROGRESS — and that stop is NOT here, it is inside `loadNewer`,
   //     which refuses a second forward page from an anchor whose page came back
   //     with nothing new. Measured, because this effect had that bound first
@@ -1455,12 +1484,6 @@ export function ChatArea({
   // before asking. That sentence was false until review #17 measured it.
   useEffect(() => {
     if (!session.forwardWalkArmed || !hasNewer || messages.length === 0) return;
-    const el = messagesRef.current;
-    if (!el) return;
-    // Declared after the auto-follow effect above, so this reads the geometry
-    // the append has already settled into rather than the one before it.
-    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (distance > NEAR_BOTTOM_PX) return;
     void loadNewer();
   }, [messages, hasNewer, loadNewer, session]);
 
