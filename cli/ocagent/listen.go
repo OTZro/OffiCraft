@@ -727,11 +727,22 @@ const chatUnreadPageLimit = 50
 // would never come back and this member would go deaf with nothing said. So the
 // walk also refuses to take more than this many pages.
 //
-// 100 pages × 50 rows is 5 000 messages, orders of magnitude above any real
-// backlog, which is the point: hitting this is a server bug, not a busy inbox,
-// and the line it prints says so. It is also what bounds the REQUEST cost of a
-// misbehaving server: at worst this walk costs 100 GETs, once per drain.
-const chatUnreadMaxPages = 100
+// 10 pages × 50 rows is 500 messages, well above any real backlog, which is the
+// point: hitting this is a server bug, not a busy inbox, and the line it prints
+// says so. It is also what bounds the REQUEST cost of a misbehaving server: at
+// worst this walk costs 10 GETs, once per drain.
+//
+// 🔴 IT IS A LOOP GUARD, NOT A DOCUMENTED LIMIT — owner, 2026-09-03
+// (rc-c31c54ca9b8b): 「5000則不是我們spec這樣訂，我們預期是未讀不會超過5000則，用這個
+// 數字來防止無限迴圈」, and then 「你也可以先把5000先改為500」. So the number is chosen
+// to be comfortably out of reach of real traffic while keeping a runaway server
+// cheap, and it does NOT belong in the agent-facing seed as a caveat: the seed
+// describes the normal case. Lower it further if 500 is still generous; the only
+// thing that must stay true is that reaching it is impossible in normal use.
+//
+// Reaching it is NOT silent and never has been: the walk prints the "came up
+// short" line and leaves the remainder unread, so the next drain picks it up.
+const chatUnreadMaxPages = 10
 
 // chatFetch is what one full unread walk answers.
 //
