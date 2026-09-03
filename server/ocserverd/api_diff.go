@@ -187,8 +187,13 @@ func (s *apiServer) diffDocContent(addr diffDocAddress) (map[string]string, bool
 	case diffAtCurrent:
 		return s.currentDocumentContent(addr.Kind, addr.Key)
 	}
+	// REACHABLE, despite diffAtRevision having matched: that pattern allows up
+	// to 19 digits and an int64 stops short of the largest of them, so
+	// "9999999999999999999" is a sayable address that does not parse. The
+	// honest answer is the same one a pruned revision gets — this side is gone
+	// — never an error about a number the reader did not know was one.
 	id, err := strconv.ParseInt(addr.At, 10, 64)
-	if err != nil { // unreachable: diffAtRevision already matched.
+	if err != nil {
 		return nil, false, nil
 	}
 	history, err := s.dal.GetDocumentHistory(addr.Kind, addr.Key, id)

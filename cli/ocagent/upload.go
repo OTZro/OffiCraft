@@ -30,6 +30,14 @@ import (
 // seam (OC_TOKEN / OC_BASE), the same clean-identity contract as every other
 // subcommand.
 //
+// ⚠️ ONE FUNCTION ON PURPOSE. This used to be cmdUpload → uploadOneFile →
+// postAttachment, a three-step split whose only reason was a second caller:
+// the OLD `diff`, which uploaded the two files it compared. A comparison is a
+// URL now (T-59) and nothing else in the CLI turns a path into stored bytes,
+// so the seams had one caller each, the `verb` they threaded through was
+// always "upload", and postAttachment's in-memory-body branch had no caller at
+// all. Splitting it again is what a SECOND sender would justify, not this one.
+//
 // Naming/typing: the file's BASENAME rides ?filename= (the server stores it
 // and serves it back via Content-Disposition on download); --mime rides
 // ?mime= when given, else the server sniffs (image magic bytes, fallback
@@ -60,17 +68,34 @@ type uploadedRef struct {
 	raw string
 }
 
-// postAttachment streams one body into POST /api/chat/attachments and returns
-// the minted ref. `verb` is only there so a diagnostic names the subcommand the
-// reader ran — it used to have a second caller in `diff`, which no longer
-// uploads anything (T-59: a comparison is a URL, not a stored blob).
-//
-// `size` is passed to Content-Length; -1 leaves it unset for an in-memory body.
-func postAttachment(
-	client httpClient, cfg Config, verb string,
-	body io.Reader, size int64, filename, mimeType string,
-	errOut io.Writer,
-) (uploadedRef, int) {
+// cmdUpload implements `ocagent upload`: it opens one path and streams its
+// bytes into POST /api/chat/attachments. On success stdout carries the minted
+// attachment id then the server's light-ref JSON; diagnostics go to `errOut`.
+func cmdUpload(client httpClient, cfg Config, path, mimeType string, out, errOut io.Writer) int {
+	if cfg.Token == "" {
+		// Fail fast + honestly: without a token the server would 401 anyway, but
+		// the local message ("mis-wired launch") beats a bare server status.
+		fmt.Fprint(errOut, "[ocagent] upload: no OC_TOKEN configured — cannot make an authed upload.\n")
+		return 3
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		fmt.Fprintf(errOut, "[ocagent] upload: cannot open %s: %v\n", path, err)
+		return 1
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		fmt.Fprintf(errOut, "[ocagent] upload: cannot stat %s: %v\n", path, err)
+		return 1
+	}
+	if info.IsDir() {
+		fmt.Fprintf(errOut, "[ocagent] upload: %s is a directory, not a file\n", path)
+		return 1
+	}
+
+	filename := filepath.Base(path)
 	query := url.Values{}
 	if name := strings.TrimSpace(filename); name != "" && name != "." && name != string(filepath.Separator) {
 		query.Set("filename", name)
@@ -82,97 +107,52 @@ func postAttachment(
 	// server as a SPACE when a query is pasted together by hand.
 	reqURL := cfg.Base + "/api/chat/attachments?" + query.Encode()
 
-	req, err := http.NewRequest(http.MethodPost, reqURL, body)
+	req, err := http.NewRequest(http.MethodPost, reqURL, f)
 	if err != nil {
-		fmt.Fprintf(errOut, "[ocagent] %s: bad request for %q: %v\n", verb, filename, err)
-		return uploadedRef{}, 1
+		fmt.Fprintf(errOut, "[ocagent] upload: bad request for %q: %v\n", filename, err)
+		return 1
 	}
-	if size >= 0 {
-		req.ContentLength = size
-	}
+	req.ContentLength = info.Size()
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+cfg.Token)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Fprintf(errOut, "[ocagent] %s: request failed (network): %v\n", verb, err)
-		return uploadedRef{}, 1
+		fmt.Fprintf(errOut, "[ocagent] upload: request failed (network): %v\n", err)
+		return 1
 	}
 	defer resp.Body.Close()
 
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	detail := strings.TrimSpace(string(raw))
 
-	switch {
-	case resp.StatusCode == http.StatusOK:
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		fmt.Fprintf(errOut, "[ocagent] %s: auth rejected (HTTP %d) for %q: %s\n",
-			verb, resp.StatusCode, filename, detail)
-		return uploadedRef{}, 3
-	case resp.StatusCode == http.StatusBadRequest:
-		fmt.Fprintf(errOut, "[ocagent] %s: server rejected %q (HTTP 400): %s\n",
-			verb, filename, detail)
-		return uploadedRef{}, 4
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusUnauthorized, http.StatusForbidden:
+		fmt.Fprintf(errOut, "[ocagent] upload: auth rejected (HTTP %d) for %q: %s\n",
+			resp.StatusCode, filename, detail)
+		return 3
+	case http.StatusBadRequest:
+		fmt.Fprintf(errOut, "[ocagent] upload: server rejected %q (HTTP 400): %s\n",
+			filename, detail)
+		return 4
 	default:
-		fmt.Fprintf(errOut, "[ocagent] %s: unexpected HTTP %d for %q: %s\n",
-			verb, resp.StatusCode, filename, detail)
-		return uploadedRef{}, 5
+		fmt.Fprintf(errOut, "[ocagent] upload: unexpected HTTP %d for %q: %s\n",
+			resp.StatusCode, filename, detail)
+		return 5
 	}
 
 	var ref uploadedRef
 	if err := json.Unmarshal(raw, &ref); err != nil || ref.ID == "" {
-		fmt.Fprintf(errOut, "[ocagent] %s: 200 but unparseable ref body: %s\n", verb, detail)
-		return uploadedRef{}, 5
+		fmt.Fprintf(errOut, "[ocagent] upload: 200 but unparseable ref body: %s\n", detail)
+		return 5
 	}
 	ref.raw = detail
-	return ref, 0
-}
 
-// cmdUpload implements `ocagent upload`. On success stdout carries the minted
-// attachment id then the server's light-ref JSON; diagnostics go to `errOut`.
-func cmdUpload(client httpClient, cfg Config, path, mimeType string, out, errOut io.Writer) int {
-	if cfg.Token == "" {
-		// Fail fast + honestly: without a token the server would 401 anyway, but
-		// the local message ("mis-wired launch") beats a bare server status.
-		fmt.Fprint(errOut, "[ocagent] upload: no OC_TOKEN configured — cannot make an authed upload.\n")
-		return 3
-	}
-	ref, size, code := uploadOneFile(client, cfg, "upload", path, mimeType, errOut)
-	if code != 0 {
-		return code
-	}
 	fmt.Fprintf(errOut, "[ocagent] upload: %s (%d bytes, %s) → %s\n",
-		ref.Filename, size, ref.Mime, ref.ID)
+		ref.Filename, info.Size(), ref.Mime, ref.ID)
 	fmt.Fprintln(out, ref.ID)
 	fmt.Fprintln(out, ref.raw)
 	return 0
-}
-
-// uploadOneFile streams a path through postAttachment, reporting the
-// filesystem faults as upload's exit code 1.
-//
-// This is the ONE place in the CLI that turns a path into stored bytes:
-// `diff` names addresses and reads no files at all (owner 2026-09-03).
-func uploadOneFile(
-	client httpClient, cfg Config, verb, path, mimeType string, errOut io.Writer,
-) (uploadedRef, int64, int) {
-	f, err := os.Open(path)
-	if err != nil {
-		fmt.Fprintf(errOut, "[ocagent] %s: cannot open %s: %v\n", verb, path, err)
-		return uploadedRef{}, 0, 1
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		fmt.Fprintf(errOut, "[ocagent] %s: cannot stat %s: %v\n", verb, path, err)
-		return uploadedRef{}, 0, 1
-	}
-	if info.IsDir() {
-		fmt.Fprintf(errOut, "[ocagent] %s: %s is a directory, not a file\n", verb, path)
-		return uploadedRef{}, 0, 1
-	}
-	ref, code := postAttachment(client, cfg, verb, f, info.Size(),
-		filepath.Base(path), mimeType, errOut)
-	return ref, info.Size(), code
 }

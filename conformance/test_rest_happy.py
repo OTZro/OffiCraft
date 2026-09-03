@@ -486,7 +486,14 @@ def _check_diff_share_link(ctx: HCtx, r: httpx.Response) -> None:
     assert anon.status_code == 200, f"credential-less read failed: {anon.status_code} {anon.text}"
     assert anon.json()["before"]["address"] == att_id, anon.text
 
-    tampered = signed.replace("sig=" + query["sig"][0], "sig=" + query["sig"][0][:-1] + "X")
+    # Replacing the last base64url character has to CHANGE it: when the
+    # signature already ends in "X" the "tampered" url is the original, the
+    # server answers 200 and a healthy build fails the assertion below about
+    # once in every 64 runs. The Go twin (api_diff_test.go) handles the same
+    # collision; this copy did not.
+    sig = query["sig"][0]
+    tampered_sig = sig[:-1] + ("Y" if sig.endswith("X") else "X")
+    tampered = signed.replace("sig=" + sig, "sig=" + tampered_sig)
     bad = ctx.client.get(tampered)
     assert bad.status_code == 401, f"a tampered sig must be 401: {bad.status_code} {bad.text}"
 

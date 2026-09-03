@@ -24,8 +24,10 @@ import (
 //
 // TWO FLAVOURS. By default this prints the INTERNAL link: no signature, opened
 // by anyone who can already sign in to this station. --external asks the server
-// to mint the signed one, which needs NO login at all — permanent, unrevocable,
-// so mint it only for a reader who has no account.
+// to mint the signed one, which needs NO login at all — it has no expiry and no
+// single link can be withdrawn, and the ONE thing that ends it is removing the
+// signing key it was minted under, which kills every link that key signed at
+// once (T-62). Mint it only for a reader who has no account.
 //
 // THE INTERNAL LINK COSTS NO REQUEST. It is a pure function of the two
 // addresses, so this subcommand normally talks to nobody: it can answer while

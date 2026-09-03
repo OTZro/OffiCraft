@@ -4,7 +4,10 @@
 //
 //   1. the query it puts on the wire, including the two optional labels and the
 //      signature;
-//   2. the owner token rides as `Authorization` when there is one;
+//   2. exactly ONE credential rides: the owner token as `Authorization` on the
+//      unsigned (session) flavour, and NOTHING but the `sig` on the signed one
+//      — the server judges a bearer that is present and never falls through to
+//      the signature, so a stale token beside a good sig would refuse the link;
 //   3. a SIGNED call's 401 must NOT clear the session — the signature failed,
 //      not the login, and a reader following a link may have no session to lose;
 //      an unsigned call's 401 must still bounce to the auth layer;
@@ -63,9 +66,11 @@ afterEach(() => {
 });
 
 describe("getDiff", () => {
+  const sentHeaders = (fetchMock: { mock: { calls: unknown[][] } }) =>
+    ((fetchMock.mock.calls[0][1] as RequestInit).headers ?? {}) as Record<string, string>;
+
   it("asks for both sides in one request, with the labels and signature the url carried", async () => {
     const fetchMock = stubFetch(ok(BODY));
-    localStorage.setItem(TOKEN_KEY, "owner-token");
 
     await httpApi.getDiff({
       ...PARAMS,
@@ -75,16 +80,46 @@ describe("getDiff", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const [url] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     const query = new URL(url, "http://localhost").searchParams;
     expect(query.get("before")).toBe(PARAMS.before);
     expect(query.get("after")).toBe(PARAMS.after);
     expect(query.get("label_before")).toBe("改動前");
     expect(query.get("label_after")).toBe("改動後");
     expect(query.get("sig")).toBe("s+g/1");
-    expect((init.headers as Record<string, string>).Authorization).toBe(
-      "Bearer owner-token",
+  });
+
+  it("sends the session token on the unsigned flavour, where it IS the credential", async () => {
+    const fetchMock = stubFetch(ok(BODY));
+    localStorage.setItem(TOKEN_KEY, "owner-token");
+
+    await httpApi.getDiff(PARAMS);
+
+    expect(sentHeaders(fetchMock).Authorization).toBe("Bearer owner-token");
+  });
+
+  it("opens a SIGNED link on a browser whose token has expired", async () => {
+    // The regression this file exists to catch. The server judges a bearer that
+    // is PRESENT and never falls through to the sig, so a dead token sent
+    // alongside a perfectly good signature is a 401 the reader can never get
+    // past: the signed page mounts ahead of the auth wall, so nothing ever
+    // probes the session or clears the dead token, and no retry follows.
+    // The fix is that the signed flavour sends no Authorization at all.
+    localStorage.setItem(TOKEN_KEY, "expired-token");
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) =>
+      (init.headers as Record<string, string>).Authorization
+        ? refused(401)
+        : ok(BODY),
     );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pair = await httpApi.getDiff({ ...PARAMS, sig: "server-minted" });
+
+    expect(pair.before.text).toBe("alpha");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(sentHeaders(fetchMock).Authorization).toBeUndefined();
+    // The token was never the credential here, so it was never judged either.
+    expect(localStorage.getItem(TOKEN_KEY)).toBe("expired-token");
   });
 
   it("keeps a GONE side gone instead of comparing against an empty text", async () => {
@@ -121,7 +156,7 @@ describe("getDiff", () => {
   });
 
   it("does NOT end the session when a SIGNED link is refused", async () => {
-    stubFetch(refused(401));
+    const fetchMock = stubFetch(refused(401));
     localStorage.setItem(TOKEN_KEY, "owner-token");
     const expired = vi.fn();
     window.addEventListener(AUTH_EXPIRED_EVENT, expired);
@@ -131,9 +166,11 @@ describe("getDiff", () => {
     );
 
     window.removeEventListener(AUTH_EXPIRED_EVENT, expired);
-    // The SIGNATURE was refused. Logging the owner out of a tab over someone
-    // else's stale link — or out of a tab that never had a session — would be
-    // blaming the wrong credential.
+    // The signature really is the only credential this call carried, so the
+    // 401 really is the signature being refused — and blaming the session for
+    // it would log the owner out over someone else's stale link, or out of a
+    // tab that never had a session at all.
+    expect(sentHeaders(fetchMock).Authorization).toBeUndefined();
     expect(expired).not.toHaveBeenCalled();
     expect(localStorage.getItem(TOKEN_KEY)).toBe("owner-token");
   });

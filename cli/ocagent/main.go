@@ -194,7 +194,7 @@ func realMain(argv []string, env func(string) string, in io.Reader, out io.Write
 		fs.Usage = func() { diffUsage(out) }
 		beforeLabel := fs.String("label-before", "", "column heading for the before side (default: the screen's own)")
 		afterLabel := fs.String("label-after", "", "column heading for the after side (default: the screen's own)")
-		external := fs.Bool("external", false, "mint the server-signed link that opens with no login (permanent, unrevocable)")
+		external := fs.Bool("external", false, "mint the server-signed link that opens with no login (no expiry; ends only when its signing key is removed)")
 		if err := fs.Parse(rest); err != nil {
 			return 2
 		}

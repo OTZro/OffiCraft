@@ -77,6 +77,10 @@ func TestDiffPairReportsAGoneSideAndStillDrawsTheOther(t *testing.T) {
 		"a pruned revision":            "doc:lessons/mira/999999/text",
 		"a kind this station lacks":    "doc:not_a_kind/x/current/text",
 		"a document with no seed":      "doc:lessons/mira/seed/text",
+		// 19 digits is SAYABLE — the address grammar allows up to 19 — and
+		// overflows int64, so the parse that api_diff.go's fail-closed branch
+		// catches is reached in earnest and answers this same honest "gone".
+		"a revision id no int64 holds": "doc:lessons/mira/9999999999999999999/text",
 	} {
 		status, pair, body := getDiff(t, srv.URL, tok, diffQueryOf(gone, after))
 		if status != 200 {

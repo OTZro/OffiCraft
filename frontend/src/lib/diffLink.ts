@@ -28,10 +28,26 @@
 // malformed link fails on the reader's own screen instead of being forwarded to
 // the server as a question about nothing.
 
-/** The page's path. A real path, not a hash: the hash never reaches the server,
- * and this url has to be one the SPA shell is served for (server/ocserverd/
- * spa.go's catch-all does that already — no extension, not under /api/). */
+/** The page's path, and the five parameter names the url spells. A real path,
+ * not a hash: the hash never reaches the server, and this url has to be one the
+ * SPA shell is served for (server/ocserverd/spa.go's catch-all does that
+ * already — no extension, not under /api/).
+ *
+ * 🔴 THESE SIX SPELLINGS ARE THE SERVER'S, NOT OURS. `server/ocserverd/
+ * api_diff.go` declares them; the mint answers a url built from them and the
+ * data route reads a query built from them. This module is the cockpit's ONE
+ * copy — the compare page's parser, its formatter and `api/diff.ts`'s query all
+ * read these constants rather than spelling the words again — and
+ * diffLink.mirror.test.ts confronts the copy against that file's SOURCE, the
+ * way cli/ocagent does for its own. Rename one there without renaming it here
+ * and the test reddens, instead of the cockpit silently asking for a parameter
+ * the server stopped answering. */
 export const DIFF_PATH = "/diff";
+export const DIFF_PARAM_BEFORE = "before";
+export const DIFF_PARAM_AFTER = "after";
+export const DIFF_PARAM_LABEL_BEFORE = "label_before";
+export const DIFF_PARAM_LABEL_AFTER = "label_after";
+export const DIFF_PARAM_SIG = "sig";
 
 /** The reserved spellings of a document side's `at`. Same two words the server
  * matches; a typo in either place is a side that silently falls through to
@@ -122,15 +138,15 @@ export function formatDiffSideAddress(side: DiffSideAddress): string {
  * not an address — a compare with one side is not a compare. */
 export function parseDiffParams(search: string): DiffParams | null {
   const q = new URLSearchParams(search);
-  const before = q.get("before");
-  const after = q.get("after");
+  const before = q.get(DIFF_PARAM_BEFORE);
+  const after = q.get(DIFF_PARAM_AFTER);
   if (before === null || after === null) return null;
   if (parseDiffSideAddress(before) === null) return null;
   if (parseDiffSideAddress(after) === null) return null;
   const params: DiffParams = { before, after };
-  const labelBefore = q.get("label_before");
-  const labelAfter = q.get("label_after");
-  const sig = q.get("sig");
+  const labelBefore = q.get(DIFF_PARAM_LABEL_BEFORE);
+  const labelAfter = q.get(DIFF_PARAM_LABEL_AFTER);
+  const sig = q.get(DIFF_PARAM_SIG);
   // An EMPTY label is not a label — heading a column with "" is the blank
   // heading the reader could not read in the first place.
   if (labelBefore) params.labelBefore = labelBefore;
@@ -139,15 +155,24 @@ export function parseDiffParams(search: string): DiffParams | null {
   return params;
 }
 
+/** The five parameters, spelled once. Shared by the page url built here and by
+ * the compare read's query (api/diff.ts) — the two used to spell the same five
+ * words twice, which is one rename away from a link the reader can open and a
+ * request the server cannot answer. An EMPTY optional is LEFT OUT rather than
+ * sent blank, matching the server's own diffPageQuery. */
+export function diffSearchParams(params: DiffParams): URLSearchParams {
+  const q = new URLSearchParams();
+  q.set(DIFF_PARAM_BEFORE, params.before);
+  q.set(DIFF_PARAM_AFTER, params.after);
+  if (params.labelBefore) q.set(DIFF_PARAM_LABEL_BEFORE, params.labelBefore);
+  if (params.labelAfter) q.set(DIFF_PARAM_LABEL_AFTER, params.labelAfter);
+  if (params.sig) q.set(DIFF_PARAM_SIG, params.sig);
+  return q;
+}
+
 /** The url for these params, relative to the origin (values URL-encoded). */
 export function formatDiffUrl(params: DiffParams): string {
-  const q = new URLSearchParams();
-  q.set("before", params.before);
-  q.set("after", params.after);
-  if (params.labelBefore) q.set("label_before", params.labelBefore);
-  if (params.labelAfter) q.set("label_after", params.labelAfter);
-  if (params.sig) q.set("sig", params.sig);
-  return `${DIFF_PATH}?${q.toString()}`;
+  return `${DIFF_PATH}?${diffSearchParams(params).toString()}`;
 }
 
 /** Is this href one of OUR compare urls, and what does it say?

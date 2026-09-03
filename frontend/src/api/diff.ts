@@ -27,6 +27,7 @@
 
 import type { DiffPairView, DiffSideView } from "../types";
 import type { DiffParams } from "../lib/diffLink";
+import { diffSearchParams } from "../lib/diffLink";
 import type { components } from "./generated/schema";
 import { ownerToken } from "./auth";
 import { handleUnauthorized } from "./client";
@@ -57,25 +58,37 @@ export function toDiffPair(w: WireDiffPair): DiffPairView {
   return { before: toDiffSide(w.before), after: toDiffSide(w.after) };
 }
 
-/** The query this call puts on the wire. */
+/** The query this call puts on the wire — the SAME five parameter names the
+ * page url spells, taken from lib/diffLink.ts rather than typed again here.
+ * The data route and the page route are one grammar; spelling it twice is what
+ * would let a rename redden one reader and silently pass the other. */
 export function diffQuery(params: DiffParams): string {
-  const q = new URLSearchParams();
-  q.set("before", params.before);
-  q.set("after", params.after);
-  if (params.labelBefore) q.set("label_before", params.labelBefore);
-  if (params.labelAfter) q.set("label_after", params.labelAfter);
-  if (params.sig) q.set("sig", params.sig);
-  return q.toString();
+  return diffSearchParams(params).toString();
 }
 
 export async function fetchDiffPair(params: DiffParams): Promise<DiffPairView> {
   const headers: Record<string, string> = { Accept: "application/json" };
-  // The signature is the credential in the external flavour; the session token
-  // is the credential in the internal one. Sending the token when there is one
-  // is right in both — a present-but-invalid bearer credential stays a 401 and
-  // never falls through to the sig, which is the server's rule, not ours.
-  const token = ownerToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
+  // ONE CREDENTIAL PER CALL, and the URL picks it. The signature is the
+  // external flavour's credential; the session token is the internal one's.
+  // They must not ride together: the server judges a bearer that is PRESENT
+  // and never falls through to the sig (its rule, and the right one), so a
+  // token that has since expired would 401 a link whose own credential is
+  // perfectly good — and the reader could never get past it, because the
+  // signed page is mounted AHEAD of the auth wall (main.tsx) and so never
+  // probes the session that would have cleared the dead token.
+  //
+  // A signed link opened by a signed-in member still works: the sig alone is
+  // what the server was going to check anyway, and withholding the member's
+  // own bearer from someone else's link is the least authority besides.
+  //
+  // The other candidate — send it, then retry without it on a 401 — was
+  // rejected: it spends a second round trip on every genuinely bad signature,
+  // and it makes "which credential was refused" unanswerable, which is exactly
+  // the question the handleUnauthorized() call below has to get right.
+  if (params.sig === undefined) {
+    const token = ownerToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+  }
 
   const res = await fetch(`/api/diff?${diffQuery(params)}`, { headers });
   if (!res.ok) {

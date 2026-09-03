@@ -4,11 +4,12 @@ package main
 // mirror confrontation (T-59).
 //
 // diffaddr.go defines how one side of a comparison is spelled; cli/ocagent
-// carries a hand-transcribed pre-flight copy of the same rule, and the two are
-// separate Go modules with no import path between them. Both are driven against
+// carries a hand-transcribed pre-flight copy of the same rule (a separate Go
+// module, no import path between them), and the cockpit carries a third in
+// TypeScript. All three are driven against
 // bin/tests/fixtures/diff-side-addresses.tsv rather than against each other, so
 // a drift reddens the copy that drifted BY NAME. The fixture's header carries
-// the full argument, including what is deliberately NOT covered (the cockpit).
+// the full argument and names all three readers.
 
 import (
 	"bufio"

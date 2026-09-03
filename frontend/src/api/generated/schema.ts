@@ -4392,7 +4392,11 @@ export interface components {
             after: components["schemas"]["DiffSideDTO"];
             before: components["schemas"]["DiffSideDTO"];
         };
-        /** @description Response of ``GET /api/diff/share-link``: the server-relative page URL for ONE comparison carrying its permanent ``?sig=`` credential. The client prefixes its own origin to form the absolute link, exactly as it does for ChatAttachmentShareLinkDTO. */
+        /**
+         * @description Response of ``GET /api/diff/share-link``: the server-relative page URL for ONE comparison carrying its ``?sig=`` credential. The client prefixes its own origin to form the absolute link, exactly as it does for ChatAttachmentShareLinkDTO.
+         *
+         *     The signature has NO expiry and no single link can be withdrawn — but it is not unrevocable (T-62): it is derived from whichever signing key minted it, so removing that key from the ring voids every link that key signed, at the same instant it voids that key's tokens and file links. Coarse, and a person's decision rather than a timer's.
+         */
         DiffShareLinkDTO: {
             url: string;
         };
@@ -5152,9 +5156,13 @@ export interface components {
         /**
          * ChatAttachmentShareLinkDTO
          * @description Response of ``GET /api/chat/attachments/{attachment_id}/share-link``: the
-         *     server-relative serve URL for ONE attachment carrying its permanent
-         *     ``?sig=`` file-level HMAC credential (see the attachment GET's SHARE-SIG
+         *     server-relative serve URL for ONE attachment carrying its ``?sig=``
+         *     file-level HMAC credential (see the attachment GET's SHARE-SIG
          *     paragraph). The client prefixes its own origin to form the absolute link.
+         *
+         *     The signature has NO expiry and no single link can be withdrawn — but it
+         *     is not unrevocable (T-62): it is derived from whichever signing key minted
+         *     it, so removing that key from the ring voids every link that key signed.
          */
         ChatAttachmentShareLinkDTO: {
             /** Url */
