@@ -29,6 +29,7 @@ import {
   resetChatDrafts,
   saveChatDraftText,
   setChatAttachError,
+  openChatAttachErrorScope,
   subscribeChatDraft,
   updateChatDraftAttachments,
 } from "./chatDraftStore";
@@ -80,16 +81,66 @@ describe("chatDraftStore", () => {
     expect(getChatDraftAttachments(A)).toBe(getChatDraftAttachments(B));
   });
 
+  it("keeps a refusal alive while any chat surface still holds the scope open", () => {
+    // The scope is a COUNT, not a flag: closing one surface while another is
+    // still up must not drop the notices the second one is showing. Nothing
+    // mounts two office pages today, so no component test reaches this — it is
+    // the half of `openChatAttachErrorScope` React cannot exercise.
+    setChatAttachError(A, "圖片太大");
+    const closeFirst = openChatAttachErrorScope();
+    const closeSecond = openChatAttachErrorScope();
+
+    closeFirst();
+    return Promise.resolve().then(() => {
+      expect(getChatAttachError(A)).toBe("圖片太大");
+      closeSecond();
+      return Promise.resolve().then(() => {
+        expect(getChatAttachError(A)).toBeNull();
+      });
+    });
+  });
+
+  it("does not drop a refusal raised after the last surface closed", () => {
+    // The close is deferred, so a `FileReader` landing in that gap would be
+    // swept up by a decision taken before it existed. The doomed list is
+    // captured at close time for exactly this.
+    const close = openChatAttachErrorScope();
+    close();
+    setChatAttachError(A, "圖片太大");
+    return Promise.resolve().then(() => {
+      expect(getChatAttachError(A)).toBe("圖片太大");
+    });
+  });
+
   it("declares no module-level mutable state that is not keyed by peer", () => {
     // The census, reduced to the one rule that matters here. A top-level `let`
     // or `var` in this module is state shared by every room — the exact shape
     // `key={peerId}` was introduced to delete, reappearing where no component
     // test can see it. Keyed containers (Map/Set) and frozen constants are the
     // permitted forms.
-    const topLevelMutable = SOURCE.split("\n").filter((line) =>
-      /^(let|var)\s/.test(line),
+    //
+    // 🔴 THE ONE EXCEPTION, NAMED RATHER THAN INFERRED (R16 D-2). The chat
+    // page's notice SCOPE needs two plain counters (how many surfaces are open,
+    // and which close a deferred sweep belongs to). A number cannot hold a
+    // peer's value, so it is not the shape this rule bans — but "it's only a
+    // number" is a judgement, so each one is listed here by name and pinned to
+    // a numeric initializer. A `let` holding anything else, or a name not on
+    // this list, is still the banned shape.
+    const COUNTERS = ["attachErrorScopes", "scopeEpoch"];
+    const topLevelMutable = [
+      ...SOURCE.matchAll(/^(?:let|var)\s+(\w+)\s*(?::[^=]+)?=\s*(.*)$/gm),
+    ];
+    const bare = SOURCE.split("\n").filter(
+      (line) => /^(let|var)\s/.test(line) && !/=/.test(line),
     );
-    expect(topLevelMutable).toEqual([]);
+    expect(bare, "a top-level `let` with no initializer holds anything at all").toEqual([]);
+    expect(topLevelMutable.map(([, name]) => name).sort()).toEqual([...COUNTERS].sort());
+    for (const [, name, init] of topLevelMutable) {
+      expect(
+        /^-?\d+;?$/.test(init.trim()),
+        `${name} is a top-level \`let\` that is not a plain counter: ${init}`,
+      ).toBe(true);
+    }
 
     const topLevelConsts = [...SOURCE.matchAll(/^const\s+(\w+)\s*(?::[^=]+)?=\s*(.*)$/gm)];
     expect(topLevelConsts.length).toBeGreaterThan(0);

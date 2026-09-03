@@ -9,7 +9,7 @@ import { useOutsourceWorkers } from "../hooks/useOutsourceWorkers";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { joinSessionRuntime, findSessionFor } from "../lib/runtime";
 import { useHashRoute } from "../lib/hashRoute";
-import { clearChatAttachErrors } from "../lib/chatDraftStore";
+import { openChatAttachErrorScope } from "../lib/chatDraftStore";
 import { updateCachedWorkerAvatar } from "../hooks/useWorkerCodenames";
 import { MemberCard } from "./MemberCard";
 import { ChatArea } from "./ChatArea";
@@ -87,7 +87,15 @@ export function OfficePage() {
   // is that lifetime, written down instead of inherited — and it clears the
   // NOTICES only: the drafts and their staged files must survive the
   // navigation, which is the whole reason they were moved out of the composer.
-  useEffect(() => clearChatAttachErrors, []);
+  //
+  // 🔴 IT IS A SCOPE, NOT AN UNMOUNT CLEAR (R16 D-2). `<StrictMode>` runs this
+  // effect setup → cleanup → setup on the first mount, and the clear it used to
+  // call drops EVERY peer's notice — including one raised before this mount.
+  // That destroyed exactly the notice this table exists to carry (a `FileReader`
+  // refusal that finished while the owner was on 任務), in dev only, so dev and
+  // prod disagreed about something the owner can see. The store counts open
+  // scopes and defers the close past StrictMode's synchronous remount.
+  useEffect(() => openChatAttachErrorScope(), []);
   const selectedId = route.chatId ?? "";
   const detailId = route.detailId ?? null;
   const workerDetailId = route.workerId ?? null;

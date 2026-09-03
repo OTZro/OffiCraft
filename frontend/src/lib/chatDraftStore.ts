@@ -72,8 +72,9 @@ const drafts = new Map<string, ChatDraft>();
  * walk to 任務, come back ten minutes later, and the red sentence is still
  * there describing something the owner did ten minutes ago. The draft survives
  * that navigation on purpose; a transient rejection does not. `OfficePage`
- * drops these on unmount (`clearChatAttachErrors`), which is what puts the
- * notice back on the lifetime it had. */
+ * holds a scope over these (`openChatAttachErrorScope`) and they drop when the
+ * last chat surface closes it, which is what puts the notice back on the
+ * lifetime it had. */
 const attachErrors = new Map<string, string>();
 const listeners = new Map<string, Set<() => void>>();
 
@@ -192,16 +193,57 @@ export function setChatAttachError(
   notify(peerId);
 }
 
-/** Drop EVERY room's staging rejection notice — the chat surface itself is
- * going away. Called from `OfficePage`'s unmount, so the notice's lifetime is
- * the page's, the way it was when it was component state (T-48, R14-2.1). The
- * drafts and their staged files are deliberately untouched: those survive the
- * navigation because that is what a draft is for. */
-export function clearChatAttachErrors(): void {
-  if (attachErrors.size === 0) return;
-  const touched = [...attachErrors.keys()];
-  attachErrors.clear();
-  for (const peerId of touched) notify(peerId);
+/** How many office-chat surfaces are currently mounted, and the notices a
+ * close is about to drop.
+ *
+ * 🔴 WHY A COUNT AND A DEFERRAL, AND NOT A BARE UNMOUNT CLEAR (T-48, R16 D-2).
+ * The notice's lifetime is the CHAT PAGE's, and the page's teardown is the only
+ * signal for it — but `<StrictMode>` (wrapping the whole app in `main.tsx`)
+ * deliberately runs every effect as setup → cleanup → setup on the first mount.
+ * A clear driven straight off that cleanup is not idempotent the way it looks:
+ * it wipes EVERY peer's notice, including one raised BEFORE this mount, so the
+ * one scenario this table exists for — a `FileReader` finishing its refusal
+ * while the owner is in another room — died in dev and lived in prod. A guard
+ * whose behaviour differs between dev and prod on something the owner can see
+ * is the defect, regardless of which half is "the real one".
+ *
+ * A mounted-count fixes the *what* (a close is a close only when the last
+ * surface goes), and deferring the close by a microtask fixes the *when*:
+ * StrictMode's remount is synchronous within the same commit, so the re-open
+ * lands before the microtask and cancels it, while a real navigation leaves the
+ * count at zero and the close runs. The doomed peers are captured at close time
+ * so a refusal raised in the gap is not swept up by a close that predates it.
+ *
+ * Both are plain counters ON PURPOSE: this module's rule is that nothing here
+ * may be mutable state that is not keyed by PEER, and a number that counts
+ * surfaces (or epochs) is not somewhere a room's value can be stashed. The
+ * doomed peer ids live in the close's own closure, not up here. */
+let attachErrorScopes = 0;
+let scopeEpoch = 0;
+
+/** Open the chat surface's notice scope; the returned function closes it.
+ * Call it from `OfficePage`'s mount effect — `() => openChatAttachErrorScope()`
+ * — so the notices drop when the page really goes away and survive a StrictMode
+ * double-mount. The drafts and their staged files are deliberately untouched:
+ * those survive the navigation because that is what a draft is for. */
+export function openChatAttachErrorScope(): () => void {
+  attachErrorScopes += 1;
+  scopeEpoch += 1;
+  let closed = false;
+  return () => {
+    if (closed) return;
+    closed = true;
+    attachErrorScopes -= 1;
+    if (attachErrorScopes > 0) return;
+    const doomed = [...attachErrors.keys()];
+    const epoch = (scopeEpoch += 1);
+    queueMicrotask(() => {
+      if (scopeEpoch !== epoch || attachErrorScopes > 0) return;
+      for (const peerId of doomed) {
+        if (attachErrors.delete(peerId)) notify(peerId);
+      }
+    });
+  };
 }
 
 /** Test-only reset so a module-level store never leaks state across tests. */
@@ -209,5 +251,7 @@ export function resetChatDrafts(): void {
   const touched = new Set([...drafts.keys(), ...attachErrors.keys()]);
   drafts.clear();
   attachErrors.clear();
+  attachErrorScopes = 0;
+  scopeEpoch += 1;
   for (const peerId of touched) notify(peerId);
 }
