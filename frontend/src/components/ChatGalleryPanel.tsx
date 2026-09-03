@@ -55,7 +55,10 @@ export function isPreviewableMime(mime: string): boolean {
  * Could THIS ONE chat delta change what the gallery renders?
  *
  * 🔴 THE INVARIANT IT ENCODES. The gallery query
- * (`HandleListChatAttachmentsApiChatAttachmentsGet`, `server/ocserverd/api_chat.go`)
+ * (`DAL.ListChatAttachmentRefsFor`, `server/ocserverd/dal.go` — since T-51 it
+ * reads the `chat_attachment_ref` index, not `chat_message.meta`, and the
+ * predicate moved with it: `WHERE sender = ?` UNION `WHERE recipient = ? AND
+ * sender <> recipient`)
  * keeps a message when — and only when — `m.Sender == with || m.Recipient == with`,
  * where `with` is the member id this panel was opened on. Every row it returns is
  * an attachment of one of those messages. ⇒ a CHAT DELTA naming this member at
