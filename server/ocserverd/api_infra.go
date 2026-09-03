@@ -483,9 +483,12 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 //     removal lifecycle is the one-shot uninstall intent, not this gate.
 //
 // Legit flows that stay untouched: a LIVE connection at deactivate time keeps
-// its stream (the wind-down nudge rides it); stop→start clears the anchors
-// and flips desired online in the SAME activate write, so the gate lifts
-// atomically; recycle/handover keeps desired online throughout. An unknown
+// its stream (the wind-down nudge rides it); stop→start clears the anchors and
+// flips desired online, and since T-55 that is TWO writes, not one — the anchors
+// through their sole writer first, desired_state with the row write after. The
+// gate keys on desired_state, so it lifts on the SECOND of the two and a failure
+// between them leaves the gate standing (refusing) rather than half-lifted, which
+// is the safe side; recycle/handover keeps desired online throughout. An unknown
 // sub (no roster row) is admitted unchanged.
 func (s *apiServer) sseStopGateRefusal(memberID string) string {
 	m, err := s.dal.GetMember(memberID)

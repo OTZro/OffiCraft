@@ -201,6 +201,7 @@ func TestLifecycleRosterPasses_TheOutsourceProducerReallyRunsEveryEveryKindPass(
 			if err := api.dal.PutOutsourceWorker(*w); err != nil {
 				t.Fatalf("seed worker: %v", err)
 			}
+			seedWorkerAnchors(t, api, *w)
 
 			api.runOutsourceTick(now)
 
@@ -296,6 +297,7 @@ func TestWorkerFoldBack_APromotionSurvivesTheLoopBreakInTheSameTick(t *testing.T
 	if err := api.dal.PutOutsourceWorker(*w); err != nil {
 		t.Fatalf("seed worker: %v", err)
 	}
+	seedWorkerAnchors(t, api, *w)
 	// …and the gauge now over the SECOND threshold, so the promotion arm fires.
 	api.gauge.Set(workerID, map[string]any{
 		"boot_ts":        bootTS,
@@ -368,6 +370,7 @@ func TestWorkerFoldBack_AWindDownClearSurvivesTheLoopBreakInTheSameTick(t *testi
 	if err := api.dal.PutOutsourceWorker(*w); err != nil {
 		t.Fatalf("seed worker: %v", err)
 	}
+	seedWorkerAnchors(t, api, *w)
 	api.gauge.Set(workerID, map[string]any{
 		"boot_ts":        bootTS,
 		"context_pct":    ctxhigh.HandoverPct + 1,

@@ -43,6 +43,26 @@ func stampProbeReceipt(d *DAL, id string) error {
 		probeReceiptAt)
 }
 
+// The four wind-down anchors move together through one writer, so they share a
+// stamp the way the receipt columns do.
+//
+// 🔴 EVERY VALUE HERE IS DIFFERENT, AND THAT IS THE POINT. These are anchors: a
+// writer that drops one of them leaves it at 0/"" — which is exactly what "was
+// never written" looks like — so a fixture that stamped the same number into two
+// of them would read green through a setter that transposed its parameters or
+// forgot a column. Distinct values make every one of those mistakes name itself.
+const (
+	probeStoppingSince = 7_001.0
+	probeStoppedSince  = 7_002.0
+	probeRefocusSince  = 7_003.0
+	probeRefocusOp     = "probe-refocus-op"
+)
+
+func stampProbeAnchors(d *DAL, id string) error {
+	return d.SetMemberWindDownAnchors(id, probeStoppingSince, probeStoppedSince,
+		probeRefocusSince, probeRefocusOp)
+}
+
 // singleColumnOwnedFields is the registry the guard iterates. Add the entry in
 // the SAME commit that removes a column from PutMember's SET list.
 var singleColumnOwnedFields = []struct {
@@ -202,6 +222,38 @@ var singleColumnOwnedFields = []struct {
 		read:  func(m Member) any { return m.AvatarAttachmentID },
 		stale: func(m *Member) { m.AvatarAttachmentID = "" },
 	},
+	{
+		column: "stopping_since",
+		writer: "SetMemberWindDownAnchors",
+		stamp:  stampProbeAnchors,
+		want:   probeStoppingSince,
+		read:   func(m Member) any { return m.StoppingSince },
+		stale:  func(m *Member) { m.StoppingSince = 0 },
+	},
+	{
+		column: "stopped_since",
+		writer: "SetMemberWindDownAnchors",
+		stamp:  stampProbeAnchors,
+		want:   probeStoppedSince,
+		read:   func(m Member) any { return m.StoppedSince },
+		stale:  func(m *Member) { m.StoppedSince = 0 },
+	},
+	{
+		column: "refocus_since",
+		writer: "SetMemberWindDownAnchors",
+		stamp:  stampProbeAnchors,
+		want:   probeRefocusSince,
+		read:   func(m Member) any { return m.RefocusSince },
+		stale:  func(m *Member) { m.RefocusSince = 0 },
+	},
+	{
+		column: "refocus_op",
+		writer: "SetMemberWindDownAnchors",
+		stamp:  stampProbeAnchors,
+		want:   probeRefocusOp,
+		read:   func(m Member) any { return m.RefocusOp },
+		stale:  func(m *Member) { m.RefocusOp = "" },
+	},
 }
 
 // TestPutMemberNeverOverwritesSingleColumnOwnedFields is the automatic guard.
@@ -212,8 +264,8 @@ func TestPutMemberNeverOverwritesSingleColumnOwnedFields(t *testing.T) {
 	// A deleted row is the one mutation the loop below cannot see: the guard
 	// would pass by iterating less. Bump this deliberately when the registry
 	// grows.
-	if len(singleColumnOwnedFields) != 13 {
-		t.Fatalf("singleColumnOwnedFields has %d entries, expected 13. Adding a "+
+	if len(singleColumnOwnedFields) != 17 {
+		t.Fatalf("singleColumnOwnedFields has %d entries, expected 17. Adding a "+
 			"column? Bump this number. REMOVING one? That means a column went "+
 			"BACK into PutMember's DO UPDATE SET — say why in the commit",
 			len(singleColumnOwnedFields))

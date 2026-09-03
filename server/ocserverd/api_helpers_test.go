@@ -274,6 +274,7 @@ func TestGetMember_WorkerSelfReadResolves(t *testing.T) {
 	if err := api.dal.PutOutsourceWorker(*w); err != nil {
 		t.Fatalf("stamp refocus: %v", err)
 	}
+	seedWorkerAnchors(t, api, *w)
 
 	rec := httptest.NewRecorder()
 	api.HandleGetMemberApiMembersMemberIdGet(rec,

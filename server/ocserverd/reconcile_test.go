@@ -37,10 +37,54 @@ func testAgent(id string) Member {
 	}
 }
 
+// putTestMember seeds a member row so that the ROW ENDS UP LOOKING LIKE `m` —
+// which is what every caller has always meant by it.
+//
+// 🔴 THE SECOND WRITE IS NOT REDUNDANT (T-55). The four wind-down anchors left
+// PutMember's DO UPDATE SET, so on a row that ALREADY EXISTS the upsert above
+// silently drops stopping_since / stopped_since / refocus_since / refocus_op.
+// (An earlier version of this sentence said the upsert "carries 31 columns".
+// That was the INSERT list minus four; the DO UPDATE SET list is shorter still,
+// because every other migrated column is missing from it too. The count is not
+// restated here — singleColumnOwnedFields is the enforced answer.) Fixtures that re-seed a row to open or close a
+// wind-down — and there are dozens — would then be asserting against anchors
+// they never actually planted, and the tests would go GREEN while testing
+// nothing. Planting them through their sole writer is what keeps the helper's
+// contract true. Production callers must NOT do this: there the dropped columns
+// are the whole point, because their snapshot is stale.
 func putTestMember(t *testing.T, s *apiServer, m Member) {
 	t.Helper()
 	if err := s.dal.PutMember(m); err != nil {
 		t.Fatalf("put member %s: %v", m.ID, err)
+	}
+	if err := s.dal.SetMemberWindDownAnchors(m.ID, m.StoppingSince, m.StoppedSince,
+		m.RefocusSince, m.RefocusOp); err != nil {
+		t.Fatalf("seed wind-down anchors for %s: %v", m.ID, err)
+	}
+}
+
+// seedMemberAnchors / seedWorkerAnchors plant the four wind-down anchors on a row
+// that ALREADY EXISTS, through their sole writer (T-55).
+//
+// A fixture that reads a row, sets stopping_since / stopped_since /
+// refocus_since / refocus_op on the snapshot and writes it back whole no longer
+// moves those four columns — they left PutMember's DO UPDATE SET. The write
+// still succeeds, so the fixture reads exactly as it always did while planting
+// nothing, and the test that depends on it goes green having exercised the
+// wrong state. Call one of these next to the whole-row fixture write.
+func seedMemberAnchors(t *testing.T, s *apiServer, m Member) {
+	t.Helper()
+	if err := s.dal.SetMemberWindDownAnchors(m.ID, m.StoppingSince, m.StoppedSince,
+		m.RefocusSince, m.RefocusOp); err != nil {
+		t.Fatalf("seed wind-down anchors for %s: %v", m.ID, err)
+	}
+}
+
+func seedWorkerAnchors(t *testing.T, s *apiServer, w OutsourceWorker) {
+	t.Helper()
+	if err := s.dal.SetMemberWindDownAnchors(w.ID, w.StoppingSince, w.StoppedSince,
+		w.RefocusSince, w.RefocusOp); err != nil {
+		t.Fatalf("seed wind-down anchors for %s: %v", w.ID, err)
 	}
 }
 
