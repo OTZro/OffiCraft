@@ -45,6 +45,14 @@ const NBSP = "\u00a0";
 const NUMBERED = (count: number) =>
   Array.from({ length: count }, (_, i) => `line ${i + 1}`).join("\n");
 
+/** A pair sharing NOTHING at either end. `diffLines` trims the common head and
+ * tail before it measures the remainder against `maxLines`, so two runs of the
+ * SAME lines — which is what `NUMBERED` gives you — no longer reach the refusal
+ * however long they are: only the part that still has to be compared counts.
+ * Any fixture that means to exercise the refusal has to differ throughout. */
+const UNRELATED = (count: number, tag: string) =>
+  Array.from({ length: count }, (_, i) => `${tag} ${i + 1}`).join("\n");
+
 describe("DiffView", () => {
   beforeEach(() => localStorage.clear());
 
@@ -252,8 +260,8 @@ describe("DiffView", () => {
 
   it("says the comparison was REFUSED for size, never that the versions match", () => {
     const { container, getByTestId, queryByTestId } = renderDiff(
-      NUMBERED(5),
-      NUMBERED(6),
+      UNRELATED(5, "old"),
+      UNRELATED(6, "new"),
       { maxLines: 2 }
     );
     // The longer side's count is named — a bare "too long" leaves the owner
@@ -281,7 +289,7 @@ describe("DiffView", () => {
     );
     identical.unmount();
 
-    const refused = renderDiff(NUMBERED(5), NUMBERED(6), { maxLines: 2 });
+    const refused = renderDiff(UNRELATED(5, "old"), UNRELATED(6, "new"), { maxLines: 2 });
     expect(refused.getByTestId("diff-view-too-large").textContent).toBe(
       `${dict.diff.tooLargeLead}6${dict.diff.tooLargeTail}`
     );

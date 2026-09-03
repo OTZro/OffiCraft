@@ -169,15 +169,98 @@ describe("diffLines", () => {
     expect(result.hunks[0].skippedBefore).toBe(0);
   });
 
-  it("refuses to diff a side past the max-lines threshold", () => {
-    const big = Array.from({ length: 5 }, (_, i) => `line${i + 1}`).join("\n");
-    const result = diffLines(big, "line1", { maxLines: 4 });
+  // The threshold measures the part that still has to go through the table —
+  // the shared head and tail are trimmed before it is consulted, so a pair that
+  // is long but barely different is now diffed where it used to be refused.
+  // Both halves of that sentence need a test; neither alone is the contract.
+  it("refuses to diff when the part that actually differs is past the max-lines threshold", () => {
+    const before = Array.from({ length: 5 }, (_, i) => `before${i + 1}`).join("\n");
+    const after = Array.from({ length: 5 }, (_, i) => `after${i + 1}`).join("\n");
+    const result = diffLines(before, after, { maxLines: 4 });
 
     expect(result.status).toBe("too-large");
     expect(result.rows).toEqual([]);
     expect(result.hunks).toEqual([]);
     expect(result.beforeLineCount).toBe(5);
-    expect(result.afterLineCount).toBe(1);
+    expect(result.afterLineCount).toBe(5);
+  });
+
+  it("diffs a pair far past the threshold when only its middle differs", () => {
+    const head = Array.from({ length: 50 }, (_, i) => `head${i}`);
+    const tail = Array.from({ length: 50 }, (_, i) => `tail${i}`);
+    const result = diffLines(
+      [...head, "old", ...tail].join("\n"),
+      [...head, "new", ...tail].join("\n"),
+      { maxLines: 4, collapseUnchanged: false }
+    );
+
+    expect(result.status).toBe("diffed");
+    expect(result.rows).toHaveLength(102);
+    expect(result.rows[0]).toEqual({
+      kind: "context",
+      text: "head0",
+      beforeLine: 1,
+      afterLine: 1,
+    });
+    expect(result.rows[50]).toEqual({
+      kind: "removed",
+      text: "old",
+      beforeLine: 51,
+      afterLine: null,
+    });
+    expect(result.rows[51]).toEqual({
+      kind: "added",
+      text: "new",
+      beforeLine: null,
+      afterLine: 51,
+    });
+    expect(result.rows[101]).toEqual({
+      kind: "context",
+      text: "tail49",
+      beforeLine: 101,
+      afterLine: 101,
+    });
+  });
+
+  it("shifts but does not reshape the rows when identical head and tail lines are added to both sides", () => {
+    const bare = diffLines("x\ny\nz", "x\nY\nz", { collapseUnchanged: false }).rows;
+    const padded = diffLines("p1\np2\nx\ny\nz\ns1\ns2", "p1\np2\nx\nY\nz\ns1\ns2", {
+      collapseUnchanged: false,
+    }).rows;
+
+    expect(padded).toHaveLength(bare.length + 4);
+    expect(padded.slice(2, 2 + bare.length)).toEqual(
+      bare.map((row) => ({
+        ...row,
+        beforeLine: row.beforeLine === null ? null : row.beforeLine + 2,
+        afterLine: row.afterLine === null ? null : row.afterLine + 2,
+      }))
+    );
+  });
+
+  it("emits rows both sides can be read back out of, when head and tail are both trimmed", () => {
+    const before = "same1\nsame2\ndrop\nkeep\nsame3\nsame4";
+    const after = "same1\nsame2\nkeep\nadd\nsame3\nsame4";
+    const rows = diffLines(before, after, { collapseUnchanged: false }).rows;
+
+    expect(
+      rows
+        .filter((row) => row.kind !== "added")
+        .map((row) => row.text)
+        .join("\n")
+    ).toBe(before);
+    expect(
+      rows
+        .filter((row) => row.kind !== "removed")
+        .map((row) => row.text)
+        .join("\n")
+    ).toBe(after);
+    expect(rows.filter((row) => row.beforeLine !== null).map((row) => row.beforeLine)).toEqual([
+      1, 2, 3, 4, 5, 6,
+    ]);
+    expect(rows.filter((row) => row.afterLine !== null).map((row) => row.afterLine)).toEqual([
+      1, 2, 3, 4, 5, 6,
+    ]);
   });
 
   it("still diffs when both sides sit exactly on the threshold", () => {

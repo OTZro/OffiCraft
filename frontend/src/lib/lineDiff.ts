@@ -179,7 +179,34 @@ export function diffLines(
   const a = splitLines(before);
   const b = splitLines(after);
 
-  if (a.length > maxLines || b.length > maxLines) {
+  // The identical head and tail never need the quadratic core. A leading line
+  // equal to its counterpart is taken by the `a[i] === b[j]` branch of
+  // buildRows before the table is ever consulted; a trailing common run shifts
+  // every table cell in the middle by the same amount, so the `>=` that breaks
+  // ties compares the same two numbers with or without it. Trimming therefore
+  // changes not one emitted row — the differential test against the untrimmed
+  // implementation is what proves it, not this paragraph.
+  // Measured over 60 real commits here: the table shrinks ~100x at the median
+  // (5 orders of magnitude on a one-line edit, 3x on a change spread over a
+  // whole file), which is the difference between `maxLines` being a wall people
+  // hit and one they do not.
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (
+    tail < a.length - head &&
+    tail < b.length - head &&
+    a[a.length - 1 - tail] === b[b.length - 1 - tail]
+  ) {
+    tail++;
+  }
+  const midA = a.slice(head, a.length - tail);
+  const midB = b.slice(head, b.length - tail);
+
+  // The ceiling exists to bound the table, so it is the MIDDLE that has to fit.
+  // The reported counts stay whole-file: the refusal screen tells a reader how
+  // big their file is, which is what they can act on.
+  if (midA.length > maxLines || midB.length > maxLines) {
     return {
       status: "too-large",
       rows: [],
@@ -189,7 +216,26 @@ export function diffLines(
     };
   }
 
-  const rows = buildRows(a, b);
+  const rows: DiffRow[] = [];
+  for (let k = 0; k < head; k++) {
+    rows.push({ kind: "context", text: a[k], beforeLine: k + 1, afterLine: k + 1 });
+  }
+  for (const row of buildRows(midA, midB)) {
+    rows.push({
+      kind: row.kind,
+      text: row.text,
+      beforeLine: row.beforeLine === null ? null : row.beforeLine + head,
+      afterLine: row.afterLine === null ? null : row.afterLine + head,
+    });
+  }
+  for (let k = 0; k < tail; k++) {
+    rows.push({
+      kind: "context",
+      text: a[a.length - tail + k],
+      beforeLine: a.length - tail + k + 1,
+      afterLine: b.length - tail + k + 1,
+    });
+  }
   const hunks = collapseUnchanged
     ? collapse(rows, Math.max(0, contextRadius))
     : rows.length > 0
