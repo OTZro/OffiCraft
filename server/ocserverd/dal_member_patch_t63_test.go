@@ -19,6 +19,7 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -36,6 +37,16 @@ func TestPatchMemberWritesOnlyTheNamedColumns(t *testing.T) {
 	seed.ForcedStopAt = 100
 	seed.AgentIatFloor = 50
 	seed.HandoverNoticedTS = 25
+	// 🔴 The three NULL-ruled columns are seeded with NON-NULL values ON PURPOSE.
+	// fullMember leaves codename "" and linked_task_id nil, and the round-trip
+	// below compares "nil" against "nil" for both — so a constructor that stored
+	// "" where it should store SQL NULL would pass unnoticed. Seeding a real
+	// codename and a real binding is what makes the comparison able to see them.
+	bound := "t-63"
+	seed.Codename = "O-214"
+	seed.LinkedTaskID = &bound
+	no := false
+	seed.LastOpOK = &no
 	if err := d.PutMember(seed); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -48,6 +59,12 @@ func TestPatchMemberWritesOnlyTheNamedColumns(t *testing.T) {
 	if before.ForcedStopAt != 100 || before.AgentIatFloor != 50 || before.BankedCost != seed.BankedCost {
 		t.Fatalf("seed did not land: forced_stop_at=%v agent_iat_floor=%v banked_cost=%v",
 			before.ForcedStopAt, before.AgentIatFloor, before.BankedCost)
+	}
+	if before.Codename != "O-214" || before.LinkedTaskID == nil || *before.LinkedTaskID != bound ||
+		before.LastOpOK == nil || *before.LastOpOK {
+		t.Fatalf("the NULL-ruled seed did not land, so this test cannot see those "+
+			"columns: codename=%q linked_task_id=%v last_op_ok=%v",
+			before.Codename, before.LinkedTaskID, before.LastOpOK)
 	}
 
 	if err := d.PatchMember("m-1", mfName("renamed")); err != nil {
@@ -129,6 +146,128 @@ func TestPatchMemberUnknownIDIsACleanNoOp(t *testing.T) {
 	}
 	if m, err := d.GetMember("m-1"); err != nil || m == nil || m.Name != "ghost" {
 		t.Fatalf("positive control: the same patch must land on an existing row, got %v %v", m, err)
+	}
+}
+
+// TestTheThreeNULLRulesStoreRealSQLNULL is the guard the round-trip test above
+// structurally CANNOT be: "" and SQL NULL both scan back as the zero value, so
+// no amount of comparing Members can tell them apart. It asks the database.
+//
+// The rules matter for three different reasons. codename "" → NULL keeps the
+// PARTIAL UNIQUE codename index from colliding across the many codename-less
+// staff rows (NULLs are mutually distinct in SQLite), and that failure is a
+// write that starts being refused, not a wrong value. linked_task_id nil → NULL
+// keeps "unbound" out of every join. last_op_ok is THREE-VALUED — "no op
+// reported yet" is not "the op failed", and the cockpit renders those
+// differently.
+//
+// Both halves are checked, because the patch door and the insert door build
+// their values from the SAME constructors and a rule can only be lost in one
+// place: the constructors.
+//
+// MUTANTS: make any of mfCodename / mfLinkedTaskID / mfLastOpOK store the zero
+// value instead of nil ⇒ this test names the column.
+func TestTheThreeNULLRulesStoreRealSQLNULL(t *testing.T) {
+	isNull := func(t *testing.T, d *DAL, id, col string) bool {
+		t.Helper()
+		var n int
+		if err := d.rdb.QueryRow(
+			`SELECT `+col+` IS NULL FROM member WHERE id = ?`, id).Scan(&n); err != nil {
+			t.Fatalf("read %s: %v", col, err)
+		}
+		return n == 1
+	}
+	cols := []string{"codename", "linked_task_id", "last_op_ok"}
+
+	t.Run("through the whole-row INSERT", func(t *testing.T) {
+		d := newTestDAL(t)
+		seed := fullMember("m-1")
+		seed.Codename = ""      // no codename — the many staff rows
+		seed.LinkedTaskID = nil // unbound
+		seed.LastOpOK = nil     // no op reported yet
+		if err := d.PutMember(seed); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		for _, c := range cols {
+			if !isNull(t, d, "m-1", c) {
+				t.Errorf("member.%s stored a zero VALUE where the rule says SQL NULL. "+
+					"The rule lives on that column's constructor in "+
+					"dal_member_patch.go; for codename this is what stops the partial "+
+					"UNIQUE index colliding across every codename-less row.", c)
+			}
+		}
+	})
+
+	t.Run("through the patch door", func(t *testing.T) {
+		d := newTestDAL(t)
+		seed := fullMember("m-1")
+		bound := "t-63"
+		yes := true
+		seed.Codename = "O-214"
+		seed.LinkedTaskID = &bound
+		seed.LastOpOK = &yes
+		if err := d.PutMember(seed); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		// Positive control: the seed really landed non-NULL, so the assertions
+		// below are not passing on a row that was NULL all along.
+		for _, c := range cols {
+			if isNull(t, d, "m-1", c) {
+				t.Fatalf("seed did not land: member.%s is already NULL", c)
+			}
+		}
+		if err := d.PatchMember("m-1",
+			mfCodename(""), mfLinkedTaskID(nil), mfLastOpOK(nil)); err != nil {
+			t.Fatalf("patch: %v", err)
+		}
+		for _, c := range cols {
+			if !isNull(t, d, "m-1", c) {
+				t.Errorf("member.%s did not go back to SQL NULL through the patch "+
+					"door — the constructor's NULL rule is not being applied on this "+
+					"path", c)
+			}
+		}
+	})
+}
+
+// TestInsertOnlyDoesNotSuppressAColumnTheCallerNAMES pins the half of insertOnly
+// that is easy to get backwards. The flag means "a WHOLE-ROW writer must not
+// carry this column", not "this column is read-only": SetMemberModel and its
+// siblings exist precisely to write insert-only columns, and after T-63 they can
+// do it through PatchMember.
+//
+// MUTANT: make patchMemberOn skip fields flagged insertOnly. Without this test
+// the new file stays green (the behavioural fallout lands two packages away, in
+// the agent-iat-floor and owner-intent guards), and the doc comment on
+// memberField would be describing a property nothing checked.
+func TestInsertOnlyDoesNotSuppressAColumnTheCallerNAMES(t *testing.T) {
+	d := newTestDAL(t)
+	if err := d.PutMember(fullMember("m-1")); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// model is insert-only; naming it in a targeted patch must still write it.
+	if err := d.PatchMember("m-1", mfModel("sonnet")); err != nil {
+		t.Fatalf("patch: %v", err)
+	}
+	got, err := d.GetMember("m-1")
+	if err != nil || got == nil {
+		t.Fatalf("read back: %v %v", got, err)
+	}
+	if got.Model != "sonnet" {
+		t.Fatalf("a targeted patch NAMING an insert-only column wrote nothing: "+
+			"model = %q, want %q.\ninsertOnly restricts WHOLE-ROW writers; it must "+
+			"not make the column unwritable, or every single-column setter that "+
+			"routes through PatchMember becomes a silent no-op.", got.Model, "sonnet")
+	}
+	// The forward-only twin of the same property: agent_iat_floor is BOTH
+	// insert-only and forward-only, and SetMemberAgentIatFloor writes it through
+	// this door.
+	if err := d.SetMemberAgentIatFloor("m-1", 700); err != nil {
+		t.Fatalf("raise floor: %v", err)
+	}
+	if m, err := d.GetMember("m-1"); err != nil || m == nil || m.AgentIatFloor != 700 {
+		t.Fatalf("SetMemberAgentIatFloor must still raise the floor through the "+
+			"patch door; got %v %v", m, err)
 	}
 }
 
@@ -283,9 +422,33 @@ func TestMemberColumnPropertiesAreDeclaredInOnePlace(t *testing.T) {
 	// The whole-row door's update set is derived from the flags, not from a
 	// hand-kept SET list. 35 columns minus the 14 insert-only ones is the 21 the
 	// old ON CONFLICT DO UPDATE SET wrote.
-	if got, want := len(fields), 35; got != want {
-		t.Errorf("memberWholeRow projects %d columns, want %d — it must track "+
-			"memberColumns, which the INSERT binds positionally against", got, want)
+	// The SET of columns must equal memberColumns exactly. This is the assertion
+	// the comment on memberWholeRow points at: order is free (each column name is
+	// emitted beside its own placeholder), membership is not. A column added to
+	// the schema and to memberColumns but not here would be silently absent from
+	// every whole-row INSERT.
+	wantCols := map[string]bool{}
+	for _, c := range strings.Split(memberColumns, ",") {
+		if c = strings.TrimSpace(c); c != "" {
+			wantCols[c] = true
+		}
+	}
+	for c := range wantCols {
+		if !seen[c] {
+			t.Errorf("member.%s is in memberColumns but memberWholeRow does not "+
+				"project it — a whole-row INSERT would leave it at its schema "+
+				"default", c)
+		}
+	}
+	for c := range seen {
+		if !wantCols[c] {
+			t.Errorf("memberWholeRow projects member.%s, which is not in "+
+				"memberColumns — the INSERT would name a column the read side "+
+				"never scans", c)
+		}
+	}
+	if got, want := len(fields), len(wantCols); got != want {
+		t.Errorf("memberWholeRow projects %d columns, memberColumns has %d", got, want)
 	}
 	if got, want := len(updatableMemberFields(fields)), 21; got != want {
 		t.Errorf("a whole-row write now updates %d columns, want %d", got, want)
@@ -293,10 +456,16 @@ func TestMemberColumnPropertiesAreDeclaredInOnePlace(t *testing.T) {
 }
 
 // memberComparable flattens the two pointer fields into values so a whole row
-// can be compared with DeepEqual. It FLATTENS rather than drops them: nilling
-// them out would make the comparison blind to exactly the two columns whose
-// NULL rules the patch door had to carry over (last_op_ok's three-valued state
-// and linked_task_id's nil-means-unbound), so a leak into either would pass.
+// can be compared with DeepEqual. It FLATTENS rather than drops them so the
+// comparison can see last_op_ok's three-valued state and linked_task_id's
+// nil-means-unbound.
+//
+// ⚠️ Flattening CANNOT guard the NULL rules and must not be read as doing so:
+// "" and SQL NULL both scan back as the zero value, so no comparison of Members
+// can tell them apart. What flattening buys is that a LEAK into either column is
+// visible — which is why the caller above seeds a real codename, a real task
+// binding and an explicit false. The NULL rules themselves are asked of the
+// database directly, in TestTheThreeNULLRulesStoreRealSQLNULL.
 type comparableMember struct {
 	Row          Member
 	LastOpOK     string // "nil" | "true" | "false" — the three-valued state

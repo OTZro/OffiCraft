@@ -363,12 +363,10 @@ func (d *DAL) GetMember(id string) (*Member, error) {
 // between "the owner picked claude" and "nobody has picked yet", which is what
 // resolveEmptyRuntimeForPlacement needs at placement time.
 //
-// PutMember upserts a member row (the repository.put_member twin; the SSE
-// delta is the service layer's job). On conflict it deliberately leaves
-// avatar_attachment_id untouched: ReplaceMemberAvatar/DeleteMemberAvatar are
-// the only update seams for that independently-owned pointer. This prevents a
-// stale lifecycle/model snapshot from erasing a newer avatar and orphaning its
-// blob. The INSERT still accepts the field for migrations/tests/new rows.
+// (The paragraph that used to sit here explained why PutMember's conflict clause
+// left avatar_attachment_id alone. That clause is gone; the column is now
+// declared insertOnly, and its reason lives on mfAvatarAttachmentID in
+// dal_member_patch.go with the rest of the property table.)
 // ── account spend (T-53, owner ruling rc-5c5d7c7c6dcd) ───────────────────────
 //
 // The ACCOUNT's own accumulated spend, the number the cockpit's account card
@@ -580,6 +578,13 @@ func (d *DAL) SetMemberHandoverNoticedTS(id string, ts float64) error {
 // the whole-row door could not — two paths saying different things about one
 // column. Naming the field here makes the column's own forwardOnly declaration
 // apply to this path as well, so there is nothing left to keep in sync.
+//
+// ⚠️ WHAT THIS SEAM GAVE UP: it can no longer CLEAR the column. Passing 0, or
+// any value below the stored one, is now a silent no-op. Nothing relies on that
+// today — the sole non-test caller stamps nowSecs(), and the column is
+// deliberately never cleared (it describes the session BEFORE this one) — but an
+// "undo the force-stop record" would need its own seam rather than this one, and
+// would not find out by being refused.
 func (d *DAL) SetMemberForcedStopAt(id string, ts float64) error {
 	return d.PatchMember(id, mfForcedStopAt(ts))
 }
