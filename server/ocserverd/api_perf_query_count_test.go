@@ -140,15 +140,27 @@ func TestTaskTableReadPatternKnowsItsOwnBoundary(t *testing.T) {
 // SAME request against two databases whose POPULATION sizes differ. So it sees
 // exactly one shape of N+1: a per-row read over a set that GROWS with the
 // fixture.
-// It does NOT see a per-row read placed AFTER the handler's status filter —
-// `?statuses=in_progress` returns ONE row in both runs, so a
-// `ListTaskSteps(t.ID)` sitting there costs 1 extra query in both, the two
-// tallies stay equal, and the constant bound (`few.step > 3`) still passes. That
-// is a REAL N+1 on the unfiltered/default list, and this guard is blind to it.
-// T-66 的執行者判斷(不是 owner 裁定,沒有人向他請示過這一格): 那是真的洞,
-// 但這一輪不補 — it is out of this ticket's scope, and closing it needs a
-// second axis (vary the number of RETURNED rows, not just the population).
-// 不要以為這道護欄守得比上面這段更多。
+// 🔴 IT USED TO BE BLIND TO THE MOST NATURAL PLACEMENT OF ALL, and that gap is
+// now closed — this paragraph replaces an earlier one that said the gap would be
+// left open. The measurement, not the reasoning: the test's only request carried
+// `?statuses=in_progress`, which returns ONE row in BOTH runs, so a
+// `ListTaskSteps(t.ID)` planted immediately before the newTaskListItemDTO call —
+// i.e. right where a per-row step read would naturally be written — cost exactly
+// 1 extra query in both, the two tallies stayed equal, the constant bound
+// (`few.step > 3`) still passed, and the whole guard came back GREEN on a real
+// N+1. Only reads placed BEFORE the filters (e.g. inside the byID build) grew
+// with the fixture and reddened it.
+//
+// The second axis it needed was not a bigger population but a bigger ANSWER, so
+// the test now also measures an UNFILTERED request over the same two
+// populations, where the loop body really does execute once per returned row
+// (listTaskReadsUnfilteredFor). Both axes are kept: the filtered runs are the
+// ones that catch a read placed before the filters, which the unfiltered runs
+// cannot tell apart from honest per-population work.
+//
+// 執行者判斷 (T-66; 沒有卡號,沒有人向 owner 請示過這一格): both shapes are worth
+// one measurement each, and a guard that names its own blind spot in a comment
+// is worse than no comment once the blind spot is gone.
 var taskStepTableRead = regexp.MustCompile(
 	`(?i)\b(?:from|join)\s+(?:[a-z_][a-z0-9_]*\.)?` +
 		"(?:\"task_step\"|'task_step'|`task_step`|\\[task_step\\]|task_step\\b)")
@@ -494,6 +506,39 @@ func listTaskReadsFor(t *testing.T, depN int) (tally queryTally, resolvedDeps in
 	return tally, resolvedDeps
 }
 
+// listTaskReadsUnfilteredFor is listTaskReadsFor's UNFILTERED twin: the same
+// seeded population, but the request carries NO ?statuses=, so EVERY seeded task
+// comes back on the wire and the handler's per-row loop body really does run
+// once per returned row.
+//
+// 🔴 WHY BOTH EXIST, and what the filtered one alone cannot see. The filtered run
+// narrows the ANSWER to one row, so a per-row read that sits after the filter
+// `continue`s — the most natural place to write one, next to the row projection
+// — fires once no matter how large the population is, and every filtered
+// assertion stays green on a real N+1. That was measured, not reasoned about.
+// Keep BOTH: the filtered run is the one that catches a read placed BEFORE the
+// filters (e.g. inside the byID build), which the unfiltered run cannot
+// distinguish from honest once-per-population work.
+func listTaskReadsUnfilteredFor(t *testing.T, depN int) (tally queryTally, rowsOut int) {
+	t.Helper()
+	dal, ctr := newCountingDAL(t)
+	s := &apiServer{dal: dal, hub: NewHub()}
+	seedDepFanout(t, s, depN)
+
+	stop := ctr.arm()
+	rows := listTaskRows(t, s, HandleListTasksApiTasksGetParams{})
+	tally = stop()
+
+	// 🔴 語料自證:整個母體都必須真的落到回應上。這一支的全部價值就在「回幾列」
+	// 會隨 depN 成長;如果它其實也只回一列,下面的等式就退化成 filtered 那一組,
+	// 什麼新的都沒測到。
+	if len(rows) != depN+1 {
+		t.Fatalf("depN=%d: 未過濾的清單該回 %d 列(1 張被擋的 + %d 張阻擋者),"+
+			"得到 %d — 語料不合格", depN, depN+1, depN, len(rows))
+	}
+	return tally, len(rows)
+}
+
 func TestTaskListTaskReadsDoNotGrowWithDepCount(t *testing.T) {
 	const fewDeps, manyDeps = 2, 25
 
@@ -550,5 +595,42 @@ func TestTaskListTaskReadsDoNotGrowWithDepCount(t *testing.T) {
 		t.Fatalf("一次 list 請求打了 %d 次 task_step 表,預期 2 次"+
 			"(AllTaskStepProgress + AllTaskCurrentStep):\n  %s",
 			few.step, strings.Join(few.stepStmts, "\n  "))
+	}
+
+	// ── 被守住的性質(三)未過濾的母體 ────────────────────────────────────
+	// 🔴 上面兩段量的是一個「只回一列」的請求(?statuses=in_progress):filter
+	// 之後的迴圈體只跑一次,所以一句放在 filter 之後、緊鄰 newTaskListItemDTO
+	// 的逐票查詢 —— N+1 最自然的落點 —— 在那裡是看不見的。那顆 mutant 實測是
+	// 全綠的。這一段用同一個母體、但不帶任何 filter,讓迴圈體真的每張票都跑一
+	// 次,那顆 mutant 才會紅。兩組都留著:filtered 那組守的是「放在 filter
+	// 之前」的讀取,unfiltered 這組分不出來。
+	fewU, fewRows := listTaskReadsUnfilteredFor(t, fewDeps)
+	manyU, manyRows := listTaskReadsUnfilteredFor(t, manyDeps)
+
+	// ── 語料非空(先於任何次數斷言)──────────────────────────────────────
+	if manyRows <= fewRows {
+		t.Fatalf("語料不合格:兩跑回的列數必須不同(few=%d many=%d),"+
+			"否則這一組和 filtered 那一組量的是同一件事", fewRows, manyRows)
+	}
+	if fewU.task == 0 || fewU.step == 0 {
+		t.Fatalf("計數器在未過濾這一跑什麼都沒數到(task=%d step=%d)— seam 壞了,"+
+			"下面的等式會恆真地過", fewU.task, fewU.step)
+	}
+
+	// MUTANT(本輪實測過的那一顆):在 handler 迴圈裡、filter 之後、緊鄰
+	// newTaskListItemDTO 放一句 `s.dal.ListTaskSteps(t.ID)`。filtered 那兩段全綠,
+	// 這一句紅:3 列 → 5 次,26 列 → 28 次。
+	if manyU.step != fewU.step {
+		t.Fatalf("未過濾的 list 請求,task_step 讀取次數隨回傳列數成長了:%d 列 → %d 次,"+
+			"%d 列 → %d 次(N+1)\nfew:\n  %s\nmany:\n  %s",
+			fewRows, fewU.step, manyRows, manyU.step,
+			strings.Join(fewU.stepStmts, "\n  "), strings.Join(manyU.stepStmts, "\n  "))
+	}
+	// `task` 表同理 —— 逐列 GetTask 也可以躲在 filter 後面。
+	if manyU.task != fewU.task {
+		t.Fatalf("未過濾的 list 請求,task 讀取次數隨回傳列數成長了:%d 列 → %d 次,"+
+			"%d 列 → %d 次(N+1)\nfew:\n  %s\nmany:\n  %s",
+			fewRows, fewU.task, manyRows, manyU.task,
+			strings.Join(fewU.taskStmts, "\n  "), strings.Join(manyU.taskStmts, "\n  "))
 	}
 }
