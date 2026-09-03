@@ -66,7 +66,7 @@ async function seedChat(page, token, memberId) {
       { headers: auth },
     )
   ).json();
-  for (let i = before.length; i < SEED_COUNT; i++) {
+  for (let i = before.messages.length; i < SEED_COUNT; i++) {
     const res = await page.request.post(`${BASE}/api/chat`, {
       headers: auth,
       data: {

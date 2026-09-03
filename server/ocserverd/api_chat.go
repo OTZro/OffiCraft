@@ -14,6 +14,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -913,6 +914,59 @@ const (
 	// not exist", which is a different and false statement.
 	chatReplyToUnknownMsg = "reply_to names no message (%s) — you can only reply to a message " +
 		"that exists; re-read the conversation and use the id it carries"
+	// ── the T-48 cursor + unread backfill ───────────────────────────────────
+	//
+	// chatCursorUnreadableMsg answers a token this API did not mint. It says
+	// "copy it back verbatim" rather than describing the encoding on purpose:
+	// the token is opaque, and a caller that knows how to build one has already
+	// bought itself a page boundary that moves when the encoding does.
+	chatCursorUnreadableMsg = "cursor is not a cursor this API issued — copy the previous " +
+		"response's next_cursor back verbatim; it is opaque, and constructing or " +
+		"editing one is not supported"
+	// chatCursorWrongWayMsg refuses a cursor minted by the OTHER direction. The
+	// alternative — honouring the position and ignoring which way it was meant
+	// to walk — answers 200 with a page from the wrong end of the stream, and
+	// the caller has no way to tell that from a real one. Same reasoning as
+	// chatWindowMixedCursorsMsg, one level down.
+	chatCursorWrongWayMsg = "this cursor continues %s and cannot be used on a path that " +
+		"continues %s — a cursor belongs to the query that minted it; start that " +
+		"walk again without one"
+	// chatCursorMixedMsg refuses `cursor` alongside either older cursor family,
+	// for the reason chatWindowMixedCursorsMsg gives: one keyset walk per
+	// request, or the silent winner picks the answer.
+	chatCursorMixedMsg = "cursor cannot be combined with before_ts/before_id or " +
+		"start_id/end_id — one keyset walk per request; send the cursor alone"
+	// chatUnreadMixedMsg refuses `unread` alongside a stream-position cursor.
+	// They are not two filters over one set: a window/keyset request names a
+	// position in the WHOLE stream, and unread names a set defined by the
+	// caller's per-sender watermarks. Serving the intersection would answer
+	// something neither parameter asked for.
+	chatUnreadMixedMsg = "unread cannot be combined with before_ts/before_id or " +
+		"start_id/end_id — those name a position in the whole stream, unread names " +
+		"the set your read watermarks define; page unread with cursor instead"
+	// chatUnknownParamMsg refuses a query parameter this route does not
+	// declare. It NAMES the offenders and then lists what is accepted: a caller
+	// that mistyped one name learns which one and what it should have been,
+	// without a second round trip or a read of the spec. See
+	// unknownChatQueryParams for why this route refuses where others ignore.
+	chatUnknownParamMsg = "unknown query parameter(s) on GET /api/chat: %s — this route " +
+		"refuses parameters it does not declare rather than ignoring them, because an " +
+		"ignored parameter silently answers a question you did not ask; accepted here: %s"
+	// chatUnreadTrue is the only value that turns the backfill on. A STRING
+	// flag, matching the convention this route already used for its removed
+	// `peek`: anything else reads as not sent rather than as an error.
+	chatUnreadTrue = "true"
+	// chatCursorOlder / chatCursorNewer are the DIRECTION tag baked into every
+	// cursor. It is carried IN the token rather than inferred from the request
+	// so that a cursor handed to the wrong path is refused instead of silently
+	// answering from the wrong end — the direction is a property of the walk
+	// that minted it, not of the request replaying it.
+	chatCursorOlder = "o"
+	chatCursorNewer = "n"
+	// chatCursorOlderName / chatCursorNewerName are what those tags are called
+	// in a refusal. A caller reading "o" learns nothing.
+	chatCursorOlderName = "towards older messages"
+	chatCursorNewerName = "towards newer messages"
 	// (chatReplyToForeignMsg — the refusal for a reply_to pointing OUT of the
 	// conversation being posted into — was DELETED with the check itself on
 	// 2026-08-21, owner ruling. Quoting sideways into a thread is the use case
@@ -958,9 +1012,9 @@ func requestedChatIDs(ids *[]string) []string {
 // were both someone else. That bound guarded nothing: the ordinary listing
 // filters on `with` — a PARTICIPANT — not on the caller, so the very same
 // message was already readable by asking for that peer's line (designed
-// behaviour, not a leak; `caller_only` is what narrows a listing to the
-// caller). What the stricter rule actually produced was two doors onto the same
-// rows disagreeing about who may open them, which cost an honest caller the
+// behaviour, not a leak). What the stricter rule actually produced was two
+// doors onto the same rows disagreeing about who may open them, which cost an
+// honest caller the
 // ability to follow a message's reply_to and cost a dishonest one nothing. If
 // this reach is ever wrong, it is wrong for BOTH doors and must be fixed on
 // both — do not quietly re-narrow this one and leave the listing open.
@@ -985,6 +1039,164 @@ func (s *apiServer) serveChatByIDs(w http.ResponseWriter, r *http.Request, ids [
 			return
 		}
 	}
+	// NO next_cursor: the caller named the set, so there is no direction to
+	// continue in. Guessing one (older than the oldest named id, say) would
+	// hand back a token that walks a stream this request never asked about.
+	s.writeChatPage(w, msgs, "")
+}
+
+// ── unknown query parameters (T-48, owner ruling) ────────────────────────────
+//
+// Owner, verbatim: 「如果送了 server 不認得的參數應該是要 error 告訴他這個參數不
+// 存在才對」, scoped to THIS ROUTE ONLY (rc-84f98080af16). Every other route keeps
+// today's behaviour of ignoring what it does not know.
+//
+// 🔴 THE ACCEPTED SET IS READ OFF THE GENERATED PARAMS STRUCT, NOT WRITTEN OUT
+// HERE. HandleListChatApiChatGetParams is generated from spec/openapi.json, so
+// its `form` tags ARE the declared parameter list; a second list in this file
+// would be a copy of the same fact, and a copy of a fact is the exact disease
+// this ticket has spent its whole life curing. Add a parameter to the spec,
+// regenerate, and this guard already knows about it — there is nothing to
+// remember to update, which is the only kind of guard that stays true.
+//
+// The one name that is NOT in the spec and still allowed is the `?token=`
+// transport credential, which extractToken accepts on every gated route for
+// clients that cannot set a header (EventSource, <img src>). It is spelled once,
+// in server.go, and read from there rather than retyped.
+//
+// WHY 400 AND NOT 422: the request is not a well-formed request carrying an
+// unprocessable value — it names something that does not exist. And the message
+// NAMES THE PARAMETER, because "bad parameters" tells a caller to re-read the
+// whole query string looking for which one.
+
+// chatDeclaredQueryParams is the accepted set, sorted, for the refusal message.
+func chatDeclaredQueryParams() []string {
+	out := make([]string, 0, len(chatQueryParamSet))
+	for name := range chatQueryParamSet {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// unknownChatQueryParams returns the query parameter names this route does not
+// accept, sorted so a request that gets several wrong is refused with the same
+// message every time.
+func unknownChatQueryParams(r *http.Request) []string {
+	var unknown []string
+	for name := range r.URL.Query() {
+		if !chatQueryParamSet[name] {
+			unknown = append(unknown, name)
+		}
+	}
+	sort.Strings(unknown)
+	return unknown
+}
+
+// chatQueryParamSet is derived ONCE from the generated params struct — see the
+// note above for why it is derived rather than declared.
+var chatQueryParamSet = func() map[string]bool {
+	out := map[string]bool{authTokenQueryParam: true}
+	t := reflect.TypeOf(HandleListChatApiChatGetParams{})
+	for i := 0; i < t.NumField(); i++ {
+		tag, ok := t.Field(i).Tag.Lookup("form")
+		if !ok {
+			continue
+		}
+		if name, _, _ := strings.Cut(tag, ","); name != "" {
+			out[name] = true
+		}
+	}
+	return out
+}()
+
+// ── the T-48 continuation cursor ─────────────────────────────────────────────
+//
+// One opaque string standing in for the composite (ts, id) keyset position the
+// deprecated before_ts/before_id pair spelled out, PLUS the direction the walk
+// that minted it was going. Callers copy it back verbatim; nothing outside this
+// file may take it apart.
+//
+// 🔴 IT IS A POSITION, NEVER AN OFFSET OR A ROW COUNT. That is the whole reason
+// the wire carries a token instead of a page number: messages keep arriving
+// while a caller pages, and an offset silently re-slices the stream under it —
+// a row read twice, or worse, a row skipped and never seen again. A (ts, id)
+// position names a place in a total order that new rows cannot renumber.
+//
+// 🔴 THE DIRECTION TRAVELS INSIDE THE TOKEN. It could have been inferred from
+// the request instead, and that is exactly the bug: an unread cursor replayed
+// on a plain listing would then answer 200 with a page from the wrong end and
+// nothing would say so. Carrying it means a misused cursor is a 422.
+//
+// The encoding is base64url of "<dir>\x00<ts>\x00<id>". strconv 'g' with
+// precision -1 is the shortest form that round-trips a float64 exactly, so a
+// cursor decodes to the same ts it was minted from — bit for bit, which is what
+// the strict keyset comparison needs.
+
+// encodeChatCursor mints the token for a page ending (in its own direction) at
+// `a`.
+func encodeChatCursor(dir string, a chatAnchor) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(
+		dir + "\x00" + strconv.FormatFloat(a.TS, 'g', -1, 64) + "\x00" + a.ID))
+}
+
+// decodeChatCursor reads a token back, refusing anything this API did not mint.
+// `want` is the direction the calling path continues in; a token tagged the
+// other way is refused rather than honoured, and the refusal names both
+// directions in words.
+func decodeChatCursor(token, want string) (chatAnchor, string, bool) {
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		return chatAnchor{}, chatCursorUnreadableMsg, false
+	}
+	parts := strings.Split(string(raw), "\x00")
+	if len(parts) != 3 || parts[2] == "" {
+		return chatAnchor{}, chatCursorUnreadableMsg, false
+	}
+	dir := parts[0]
+	if dir != chatCursorOlder && dir != chatCursorNewer {
+		return chatAnchor{}, chatCursorUnreadableMsg, false
+	}
+	ts, err := strconv.ParseFloat(parts[1], 64)
+	if err != nil {
+		return chatAnchor{}, chatCursorUnreadableMsg, false
+	}
+	if dir != want {
+		return chatAnchor{}, fmt.Sprintf(chatCursorWrongWayMsg,
+			chatCursorDirName(dir), chatCursorDirName(want)), false
+	}
+	return chatAnchor{TS: ts, ID: parts[2]}, "", true
+}
+
+func chatCursorDirName(dir string) string {
+	if dir == chatCursorNewer {
+		return chatCursorNewerName
+	}
+	return chatCursorOlderName
+}
+
+// chatPageWindow is the row budget one page asks the DAL for: `limit` + 1.
+//
+// The extra row is NEVER returned. It exists solely so the handler can answer
+// "is there more in this direction" as a FACT rather than an inference: a page
+// that comes back exactly `limit` long is ambiguous (the stream might end
+// precisely there), and answering that ambiguity by emitting a cursor anyway
+// costs the caller one pointless extra round trip per walk and, worse, makes
+// "cursor absent" stop meaning "the end". A caller that trusts the token more
+// than the page length is the caller this design wants.
+// A NEGATIVE limit is uncapped and a ZERO limit reads nothing; neither has a
+// "next page" to detect, so neither gets the extra row.
+func chatPageWindow(limit int) int {
+	if limit <= 0 {
+		return limit
+	}
+	return limit + 1
+}
+
+// writeChatPage renders one page into the T-48 envelope. Every path of
+// GET /api/chat goes through here, so no path can quietly answer a bare array
+// again — the shape is one function, not a convention each handler repeats.
+func (s *apiServer) writeChatPage(w http.ResponseWriter, msgs []ChatMessage, nextCursor string) {
 	out := []chatMessageDTO{}
 	for _, m := range msgs {
 		dto, err := s.servedChatMessageDTO(m)
@@ -994,7 +1206,7 @@ func (s *apiServer) serveChatByIDs(w http.ResponseWriter, r *http.Request, ids [
 		}
 		out = append(out, dto)
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, chatListDTO{Messages: out, NextCursor: nextCursor})
 }
 
 // requestedChatWindow reads the T-48 window anchors off the GENERATED params.
@@ -1024,15 +1236,14 @@ func requestedChatWindow(params HandleListChatApiChatGetParams) (startID string,
 
 // chatWindowRequest is one window read, already stripped of the transport.
 type chatWindowRequest struct {
-	with       string
-	callerOnly bool
-	actor      string
+	filter     chatListFilter
 	limit      int
 	startID    string
 	hasStart   bool
 	endID      string
 	hasEnd     bool
 	beforeSent bool
+	cursorSent bool
 }
 
 // serveChatWindow answers ?start_id= / ?end_id= — the T-48 window, both ends
@@ -1045,7 +1256,7 @@ type chatWindowRequest struct {
 // than one way at once and a caller fixing them one at a time needs the order
 // to be stable:
 //
-//  1. mixed cursor families (before_ts/before_id alongside)   422
+//  1. mixed cursor families (before_ts/before_id, or cursor)  422
 //  2. limit outside 1..200                                    422
 //  3. an anchor naming no message                             404
 //  4. start_id strictly newer than end_id                     422
@@ -1062,6 +1273,13 @@ type chatWindowRequest struct {
 func (s *apiServer) serveChatWindow(w http.ResponseWriter, r *http.Request, req chatWindowRequest) {
 	if req.beforeSent {
 		writeError(w, http.StatusUnprocessableEntity, chatWindowMixedCursorsMsg)
+		return
+	}
+	// `cursor` is the third cursor family and this path mints none, so a cursor
+	// arriving here can only have come from another walk. Refused for the same
+	// reason as the pair above, not silently dropped.
+	if req.cursorSent {
+		writeError(w, http.StatusUnprocessableEntity, chatCursorMixedMsg)
 		return
 	}
 	if req.limit < 1 || req.limit > chatWindowMaxLimit {
@@ -1085,7 +1303,7 @@ func (s *apiServer) serveChatWindow(w http.ResponseWriter, r *http.Request, req 
 	for _, m := range found {
 		byID[m.ID] = m
 	}
-	// Anchors are resolved WITHOUT the participant / caller_only filters on
+	// Anchors are resolved WITHOUT the listing filters on
 	// purpose: "does this message exist" and "is it in the slice you asked
 	// for" are different questions, and folding them together would answer a
 	// real id outside the filter with a 404 that says the message does not
@@ -1115,30 +1333,36 @@ func (s *apiServer) serveChatWindow(w http.ResponseWriter, r *http.Request, req 
 			fmt.Sprintf(chatWindowContradictionMsg, req.startID, req.endID))
 		return
 	}
-	caller := ""
-	if req.callerOnly {
-		caller = req.actor
-	}
-	msgs, err := s.dal.listChatWindow(req.with, caller, start, end, req.limit)
+	msgs, err := s.dal.listChatWindow(req.filter, start, end, req.limit)
 	if err != nil {
 		internalError(w, err)
 		return
 	}
-	out := []chatMessageDTO{}
-	for _, m := range msgs {
-		dto, err := s.servedChatMessageDTO(m)
-		if err != nil {
-			internalError(w, err)
-			return
-		}
-		out = append(out, dto)
-	}
-	writeJSON(w, http.StatusOK, out)
+	// NO next_cursor, for the same reason the by-ids path emits none: the
+	// caller named both edges of what it wanted.
+	s.writeChatPage(w, msgs, "")
 }
 
 // GET /api/chat — the stream oldest→newest, capped to the most recent limit
 // (default 30; negative = uncapped; 0 = empty). ?with= filters to a
 // participant.
+//
+// THE ANSWER IS AN OBJECT (T-48): {messages, next_cursor}, on every path, never
+// a bare array. The array had nowhere to say "there is more in this direction",
+// so a caller could only infer exhaustion from a short page — and a page is
+// short for reasons that have nothing to do with exhaustion (a participant
+// filter, a one-sided sender/recipient narrowing, an unread set spread across
+// senders). next_cursor is
+// OPAQUE, encodes a (ts, id) POSITION plus the direction it walks, and its
+// ABSENCE is the only end-of-walk signal. See encodeChatCursor.
+//
+// PATH PRECEDENCE, decided here and nowhere else:
+//
+//	?ids=      → serveChatByIDs   (answered on its own; nothing else consulted)
+//	?unread=   → serveChatUnread  (refuses the stream-position cursors)
+//	?start_id= / ?end_id= → serveChatWindow
+//	?before_ts= + ?before_id=     (DEPRECATED keyset pair)
+//	otherwise  → the newest page, optionally continued by ?cursor=
 //
 // THIS ROUTE NEVER WRITES A READ WATERMARK (T-48, owner ruling 2026-09-02:
 // 「get_chat不應該可以標示已讀未讀，這應該要另一隻API明確表示有這個意圖」). A
@@ -1151,6 +1375,11 @@ func (s *apiServer) serveChatWindow(w http.ResponseWriter, r *http.Request, req 
 // (T-cf91) existed solely to OPT OUT of that receipt and is REMOVED from the
 // wire rather than kept and ignored: a parameter with no effect reads to the
 // next caller like a protection that is there.
+//
+// 🔴 THE UNREAD PATH IS NOT AN EXCEPTION TO THAT. Reading your unread does not
+// clear it. It is the loudest place the rule could have been broken — a
+// backfill reads exactly like "I have now seen these" — and it is not broken:
+// serveChatUnread calls no writer at all.
 //
 // 🔑 The harm was MEASURED, not reasoned about (T-48 repro, isolated station,
 // a real `ocagent listen`): an agent that had only attached its listener —
@@ -1169,40 +1398,73 @@ func (s *apiServer) serveChatWindow(w http.ResponseWriter, r *http.Request, req 
 // SCROLLBACK (T-bf82): ?before_ts=&before_id= (both together, else 422) is a
 // composite keyset cursor — the page is the `limit` messages strictly OLDER
 // than (before_ts, before_id) in the stream's total (ts, id) order, still
-// oldest→newest.
+// oldest→newest. DEPRECATED: ?cursor= is the same walk in one opaque token.
 //
 // ?ids= (T-a828) is answered FIRST and ON ITS OWN — see serveChatByIDs. It is
-// not a filter layered on the listing below: with/limit/before_* are not
-// consulted at all, so nothing about the paths above changes for a caller that
-// does not send it. A request whose ids are all blank is not a by-id read and
-// falls through here unchanged.
+// not a filter layered on the listing below: nothing else is consulted at all,
+// so nothing about the paths above changes for a caller that does not send it.
+// A request whose ids are all blank is not a by-id read and falls through here
+// unchanged.
 func (s *apiServer) HandleListChatApiChatGet(w http.ResponseWriter, r *http.Request, params HandleListChatApiChatGetParams) {
+	if unknown := unknownChatQueryParams(r); len(unknown) > 0 {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf(chatUnknownParamMsg,
+			strings.Join(unknown, ", "), strings.Join(chatDeclaredQueryParams(), ", ")))
+		return
+	}
 	if ids := requestedChatIDs(params.Ids); len(ids) > 0 {
 		s.serveChatByIDs(w, r, ids)
 		return
 	}
-	with := strOrEmpty(params.With)
-	callerOnly := params.CallerOnly != nil && *params.CallerOnly
 	actor := currentActor(r)
+	// ONE filter value for every listing path below. `sender`/`recipient` are
+	// one-sided where `with` matches either side, so ?sender=a&recipient=b pins
+	// a direction `with` cannot express; they AND with each other and with
+	// `with`. They also replace the removed `caller_only` flag: "only mine" is
+	// this caller's own id in one of them, which — unlike the boolean — says
+	// which side.
+	filter := chatListFilter{
+		participant: strOrEmpty(params.With),
+		sender:      strOrEmpty(params.Sender),
+		recipient:   strOrEmpty(params.Recipient),
+	}
 	limit := chatListDefaultLimit
 	if params.Limit != nil {
 		limit = *params.Limit
 	}
-	if startID, hasStart, endID, hasEnd := requestedChatWindow(params); hasStart || hasEnd {
+	startID, hasStart, endID, hasEnd := requestedChatWindow(params)
+	beforeSent := params.BeforeTs != nil || params.BeforeId != nil
+	// PRESENCE, not emptiness — the same rule requestedChatWindow states: a
+	// blank ?cursor= is SENT, and is refused as unreadable rather than dropped
+	// back onto the cursorless path, where a malformed continuation would be
+	// answered with the newest page and no word said.
+	cursorSent := params.Cursor != nil
+
+	if strOrEmpty(params.Unread) == chatUnreadTrue {
+		if beforeSent || hasStart || hasEnd {
+			writeError(w, http.StatusUnprocessableEntity, chatUnreadMixedMsg)
+			return
+		}
+		s.serveChatUnread(w, actor, filter, limit, params.Cursor)
+		return
+	}
+	if hasStart || hasEnd {
 		s.serveChatWindow(w, r, chatWindowRequest{
-			with:       with,
-			callerOnly: callerOnly,
-			actor:      actor,
+			filter:     filter,
 			limit:      limit,
 			startID:    startID,
 			hasStart:   hasStart,
 			endID:      endID,
 			hasEnd:     hasEnd,
-			beforeSent: params.BeforeTs != nil || params.BeforeId != nil,
+			beforeSent: beforeSent,
+			cursorSent: cursorSent,
 		})
 		return
 	}
-	if params.BeforeTs != nil || params.BeforeId != nil {
+	if beforeSent {
+		if cursorSent {
+			writeError(w, http.StatusUnprocessableEntity, chatCursorMixedMsg)
+			return
+		}
 		if params.BeforeTs == nil || params.BeforeId == nil {
 			writeError(w, http.StatusUnprocessableEntity,
 				"before_ts and before_id must be supplied together")
@@ -1211,25 +1473,16 @@ func (s *apiServer) HandleListChatApiChatGet(w http.ResponseWriter, r *http.Requ
 		// History page: cursor-bounded SQL read (LIMIT in the query — never a
 		// full-table pull). No PutChatRead here, and none on the cursorless
 		// path either — see the handler note above.
-		caller := ""
-		if callerOnly {
-			caller = actor
-		}
-		msgs, err := s.dal.listChatBefore(with, caller, *params.BeforeTs, *params.BeforeId, limit)
-		if err != nil {
-			internalError(w, err)
+		s.serveChatOlder(w, filter, chatAnchor{TS: *params.BeforeTs, ID: *params.BeforeId}, limit)
+		return
+	}
+	if cursorSent {
+		before, refusal, ok := decodeChatCursor(*params.Cursor, chatCursorOlder)
+		if !ok {
+			writeError(w, http.StatusUnprocessableEntity, refusal)
 			return
 		}
-		out := []chatMessageDTO{}
-		for _, m := range msgs {
-			dto, err := s.servedChatMessageDTO(m)
-			if err != nil {
-				internalError(w, err)
-				return
-			}
-			out = append(out, dto)
-		}
-		writeJSON(w, http.StatusOK, out)
+		s.serveChatOlder(w, filter, before, limit)
 		return
 	}
 	// The newest-page read: participant filter, caller filter and the
@@ -1237,25 +1490,109 @@ func (s *apiServer) HandleListChatApiChatGet(w http.ResponseWriter, r *http.Requ
 	// ListChat() — the WHOLE chat_message table into Go — followed by the same
 	// three steps as slice work, which on 48,153 real rows cost 68.115ms to
 	// return at most 30 of them. Same rows, same order, same count: 0.697ms.
-	caller := ""
-	if callerOnly {
-		caller = actor
-	}
-	msgs, err := s.dal.ListChatLatest(with, caller, limit)
+	msgs, err := s.dal.listChatLatest(filter, chatPageWindow(limit))
 	if err != nil {
 		internalError(w, err)
 		return
 	}
-	out := []chatMessageDTO{}
-	for _, m := range msgs {
-		dto, err := s.servedChatMessageDTO(m)
-		if err != nil {
-			internalError(w, err)
+	msgs, next := trimChatPageOlder(msgs, limit)
+	s.writeChatPage(w, msgs, next)
+}
+
+// serveChatOlder answers the two walks that go TOWARDS THE OLDER — the
+// deprecated before_ts/before_id pair and the ?cursor= token that replaces it —
+// so the two cannot drift into answering the same request differently. The
+// anchor is exclusive; the page is still oldest→newest.
+func (s *apiServer) serveChatOlder(w http.ResponseWriter, f chatListFilter, before chatAnchor, limit int) {
+	msgs, err := s.dal.listChatBefore(f, before.TS, before.ID, chatPageWindow(limit))
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	msgs, next := trimChatPageOlder(msgs, limit)
+	s.writeChatPage(w, msgs, next)
+}
+
+// trimChatPageOlder cuts the one extra row chatPageWindow asked for off an
+// OLDER-walking page and mints the cursor for the next one.
+//
+// The page arrives oldest→newest, so the surplus row is the OLDEST one — drop
+// the front. The next cursor then names the oldest row STILL IN THE PAGE, which
+// is exactly the exclusive upper bound the next page needs.
+//
+// 🔴 NO SURPLUS ⇒ NO CURSOR, and no cursor is the end of the walk. This is the
+// only place that decision is made for this direction, so "the walk terminates"
+// is a property of one function rather than a habit spread over two handlers.
+//
+// 🔴 THE CURSOR ALWAYS STRICTLY ADVANCES, because it is minted from a row that
+// was RETURNED and the next page is strictly older than it. A caller looping
+// "until next_cursor is absent" therefore cannot spin: each turn either hands
+// back at least one row and a strictly older position, or ends. An uncapped
+// (negative limit) read returns everything and mints nothing, and a limit of 0
+// reads nothing and so has no position to name.
+func trimChatPageOlder(msgs []ChatMessage, limit int) ([]ChatMessage, string) {
+	if limit <= 0 || len(msgs) <= limit {
+		return msgs, ""
+	}
+	msgs = msgs[len(msgs)-limit:]
+	return msgs, encodeChatCursor(chatCursorOlder, chatAnchor{TS: msgs[0].TS, ID: msgs[0].ID})
+}
+
+// serveChatUnread answers ?unread=true — the caller's OWN unread, OLDEST FIRST,
+// `limit` taking the OLDEST batch and ?cursor= walking TOWARDS THE NEWER.
+//
+// OLDEST FIRST IS THE OPPOSITE END from the default listing, and that is the
+// point: a backfill is re-read in the order it was said, so the batch a caller
+// gets first must be the one it fell behind on first. Taking the newest batch
+// instead would print the end of a conversation before its beginning.
+//
+// 🔴 UNREAD IS JUDGED PER (caller, sender) — see DAL.listChatUnread, which
+// holds the SQL and the reason. Nothing here narrows or widens that.
+//
+// 🔴 NOTHING IS WRITTEN. Paging the whole backlog leaves every line of it
+// unread; POST /api/chat/mark-read is the only door that clears it.
+//
+// `limit` keeps this route's legacy semantics rather than the window path's
+// 1..200 bound: 0 is an empty page and a NEGATIVE limit is uncapped (and then
+// mints no cursor, because everything is already in the answer).
+func (s *apiServer) serveChatUnread(w http.ResponseWriter, actor string, f chatListFilter, limit int, cursor *string) {
+	var after *chatAnchor
+	if cursor != nil {
+		a, refusal, ok := decodeChatCursor(*cursor, chatCursorNewer)
+		if !ok {
+			writeError(w, http.StatusUnprocessableEntity, refusal)
 			return
 		}
-		out = append(out, dto)
+		after = &a
 	}
-	writeJSON(w, http.StatusOK, out)
+	if limit == 0 {
+		s.writeChatPage(w, nil, "")
+		return
+	}
+	msgs, err := s.dal.listChatUnread(actor, f, after, chatPageWindow(limit))
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	msgs, next := trimChatPageNewer(msgs, limit)
+	s.writeChatPage(w, msgs, next)
+}
+
+// trimChatPageNewer is trimChatPageOlder's mirror for a walk going TOWARDS THE
+// NEWER: the page arrives oldest→newest, so the surplus row is the NEWEST one —
+// drop the back — and the next cursor names the newest row STILL IN THE PAGE,
+// the exclusive lower bound of the next batch.
+//
+// The same two guarantees hold and for the same reasons: no surplus ⇒ no cursor
+// ⇒ the walk has ended, and the cursor strictly advances because it is minted
+// from a returned row that the next page starts strictly after.
+func trimChatPageNewer(msgs []ChatMessage, limit int) ([]ChatMessage, string) {
+	if limit <= 0 || len(msgs) <= limit {
+		return msgs, ""
+	}
+	msgs = msgs[:limit]
+	last := msgs[len(msgs)-1]
+	return msgs, encodeChatCursor(chatCursorNewer, chatAnchor{TS: last.TS, ID: last.ID})
 }
 
 // isPreviewableMime: a mime the browser renders in a new tab (image/*, text/*,

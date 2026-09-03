@@ -59,12 +59,32 @@ func (m *mutableChatServer) dials() int32 { return atomic.LoadInt32(&m.conns) }
 
 func (m *mutableChatServer) setList(s string) { m.list.Store(s) }
 
+// msgsJSON renders a chat RESPONSE BODY carrying the given message ids — the
+// T-48 envelope, not a bare array, because that is what GET /api/chat answers
+// and what fetchChat reads. Every use of this helper is a server writing a
+// response, so the envelope belongs here rather than at 25 call sites.
 func msgsJSON(ids ...string) string {
 	parts := make([]string, 0, len(ids))
 	for _, id := range ids {
 		parts = append(parts, fmt.Sprintf(`{"id":%q,"from":"boss","to":"kyle","body":"body-%s"}`, id, id))
 	}
-	return "[" + strings.Join(parts, ",") + "]"
+	return chatBody("[" + strings.Join(parts, ",") + "]")
+}
+
+// chatBody wraps a ChatMessageDTO array literal in the T-48 GET /api/chat
+// envelope. A test server that writes a bare array is not serving what the
+// route serves, and fetchChat would answer nil — a fault, deliberately, rather
+// than "no messages".
+func chatBody(list string) string { return `{"messages":` + list + `}` }
+
+// emptyChatOrList answers the empty body for `path`: the chat envelope on
+// /api/chat, a bare array anywhere else. The stub servers below answer several
+// routes from one branch, and only one of them changed shape.
+func emptyChatOrList(path string) string {
+	if strings.HasPrefix(path, "/api/chat") {
+		return chatBody("[]")
+	}
+	return "[]"
 }
 
 func readSeenFile(t *testing.T, path string) []string {
@@ -288,7 +308,7 @@ func TestLoadChatSeen_CorruptOrMissing_ReprimesSilently(t *testing.T) {
 // genuinely empty must NOT re-baseline silently on its next boot.
 func TestLoadChatSeen_EmptyArrayIsPrimed(t *testing.T) {
 	home := t.TempDir()
-	srv := newMutableChatServer(t, `[]`)
+	srv := newMutableChatServer(t, chatBody(`[]`))
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle", Home: home}
 
 	s1 := loadChatSeen(chatSeenPath(cfg))

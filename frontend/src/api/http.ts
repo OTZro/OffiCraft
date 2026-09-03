@@ -1346,6 +1346,13 @@ export const httpApi: Api = {
     // history page. Undefined params are dropped from the query by the
     // client's serializer, so the cursorless wire shape is unchanged.
     //
+    // THE WIRE ANSWERS AN OBJECT (T-48): `{messages, next_cursor}`. This method
+    // reads `messages` and DROPS `next_cursor` on purpose — the cockpit pages
+    // with the deprecated-but-supported `before_ts`/`before_id` pair it derives
+    // from the oldest row it holds, and taking the token as well would leave two
+    // cursors in play with nothing saying which one wins. Moving the scrollback
+    // onto `?cursor=` is its own change, with its own test surface.
+    //
     // READ-ONLY on every path (T-48): GET /api/chat advances no read
     // watermark, cursor or not. Marking a conversation read is
     // POST /api/chat/mark-read only. A `peekChat` twin of this method existed
@@ -1364,7 +1371,7 @@ export const httpApi: Api = {
         },
       }),
     );
-    return wire.map(toChatMessage);
+    return wire.messages.map(toChatMessage);
   },
 
   async listChatWindow(
@@ -1396,7 +1403,7 @@ export const httpApi: Api = {
         },
       }),
     );
-    return wire.map(toChatMessage);
+    return wire.messages.map(toChatMessage);
   },
 
   async getChatMessage(id: string): Promise<ChatMessage> {
@@ -1413,7 +1420,7 @@ export const httpApi: Api = {
     const wire = unwrap(
       await client.GET("/api/chat", { params: { query: { ids: [id] } } }),
     );
-    const first = wire[0];
+    const first = wire.messages[0];
     if (!first) {
       // Defensive: the server answers 404 rather than an empty array for an
       // unknown id, so this is unreachable today. It is a throw and not a null

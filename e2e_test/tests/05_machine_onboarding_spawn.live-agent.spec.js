@@ -404,7 +404,7 @@ test.describe('C1 · machine onboarding → agent spawn → warden-log START', (
         { headers: auth },
       );
       expect(chatRes.status(), 'chat read must succeed').toBe(200);
-      const chat = await chatRes.json();
+      const chat = (await chatRes.json()).messages;
       const frictionHits = (Array.isArray(chat) ? chat : [])
         .filter((msg) => msg && typeof msg.body === 'string' && FRICTION_RX.test(msg.body))
         .map((msg) => `ts=${msg.ts} ${msg.from}->${msg.to}: ${msg.body}`);

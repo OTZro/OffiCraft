@@ -54,6 +54,38 @@ func scopeFor(sub string) string {
 	return "agent"
 }
 
+// chatEnvelopeMessages pulls the `messages` array out of a GET /api/chat body.
+//
+// EVERY read door on that route answers the T-48 envelope
+// (`{messages, next_cursor}`), so a test that decodes the body straight into an
+// array is asserting against a shape the route does not serve — and would go
+// green again the moment someone re-introduced the bare array. Going through
+// here means the envelope is re-proved by every chat test in the package, not
+// by one.
+func chatEnvelopeMessages(t *testing.T, raw []byte) []byte {
+	t.Helper()
+	var env struct {
+		Messages json.RawMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil || env.Messages == nil {
+		t.Fatalf("GET /api/chat must answer the T-48 envelope {messages,...}: %v (%s)",
+			err, raw)
+	}
+	return env.Messages
+}
+
+// chatEnvelopeNextCursor reads the continuation token, "" when absent.
+func chatEnvelopeNextCursor(t *testing.T, raw []byte) string {
+	t.Helper()
+	var env struct {
+		NextCursor string `json:"next_cursor"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		t.Fatalf("decode envelope: %v (%s)", err, raw)
+	}
+	return env.NextCursor
+}
+
 func chatIDs(t *testing.T, rec *httptest.ResponseRecorder) []string {
 	t.Helper()
 	if rec.Code != 200 {
@@ -62,7 +94,7 @@ func chatIDs(t *testing.T, rec *httptest.ResponseRecorder) []string {
 	var rows []struct {
 		ID string `json:"id"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
+	if err := json.Unmarshal(chatEnvelopeMessages(t, rec.Body.Bytes()), &rows); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	out := make([]string, len(rows))
@@ -123,7 +155,6 @@ func TestMarkReadWritesWatermark(t *testing.T) {
 func TestChatListNeverAdvancesWatermark(t *testing.T) {
 	with := "m-1"
 	other := "m-2"
-	callerOnly := true
 	big, none := 100, -1
 	bts, bid := 999.0, "zzz"
 	ids := []string{"a-1", "a-3"}
@@ -137,7 +168,7 @@ func TestChatListNeverAdvancesWatermark(t *testing.T) {
 		{"cursorless ?with=", HandleListChatApiChatGetParams{With: &with}},
 		{"cursorless ?with= with a limit", HandleListChatApiChatGetParams{With: &with, Limit: &big}},
 		{"uncapped ?with= (limit=-1)", HandleListChatApiChatGetParams{With: &with, Limit: &none}},
-		{"caller_only", HandleListChatApiChatGetParams{With: &with, CallerOnly: &callerOnly}},
+		{"one-sided sender filter", HandleListChatApiChatGetParams{With: &with, Sender: &with}},
 		{"history page", HandleListChatApiChatGetParams{With: &with, Limit: &big, BeforeTs: &bts, BeforeId: &bid}},
 		{"by ids", HandleListChatApiChatGetParams{Ids: &ids}},
 		// No ?with= at all: the whole-stream listing must not mark anything

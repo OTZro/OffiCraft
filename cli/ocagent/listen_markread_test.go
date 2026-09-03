@@ -82,7 +82,7 @@ func newMarkReadServer(t *testing.T, list string) *markReadServer {
 			list := m.list
 			m.mu.Unlock()
 			w.WriteHeader(200)
-			_, _ = w.Write([]byte(list))
+			_, _ = w.Write([]byte(chatBody(list)))
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, eventsPath) {

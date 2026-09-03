@@ -148,7 +148,7 @@ func TestListChatScrollbackCursor(t *testing.T) {
 		var msgs []struct {
 			ID string `json:"id"`
 		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &msgs); err != nil {
+		if err := json.Unmarshal(chatEnvelopeMessages(t, rec.Body.Bytes()), &msgs); err != nil {
 			t.Fatalf("body: %v %s", err, rec.Body.String())
 		}
 		out := make([]string, len(msgs))
@@ -228,17 +228,32 @@ func TestListChatScrollbackCursor(t *testing.T) {
 		t.Fatalf("cursorless list must NOT advance the watermark (T-48), got %v", wm)
 	}
 
-	callerOnly := true
+	// `caller_only` was removed with T-48 (owner ruling rc-09f6d801b2b8);
+	// narrowing to one side of a line is now `sender`/`recipient`, which say
+	// WHICH side — and they narrow the history page exactly as they narrow the
+	// newest one, which is the property that has to hold across paths.
 	owner := "owner"
-	rec = listChatRec(s, "mira", HandleListChatApiChatGetParams{With: &owner, CallerOnly: &callerOnly})
-	if got := ids(rec); len(got) != 4 || got[0] != "c-1" || got[len(got)-1] != "c-4" {
-		t.Fatalf("caller-only list: want mira thread only, got %v", got)
+	mira := "mira"
+	rec = listChatRec(s, "mira", HandleListChatApiChatGetParams{With: &owner, Sender: &mira})
+	if got := ids(rec); len(got) != 3 || got[0] != "c-1" || got[1] != "c-b" || got[2] != "c-4" {
+		t.Fatalf("?with=owner&sender=mira: want mira's half of the line "+
+			"[c-1 c-b c-4], got %v", got)
 	}
 
+	// The SAME narrowing on the history page. A filter honoured by the newest
+	// page and forgotten one page in hands back rows it promised to withhold,
+	// and says nothing — which is why both paths are asserted, not one.
 	bts, bid = 5.0, "c-z"
-	rec = listChatRec(s, "mira", HandleListChatApiChatGetParams{With: &owner, BeforeTs: &bts, BeforeId: &bid, CallerOnly: &callerOnly})
-	if got := ids(rec); len(got) != 4 || got[0] != "c-1" || got[len(got)-1] != "c-4" {
-		t.Fatalf("caller-only history: want mira thread only, got %v", got)
+	rec = listChatRec(s, "mira", HandleListChatApiChatGetParams{With: &owner, BeforeTs: &bts, BeforeId: &bid, Sender: &mira})
+	if got := ids(rec); len(got) != 3 || got[0] != "c-1" || got[1] != "c-b" || got[2] != "c-4" {
+		t.Fatalf("?sender= must narrow the history page too, got %v", got)
+	}
+
+	// recipient is the other side, and the two AND into one direction of one
+	// line — the thing `with` alone cannot express.
+	rec = listChatRec(s, "mira", HandleListChatApiChatGetParams{Sender: &owner, Recipient: &mira})
+	if got := ids(rec); len(got) != 1 || got[0] != "c-a" {
+		t.Fatalf("?sender=owner&recipient=mira: want [c-a], got %v", got)
 	}
 }
 

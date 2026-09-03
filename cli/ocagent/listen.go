@@ -714,13 +714,29 @@ func intField(v any) int {
 // GET /api/chat?with=<selfID> — owner-scoped + participant-filtered by the SERVER.
 // Returns the wire ChatMessageDTOs (from/to/body/id/ts), oldest→newest, or nil on any
 // fault. Mirrors fetch_chat.
+//
+// THE WIRE ANSWERS AN OBJECT since T-48: {"messages": [...], "next_cursor": ...}.
+// The rows are read out of `messages`; `next_cursor` is DROPPED, because this
+// call takes the server's newest window and the drain that consumes it already
+// says out loud when it could not see the whole backlog ("至少 N 則未讀"). Paging
+// the token here would change what that line means without changing the line.
+//
+// A body that is not an object with a `messages` ARRAY is a fault, answered nil
+// like a non-200 — the same fail-closed shape this function already had for a
+// non-array body. It must not degrade to "zero messages": that is
+// indistinguishable from a quiet conversation, and this drain's whole job is to
+// notice what arrived.
 func fetchChat(client httpClient, cfg Config, selfID string) []map[string]any {
 	path := "/api/chat?with=" + url.QueryEscape(selfID)
 	status, body := getJSON(client, cfg, path, true)
 	if status != 200 {
 		return nil
 	}
-	list, ok := body.([]any)
+	env, ok := body.(map[string]any)
+	if !ok {
+		return nil
+	}
+	list, ok := env["messages"].([]any)
 	if !ok {
 		return nil
 	}

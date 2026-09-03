@@ -28,9 +28,13 @@ import (
 )
 
 // listChatLatestReference is VERBATIM the pre-T-48 handler path: read the whole
-// table oldest→newest, filter to the participant, filter to the caller, then
-// keep the last `limit`. It is the oracle, so it must not be "improved".
-func listChatLatestReference(t *testing.T, d *DAL, participant, caller string, limit int) []ChatMessage {
+// table oldest→newest, filter to the participant, filter again by one side,
+// then keep the last `limit`. It is the oracle, so it must not be "improved".
+//
+// The second filter used to be `caller_only` (the caller, EITHER side); that
+// parameter was removed with T-48 and `sender` (ONE side) took its job, so the
+// oracle narrows the same way the wire now does.
+func listChatLatestReference(t *testing.T, d *DAL, participant, sender string, limit int) []ChatMessage {
 	t.Helper()
 	msgs, err := d.ListChat()
 	if err != nil {
@@ -45,10 +49,10 @@ func listChatLatestReference(t *testing.T, d *DAL, participant, caller string, l
 		}
 		msgs = filtered
 	}
-	if caller != "" {
+	if sender != "" {
 		filtered := msgs[:0]
 		for _, m := range msgs {
-			if m.Sender == caller || m.Recipient == caller {
+			if m.Sender == sender {
 				filtered = append(filtered, m)
 			}
 		}
@@ -119,15 +123,15 @@ func TestListChatLatestMatchesTheGoFilterItReplaced(t *testing.T) {
 	seedChatPushdownFixture(t, d)
 
 	participants := []string{"", "owner", "m-1", "m-2", "m-3", "nobody"}
-	callers := []string{"", "owner", "m-1", "m-2", "nobody"}
+	senders := []string{"", "owner", "m-1", "m-2", "nobody"}
 	limits := []int{-1, 0, 1, 2, 3, 5, 12, 30, 100}
 
 	cases := 0
 	for _, p := range participants {
-		for _, c := range callers {
+		for _, c := range senders {
 			for _, lim := range limits {
 				want := listChatLatestReference(t, d, p, c, lim)
-				got, err := d.ListChatLatest(p, c, lim)
+				got, err := d.listChatLatest(chatListFilter{participant: p, sender: c}, lim)
 				if err != nil {
 					t.Fatalf("ListChatLatest(%q,%q,%d): %v", p, c, lim, err)
 				}
@@ -139,7 +143,7 @@ func TestListChatLatestMatchesTheGoFilterItReplaced(t *testing.T) {
 			}
 		}
 	}
-	if cases != len(participants)*len(callers)*len(limits) {
+	if cases != len(participants)*len(senders)*len(limits) {
 		t.Fatalf("case count: %d", cases)
 	}
 	// The oracle must actually SEE rows, or every comparison above is 0 == 0.
@@ -151,7 +155,7 @@ func TestListChatLatestMatchesTheGoFilterItReplaced(t *testing.T) {
 func TestListChatLatestOnAnEmptyTable(t *testing.T) {
 	d := newTestDAL(t)
 	for _, lim := range []int{-1, 0, 1, 30} {
-		got, err := d.ListChatLatest("m-1", "", lim)
+		got, err := d.ListChatLatest("m-1", lim)
 		if err != nil {
 			t.Fatalf("limit %d: %v", lim, err)
 		}

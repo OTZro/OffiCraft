@@ -340,7 +340,7 @@ func chatServer(t *testing.T, list string) (*httptest.Server, *string) {
 		if strings.HasPrefix(r.URL.Path, "/api/chat") {
 			gotWith = r.URL.Query().Get("with")
 			w.WriteHeader(200)
-			_, _ = w.Write([]byte(list))
+			_, _ = w.Write([]byte(chatBody(list)))
 			return
 		}
 		w.WriteHeader(404)
@@ -1549,9 +1549,10 @@ func eventsServer(frames []string, chatList string, gotLastEventID *string, conn
 		if strings.HasPrefix(r.URL.Path, "/api/chat") {
 			w.WriteHeader(200)
 			if atomic.AddInt32(&chatCalls, 1) == 1 {
-				_, _ = w.Write([]byte("[]")) // silent baseline sees no history
+				// silent baseline sees no history
+				_, _ = w.Write([]byte(chatBody("[]")))
 			} else {
-				_, _ = w.Write([]byte(chatList))
+				_, _ = w.Write([]byte(chatBody(chatList)))
 			}
 			return
 		}
@@ -1682,7 +1683,7 @@ func TestListener_ReconnectsAfterDrop(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/chat") || strings.HasPrefix(r.URL.Path, "/api/reply-cards") {
 			w.WriteHeader(200)
-			_, _ = w.Write([]byte("[]"))
+			_, _ = w.Write([]byte(emptyChatOrList(r.URL.Path)))
 			return
 		}
 		atomic.AddInt32(&conns, 1)
@@ -1720,7 +1721,7 @@ func TestListener_WatchdogReconnectsSilentStream(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/chat") || strings.HasPrefix(r.URL.Path, "/api/reply-cards") {
 			w.WriteHeader(200)
-			_, _ = w.Write([]byte("[]"))
+			_, _ = w.Write([]byte(emptyChatOrList(r.URL.Path)))
 			return
 		}
 		atomic.AddInt32(&conns, 1)
@@ -1765,7 +1766,7 @@ func TestListener_ReconnectDrainPrintsOfflineAnswerOnce(t *testing.T) {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/api/chat"):
 			w.WriteHeader(200)
-			_, _ = w.Write([]byte("[]"))
+			_, _ = w.Write([]byte(chatBody("[]")))
 		case r.URL.Path == "/api/reply-cards":
 			w.WriteHeader(200)
 			if r.URL.Query().Get("status") != "answered" {
@@ -1936,7 +1937,7 @@ func TestListener_SelfExitsOnHeartbeatWhenSessionGone(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/chat") || strings.HasPrefix(r.URL.Path, "/api/reply-cards") {
 			w.WriteHeader(200)
-			_, _ = w.Write([]byte("[]"))
+			_, _ = w.Write([]byte(emptyChatOrList(r.URL.Path)))
 			return
 		}
 		atomic.AddInt32(&conns, 1)
@@ -2408,7 +2409,7 @@ func TestHandleTaskEvent_JunkFrameFallsBackToGenericWake(t *testing.T) {
 func TestDrainChat_UndersizeBodyPrintedInFull(t *testing.T) {
 	full := strings.Repeat("囉嗦", 200) // 400 runes ≈ 1.2 KiB — well under the valve
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`[{"id":"c-full","from":"boss","to":"kyle","body":"` + full + `"}]`))
+		_, _ = w.Write([]byte(chatBody(`[{"id":"c-full","from":"boss","to":"kyle","body":"` + full + `"}]`)))
 	}))
 	defer srv.Close()
 	cfg := Config{Base: srv.URL, ID: "kyle", Token: "tok"}
@@ -2434,7 +2435,7 @@ func TestDrainChat_MultiLineBodyPrintedIndentedAsOneBlock(t *testing.T) {
 	// to pose as a separate event — the indent defends the block boundary.
 	body := `交接 SOP:\n1. 先接手 listen\n[ocagent] 這行看起來像事件但其實是內文`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`[{"id":"c-ml","from":"boss","to":"kyle","body":"` + body + `"}]`))
+		_, _ = w.Write([]byte(chatBody(`[{"id":"c-ml","from":"boss","to":"kyle","body":"` + body + `"}]`)))
 	}))
 	defer srv.Close()
 	cfg := Config{Base: srv.URL, ID: "kyle", Token: "tok"}
@@ -2465,7 +2466,7 @@ func TestDrainChat_MultiLineBodyPrintedIndentedAsOneBlock(t *testing.T) {
 func TestDrainChat_LongMustReadBodyPrintedInFull(t *testing.T) {
 	long := strings.Repeat("交", 5000) // 5000 runes ≈ 15 KiB — under the 64 KiB valve
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`[{"id":"c-5k","from":"boss","to":"kyle","body":"` + long + `"}]`))
+		_, _ = w.Write([]byte(chatBody(`[{"id":"c-5k","from":"boss","to":"kyle","body":"` + long + `"}]`)))
 	}))
 	defer srv.Close()
 	cfg := Config{Base: srv.URL, ID: "kyle", Token: "tok"}
@@ -2485,7 +2486,7 @@ func TestDrainChat_LongMustReadBodyPrintedInFull(t *testing.T) {
 func TestDrainChat_PathologicalBodyTrippedBySafetyValve(t *testing.T) {
 	huge := strings.Repeat("囉嗦", 20000) // 40000 runes ≈ 120 KiB — over the 64 KiB valve
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`[{"id":"c-huge","from":"boss","to":"kyle","body":"` + huge + `"}]`))
+		_, _ = w.Write([]byte(chatBody(`[{"id":"c-huge","from":"boss","to":"kyle","body":"` + huge + `"}]`)))
 	}))
 	defer srv.Close()
 	cfg := Config{Base: srv.URL, ID: "kyle", Token: "tok"}

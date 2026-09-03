@@ -74,12 +74,14 @@ import type { LatchRelease } from "../lib/conversationLatches";
 //     therefore counted as READ: unread goes to 0 and the "以下是未讀" divider
 //     does not point at them. "Lost" and "read" are indistinguishable.
 //
-// THE FIX, and why it has this shape. There is NO forward cursor on the server
-// (`HandleListChatApiChatGetParams` is With / Limit / BeforeTs / BeforeId /
-// StartId / EndId / CallerOnly / Ids — verified against api_chat.go, not
-// against a doc; `Peek` was removed with T-48),
-// and adding one is out of scope. So we detect the seam and page BACKWARDS into
-// it with the cursor that does exist:
+// THE FIX, and why it has this shape. There is no forward cursor this hook can
+// use (`HandleListChatApiChatGetParams` is With / Limit / BeforeTs / BeforeId /
+// StartId / EndId / Cursor / Unread / Sender / Recipient / Ids — verified
+// against api_chat.go, not against a doc; `Peek` and `CallerOnly` were both
+// removed with T-48). `Unread` walks forwards, but over the caller's OWN unread
+// set rather than the open thread, which is a different question from the one
+// this seam asks; adopting it here is its own change. So we detect the seam and
+// page BACKWARDS into it with the cursor this hook already sends:
 //   1. after a newest page lands, compare its OLDEST row against our NEWEST row
 //      in the stream's total (ts, id) order;
 //   2. if the page's oldest is strictly NEWER than ours, the range between them

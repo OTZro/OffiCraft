@@ -82,7 +82,7 @@ func wantIDs(t *testing.T, rec *httptest.ResponseRecorder, want ...string) {
 	var rows []struct {
 		ID string `json:"id"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
+	if err := json.Unmarshal(chatEnvelopeMessages(t, rec.Body.Bytes()), &rows); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	got := make([]string, len(rows))

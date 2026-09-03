@@ -123,8 +123,7 @@ test.describe('B8 · chat gallery — scope, sender labels, tabs + uploader filt
       await unreadCountOf(request, token, A.id),
       'listing the thread must NOT clear the unread count either (8cd4fff9)',
     ).toBe(unreadBefore);
-    const listed = await list.json();
-    const newest = (Array.isArray(listed) ? listed : listed.messages).at(-1);
+    const newest = (await list.json()).messages.at(-1);
     await markChatRead(request, token, A.id, newest.ts);
     expect(
       await unreadCountOf(request, token, A.id),
