@@ -831,6 +831,60 @@ describe("③ jump-to-origin (跳到原訊息, B3)", () => {
     expect(loadNewer).toHaveBeenCalledWith({ human: true });
   });
 
+  it("the re-center observer lets go once the reader has walked to the bottom", () => {
+    // 🔴 The failure a CI trace caught and a rerun hid. The forward walk appends
+    // into the very row this observer watches (80 messages on one day are ONE
+    // day-group), so a landed page IS a resize — and re-centring then throws the
+    // viewport from the bottom back to the jump target. Measured in the trace:
+    // scrollTop 117 → 2702 → 117, one forward request and then silence, frozen
+    // at 61 of 80 rows. The viewport going backwards takes `nearBottom` with it,
+    // so the walk's continuation stops for good, with no spinner and no end
+    // marker. Re-centring is for a stationary reader fighting async reflow; a
+    // reader who scrolled to the bottom has said that is not where they want to
+    // be any more.
+    const callbacks: (() => void)[] = [];
+    const Real = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(cb: () => void) {
+        callbacks.push(cb);
+      }
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    } as unknown as typeof ResizeObserver;
+    try {
+      hasNewer = true;
+      messages = [
+        mkMsg("a1", "b", "owner", 100),
+        mkMsg("a2", "b", "owner", 101),
+      ];
+      const { container } = renderChat(0, "a1");
+      expect(callbacks.length).toBeGreaterThan(0);
+
+      // Positive control: while the reader has not moved, it still re-centres.
+      const beforeControl = scrollCalls.length;
+      callbacks[callbacks.length - 1]();
+      expect(scrollCalls.length).toBe(beforeControl + 1);
+
+      // The reader scrolls to the bottom — that arms the forward walk.
+      const list = container.querySelector(".chat__messages")!;
+      setScrollGeometry(list, {
+        scrollHeight: 1000,
+        clientHeight: 300,
+        scrollTop: 700,
+      });
+      fireEvent.scroll(list);
+      expect(loadNewer).toHaveBeenCalledWith({ human: true });
+
+      // …and now a landed page must not drag them back.
+      const beforeWalk = scrollCalls.length;
+      callbacks[callbacks.length - 1]();
+      expect(scrollCalls.length).toBe(beforeWalk);
+    } finally {
+      globalThis.ResizeObserver = Real;
+    }
+  });
+
   it("the arrow is still there at the BOTTOM of an anchor window, and clicking it FETCHES the live tail", () => {
     // 🔴 The half of the jump nobody sees coming. After landing on an old
     // message the thread is a window from the middle of the history, so

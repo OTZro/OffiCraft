@@ -1185,9 +1185,26 @@ export function ChatArea({
       // height actually grows, and re-center until the highlight window closes.
       const scroller = messagesRef.current;
       if (scroller) {
-        const ro = new ResizeObserver(() =>
-          el.scrollIntoView({ block: "center" }),
-        );
+        const ro = new ResizeObserver(() => {
+          // 🔴 …but NOT once the reader has walked away from the target. The
+          // forward walk appends into the very row this observer watches (80
+          // messages on one day are ONE `.chat__day-group`), so a landed page
+          // is a resize, and re-centring then yanks the viewport from the
+          // bottom back to the jump target. Measured from a CI trace of the
+          // real failure: scrollTop 117 → 2702 → 117, one forward request and
+          // then silence, the thread frozen at 61 of 80 rows. `nearBottom`
+          // goes false with the viewport, auto-follow stops, and the walk's
+          // continuation reads a distance that is no longer the reader's — so
+          // it stops for good, with no spinner and no end marker. This
+          // observer's job is to fight async reflow under a stationary reader;
+          // a reader who has scrolled to the bottom and started the walk has
+          // said that is no longer where they want to be.
+          if (session.forwardWalkArmed) {
+            ro.disconnect();
+            return;
+          }
+          el.scrollIntoView({ block: "center" });
+        });
         for (const row of Array.from(scroller.children)) ro.observe(row);
         const settle = window.setTimeout(() => ro.disconnect(), 2600);
         return () => {
