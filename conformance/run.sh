@@ -131,9 +131,12 @@ fi
 # and test_catalog_hash_algorithm locks the mcp_tool rows to the digest the
 # server serves. test_openapi_covers_manifest is NOT that: both sides of it are
 # hand-written, so it catches a spec/manifest disagreement and nothing else.
-# The row set itself is pinned to the route table by
-# TestEveryServedRouteIsInThePermissionManifest (T-61), which is a Go test. An
-# unregistered route that IS on the MCP surface still reddens from in here —
+# The row set itself reaches the route table in TWO hops: the Go test
+# TestRouteTableCoversSpecSurface pins the route table against
+# spec/openapi.json in both directions, and test_openapi_covers_manifest is a
+# symmetric equality against that same spec — so an unregistered route reddens
+# one of those two. An unregistered route that IS on the MCP surface also
+# reddens from in here directly —
 # catalog_hash moves and test_catalog_hash_algorithm catches it. The ones this
 # suite cannot see are the MCPExclude rows (mcp_tool: null): they are outside
 # that digest, and every check in here starts from the manifest.
