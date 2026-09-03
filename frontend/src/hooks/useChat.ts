@@ -182,7 +182,10 @@ interface UseChat {
   // no-op unless `hasNewer`. A page shorter than one window means the live tail
   // has been reached → `hasNewer` flips false and the ordinary newest-window
   // refresh takes over again.
-  loadNewer: () => Promise<void>;
+  // `human: true` means a reader gesture, which clears the walk's no-progress
+  // bound — see the note where it is read. The automatic continuation passes
+  // nothing and stays bounded.
+  loadNewer: (opts?: { human?: boolean }) => Promise<void>;
   // Fetch the window AROUND one message id and make it the thread, so a jump
   // can land on a message that was never loaded. Two requests — the page
   // ending at the target (context above) and the page starting at it (context
@@ -1119,10 +1122,22 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   // The anchor is inclusive, so a full page carries CHAT_PAGE_SIZE-1 new rows
   // plus the row we already hold; the duplicate is dropped on merge and the
   // page LENGTH (not the merged count) is what decides whether more remains.
-  const loadNewer = useCallback(async () => {
+  const loadNewer = useCallback(async (opts?: { human?: boolean }) => {
     const cur = threadRef.current;
     if (cur.messages.length === 0 || !cur.hasNewer)
       return;
+    // 🔴 A SCROLL IS A RETRY, AND UNTIL THIS PARAMETER EXISTED THAT SENTENCE
+    // WAS FALSE (independent review #17, F-1). The bound below is there to stop
+    // the LEVEL-TRIGGERED continuation from re-asking a question it has already
+    // been answered — it was never meant to bind the reader. But the scroll
+    // handler reaches this same door, so once a page came back carrying nothing
+    // new, scrolling did nothing at all: `hasNewer` still true, no spinner, no
+    // end marker, no arrow (that one measures the newest LOADED row), and only
+    // switching conversations cleared it. The stall this walk was written to end
+    // came back as a permanent one, and the comment two screens up promised the
+    // opposite. A reader asking again is new information — it cannot loop,
+    // because it takes a gesture each time.
+    if (opts?.human) forwardExhaustedRef.current = null;
     // Already answered for this row: the page from here held nothing new, and
     // nothing has changed since. Asking again is the busy loop.
     if (forwardExhaustedRef.current === cur.messages[cur.messages.length - 1].id)
@@ -1165,17 +1180,25 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       // thread mirror gives the same answer, now, without touching the merge.
       const held = new Set(threadRef.current.messages.map((m) => m.id));
       const addsNothing = page.every((m) => held.has(m.id));
-      setThread((prev) => {
-        const have = new Set(prev.messages.map((m) => m.id));
-        const fresh = page.filter((m) => !have.has(m.id));
-        return {
-          ...prev,
-          messages: [...prev.messages, ...fresh],
-          // A SHORT page means this window reached the live tail — the thread
-          // is the newest window again and the ordinary refresh may resume.
-          hasNewer: page.length >= CHAT_PAGE_SIZE,
-        };
-      });
+      const fresh = page.filter((m) => !held.has(m.id));
+      const merged = {
+        ...threadRef.current,
+        messages: [...threadRef.current.messages, ...fresh],
+        // A SHORT page means this window reached the live tail — the thread
+        // is the newest window again and the ordinary refresh may resume.
+        hasNewer: page.length >= CHAT_PAGE_SIZE,
+      };
+      // 🔴 ADVANCE THE MIRROR NOW, NOT AT THE NEXT RENDER — this is the CAUSE
+      // the exhausted bound below was only ever a bandage for. The duplicate
+      // `?start_id=` pair measured 8ms apart is not a race between two threads:
+      // it is one walk asking twice from the SAME anchor because `threadRef`
+      // had not caught up yet, and the second page therefore came back carrying
+      // rows we already held. Every consumer in this file already reads this
+      // mirror as "the freshest thread", and the render below overwrites it
+      // with the same value, so making it true one tick earlier removes the
+      // duplicate instead of tolerating it.
+      threadRef.current = merged;
+      setThread(merged);
       // The walk's own stop sign, decided by the page that just landed: the
       // anchor we asked from is exhausted when its page held nothing new; a
       // page that did carry rows clears whatever was marked before.

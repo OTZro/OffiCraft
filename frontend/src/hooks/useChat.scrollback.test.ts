@@ -460,6 +460,87 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     expect(h.listChat.mock.calls.length).toBe(before + 1);
   });
 
+  it("a walk that stopped on a page carrying nothing new is restarted by the reader scrolling again", async () => {
+    // 🔴 Independent review #17 (F-1). The no-progress bound belongs to the
+    // LEVEL-TRIGGERED continuation, not to the reader — but both reach the same
+    // door, so once a full page came back holding only rows we already had, a
+    // scroll issued no request at all: `hasNewer` still true, no spinner, no end
+    // marker, and the arrow measures the newest LOADED row so it stays hidden
+    // too. Only switching conversations cleared it. Measured, before the fix:
+    // three further scrolls produced zero requests.
+    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
+    const { result } = renderHook(() => useChat("b"));
+    await waitFor(() => expect(result.current.messages).toHaveLength(30));
+
+    h.listChatWindow
+      .mockResolvedValueOnce(page("a", 100, 30))
+      .mockResolvedValueOnce(page("a", 129, 30));
+    await act(async () => {
+      await result.current.loadAround("a0");
+    });
+    const held = result.current.messages.slice();
+    const newestLoaded = held[held.length - 1].id;
+
+    // A FULL page that adds nothing — the shape a duplicate anchor produces.
+    h.listChatWindow.mockResolvedValueOnce(held.slice(-30));
+    await act(async () => {
+      await result.current.loadNewer();
+    });
+    expect(result.current.hasNewer).toBe(true);
+    const afterStop = h.listChatWindow.mock.calls.length;
+
+    // The continuation must NOT spin: asking again with no new information is
+    // the busy loop the bound exists to prevent.
+    await act(async () => {
+      await result.current.loadNewer();
+    });
+    expect(h.listChatWindow.mock.calls.length).toBe(afterStop);
+
+    // The reader scrolling IS new information, and it must reach the network.
+    h.listChatWindow.mockResolvedValueOnce([
+      mkMsg(newestLoaded, "b", "owner", 158),
+      mkMsg("t1", "b", "owner", 159),
+    ]);
+    await act(async () => {
+      await result.current.loadNewer({ human: true });
+    });
+    expect(h.listChatWindow.mock.calls.length).toBe(afterStop + 1);
+    expect(result.current.messages.map((m) => m.id).slice(-1)).toEqual(["t1"]);
+  });
+
+  it("a landed forward page advances the anchor immediately, so the next ask cannot repeat it", async () => {
+    // 🔴 The CAUSE the bound above was a bandage for. The duplicate `?start_id=`
+    // pair measured 8ms apart was one walk asking twice from the same row,
+    // because the thread mirror only caught up at the next render — and the
+    // second page then came back carrying rows already held, which is exactly
+    // what stopped the walk. Both asks here happen before React re-renders.
+    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
+    const { result } = renderHook(() => useChat("b"));
+    await waitFor(() => expect(result.current.messages).toHaveLength(30));
+
+    h.listChatWindow
+      .mockResolvedValueOnce(page("a", 100, 30))
+      .mockResolvedValueOnce(page("a", 129, 30));
+    await act(async () => {
+      await result.current.loadAround("a0");
+    });
+    const newestLoaded =
+      result.current.messages[result.current.messages.length - 1].id;
+
+    h.listChatWindow
+      .mockResolvedValueOnce(page("f", 200, 30))
+      .mockResolvedValueOnce(page("g", 300, 30));
+    await act(async () => {
+      await result.current.loadNewer();
+      await result.current.loadNewer();
+    });
+
+    const asked = h.listChatWindow.mock.calls.slice(-2).map((c) => c[1].startId);
+    expect(asked[0]).toBe(newestLoaded);
+    expect(asked[1]).not.toBe(newestLoaded);
+    expect(asked[1]).toBe("f29");
+  });
+
   it("overlapping loadNewer calls are concurrency-locked to ONE forward page", async () => {
     // The mirror of the loadOlder lock above, and it had no pin at all until
     // the latch inventory went looking: the forward walk is driven by the SAME

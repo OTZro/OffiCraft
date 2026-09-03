@@ -233,7 +233,7 @@ function JumpMissRow({ text, retry }: { text: string; retry: boolean }) {
  */
 export function LatestRowInViewStory({
   at = "bottom",
-}: { at?: "bottom" | "top" } = {}) {
+}: { at?: "bottom" | "top" | "just-below" } = {}) {
   const boxRef = useRef<HTMLDivElement>(null);
   const [probe, setProbe] = useState("");
   useLayoutEffect(() => {
@@ -242,7 +242,16 @@ export function LatestRowInViewStory({
     const rows = box.querySelectorAll<HTMLElement>("[data-msg-id]");
     // 落點跟 `scrollToLatest` 逐字相同 —— guard 量的必須是產品真的會停的地方。
     if (at === "bottom") rows[rows.length - 1].scrollIntoView({ block: "end" });
-    else box.scrollTop = 0;
+    else if (at === "just-below") {
+      // 🔴 The case the other two cannot fail on. "bottom" lands the row flush
+      // and "top" puts it thousands of pixels away, so a tolerance inflated to
+      // swallow the 12px gap passes BOTH — measured: SUBPIXEL_PX raised from 1
+      // to 40 left every assertion green (independent review #17, F-2). Here the
+      // newest row's bottom is just SIX pixels under the fold: still clipped, and
+      // a reader would still want the arrow.
+      rows[rows.length - 1].scrollIntoView({ block: "end" });
+      box.scrollTop -= 6;
+    } else box.scrollTop = 0;
     const last = rows[rows.length - 1].getBoundingClientRect();
     setProbe(
       JSON.stringify({

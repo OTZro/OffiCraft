@@ -894,7 +894,11 @@ export function ChatArea({
       // Arms the continuation below: from here on, a landed page re-asks by
       // itself until the walk reaches the live tail.
       session.forwardWalkArmed = true;
-      void loadNewer();
+      // `human: true` — this call came from the reader moving the box, so it
+      // clears the walk's no-progress bound. Without it a walk that once came
+      // back empty could not be restarted by scrolling at all (review #17 F-1),
+      // which is the opposite of what the comment below the effect promises.
+      void loadNewer({ human: true });
     }
     // ① The arrow's condition, and it is a DIFFERENT question from
     // `nowNearBottom`: auto-follow may forgive 80px, but the owner asked for
@@ -1423,7 +1427,9 @@ export function ChatArea({
   //     may decide that asking again is pointless. Here, a landed page is
   //     always worth re-asking on: nothing changes unless something landed.
   // A failed request stops the walk simply by not landing anything (there is no
-  // re-render to re-evaluate), and a reader who scrolls again is the retry.
+  // re-render to re-evaluate), and a reader who scrolls again is the retry —
+  // literally: `onMessagesScroll` passes `human: true`, which clears the bound
+  // before asking. That sentence was false until review #17 measured it.
   useEffect(() => {
     if (!session.forwardWalkArmed || !hasNewer || messages.length === 0) return;
     const el = messagesRef.current;

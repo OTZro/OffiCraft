@@ -116,6 +116,24 @@ for (const width of WIDTHS) {
     ).toBe(true);
 
     await bottom.unmount();
+    // 🔴 前兩格加起來夾不住這個判準的「寬度」:一個貼齊、一個差好幾千 px，把容忍
+    // 值灌大到能吞掉 gap 仍然兩格全綠(實測:1 改成 40，37 支 jsdom ＋ 這支全綠 —— 獨立
+    // 審查 #17 F-2)。這一格把最新那一列的底邊壓到視窗底邊「下面 6px」:還是被切掉、
+    // 人還是會想要那顆箭頭，所以判準必須說「不在」。容忍值一旦大過 6，這行就紅。
+    const clipped = await mount(<LatestRowInViewStory at="just-below" />);
+    const under = JSON.parse(
+      await clipped.getByTestId("latest-probe").innerText(),
+    );
+    expect(
+      under.rowBottomGap,
+      "前提:最新那一列的底邊真的落在視窗底邊下面(不然這一格沒有在量東西)",
+    ).toBeGreaterThan(4);
+    expect(
+      under.inView,
+      "最新那一列被切掉 6px ⇒ 判準必須說「不在」，容忍值不准長到蓋過版面距離",
+    ).toBe(false);
+
+    await clipped.unmount();
     const top = await mount(<LatestRowInViewStory at="top" />);
     const away = JSON.parse(await top.getByTestId("latest-probe").innerText());
     expect(

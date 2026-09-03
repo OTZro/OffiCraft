@@ -5,7 +5,7 @@ package main
 // 00073 renames the member kind 'assistant' to 'staff'. SQLite cannot alter a
 // CHECK in place, so the migration rebuilds `member`: create member_rebuild with
 // the CHECK set {'staff','warden','outsource'}, copy every row through a named
-// 35-column INSERT…SELECT that maps 'assistant' -> 'staff' (leaving 'warden' and
+// 36-column INSERT…SELECT that maps 'assistant' -> 'staff' (leaving 'warden' and
 // 'outsource' alone), DROP TABLE member, RENAME, and then re-create
 //
 //	CREATE UNIQUE INDEX idx_member_codename ON member (codename)
@@ -94,7 +94,7 @@ func migration00073Columns() []string {
 	}
 }
 
-// migration00073Fixture is the pre-68 world. EVERY column of every row carries a
+// migration00073Fixture is the pre-00073 world. EVERY column of every row carries a
 // distinctive non-default value, and no two columns of the same row share one —
 // that is what makes a transposed pair in the INSERT…SELECT visible instead of
 // merely plausible. NULLs (the three nullable columns), CJK text, empty strings
@@ -715,8 +715,11 @@ func TestMigration00073UpDownUpIsStable(t *testing.T) {
 // That is not hypothetical here. Merge order for this package is serialised and
 // this rebuild is deliberately LAST (a migration numbered below the database's
 // current version refuses to start the server at all), so every column added by
-// anything that lands first passes through this rebuild. As of 2026-09-03 there
-// is exactly one such change in flight: #387 adds member.restart_after_stop.
+// anything that lands first passes through this rebuild. That is not a
+// hypothetical: #387 LANDED on 2026-09-03 carrying
+// 00070_member_restart_after_stop.sql, and on the renumber that put this
+// migration above it all three rulers below went red naming that column
+// before it was added to the list. It is in the list now.
 //
 // So this test is the one place the LIVE schema meets the list.
 // migration00073SchemaBeforeUp brings a temp database to the state just before
@@ -739,7 +742,7 @@ func TestMigration00073UpDownUpIsStable(t *testing.T) {
 // built it. Nothing 00073 wrote is in the picture.
 func migration00073SchemaBeforeUp(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := openSQLite(filepath.Join(t.TempDir(), "member-schema-before-68.db"))
+	db, err := openSQLite(filepath.Join(t.TempDir(), "member-schema-before-00073.db"))
 	if err != nil {
 		t.Fatalf("open temp sqlite: %v", err)
 	}
