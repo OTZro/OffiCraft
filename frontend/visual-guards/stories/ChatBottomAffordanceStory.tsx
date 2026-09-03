@@ -250,7 +250,13 @@ export function LatestRowInViewStory({
       // newest row's bottom is just SIX pixels under the fold: still clipped, and
       // a reader would still want the arrow.
       rows[rows.length - 1].scrollIntoView({ block: "end" });
-      box.scrollTop -= 6;
+      // Clipped by HALF THE FLEX GAP, read from CSS rather than typed in. A bare
+      // number here would be the same species as the tolerance it is testing —
+      // it would stop tracking the layout the moment someone changed the gap,
+      // and nothing would say so. Half, because that is the largest clip the
+      // tolerance could ever be argued up to on gap grounds and still be wrong.
+      const gap = parseFloat(getComputedStyle(box).rowGap || "0") || 0;
+      box.scrollTop -= Math.max(2, gap / 2);
     } else box.scrollTop = 0;
     const last = rows[rows.length - 1].getBoundingClientRect();
     setProbe(

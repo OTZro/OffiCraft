@@ -823,6 +823,12 @@ describe("③ jump-to-origin (跳到原訊息, B3)", () => {
     fireEvent.scroll(list);
 
     expect(loadNewer).toHaveBeenCalled();
+    // 🔴 AND IT MUST SAY IT IS THE READER. Independent review #18 (A-3) deleted
+    // this one argument — the entire wiring of the F-1 fix — and all 71 tests
+    // stayed green: the hook-level guard proves the retry works when asked for,
+    // and nothing proved this caller asks. Without it a walk that once came back
+    // empty cannot be restarted by scrolling at all.
+    expect(loadNewer).toHaveBeenCalledWith({ human: true });
   });
 
   it("the arrow is still there at the BOTTOM of an anchor window, and clicking it FETCHES the live tail", () => {

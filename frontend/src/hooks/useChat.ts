@@ -518,8 +518,12 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   // 🔴 THE FORWARD WALK'S ONLY STOP THAT IS NOT `hasNewer` (T-48). Holds the
   // anchor id whose forward page came back carrying nothing this thread did not
   // already have — the shape a DUPLICATE anchor request produces (measured: two
-  // `?start_id=` requests 8ms apart on the same id, because `threadRef` only
-  // catches up on the next render).
+  // `?start_id=` requests 8ms apart on the same id, back when `threadRef` only
+  // caught up on the next render). That CAUSE is gone: the forward loader now
+  // advances the mirror the moment a page commits, and the duplicate went with
+  // it (measured on the fix: 0 repeats in 1000 walks against 5 in 400 without
+  // it, p=0.0019). This bound is what remains — refusing a question already
+  // answered — and it should now be nearly unreachable rather than load-bearing.
   //
   // Why it lives HERE and not in the caller that drives the walk: "did that ask
   // actually go out" is knowledge this function has and nobody else does. A
@@ -531,8 +535,22 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   // function itself already answered.
   //
   // It is cleared by every commit that changes what "forward" means — a page
-  // that appends rows, and each of the three paths that replace the thread.
+  // that appends rows, and each of the paths that replace the thread — and, on
+  // top of those, by a reader who scrolls (see the rate limit below). Count the
+  // assignments rather than trusting this sentence: it has been wrong before.
   const forwardExhaustedRef = useRef<string | null>(null);
+
+  // 🔴 A GESTURE IS NOT ONE EVENT, and the first cut of the retry above said it
+  // was ("a gesture cannot loop" — measured false: independent review #18, A-2).
+  // A wheel produces ~60 scroll events a second, every one of them clearing the
+  // bound and asking again, so a reader resting at the bottom of a stalled walk
+  // sent 20 requests a second — the loop the bound exists to prevent, moved to
+  // the other side of the door. This is a RATE LIMIT on the retry and nothing
+  // else: it is not a claim about how long anything takes, and no behaviour
+  // reads it as a threshold. One wheel still retries instantly; the same wheel
+  // held down retries at most twice a second.
+  const HUMAN_RETRY_MIN_MS = 400;
+  const humanRetryAtRef = useRef(-Infinity);
   const loadSeqRef = useRef(0);
   const committedSeqRef = useRef(0);
   // The entry anchor, mirrored for the subscription effect below. Read in the
@@ -1137,7 +1155,10 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     // came back as a permanent one, and the comment two screens up promised the
     // opposite. A reader asking again is new information — it cannot loop,
     // because it takes a gesture each time.
-    if (opts?.human) forwardExhaustedRef.current = null;
+    if (opts?.human && Date.now() - humanRetryAtRef.current >= HUMAN_RETRY_MIN_MS) {
+      humanRetryAtRef.current = Date.now();
+      forwardExhaustedRef.current = null;
+    }
     // Already answered for this row: the page from here held nothing new, and
     // nothing has changed since. Asking again is the busy loop.
     if (forwardExhaustedRef.current === cur.messages[cur.messages.length - 1].id)
@@ -1177,7 +1198,8 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       // answer out of the updater and always got "nothing landed yet", so the
       // marker below was cleared instead of set and the walk asked from the
       // same anchor twice (measured, in the guard for exactly this). The live
-      // thread mirror gives the same answer, now, without touching the merge.
+      // thread mirror gives the same answer, now. The merge is then computed a
+      // SECOND time against React's own `prev`, on purpose — see the note there.
       const held = new Set(threadRef.current.messages.map((m) => m.id));
       const addsNothing = page.every((m) => held.has(m.id));
       const fresh = page.filter((m) => !held.has(m.id));
@@ -1188,6 +1210,17 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
         // is the newest window again and the ordinary refresh may resume.
         hasNewer: page.length >= CHAT_PAGE_SIZE,
       };
+      // 🔴 THE STATE WRITE STAYS AN UPDATER, AND THAT IS NOT A STYLE CHOICE.
+      // A first cut of this committed `setThread(merged)` — the same object
+      // written to the mirror — and that quietly threw away any OTHER load that
+      // had committed while this page was in the air. `loadOlder` takes no
+      // generation ticket and writes through an updater, so a history page
+      // landing inside this function's await window is present in `prev` and
+      // absent from `merged`: measured, 30 rows of loaded history vanished
+      // (`len 90 head h0` became `len 60 hasH false`) with nothing to see it
+      // happen. The mirror wants the value NOW; React wants the merge computed
+      // against whatever it actually holds. They are two different questions and
+      // this is what it costs to answer both.
       // 🔴 ADVANCE THE MIRROR NOW, NOT AT THE NEXT RENDER — this is the CAUSE
       // the exhausted bound below was only ever a bandage for. The duplicate
       // `?start_id=` pair measured 8ms apart is not a race between two threads:
@@ -1198,7 +1231,14 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       // with the same value, so making it true one tick earlier removes the
       // duplicate instead of tolerating it.
       threadRef.current = merged;
-      setThread(merged);
+      setThread((prev) => {
+        const havePrev = new Set(prev.messages.map((m) => m.id));
+        return {
+          ...prev,
+          messages: [...prev.messages, ...page.filter((m) => !havePrev.has(m.id))],
+          hasNewer: page.length >= CHAT_PAGE_SIZE,
+        };
+      });
       // The walk's own stop sign, decided by the page that just landed: the
       // anchor we asked from is exhausted when its page held nothing new; a
       // page that did carry rows clears whatever was marked before.

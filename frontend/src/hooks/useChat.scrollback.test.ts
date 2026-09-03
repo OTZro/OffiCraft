@@ -508,6 +508,83 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     expect(result.current.messages.map((m) => m.id).slice(-1)).toEqual(["t1"]);
   });
 
+  it("a wheel is not 60 retries: the reader's retry is rate-limited, not fired per scroll event", async () => {
+    // 🔴 Independent review #18 (A-2). "A gesture cannot loop" was measured
+    // false: one wheel is ~60 scroll events a second and every one of them
+    // cleared the bound, so a reader resting at the bottom of a stalled walk
+    // sent 20 requests a second — the busy loop, moved to the other side of the
+    // door. The retry stays instant; a held wheel does not multiply it.
+    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
+    const { result } = renderHook(() => useChat("b"));
+    await waitFor(() => expect(result.current.messages).toHaveLength(30));
+
+    h.listChatWindow
+      .mockResolvedValueOnce(page("a", 100, 30))
+      .mockResolvedValueOnce(page("a", 129, 30));
+    await act(async () => {
+      await result.current.loadAround("a0");
+    });
+    const held = result.current.messages.slice();
+
+    // Stall it: a full page that adds nothing.
+    h.listChatWindow.mockResolvedValueOnce(held.slice(-30));
+    await act(async () => {
+      await result.current.loadNewer();
+    });
+    const afterStop = h.listChatWindow.mock.calls.length;
+
+    // Ten scroll events in the same instant — the shape of one wheel. Each one
+    // that got through would come back empty and re-arm the next.
+    h.listChatWindow.mockResolvedValue(held.slice(-30));
+    await act(async () => {
+      for (let i = 0; i < 10; i++) await result.current.loadNewer({ human: true });
+    });
+    expect(h.listChatWindow.mock.calls.length).toBe(afterStop + 1);
+  });
+
+  it("a history page that lands while a forward page is in the air is not thrown away by it", async () => {
+    // 🔴 Independent review #18 (A-1). Advancing the mirror is one thing;
+    // committing that same object to React is another. `loadOlder` takes no
+    // generation ticket and writes through an updater, so a history page landing
+    // inside `loadNewer`'s await window lives in `prev` and not in the value the
+    // forward page computed. Committing the value threw it away — measured, 30
+    // loaded rows disappeared and `hasMore` flipped, with nothing to see it.
+    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
+    const { result } = renderHook(() => useChat("b"));
+    await waitFor(() => expect(result.current.messages).toHaveLength(30));
+
+    h.listChatWindow
+      .mockResolvedValueOnce(page("a", 100, 30))
+      .mockResolvedValueOnce(page("a", 129, 30));
+    await act(async () => {
+      await result.current.loadAround("a0");
+    });
+    const before = result.current.messages.length;
+
+    let releaseForward!: (v: ChatMessage[]) => void;
+    h.listChatWindow.mockImplementationOnce(
+      () => new Promise((res) => (releaseForward = res)),
+    );
+    const newestLoaded =
+      result.current.messages[result.current.messages.length - 1].id;
+    await act(async () => {
+      const forward = result.current.loadNewer();
+      // …and while it is in the air, a history page lands.
+      h.listChat.mockResolvedValueOnce(page("h", 1, 30));
+      await result.current.loadOlder();
+      releaseForward([
+        mkMsg(newestLoaded, "b", "owner", 158),
+        mkMsg("t1", "b", "owner", 159),
+      ]);
+      await forward;
+    });
+
+    // Both survive: 30 older rows in front, the forward row at the back.
+    expect(result.current.messages).toHaveLength(before + 31);
+    expect(result.current.messages[0].id).toBe("h0");
+    expect(result.current.messages.map((m) => m.id).slice(-1)).toEqual(["t1"]);
+  });
+
   it("a landed forward page advances the anchor immediately, so the next ask cannot repeat it", async () => {
     // 🔴 The CAUSE the bound above was a bandage for. The duplicate `?start_id=`
     // pair measured 8ms apart was one walk asking twice from the same row,
