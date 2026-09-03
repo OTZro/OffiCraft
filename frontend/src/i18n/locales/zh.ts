@@ -1538,6 +1538,7 @@ export const zh = {
       "⚠️ 機器（warden）的憑證沒有到期時間，不會自己過期。要判斷現在能不能移除，看的是「所有機器都重新連過了嗎」，不是「等了幾天」。",
     removeConfirmCancel: "取消",
     removeConfirmOk: "確定移除",
+    actionFailed: "這個動作沒有成功，伺服器沒有說明原因。",
     emptyState: "讀不到金鑰。",
   },
   backupHealth: {

@@ -4,10 +4,16 @@ package main
 // GET /api/chat/attachment/{attachment_id}).
 //
 // Design (owner-approved minimal version): a share link is the attachment's
-// serve URL carrying an HMAC-SHA256 over EXACTLY that attachment id. No
-// expiry, no revocation, no stored state — the sig is permanent and grants
-// nothing beyond reading the one blob it names (any other id fails the HMAC;
-// any other route never consults sigs at all).
+// serve URL carrying an HMAC-SHA256 over EXACTLY that attachment id. No expiry,
+// no per-link revocation, no stored state of its own — it grants nothing beyond
+// reading the one blob it names (any other id fails the HMAC; any other route
+// never consults sigs at all).
+//
+// It is NOT permanent. That word was true until T-62 and is the first thing a
+// reader of this file meets, so it is corrected here rather than only in the
+// block below: a sig lives exactly as long as the key that signed it stays in
+// the signing-key ring, and every sig made under a key dies the moment an owner
+// removes it. See the multi-key section at the bottom.
 //
 // KEY: derived from a server signing key via domain separation (SHA-256 over a
 // versioned label + the key), NEVER the JWT key used raw — a share sig must not

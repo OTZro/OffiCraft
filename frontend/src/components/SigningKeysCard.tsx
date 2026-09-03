@@ -5,7 +5,7 @@
 // (visual-guards/signing-keys-card.ct.spec.tsx) has to mount the real card, and
 // exporting one purely so a test can reach it is a backdoor that then has to be
 // kept honest forever.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useI18n } from "../i18n";
 import { useSigningKeys } from "../hooks/useSigningKeys";
 import { ConfirmModal } from "./ConfirmModal";
@@ -35,15 +35,29 @@ import { formatAbsolute } from "../lib/dateFormat";
 export function SigningKeysCard() {
   const { t } = useI18n();
   const d = t.signingKeys;
-  const { keys, loading, busy, error, rotate, remove } = useSigningKeys();
+  // The fallback is the card's own copy for a rejection that carried no server
+  // reason — never an empty error line, which reads as "nothing went wrong".
+  const { keys, loading, busy, error, rotate, remove } = useSigningKeys(
+    d.actionFailed,
+  );
   const [confirming, setConfirming] = useState<string | null>(null);
   const nowSecs = Math.floor(Date.now() / 1000);
+
+  // Close the confirmation when the removal actually LANDS — i.e. when the key
+  // is no longer in the ring the server just answered with. A refusal leaves
+  // the key there, so the modal stays open carrying the server's reason, which
+  // is where the user pressed and where they are looking.
+  useEffect(() => {
+    if (confirming !== null && !keys.some((k) => k.keyId === confirming)) {
+      setConfirming(null);
+    }
+  }, [keys, confirming]);
 
   return (
     <>
       <h2 className="settings__title settings__title--doc">{d.title}</h2>
-      <div className="param-card" data-testid="set-signing-keys">
-        <div className="param-card__hint">{d.intro}</div>
+      <div className="param-card signing-keys" data-testid="set-signing-keys">
+        <div className="signing-keys__hint">{d.intro}</div>
 
         {loading ? (
           <div className="signing-keys__loading">{d.loading}</div>
@@ -104,7 +118,7 @@ export function SigningKeysCard() {
           >
             {d.rotateButton}
           </button>
-          <div className="param-card__hint">{d.rotateHint}</div>
+          <div className="signing-keys__hint">{d.rotateHint}</div>
         </div>
 
         {error !== "" && (
@@ -135,9 +149,14 @@ export function SigningKeysCard() {
               </>
             }
             onCancel={() => setConfirming(null)}
+            error={error !== "" ? error : null}
             onConfirm={() => {
+              // Closing here is what made `busy` and `error` dead props: the
+              // modal was gone before either could mean anything, so a refusal
+              // surfaced below a dialog the user had already dismissed. The
+              // hook clears `error` when the next action starts, and the effect
+              // below closes the modal once a removal actually lands.
               remove(confirming);
-              setConfirming(null);
             }}
           />
         )}

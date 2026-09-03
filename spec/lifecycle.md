@@ -224,7 +224,9 @@ ceiling for non-warden agent-token mints.
   Every failed redemption (unknown / expired / already used) is the same flat 401 with no
   distinguishing hint. The legacy `install.sh?token=` surface stays byte-identical
   indefinitely.
-- Token verification is stateless with THREE revocation cuts:
+- Token verification is stateless with FOUR revocation cuts (the fourth arrived with the
+  signing-key ring, §1.2 — and note that unlike the three below it is not a per-token cut:
+  removing a key refuses every token that key signed, at once):
   1. **owner scope — the password floor.** Owner-scope tokens whose `iat` is earlier than
      the DB `auth.password_changed_at` (stamped by `POST /api/auth/change-password`) MUST
      be refused (401).
@@ -355,8 +357,20 @@ ceiling for non-warden agent-token mints.
      Deferral is a POSTPONEMENT and not an accepted permanent design: revisit both rather
      than reading their absence as settled.
 
+  4. **every scope — a signing key leaving the ring.** Removing a key
+     (`POST /api/auth/signing-keys/{key_id}/remove`, §1.2) refuses every token that key
+     signed, whatever its scope, from the next request onward. It is the ONLY cut of the
+     four that is not per-token and not per-principal: it is per KEY, so it takes tokens
+     the operator never enumerated — including `kind="warden"` credentials, which the three
+     cuts above deliberately exempt or cannot reach and which carry no `exp` to expire out
+     of the way. That is why it is a human's decision with no timer and no undo, and why
+     the settings page states the cost before the press. It also ends every attachment
+     share-link `?sig=` produced under that key, which is not a token at all.
+
   For every other agent token — a `kind="warden"` credential, and any token on a member
-  that has never reported waking — expiry stays the only invalidation.
+  that has never reported waking — **expiry is not the only invalidation any more**: cut 4
+  reaches them, and for a warden credential it is the only cut that does. Short of that,
+  expiry remains the only one.
 
 ### 1.4 Credential renewal (`POST /api/machines/renew-credential`)
 

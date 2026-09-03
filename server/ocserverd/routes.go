@@ -772,7 +772,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleGetChatAttachmentShareLinkApiChatAttachmentsAttachmentIdShareLinkGet,
 			Auth:     authGated,
 			Requires: principalMachine,
-			Summary:  "Mint a permanent single-file share link (?sig= HMAC; grants read of this one attachment only). Returns {url} as a SERVER-RELATIVE path — prefix it with the origin you reach this server on to get a link you can paste to someone. The sig carries NO identity and NO expiry: whoever holds the link reads that one blob without signing in, for as long as the key that signed it is still in the server's signing-key ring. No single link can be withdrawn; the only way to void one is to remove that key (POST /api/auth/signing-keys/{key_id}/remove), which voids every link it signed at once. Mint it for deliverables you meant to hand over; do not paste it anywhere the blob itself would not belong.",
+			Summary:  "Mint a single-file share link (?sig= HMAC; grants read of this one attachment only). Returns {url} as a SERVER-RELATIVE path — prefix it with the origin you reach this server on to get a link you can paste to someone. The sig carries NO identity and NO expiry: whoever holds the link reads that one blob without signing in, for as long as the key that signed it is still in the server's signing-key ring. No single link can be withdrawn; the only way to void one is to remove that key (POST /api/auth/signing-keys/{key_id}/remove), which voids every link it signed at once. Mint it for deliverables you meant to hand over; do not paste it anywhere the blob itself would not belong.",
 			// This row used to read `MCPExclude: true, // a UI convenience
 			// seam, not an agent tool`. That call is REVERSED here, on
 			// purpose: minting is an agent seam too. An agent that produces a
@@ -785,9 +785,12 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			// principal already reached this route over REST, so no caller
 			// gains a capability it lacked. What changes is discoverability —
 			// and that is not risk-neutral: minting will happen far more often
-			// now, and every minted link is permanent, unrevocable, and
-			// credential-less (sharesig.go). Read that file before widening
-			// this seam any further.
+			// now, and every minted link is credential-less and carries no
+			// expiry (sharesig.go). Since T-62 it is not unrevocable: a link
+			// dies when the key that signed it leaves the signing-key ring —
+			// which is a COARSE revocation (it takes every link that key
+			// signed with it) and not a per-link one. Read that file before
+			// widening this seam any further.
 			MCPTool: "get_chat_attachment_share_link",
 		},
 		{

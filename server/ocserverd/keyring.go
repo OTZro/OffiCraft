@@ -65,6 +65,11 @@ const (
 
 // errNoSigningKey means the ring has no key marked for signing — a state the
 // server must refuse to mint in rather than silently sign with something else.
+//
+// It is enforced at mintJWTClaims (jwt.go), the single seam EVERY mint passes
+// through, rather than at each caller: this symbol spent one review cycle
+// declared, documented and referenced by nothing while two mint paths had no
+// check at all. A guard's home is the choke point, not the doc comment.
 var errNoSigningKey = errors.New("signing keyring: no active key")
 
 // signingKey is one key in the ring. `Key` is the raw HMAC key; it is the only
@@ -279,17 +284,25 @@ func loadKeyring(d *DAL, legacySecret []byte) (*keyring, error) {
 // persist takes the read lock itself.
 func (k *keyring) persist(d *DAL) error {
 	k.mu.RLock()
-	stored := make([]storedKey, 0, len(k.keys))
-	for _, key := range k.keys {
+	keys, active := k.keys, k.activeID
+	k.mu.RUnlock()
+	return persistRing(d, keys, active)
+}
+
+// persistRing writes an EXPLICIT key set, taking no lock of its own — so a
+// caller holding the write lock can persist the state it is about to install
+// without releasing it. That is what lets rotate/remove be a single critical
+// section (see their headers); sync.RWMutex is not reentrant, so a lock-taking
+// persist could not be called from inside one.
+func persistRing(d *DAL, keys []signingKey, active string) error {
+	stored := make([]storedKey, 0, len(keys))
+	for _, key := range keys {
 		stored = append(stored, storedKey{
 			ID:        key.ID,
 			Key:       base64.RawURLEncoding.EncodeToString(key.Key),
 			CreatedTS: key.CreatedTS,
 		})
 	}
-	active := k.activeID
-	k.mu.RUnlock()
-
 	blob, err := json.Marshal(stored)
 	if err != nil {
 		return err
@@ -306,9 +319,22 @@ func (k *keyring) persist(d *DAL) error {
 // already in the ring stays — this is the transition, not the cut-over: tokens
 // signed by the outgoing key keep verifying until a human removes it.
 //
-// ORDER IS LOAD-BEARING: the DB write happens FIRST and the in-memory swap only
-// on its success. The other order would leave a process signing with a key that
-// no restart could recover, and the failure would be silent.
+// 🔴 ORDER IS LOAD-BEARING, AND SO IS THE SINGLE CRITICAL SECTION. The DB write
+// happens FIRST and the in-memory swap only on its success, with the write lock
+// held across both. Two earlier shapes are wrong and both were tried:
+//
+//   - memory first, then persist, rolling back on failure: between the swap and
+//     the failure the process MINTS under a key that was never persisted, and
+//     those tokens die at the next restart with no error anywhere.
+//   - the same, but releasing the lock before persisting: the rollback restores
+//     a wholesale snapshot captured earlier, so a concurrent remove that
+//     completed in between is silently undone in memory, leaving the process
+//     signing with a key the DB no longer holds. (Independent review traced the
+//     interleaving; owner-only routes make it unlikely, not impossible, and this
+//     file explicitly invites future consumers.)
+//
+// Holding the lock across the DB write costs readers a moment on a
+// human-pressed, owner-only action. That is the right trade.
 func (k *keyring) rotate(d *DAL) (keyMeta, error) {
 	key, err := newSigningKeyBytes()
 	if err != nil {
@@ -321,19 +347,15 @@ func (k *keyring) rotate(d *DAL) (keyMeta, error) {
 	created := nowSecs()
 
 	k.mu.Lock()
+	defer k.mu.Unlock()
 	next := make([]signingKey, len(k.keys), len(k.keys)+1)
 	copy(next, k.keys)
 	next = append(next, signingKey{ID: id, Key: key, CreatedTS: created})
-	prevKeys, prevActive := k.keys, k.activeID
-	k.keys, k.activeID = next, id
-	k.mu.Unlock()
-
-	if err := k.persist(d); err != nil {
-		k.mu.Lock()
-		k.keys, k.activeID = prevKeys, prevActive
-		k.mu.Unlock()
+	if err := persistRing(d, next, id); err != nil {
+		// Nothing to roll back: memory was never touched.
 		return keyMeta{}, err
 	}
+	k.keys, k.activeID = next, id
 	return keyMeta{ID: id, CreatedTS: created, IsSigning: true}, nil
 }
 
@@ -351,8 +373,8 @@ var errUnknownKey = errors.New("signing keyring: no such key")
 // human's decision and never a timer's.
 func (k *keyring) remove(d *DAL, id string) error {
 	k.mu.Lock()
+	defer k.mu.Unlock()
 	if id == k.activeID {
-		k.mu.Unlock()
 		return errRemoveSigningKey
 	}
 	idx := -1
@@ -363,21 +385,17 @@ func (k *keyring) remove(d *DAL, id string) error {
 		}
 	}
 	if idx < 0 {
-		k.mu.Unlock()
 		return errUnknownKey
 	}
 	next := make([]signingKey, 0, len(k.keys)-1)
 	next = append(next, k.keys[:idx]...)
 	next = append(next, k.keys[idx+1:]...)
-	prevKeys := k.keys
-	k.keys = next
-	k.mu.Unlock()
-
-	if err := k.persist(d); err != nil {
-		k.mu.Lock()
-		k.keys = prevKeys
-		k.mu.Unlock()
+	// DB first, under the same lock, for the reasons on rotate above: a removal
+	// applied in memory and not on disk is a key that comes BACK at the next
+	// restart — a revocation that silently un-revokes.
+	if err := persistRing(d, next, k.activeID); err != nil {
 		return err
 	}
+	k.keys = next
 	return nil
 }

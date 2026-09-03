@@ -164,7 +164,13 @@ describe("簽章金鑰卡 · 兩顆按鈕的不對稱", () => {
 });
 
 describe("簽章金鑰卡 · 失敗不可以長得像成功", () => {
-  it("renders the server's refusal instead of swallowing it", async () => {
+  it("renders whatever the hook reports as the failure", async () => {
+    // ⚠️ This row only proves the card DISPLAYS an error string. It cannot prove
+    // the string is the server's reason, because the hook is mocked here — and
+    // the first version of this file stopped at exactly this assertion while the
+    // real path rendered "http 409 for POST /api/…". That the string is the
+    // SERVER'S is pinned where it can be: useSigningKeys.test.ts, which drives
+    // the real adapter error envelope.
     state.error =
       "key 'k-new' is the one currently signing and cannot be removed — rotate first, then remove it";
     await openSection();

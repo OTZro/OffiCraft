@@ -1829,12 +1829,14 @@ export interface Api {
    * row carrying the sender id + server-resolved display name + send time.
    * READ-ONLY (no read-watermark side effect, unlike listChat's auto-mark). */
   listChatAttachments(withId: string): Promise<GalleryAttachment[]>;
-  /** Mint the PERMANENT share link for one attachment
+  /** Mint the share link for one attachment
    * (`GET /api/chat/attachments/{id}/share-link`): resolves to the blob's
    * server-relative serve path carrying its `?sig=` file-level HMAC credential
    * — anyone holding the URL may read exactly this one blob, nothing else, no
-   * expiry. Callers prefix the page origin to form the absolute, sendable URL.
-   * Unknown id → 404 (throws). */
+   * expiry. It is NOT permanent: the sig is derived from the key that signs at
+   * mint time, so removing that key from the signing-key ring voids it, along
+   * with every other link that key signed (T-62). Callers prefix the page
+   * origin to form the absolute, sendable URL. Unknown id → 404 (throws). */
   getChatAttachmentShareLink(attachmentId: string): Promise<string>;
   /** Post a chat message. May carry text and/or MULTIPLE generic `attachments`
    * (pasted images AND/OR uploaded files, mixed), sent to the server as the

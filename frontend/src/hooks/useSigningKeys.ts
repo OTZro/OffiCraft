@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { SigningKeyView } from "../types";
 import { api } from "../api";
+import { serverMessageOf } from "../api/errors";
 
 interface UseSigningKeys {
   keys: SigningKeyView[];
@@ -27,7 +28,7 @@ interface UseSigningKeys {
   remove: (keyId: string) => void;
 }
 
-export function useSigningKeys(): UseSigningKeys {
+export function useSigningKeys(fallbackMessage: string): UseSigningKeys {
   const [keys, setKeys] = useState<SigningKeyView[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -45,7 +46,7 @@ export function useSigningKeys(): UseSigningKeys {
       })
       .catch((e: unknown) => {
         console.warn("useSigningKeys: load failed", e);
-        if (alive) setError(messageOf(e));
+        if (alive) setError(messageOf(e, fallbackMessage));
       })
       .finally(() => {
         if (alive) setLoading(false);
@@ -53,7 +54,7 @@ export function useSigningKeys(): UseSigningKeys {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [fallbackMessage]);
 
   // Both actions share one runner because they share the property that matters:
   // the answer IS the new ring, and a rejection must leave the old one alone.
@@ -62,9 +63,9 @@ export function useSigningKeys(): UseSigningKeys {
     setError("");
     action()
       .then((next) => setKeys(next))
-      .catch((e: unknown) => setError(messageOf(e)))
+      .catch((e: unknown) => setError(messageOf(e, fallbackMessage)))
       .finally(() => setBusy(false));
-  }, []);
+  }, [fallbackMessage]);
 
   const rotate = useCallback(() => run(() => api.rotateSigningKey()), [run]);
   const remove = useCallback(
@@ -75,6 +76,17 @@ export function useSigningKeys(): UseSigningKeys {
   return { keys, loading, busy, error, rotate, remove };
 }
 
-function messageOf(e: unknown): string {
-  return e instanceof Error && e.message !== "" ? e.message : String(e);
+// 🔴 THE SERVER'S REASON, NOT THE LOG LINE. `ApiError.message` is the
+// `http <status> for <METHOD> <path>` format, which api/errors.ts explicitly
+// says is "not readable copy" — rendering it would show a Chinese cockpit
+// `http 409 for POST /api/auth/signing-keys/k-…/remove` and throw away the
+// server's actual "rotate first, then remove it". serverMessageOf carries the
+// reason; "" means the rejection had none, and the caller falls back to its own
+// copy rather than showing an empty line.
+//
+// (The first version of this hook used `e.message`, and the mock hid it by
+// throwing a plain Error whose message WAS the prose — so mock mode looked
+// right while the real path was wrong. Found by independent review.)
+function messageOf(e: unknown, fallback: string): string {
+  return serverMessageOf(e) || fallback;
 }

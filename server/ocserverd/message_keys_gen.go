@@ -1014,6 +1014,7 @@ var messageKeys = map[string]bool{
 	"settings.upgradeRestarting":                       true,
 	"settings.upgradeTimeout":                          true,
 	"settings.viewRelease":                             true,
+	"signingKeys.actionFailed":                         true,
 	"signingKeys.createdLabel":                         true,
 	"signingKeys.createdUnknown":                       true,
 	"signingKeys.emptyState":                           true,

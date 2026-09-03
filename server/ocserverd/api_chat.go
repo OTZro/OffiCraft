@@ -1137,8 +1137,8 @@ func (s *apiServer) HandleGetChatAttachmentApiChatAttachmentAttachmentIdGet(w ht
 	_, _ = w.Write(att.Data)
 }
 
-// GET /api/chat/attachments/{attachment_id}/share-link — mint the permanent
-// share link for ONE attachment: the serve path carrying its ?sig= HMAC
+// GET /api/chat/attachments/{attachment_id}/share-link — mint the share link
+// for ONE attachment: the serve path carrying its ?sig= HMAC
 // credential (sharesig.go). Gated like every chat route; 404 for an unknown
 // blob id so a caller cannot mint links into the void. The URL is
 // server-relative — the client prefixes its own origin.

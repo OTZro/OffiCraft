@@ -1420,8 +1420,9 @@ export const httpApi: Api = {
 
   async getChatAttachmentShareLink(attachmentId: string): Promise<string> {
     // GET /api/chat/attachments/{attachment_id}/share-link -> {url}: the
-    // blob's serve path + its permanent ?sig= HMAC credential (grants reading
-    // exactly that one blob; no expiry). The caller absolutizes with the page
+    // blob's serve path + its ?sig= HMAC credential (grants reading exactly
+    // that one blob; no expiry, but voided when the signing key it was made
+    // under leaves the ring — T-62). The caller absolutizes with the page
     // origin — the server never knows its public host.
     const wire = unwrap(
       await client.GET("/api/chat/attachments/{attachment_id}/share-link", {

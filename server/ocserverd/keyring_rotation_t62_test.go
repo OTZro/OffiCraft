@@ -12,6 +12,7 @@ package main
 // still needs a restart, they are not testing what they say.
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -276,5 +277,159 @@ func TestT62_TheRingNeverLeaksKeyMaterial(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "!!not-base64!!") {
 		t.Fatalf("the load error quotes the stored key material: %v", err)
+	}
+}
+
+// ── the failure and refusal paths (added after independent review) ───────────
+//
+// Every test below covers a claim that survived a mutant in the first pass. The
+// pattern in all four is the same and it is the pattern the first pass missed:
+// the happy path was driven through the real gate, and the path where something
+// REFUSES or FAILS was left to the comment describing it.
+
+// failingDAL returns a DAL whose writes fail, by closing the database under it.
+// A closed handle is a real error from the real code path — no injection seam,
+// no interface to keep honest.
+func failingDAL(t *testing.T) *DAL {
+	t.Helper()
+	db, err := openSQLite(filepath.Join(t.TempDir(), "closed.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := runMigrations(db); err != nil {
+		t.Fatalf("goose up: %v", err)
+	}
+	d := NewDAL(db)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	return d
+}
+
+// TestT62_AFailedPersistLeavesTheRingUntouched: the DB is the authority, so a
+// rotation that could not be written must not exist in memory either. The
+// earlier shape swapped memory first and rolled back — which meant a window
+// where the process signed with a key that was never persisted, and (with the
+// lock released across the write) a rollback that could silently undo a
+// concurrent removal.
+func TestT62_AFailedPersistLeavesTheRingUntouched(t *testing.T) {
+	srv, keys, _, _ := t62Stack(t, []byte(interopSecret))
+	now := time.Now().Unix()
+	before := keys.snapshot()
+	beforeKey := append([]byte(nil), keys.signingSecret()...)
+	tok := mintOwnerAt(t, keys, now)
+
+	if _, err := keys.rotate(failingDAL(t)); err == nil {
+		t.Fatalf("a rotation whose DB write fails must report the failure, not succeed quietly")
+	}
+
+	after := keys.snapshot()
+	if len(after) != len(before) {
+		t.Fatalf("a failed rotation changed the ring: %d keys before, %d after", len(before), len(after))
+	}
+	if string(keys.signingSecret()) != string(beforeKey) {
+		t.Fatalf("a failed rotation moved the signing key — the process is now signing with something no restart could recover")
+	}
+	// And the whole point of that: what was minted before still works, and what
+	// is minted now is minted under the same key.
+	if st := probeGate(t, srv, tok); st != http.StatusOK {
+		t.Fatalf("a failed rotation must not disturb live credentials, got %d", st)
+	}
+	if st := probeGate(t, srv, mintOwnerAt(t, keys, now)); st != http.StatusOK {
+		t.Fatalf("the server must still mint working tokens after a failed rotation, got %d", st)
+	}
+}
+
+// TestT62_AFailedRemovePersistDoesNotDropTheKey is the same property on the
+// other action, and it matters MORE there: a removal applied in memory but not
+// on disk is a key that comes BACK at the next restart — a revocation that
+// silently un-revokes.
+func TestT62_AFailedRemovePersistDoesNotDropTheKey(t *testing.T) {
+	srv, keys, dal, _ := t62Stack(t, []byte(interopSecret))
+	now := time.Now().Unix()
+	oldTok := mintOwnerAt(t, keys, now)
+	oldID := keys.snapshot()[0].ID
+	if _, err := keys.rotate(dal); err != nil {
+		t.Fatalf("PREMISE FAILED: rotate: %v", err)
+	}
+
+	if err := keys.remove(failingDAL(t), oldID); err == nil {
+		t.Fatalf("a removal whose DB write fails must report the failure")
+	}
+	if len(keys.snapshot()) != 2 {
+		t.Fatalf("a failed removal dropped the key from memory: %+v", keys.snapshot())
+	}
+	// The credential that key signed must still be accepted — a revocation that
+	// did not reach the DB has not happened.
+	if st := probeGate(t, srv, oldTok); st != http.StatusOK {
+		t.Fatalf("a failed removal revoked the credential anyway, got %d — the DB and the gate now disagree", st)
+	}
+}
+
+// TestT62_ANewShareLinkIsSignedByTheKeyThatSignsNow. Signing a fresh link with
+// any OTHER ring key is invisible to the eye and fatal in effect: the link would
+// be killed by the next removal of a key the operator regards as long retired,
+// silently, for a link minted seconds earlier.
+func TestT62_ANewShareLinkIsSignedByTheKeyThatSignsNow(t *testing.T) {
+	_, keys, dal, _ := t62Stack(t, []byte(interopSecret))
+	retired := append([]byte(nil), keys.signingSecret()...)
+	if _, err := keys.rotate(dal); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+
+	sig := shareSigForRing(keys, "att-t62")
+	if sig == "" {
+		t.Fatalf("PREMISE FAILED: the ring must be able to sign a share link")
+	}
+	// It verifies under the ring (both keys are in it) …
+	if !verifyShareSigAnyKey(keys, "att-t62", sig) {
+		t.Fatalf("a freshly minted share sig must verify")
+	}
+	// … but NOT under the retired key alone, which is what pins it to the
+	// current signer rather than merely to "some key in the ring".
+	if verifyShareSig(retired, "att-t62", sig) {
+		t.Fatalf("a share link minted AFTER the rotation is signed by the RETIRED key — it would die at the next removal of a key the operator thinks is long gone")
+	}
+}
+
+// TestT62_LoadRefusesWhenTheActiveIdNamesNoKey. The refusal carries the
+// strongest comment in keyring.go — guessing which key signs would mint under a
+// key the operator did not choose, and the mistake stays invisible until the
+// wrong key is removed — and until now nothing held it.
+func TestT62_LoadRefusesWhenTheActiveIdNamesNoKey(t *testing.T) {
+	_, keys, dal, _ := t62Stack(t, []byte(interopSecret))
+	if _, err := keys.rotate(dal); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	// Positive control: this ring loads cleanly before the active id is broken,
+	// so the refusal below is about the id and not about the blob.
+	if _, err := loadKeyring(dal, []byte(interopSecret)); err != nil {
+		t.Fatalf("PREMISE FAILED: the ring must load before we break it: %v", err)
+	}
+
+	if err := dal.PutSetting(settingJWTActiveKeyID, "k-not-in-this-ring"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := loadKeyring(dal, []byte(interopSecret)); err == nil {
+		t.Fatalf("an active key id naming no key in the ring must REFUSE to load, not pick one")
+	}
+}
+
+// TestT62_AnEmptyRingRefusesToMintRatherThanSignUnderNothing. An empty HMAC key
+// is a perfectly valid HMAC key, so without a refusal the server would answer
+// 200 with a token signed under nothing — and on the warden path that token
+// carries no exp at all.
+func TestT62_AnEmptyRingRefusesToMintRatherThanSignUnderNothing(t *testing.T) {
+	empty := singleKeyring(nil)
+	if len(empty.signingSecret()) != 0 {
+		t.Fatalf("PREMISE FAILED: this ring must have no signing key")
+	}
+	if _, err := mintJWT("someone", "owner", 3600, empty.signingSecret(), time.Now().Unix(), ""); !errors.Is(err, errNoSigningKey) {
+		t.Fatalf("minting with an empty ring must fail with errNoSigningKey, got %v", err)
+	}
+	// The exp-less path is the one that mattered: a permanent credential signed
+	// under nothing would never expire its way out of existence.
+	if _, err := mintJWTWithoutExpiry("m-warden", "agent", empty.signingSecret(), time.Now().Unix(), ""); !errors.Is(err, errNoSigningKey) {
+		t.Fatalf("minting a PERMANENT credential with an empty ring must fail with errNoSigningKey, got %v", err)
 	}
 }

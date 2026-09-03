@@ -787,7 +787,10 @@ export const en: Dict = {
     galleryClose: "Close gallery",
     galleryPreviewHint: "Preview in a new tab",
     galleryDownloadHint: "Download",
-    // Permanent single-file share link (?sig= HMAC) — copied to the clipboard.
+    // Single-file share link (?sig= HMAC) — copied to the clipboard. No expiry,
+    // but not permanent: it follows the signing-key ring, so removing the key
+    // that signed it voids it (T-62). Kept in step with its Chinese twin in
+    // zh.ts — the first pass fixed one and not the other.
     copyShareLink: "Copy share link",
     shareLinkCopied: "Link copied",
     shareLinkCopyFailed: "Failed to copy link",
@@ -1494,6 +1497,7 @@ export const en: Dict = {
       "⚠️ Machine (warden) credentials carry no expiry and never lapse on their own. What decides whether this is safe is whether every machine has reconnected — not how many days have passed.",
     removeConfirmCancel: "Cancel",
     removeConfirmOk: "Remove it",
+    actionFailed: "That action did not go through, and the server gave no reason.",
     emptyState: "The keys could not be read.",
   },
   backupHealth: {

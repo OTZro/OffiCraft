@@ -1013,6 +1013,7 @@ export const MESSAGE_KEYS: readonly string[] = [
   "settings.upgradeRestarting",
   "settings.upgradeTimeout",
   "settings.viewRelease",
+  "signingKeys.actionFailed",
   "signingKeys.createdLabel",
   "signingKeys.createdUnknown",
   "signingKeys.emptyState",

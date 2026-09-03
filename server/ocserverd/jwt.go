@@ -88,6 +88,20 @@ func mintJWTWithoutExpiry(sub, scope string, secret []byte, now int64, machineID
 }
 
 func mintJWTClaims(claims jwtClaims, secret []byte) (string, error) {
+	// 🔴 THE EMPTY-KEY REFUSAL LIVES HERE, at the one seam every mint passes
+	// through, and not at each caller. It was previously declared in keyring.go
+	// (errNoSigningKey), documented as "a state the server must refuse to mint
+	// in rather than silently sign with something else" — and wired to nothing;
+	// five callers open-coded the check and two did not have it at all, one of
+	// them the WARDEN path, whose credentials carry no exp. An empty key is a
+	// perfectly valid HMAC key, so without this the server would have handed out
+	// a permanent credential signed under nothing and said 200. (Found by
+	// independent review; not reachable today because requireAuth refuses
+	// everything while the ring is empty, which is precisely why it could sit
+	// there unnoticed.)
+	if len(secret) == 0 {
+		return "", errNoSigningKey
+	}
 	payload, err := json.Marshal(claims)
 	if err != nil {
 		return "", fmt.Errorf("%w: marshal claims: %v", errInvalidToken, err)
