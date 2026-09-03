@@ -21,7 +21,10 @@
 // ⇒ DO NOT ADD A CORRECTION LOOP BACK HERE. Three attempts died on the same
 // rock: a loop that writes `scrollTop` cannot tell its own re-scroll from the
 // reader's, so it either yanks a reader who has moved on or gives up on the
-// case it was written for.
+// case it was written for. What ships instead is a PURE-READ ResizeObserver in
+// ChatArea that only re-answers {@link isLatestRowInView}, so the 回到最新 arrow
+// comes back rather than the viewport being dragged. An observer that only
+// reads and a loop that writes are not interchangeable.
 //
 // (The module used to name a third source, "markdown 重排". It was never real —
 // measured 0px across code blocks, tables and long quotes, byte-identical at

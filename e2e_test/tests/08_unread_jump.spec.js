@@ -25,6 +25,7 @@ const {
   unreadCountOf,
   bootAuthedSpa,
   uniqueName,
+  PNG_400x300_B64,
 } = require('../lib/fixtures');
 
 const NAME_M = uniqueName('Unread M');
@@ -193,6 +194,43 @@ test.describe('B9 · unread — badge, entry divider anchor, 進房 mark-read, f
       'nothing arrived, so there is nothing to preview',
     ).toBeHidden();
 
+    // 🔴 窄視窗,而且這不是「順便也測一下手機」。
+    //
+    // 這一段量的是「上方的內容晚長高之後,最新那一列還在不在視窗裡」。在 1280x720
+    // 的預設視窗上這條路自己會癒合:內容長高時瀏覽器的 scroll anchoring 會補
+    // `scrollTop`,補了就發 scroll 事件,而 `onMessagesScroll` 是 `latestInView`
+    // 的七個寫入點之一 —— 箭頭因此碰巧回來了(實測 mutant 上 st 2314、arrowBack
+    // true)。窄視窗上瀏覽器選的錨點不同,`scrollTop` 一動也不動、零個 scroll 事件,
+    // `latestInView` 就停在落地當時那個過期的 true。設計者的實測也是在 390x844
+    // 量到的(st 1101 → 1101、sh 1546 → 1964、gap 418.31、箭頭不回來)。
+    // ⇒ 換寬度不是加測一個裝置,是這條護欄有沒有牙齒的差別。
+    await page.setViewportSize({ width: 390, height: 844 });
+
+    // ── 🔴 G-1 護欄的燃料:三張還在載入的圖片,落在**最新那一列的上方**。
+    //
+    // 這個 fixture 在 T-48 之前全是純文字,所以下面那一組斷言(最新那一列貼齊
+    // 底部、而且沒有箭頭)是**碰巧**綠的 —— 沒有任何東西會在落地之後改變版面,
+    // 所以它守不住任何事。兩個落點修正迴圈刪掉之後(owner rc-6c27f486ef9d),
+    // 「上方晚載入的內容把最新那一列推到摺線下」變成一條真的會發生的路,而唯一
+    // 還在替讀者說實話的東西是那顆「回到最新」箭頭。加三張圖就是把那條路接進來。
+    //
+    // bytes 擋到**落地之後**才放行:圖片沒解碼時 `.chat__msg-image` 是零高
+    // (width/height:auto),解碼後每張撐開 225px。它們必須在最新那一列的上方,
+    // 因為視窗**下方**長高對讀者是 0px 位移(實測),推不動任何東西。
+    let releaseImages;
+    const imagesHeld = new Promise((r) => {
+      releaseImages = r;
+    });
+    await page.route('**/api/chat/attachment/**', async (route) => {
+      await imagesHeld;
+      await route.continue();
+    });
+    for (let i = 1; i <= 3; i++) {
+      await postChatAs(request, tokM, 'owner', `image above the target ${i}`, [
+        { data_b64: PNG_400x300_B64, filename: `above-${i}.png`, mime: 'image/png' },
+      ]);
+    }
+
     const lateBody = `late-breaking message ${PAD}`;
     await postChatAs(request, tokM, 'owner', lateBody);
     const strip = page.getByTestId('chat-new-msg-preview');
@@ -213,28 +251,47 @@ test.describe('B9 · unread — badge, entry divider anchor, 進房 mark-read, f
     });
     await expect(page.getByTestId('chat-jump-latest')).toBeHidden();
 
-    // 🔴 而且要**待得住**。上面那一行是輪詢的:只要在某一格取樣到「不在」就
-    // PASS,所以在一個「箭頭消失 10–40ms 又長回來」的產品上,它有時候會綠 ——
-    // 實測 30 次跑紅 16 次,綠的那幾次時間軸上看得到箭頭 17ms 後就回來了。
-    // 讓版面完全靜止之後再問一次,並且把幾何一起釘住:最新那一列的底邊已經在
-    // 視窗裡(容器底下還有 flex gap 與哨兵,所以 `distance` 本來就不會是 0),
-    // 這種情況下畫面上不該有任何「回到最新」。
+    // 🔴 而且要**待得住**,而「待得住」在有東西還在載入的時候不等於「不會動」。
+    //
+    // 上面那兩行是輪詢的:只要在某一格取樣到「不在」就 PASS,所以在一個「箭頭消失
+    // 10–40ms 又長回來」的產品上,它有時候會綠 —— 實測 30 次跑紅 16 次。所以這裡
+    // 讓版面完全靜止之後再問一次。
+    //
+    // 但斷言的形狀變了,而且是**因為 owner 簽了字**才變的。他在 rc-6c27f486ef9d
+    // 圈了「拿掉。圖片／卡片展開把目標擠走我接受」—— 所以「最新那一列被推到摺線
+    // 下」本身不再是 bug,不可以再無條件斷言 `lastRowBottomGap <= 1`。
+    //
+    // 他**沒有**簽的是介面說謊。這個 app 的既有規則是「不在最新訊息時有個向下
+    // 箭頭」,所以真正的不變量是這兩件**永不同時為假**:
+    //     ① 最新那一列完整在視窗裡(gap <= 1),或
+    //     ② 「回到最新」箭頭在畫面上。
+    // 位移是代價,無聲的位移是 bug。刪掉迴圈之後量到的正是兩個都假
+    // (gap 418.31、arrowBack=false):讀者按了「回到最新」,人不在最新,而且畫面上
+    // 沒有任何東西告訴他 —— 那就是這張票存在的理由本身。
+    releaseImages();
     await page.waitForTimeout(3000);
     const settled = await thread.evaluate((el) => {
       const rows = el.querySelectorAll('[data-msg-id]');
       const r = rows[rows.length - 1].getBoundingClientRect();
+      const imgs = [...el.querySelectorAll('img.chat__msg-image')];
       return {
         distance: Math.round(el.scrollHeight - el.scrollTop - el.clientHeight),
         lastRowBottomGap: Number((r.bottom - el.getBoundingClientRect().bottom).toFixed(2)),
+        imagesDecoded: imgs.filter((i) => i.naturalHeight > 0).length,
+        imageHeights: imgs.map((i) => Math.round(i.getBoundingClientRect().height)),
       };
     });
+    // 前提誠實:圖片真的解碼了。沒有這一行,上面整段可能只是「圖沒載到,所以沒有
+    // 任何東西動過」的空綠。
     expect(
-      settled.lastRowBottomGap,
-      `最新那一列必須完整在視窗裡(量到 ${JSON.stringify(settled)})`,
-    ).toBeLessThanOrEqual(1);
-    await expect(
-      page.getByTestId('chat-jump-latest'),
-      `版面靜止之後箭頭必須還是不在 —— 量到 ${JSON.stringify(settled)}`,
-    ).toHaveCount(0);
+      settled.imagesDecoded,
+      `三張圖必須真的解碼完成,否則這條護欄什麼都沒測到(量到 ${JSON.stringify(settled)})`,
+    ).toBe(3);
+    const arrowBack = await page.getByTestId('chat-jump-latest').isVisible();
+    expect(
+      settled.lastRowBottomGap <= 1 || arrowBack,
+      `版面靜止之後,最新那一列要嘛還在視窗裡、要嘛畫面上有「回到最新」箭頭 —— ` +
+        `兩個都不成立就是介面在說謊(量到 ${JSON.stringify({ ...settled, arrowBack })})`,
+    ).toBe(true);
   });
 });

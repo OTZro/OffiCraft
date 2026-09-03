@@ -266,6 +266,13 @@ const REGISTRY = [
   },
   {
     file: "components/ChatArea.tsx",
+    kind: "Observer",
+    count: 1,
+    verdict:
+      "the PURE-READ latestInView observer (T-48). It writes one boolean derived from this mount's own scroller and nothing else — no scrollTop — so a callback that lands after the screen has moved on can only re-answer a question about a room React has already discarded; disconnected in the same effect's cleanup",
+  },
+  {
+    file: "components/ChatArea.tsx",
     kind: "subscribe",
     count: 1,
     verdict:

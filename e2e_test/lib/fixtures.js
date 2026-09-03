@@ -21,6 +21,59 @@ const PNG_1x1_B64 =
 // unzip-able archive, NOT previewable (forces the download disposition path).
 const ZIP_EMPTY_B64 = 'UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==';
 
+// A real PNG of a GIVEN SIZE, generated rather than pasted (3KB of base64 in
+// this file buys nothing a `zlib` call does not).
+//
+// 🔴 WHY A BIG ONE EXISTS AT ALL. A chat thumbnail has NO intrinsic size in the
+// DOM until its bytes decode — `.chat__msg-image` is width/height:auto — so an
+// undecoded image is a ZERO-HEIGHT row that grows to its real height later.
+// That is the whole mechanism behind 「上方晚載入的內容把目標擠走」, and a
+// fixture built on PNG_1x1_B64 cannot reproduce it: 1px of growth is inside
+// every tolerance in the suite. A spec that needs a reflow needs this.
+function pngOfSize(w, h) {
+  const zlib = require('zlib');
+  const chunk = (type, data) => {
+    const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(zlib.crc32 ? zlib.crc32(body) >>> 0 : crc32(body));
+    return Buffer.concat([len, body, crc]);
+  };
+  // Node <20.12 has no zlib.crc32 — carry the table rather than depend on it.
+  function crc32(buf) {
+    let c = ~0;
+    for (const b of buf) {
+      c ^= b;
+      for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1));
+    }
+    return ~c >>> 0;
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 2; // truecolour
+  // Non-uniform pixels on purpose: a solid colour compresses to a few hundred
+  // bytes and can land in one TCP segment, which makes "still decoding" hard to
+  // hold open.
+  const rows = [];
+  for (let y = 0; y < h; y++) {
+    const row = Buffer.alloc(w * 3 + 1);
+    for (let x = 0; x < w * 3; x++) row[x + 1] = (x * 7 + y * 3) % 256;
+    rows.push(row);
+  }
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', zlib.deflateSync(Buffer.concat(rows), { level: 9 })),
+    chunk('IEND', Buffer.alloc(0)),
+  ]).toString('base64');
+}
+
+/** 400x300 — renders at 300x225 under `.chat__msg-image`'s max-width. */
+const PNG_400x300_B64 = pngOfSize(400, 300);
+
 // A per-call unique display name. run_all always starts from a FRESH DB, but
 // specs must stay idempotent under re-runs against a still-warm server (dev
 // iteration) — a duplicated display name would make name-scoped UI locators
@@ -138,6 +191,8 @@ module.exports = {
   PASSWORD,
   uniqueName,
   PNG_1x1_B64,
+  PNG_400x300_B64,
+  pngOfSize,
   ZIP_EMPTY_B64,
   authHeaders,
   ownerToken,

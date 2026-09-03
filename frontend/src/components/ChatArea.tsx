@@ -1366,6 +1366,44 @@ export function ChatArea({
     session.nearBottom = true;
   }, [messages]);
 
+  // 🔴 THE ARROW HAS TO SURVIVE A REFLOW, AND UNTIL THIS EFFECT IT DID NOT.
+  // This is the guardrail that had to ship WITH the deletion of the two
+  // correction loops, not after it.
+  //
+  // `latestInView` is written at seven sites and EVERY ONE of them is 「有人主動
+  // 捲動」—— the scroll handler, entry positioning, the jump, the arrow, the
+  // preview strip. A reflow writes it nowhere. While the settle loop existed
+  // that did not show: the loop kept re-scrolling the newest row flush with the
+  // bottom for 2.6s, so the stale `true` happened to stay correct. The loop was
+  // taking the bullet for the staleness.
+  //
+  // Measured on the deleted code, the plainest path there is — scroll up, press
+  // 回到最新, three images above still decoding:
+  //     landed : lastRowBottomGap 0       inView true
+  //     +3.5s  : lastRowBottomGap 418.31  inView false   arrowBack=false
+  // The reader pressed 回到最新, ended up a full screen away from the newest
+  // message (the viewport is 433px), and NOTHING on screen said so. 「箭頭說謊」
+  // is the reason this ticket exists at all — a displacement the owner signed
+  // for is not the same thing as the interface lying about where you are.
+  //
+  // ⚠️ IT IS PURE READ. It re-answers 「最新那一列還在視窗裡嗎」 and writes
+  // nothing else — no `scrollTop`, no `nearBottom`, no scroll of any kind. That
+  // is the whole reason it is allowed to exist where three correction loops
+  // were rejected: it never contends with the reader or with the browser's own
+  // anchoring, so it needs none of the reader-versus-programmatic telling-apart
+  // that killed them. Adding a scroll here re-creates exactly what was deleted.
+  //
+  // Same target as the loops watched, and for the same reason: a RO on the
+  // viewport never fires (its own box is clamped by flex + overflow), so the
+  // in-flow children — whose height is what actually grows — are what to watch.
+  useEffect(() => {
+    const el = messagesRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setLatestInView(isLatestRowInView(el)));
+    for (const child of Array.from(el.children)) ro.observe(child);
+    return () => ro.disconnect();
+  }, [messages]);
+
   // 🔴 THE FORWARD WALK IS LEVEL-TRIGGERED, NOT EDGE-TRIGGERED (T-48).
   //
   // `onMessagesScroll` starts the walk, and until this effect existed a scroll
