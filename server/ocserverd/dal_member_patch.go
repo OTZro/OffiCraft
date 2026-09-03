@@ -116,7 +116,7 @@ func mfRefocusSince(v float64) memberField {
 func mfRefocusOp(v string) memberField {
 	return memberField{col: "refocus_op", val: v, insertOnly: true}
 }
-func mfRosterStatus(v string) memberField   { return memberField{col: "roster_status", val: v} }
+func mfRosterStatus(v string) memberField { return memberField{col: "roster_status", val: v} }
 
 func mfCreatedTS(v float64) memberField   { return memberField{col: "created_ts", val: v} }
 func mfReleasedTS(v float64) memberField  { return memberField{col: "released_ts", val: v} }
@@ -226,6 +226,7 @@ func mfLastOpReason(v string) memberField {
 func mfLastOpAt(v float64) memberField {
 	return memberField{col: "last_op_at", val: v, insertOnly: true}
 }
+
 // mfAvatarAttachmentID — insert-only, and its blast radius is WORSE than the
 // usual clobber, which is why it gets its own paragraph rather than sharing the
 // receipt's. ReplaceMemberAvatar / DeleteMemberAvatar are the only update seams
