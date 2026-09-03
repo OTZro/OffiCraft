@@ -12,7 +12,7 @@
 
 ## 2. wire、route 與權限是同一個契約
 
-- `spec/openapi.json` 先於 handler；`bin/gen-ocapi` 產生 `ocapi_gen.go`。route table 在 `routes.go`，它同時承載 auth、`requires`、MCP surface 與 handler；`conformance/routes_manifest.json` 與 spec 是核對來源。新增 endpoint 必須讓這幾個 executable source 同批一致，不能只改 handler。
+- `spec/openapi.json` 先於 handler；`bin/gen-ocapi` 產生 `ocapi_gen.go`。route table 在 `routes.go`，它同時承載 auth、`requires`、MCP surface 與 handler；`conformance/routes_manifest.json` 與 spec 是核對來源。新增 endpoint 必須讓這幾個 executable source 同批一致，不能只改 handler；`TestEveryServedRouteIsInThePermissionManifest`（T-61）把 route table 與 manifest 雙向釘死，漏登記或殘留都會當場紅並指名，例外要走 `exemptRoute` 並具名理由與裁定出處。
 - DTO 的 wire shape 由 `wire.go` 的手寫型別維護；`null`、空字串、缺欄與 `additionalProperties:false` 都是語意。不要因生成 struct 的 `omitempty` 偷掉既定 wire。
 - verified token 的 `sub` 是 caller identity，不採信 request body 的 caller id。`requires` 是唯一 route capability floor；boot-time assertion 要拒絕未知 floor、auth／requires 不一致與漏寫 floor。MCP tool 的 caller、target、作用域必須沿用同一條 route gate，不得借 target 的身分。
 - capability 階梯是 `machine < agent < admin_agent < owner`。`owner`、`admin_agent` 與 `MCPExclude` 的現行分配只以 `routes.go` 和治理測試為準，不在本檔硬編可變端點名單；`/api/mint`、owner 憑證與個人 push 類能力不能因「方便自動化」而下放。

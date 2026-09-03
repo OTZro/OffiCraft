@@ -1055,8 +1055,15 @@ func TestStampMemberPlacementBlockedReReadsTheRow(t *testing.T) {
 	// back would resurrect it into the active roster.
 	removed := *got
 	removed.RosterStatus = RosterStatusRemoved
-	removed.LastOp, removed.LastOpReason, removed.LastOpAt = "", "", 0
 	putTestMember(t, s, removed)
+	// The receipt has to be cleared through its SOLE writer (T-55): zeroing the
+	// three fields on the snapshot above no longer does anything, because a
+	// whole-row write cannot move these columns any more. Left uncleared, the
+	// first stamp's receipt would still be on the row and the assertion below
+	// would be reading it instead of the second stamp's absence.
+	if err := s.dal.SetMemberOpReceipt("m-moved", "", nil, "", "", 0); err != nil {
+		t.Fatalf("clear receipt: %v", err)
+	}
 
 	s.reconcileMu.Lock()
 	s.reconcileTickMemberLocked(stale, now+30)

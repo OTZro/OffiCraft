@@ -376,10 +376,29 @@ func (s *apiServer) foldCommandResult(commandResult map[string]any, trigger, rep
 	m.LastOpAt = commandResultAtEpoch(commandResult["at"])
 	// UNINSTALL CONVERGENCE: an ok uninstall receipt folds the machine
 	// lifecycle intent back to offline (record kept — re-installable).
+	//
+	// 🔴 THIS IS THE ONLY ARM THAT STILL NEEDS THE WHOLE-ROW WRITE (T-55): the
+	// receipt columns left PutMember's SET list, but desired_state has not, so
+	// the ordinary fold below is now a single-column write and this rare arm is
+	// two writes.
+	//
+	// ⚠️ THE ORDER HERE IS NOT A §2.1 CONVERGENCE ARGUMENT, and must not be read
+	// as one. §2.1 picks the order whose failure a RETRY can still see — but a
+	// warden command_result is pushed once and never re-sent, so no retry exists
+	// to see anything. What is chosen instead is the LESS BAD RESIDUE: intent
+	// first, receipt second, so a failure between them leaves the machine
+	// correctly converged with its explanation missing. The other way round
+	// leaves the cockpit stating an uninstall that the lifecycle intent still
+	// contradicts, which is a screen that lies rather than one that is quiet.
 	if m.LastOp == "uninstall" && m.LastOpOK != nil && *m.LastOpOK {
 		m.DesiredState = DesiredStateOffline
+		if err := s.putMember(*m, trigger); err != nil {
+			fmt.Fprintf(os.Stderr,
+				"[monitoring] uninstall convergence failed for member %q: %v\n", memberID, err)
+			return
+		}
 	}
-	if err := s.putMember(*m, trigger); err != nil {
+	if err := s.persistMemberOpReceipt(*m, trigger); err != nil {
 		fmt.Fprintf(os.Stderr,
 			"[monitoring] command_result fold failed for member %q: %v\n", memberID, err)
 	}
@@ -446,7 +465,12 @@ func (s *apiServer) foldWorkerCommandResult(workerID string, commandResult map[s
 	w.LastOpLog = logText
 	w.LastOpReason = reason
 	w.LastOpAt = commandResultAtEpoch(commandResult["at"])
-	if err := s.dal.PutOutsourceWorker(*w); err != nil {
+	// Single write (T-55): this fold mutates the five receipt columns and nothing
+	// else, so the whole-row write it used to end on carried every other column
+	// as freight — and this handler holds outsourceMu while a reconcile tick may
+	// be writing the same row through its own re-read.
+	if err := s.dal.SetMemberOpReceipt(w.ID, w.LastOp, w.LastOpOK, w.LastOpLog,
+		w.LastOpReason, w.LastOpAt); err != nil {
 		fmt.Fprintf(os.Stderr,
 			"[monitoring] worker command_result fold failed for %q: %v\n", workerID, err)
 		return

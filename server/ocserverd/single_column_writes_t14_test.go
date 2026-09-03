@@ -25,6 +25,24 @@ import (
 	"testing"
 )
 
+// The op receipt is FIVE columns behind ONE writer (T-55), so its five registry
+// rows all stamp through this one call and then each check its own column. The
+// values are arbitrary but must be non-zero in every column at once: a row that
+// left one of them on its zero could not tell "the stale upsert clobbered it"
+// from "the stamp never wrote it".
+const (
+	probeReceiptOp     = "start"
+	probeReceiptLog    = "probe log"
+	probeReceiptReason = "probe reason"
+	probeReceiptAt     = float64(4243)
+)
+
+func stampProbeReceipt(d *DAL, id string) error {
+	ok := true
+	return d.SetMemberOpReceipt(id, probeReceiptOp, &ok, probeReceiptLog, probeReceiptReason,
+		probeReceiptAt)
+}
+
 // singleColumnOwnedFields is the registry the guard iterates. Add the entry in
 // the SAME commit that removes a column from PutMember's SET list.
 var singleColumnOwnedFields = []struct {
@@ -112,6 +130,59 @@ var singleColumnOwnedFields = []struct {
 		stale:  func(m *Member) { m.Effort = "" },
 	},
 	{
+		column: "last_op",
+		writer: "SetMemberOpReceipt",
+		stamp:  stampProbeReceipt,
+		want:   probeReceiptOp,
+		read:   func(m Member) any { return m.LastOp },
+		stale:  func(m *Member) { m.LastOp = "" },
+	},
+	{
+		// 🔴 read PROJECTS the *bool instead of returning it. want is compared
+		// with !=, and two pointers are equal only when they are the SAME
+		// pointer — a round-tripped row always carries a fresh one, so handing
+		// the pointer straight back would make this row report a clobber on
+		// every run, for a reason that has nothing to do with the column. The
+		// projection also keeps the THIRD state distinguishable: nil comes back
+		// as a string no bool can equal, so a stale upsert that blanks the
+		// verdict reddens rather than reading as `false`.
+		column: "last_op_ok",
+		writer: "SetMemberOpReceipt",
+		stamp:  stampProbeReceipt,
+		want:   true,
+		read: func(m Member) any {
+			if m.LastOpOK == nil {
+				return "nil"
+			}
+			return *m.LastOpOK
+		},
+		stale: func(m *Member) { m.LastOpOK = nil },
+	},
+	{
+		column: "last_op_log",
+		writer: "SetMemberOpReceipt",
+		stamp:  stampProbeReceipt,
+		want:   probeReceiptLog,
+		read:   func(m Member) any { return m.LastOpLog },
+		stale:  func(m *Member) { m.LastOpLog = "" },
+	},
+	{
+		column: "last_op_reason",
+		writer: "SetMemberOpReceipt",
+		stamp:  stampProbeReceipt,
+		want:   probeReceiptReason,
+		read:   func(m Member) any { return m.LastOpReason },
+		stale:  func(m *Member) { m.LastOpReason = "" },
+	},
+	{
+		column: "last_op_at",
+		writer: "SetMemberOpReceipt",
+		stamp:  stampProbeReceipt,
+		want:   probeReceiptAt,
+		read:   func(m Member) any { return m.LastOpAt },
+		stale:  func(m *Member) { m.LastOpAt = 0 },
+	},
+	{
 		// The OLDEST member of this class and the last one to be registered:
 		// avatar_attachment_id has been out of the SET list since T-c826, with
 		// ReplaceMemberAvatar / DeleteMemberAvatar as its only update seams —
@@ -141,8 +212,8 @@ func TestPutMemberNeverOverwritesSingleColumnOwnedFields(t *testing.T) {
 	// A deleted row is the one mutation the loop below cannot see: the guard
 	// would pass by iterating less. Bump this deliberately when the registry
 	// grows.
-	if len(singleColumnOwnedFields) != 8 {
-		t.Fatalf("singleColumnOwnedFields has %d entries, expected 8. Adding a "+
+	if len(singleColumnOwnedFields) != 13 {
+		t.Fatalf("singleColumnOwnedFields has %d entries, expected 13. Adding a "+
 			"column? Bump this number. REMOVING one? That means a column went "+
 			"BACK into PutMember's DO UPDATE SET — say why in the commit",
 			len(singleColumnOwnedFields))

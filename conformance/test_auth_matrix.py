@@ -1,4 +1,4 @@
-"""Auth matrix — every served route × {none, owner, admin_agent, warden, agents}.
+"""Auth matrix — every manifest row × {none, owner, admin_agent, warden, agents}.
 
 The first conformance batch: a TABLE-DRIVEN status assertion per (route,
 identity) cell, mechanically tied to the committed ``routes_manifest.json``
@@ -1829,8 +1829,10 @@ def test_matrix_requires_match_manifest(
 ) -> None:
     """Mechanical tie to the RBAC table: each matrix row's ``requires`` label —
     the value the whole expectation row is DERIVED from — must equal the
-    server's committed route-table requires. A server requires change reddens
-    this before any cell can silently pass on stale semantics."""
+    ``requires`` the manifest declares. Both sides are committed text, so this
+    catches a manifest edit the matrix did not follow; what catches a
+    ``requires`` change in routes.go is the live cells below, which fire real
+    requests. (T-61's Go gate compares route MEMBERSHIP only, not this column.)"""
     declared = {
         f"{r['method']} {r['path']}": r["requires"] for r in routes_manifest
     }

@@ -1097,8 +1097,14 @@ func TestStampWorkerPlacementBlocked_ReReadsTheRowBeforeWriting(t *testing.T) {
 	// to explain, and writing the snapshot back would resurrect it as assigned.
 	released := readWorker(t, s, "ow-stale")
 	released.Status = WorkerStatusReleased
-	released.LastOp, released.LastOpReason, released.LastOpAt = "", "", 0
 	putWorkerFixture(t, s, released)
+	// Clear the receipt through its SOLE writer (T-55) — the whole-row fixture
+	// write above can no longer move these columns, so zeroing them on the
+	// snapshot would leave the FIRST stamp's receipt in place and the assertion
+	// below would pass or fail on that instead of on the second stamp.
+	if err := s.dal.SetMemberOpReceipt("ow-stale", "", nil, "", "", 0); err != nil {
+		t.Fatalf("clear receipt: %v", err)
+	}
 
 	s.outsourceMu.Lock()
 	s.notifyWorkerSpawn(stale, now+workerSpawnRetrySecs+1)
@@ -1381,6 +1387,14 @@ func TestReconcileWorkerLiveness_ClobberedStartZombieTakeover(t *testing.T) {
 	w.LastOp = reconcileCmdStart
 	w.LastOpReason = "session_already_exists: live session refused clobber"
 	putWorkerFixture(t, s, w)
+	// The receipt reaches the code under test in the VALUE passed below, not off
+	// the row — but the row carried it before T-55 and still should, or the
+	// fixture reads as writing something it does not write. Planted through the
+	// sole writer so the two agree.
+	if err := s.dal.SetMemberOpReceipt("ow-g", w.LastOp, w.LastOpOK, w.LastOpLog,
+		w.LastOpReason, w.LastOpAt); err != nil {
+		t.Fatalf("seed the clobber receipt: %v", err)
+	}
 
 	s.outsourceMu.Lock()
 	s.workerSpawnAt["ow-g"] = now - 5 // recently paced (must not block the reap path)
@@ -1501,6 +1515,14 @@ func TestReconcileWorkerLiveness_LegacyWorkerStartReceiptStillDetectsZombie(t *t
 	w.LastOp = legacyWardenCmdWorkerStart
 	w.LastOpReason = "session_already_exists: live session refused clobber"
 	putWorkerFixture(t, s, w)
+	// The receipt reaches the code under test in the VALUE passed below, not off
+	// the row — but the row carried it before T-55 and still should, or the
+	// fixture reads as writing something it does not write. Planted through the
+	// sole writer so the two agree.
+	if err := s.dal.SetMemberOpReceipt("ow-l", w.LastOp, w.LastOpOK, w.LastOpLog,
+		w.LastOpReason, w.LastOpAt); err != nil {
+		t.Fatalf("seed the clobber receipt: %v", err)
+	}
 	s.outsourceMu.Lock()
 	s.workerSpawnTarget["ow-l"] = ServerSelfHost
 	s.workerReconcileStates["ow-l"] = reconcileState{

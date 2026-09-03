@@ -6,6 +6,7 @@
 
 - `run.sh` 開跑前做 blackbox lint；`bin/ci.sh` 也做同一檢查並在隔離 ocserverd 上完整跑 conformance。不要把「平常不跑」或測試數量寫成文件規則；以 CI／`run.sh` 實際輸出為準。
 - `routes_manifest.json` 是 committed、凍結的 route snapshot；`spec/openapi.json`、`spec/mcp-catalog.json` 與 manifest 是 wire-freeze 資產。改 route、auth、MCP surface 必須 spec-first、owner 過目、測試同批更新；沒有生成器可替代這個裁決。
+- manifest 的 row set 由 Go 側的 `TestEveryServedRouteIsInThePermissionManifest`（T-61）釘回 `routes.go` 的 route table，兩個方向都會紅並指名。本目錄能自己抓到的是**非 `MCPExclude`** 的漏登記（`test_catalog_hash_algorithm` 拿伺服器的 `catalog_hash` 對帳）；**`MCPExclude` 那一族**（`mcp_tool: null`）從這裡看不到，要靠上面那道 Go 閘。
 - manifest 與 OpenAPI operation 集合必須相等；每條 gated route 必須出現在 auth matrix 或有理由的 `SKIP`；每條 happy route 也必須被 happy 表或有理由的 skip 覆蓋。這些是集合檢查，不是手抄數量。
 
 ## 2. 執行與隔離
