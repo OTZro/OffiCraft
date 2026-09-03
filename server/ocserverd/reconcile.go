@@ -1030,7 +1030,7 @@ func (s *apiServer) buildStartFrame(m Member) ([]byte, bool) {
 	if m.RosterStatus != RosterStatusActive {
 		return nil, false
 	}
-	if len(s.secret) == 0 {
+	if len(s.keys.signingSecret()) == 0 {
 		return nil, false
 	}
 	boot, err := s.buildBootContext("", &m)

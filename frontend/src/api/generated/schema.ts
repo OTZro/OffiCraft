@@ -322,6 +322,84 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/signing-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the signing keys: id, when it was made, which one signs.
+         * @description List the server's HS256 signing keys (owner-gated).
+         *
+         *     Every key in the ring VERIFIES tokens; exactly one of them SIGNS new ones. This is what the settings page renders: how many keys exist, when each was created, and which one is signing.
+         *
+         *     🔴 NO KEY MATERIAL, AND NOT EVEN A HASH OF IT, EVER APPEARS HERE. `key_id` is drawn from crypto/rand and stored; it is not a function of the key. A hash-derived identifier would be harmless for a random key and a password oracle for a migrated one, whose key IS `SHA-256` over the owner password (`deriveSecretFromPassword`) — publishing any digest of it would hand out an offline dictionary attack on that password.
+         *
+         *     `created_ts` is `0` for the key an install has been using since before the ring existed: its creation time was never recorded, and clients MUST render that as unknown rather than as the epoch.
+         */
+        get: operations["handle_signing_keys_api_auth_signing_keys_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/signing-keys/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mint a new signing key and hand signing over to it; the old one stays, verifying.
+         * @description Mint a new signing key and put it in charge of signing (owner-gated).
+         *
+         *     This is the transition, not a cut-over. The outgoing key STAYS in the ring and keeps verifying, so every token already in circulation — and every attachment share link — goes on working; it simply never signs again. Tokens minted from this point carry the new key.
+         *
+         *     It takes effect on the NEXT REQUEST: the ring is shared by pointer with the HTTP gate, so no restart and no redeploy is involved. (Within one process — a second server on the same database keeps its old ring until it restarts.)
+         *
+         *     Nothing is revoked here. Revocation is the separate, human-timed `…/{key_id}/remove`.
+         */
+        post: operations["handle_signing_key_rotate_api_auth_signing_keys_rotate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/signing-keys/{key_id}/remove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remove a retired key, revoking everything it signed. Refuses the signing key.
+         * @description Remove a retired signing key — THIS is the revocation, and it has no undo (owner-gated).
+         *
+         *     The moment this returns, every token signed by that key is refused, and every attachment share link produced under it stops working: a share `?sig=` is an HMAC under a key derived from the signing key, so it is governed by the ring too (owner ruling, card rc-cf9c27c07442). There is no grace period and holders are not notified — which is why the timing is a person's decision and never a timer's.
+         *
+         *     ⚠️ Warden credentials carry NO `exp`, so "wait for the old tokens to expire" is not a strategy for them: they are valid until their key leaves the ring. The question to answer before calling this is whether every machine has reconnected, not how many days have passed.
+         *
+         *     The key that is currently SIGNING cannot be removed (409) — rotate first, then remove the one that stepped down. An unknown `key_id` is a 404.
+         */
+        post: operations["handle_signing_key_remove_api_auth_signing_keys_key_id_remove_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/backup-health": {
         parameters: {
             query?: never;
@@ -630,7 +708,15 @@ export interface paths {
          *     authorizes reading THIS ONE blob and nothing else; a bad/foreign sig is
          *     401; ``?sig=`` on any other route is ignored (401 missing credentials).
          *     Like ``?token=``, the param is an auth credential OUTSIDE the OpenAPI
-         *     parameter schema. Permanent by design (no expiry/revocation — beta).
+         *     parameter schema.
+         *
+         *     A sig carries NO EXPIRY and cannot be revoked one link at a time. It is not
+         *     unconditionally permanent, though, and since T-62 it never was: the derivation
+         *     key follows the SIGNING-KEY RING, so a sig keeps verifying while the key that
+         *     produced it is still in the ring, and every sig made under a key dies together
+         *     the moment an owner REMOVES that key (`POST
+         *     /api/auth/signing-keys/{key_id}/remove`). That is the whole revocation story —
+         *     coarse, deliberate, and a person's decision rather than a timer's.
          */
         get: operations["handle_get_chat_attachment_api_chat_attachment__attachment_id__get"];
         put?: never;
@@ -722,17 +808,20 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Mint a permanent single-file share link (?sig= HMAC; grants read of this one attachment only). Returns {url} as a SERVER-RELATIVE path — prefix it with the origin you reach this server on to get a link you can paste to someone. The sig carries NO identity and NO expiry: whoever holds the link reads that one blob without signing in, forever, and it cannot be revoked. Mint it for deliverables you meant to hand over; do not paste it anywhere the blob itself would not belong.
-         * @description Mint the permanent share link for ONE attachment
+         * Mint a single-file share link (?sig= HMAC; grants read of this one attachment only). Returns {url} as a SERVER-RELATIVE path — prefix it with the origin you reach this server on to get a link you can paste to someone. The sig carries NO identity and NO expiry: whoever holds the link reads that one blob without signing in, for as long as the key that signed it is still in the server's signing-key ring. No single link can be withdrawn; the only way to void one is to remove that key (POST /api/auth/signing-keys/{key_id}/remove), which voids every link it signed at once. Mint it for deliverables you meant to hand over; do not paste it anywhere the blob itself would not belong.
+         * @description Mint the share link for ONE attachment
          *     (``GET /api/chat/attachments/<id>/share-link``). GATED like every chat
          *     route (any authenticated principal); 404 for an unknown blob id.
          *
          *     Returns ``{url}`` — the attachment's serve path
          *     (``/api/chat/attachment/<id>``) carrying a ``?sig=`` HMAC-SHA256
          *     credential over exactly that attachment id, signed with a
-         *     domain-separated key derived from the server signing secret. The sig is
-         *     PERMANENT (no expiry, no revocation — owner-accepted beta trade-off)
-         *     and grants NOTHING beyond reading this one blob: a different id, a
+         *     domain-separated key derived from the key that is CURRENTLY SIGNING (see
+         *     `GET /api/auth/signing-keys`). The sig carries no expiry and there is no
+         *     way to revoke one link on its own; what does end it is removing the signing
+         *     key it was made under, which ends every sig made under that key at the same
+         *     instant (T-62, owner ruling rc-cf9c27c07442). It grants NOTHING beyond
+         *     reading this one blob: a different id, a
          *     tampered sig, or any other endpoint stays 401 deny-by-default.
          */
         get: operations["handle_get_chat_attachment_share_link_api_chat_attachments__attachment_id__share_link_get"];
@@ -1420,9 +1509,11 @@ export interface paths {
          *     of band and rate-limited, asking her to have the owner change it. The response
          *     to the caller is unchanged and takes exactly as long as any other refusal.
          *
-         *     The signing secret and the password hash are loaded from the DB settings table
-         *     at boot and updated in place by the owner endpoints; this handler never sees a
-         *     hard-coded secret.
+         *     The signing keys and the password hash are loaded from the DB settings table at
+         *     boot and updated in place by the owner endpoints; this handler never sees a
+         *     hard-coded secret. The keys are a RING (`GET /api/auth/signing-keys`): the token
+         *     minted here is signed by the one key that currently signs, and stays valid while
+         *     that key remains in the ring.
          */
         post: operations["handle_login_api_login_post"];
         delete?: never;
@@ -5794,6 +5885,23 @@ export interface components {
             code?: string;
             /** Password */
             password: string;
+        };
+        /**
+         * SigningKeyDTO
+         * @description ONE signing key, as the outside is allowed to see it: which key it is, when it was made, and whether it is the one signing. There is deliberately no field that could carry key material — not the key, not a fingerprint, not a hash prefix — so "did this leak the key" is answered by the shape of the type rather than by remembering to strip a field at each call site.
+         */
+        SigningKeyDTO: {
+            /** Format: double */
+            created_ts: number;
+            is_signing: boolean;
+            key_id: string;
+        };
+        /**
+         * SigningKeysDTO
+         * @description The whole signing-key ring, oldest first. Every mutating call answers with the FULL ring rather than with just what changed, so the settings page never has to re-fetch to learn the truth after acting.
+         */
+        SigningKeysDTO: {
+            keys: components["schemas"]["SigningKeyDTO"][];
         };
         /**
          * MfaActivateDTO
@@ -10476,6 +10584,149 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuthStatusDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_signing_keys_api_auth_signing_keys_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SigningKeysDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_signing_key_rotate_api_auth_signing_keys_rotate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SigningKeysDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_signing_key_remove_api_auth_signing_keys_key_id_remove_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SigningKeysDTO"];
                 };
             };
             /** @description Validation error (unified error envelope). */

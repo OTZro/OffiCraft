@@ -33,7 +33,7 @@ func newWorkerTestServer(t *testing.T) *apiServer {
 	if err := seedOutOfBox(dal); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	return newAPIServer(dal, NewHub(), []byte("worker-test-secret"), 3600,
+	return newAPIServer(dal, NewHub(), singleKeyring([]byte("worker-test-secret")), 3600,
 		assetRoot(t.TempDir()))
 }
 
@@ -1896,7 +1896,7 @@ func TestReconcileWorkerLiveness_UnknownTargetNamesNoMachine(t *testing.T) {
 // with nothing at all explaining why it never booted.
 func TestNotifyWorkerSpawn_NoSigningSecret_LeavesReceipt(t *testing.T) {
 	s := newWorkerTestServer(t)
-	s.secret = nil
+	s.keys = singleKeyring(nil)
 	connectWarden(t, s, ServerSelfHost)
 	seedMachine(t, s, ServerSelfHost)
 	task := putTaskFixture(t, s, Task{

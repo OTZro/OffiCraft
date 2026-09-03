@@ -11,6 +11,7 @@ import type {
   VersionView,
   ReleaseCheckView,
   BackupHealthView,
+  SigningKeyView,
   AuthStatusView,
   MfaEnrollView,
   MfaStateView,
@@ -94,6 +95,7 @@ import type {
   WireMonSession,
   WireVersion,
   WireBackupHealth,
+  WireSigningKeys,
   WireGlobalContext,
   WireBootDoc,
   WireDocumentHistory,
@@ -114,6 +116,7 @@ import {
   toVersion,
   toReleaseCheck,
   toBackupHealth,
+  toSigningKeys,
   toGlobalContext,
   toBootDoc,
   toDocumentHistory,
@@ -2355,6 +2358,21 @@ let relocationPendingNext = false;
 // has no live agent to wind down, so this is staged rather than derived — same
 // shape as relocationPendingNext, and equally sticky.
 let relocationDeferredNext = false;
+
+// The id shape is PRODUCTION'S, not a short stand-in: the server mints
+// "k-" + 16 hex (keyring.go newKeyID). A mock that models a narrower row than
+// the real one is a mock that hides layout defects from every guard mounted on
+// it — which is exactly what happened the first time this fixture was written
+// with "k-mock0". `created_ts: 0` is likewise the real convention, not a
+// placeholder: it is how an install that predates the ring reports a key whose
+// creation time was never recorded, so the card's "unknown" branch is exercised
+// by default.
+const MOCK_WIRE_SIGNING_KEYS: WireSigningKeys["keys"] = [
+  { key_id: "k-a1b2c3d4e5f60718", created_ts: 0, is_signing: true },
+];
+let mockSigningKeys: WireSigningKeys["keys"] = structuredClone(
+  MOCK_WIRE_SIGNING_KEYS,
+);
 
 export const mockApi: Api = {
   async listMembers(_opts?: { light?: boolean }): Promise<Member[]> {
@@ -4697,6 +4715,49 @@ export const mockApi: Api = {
     return toBackupHealth(wire);
   },
 
+  async getSigningKeys(): Promise<SigningKeyView[]> {
+    return toSigningKeys({ keys: mockSigningKeys });
+  },
+
+  async rotateSigningKey(): Promise<SigningKeyView[]> {
+    // A real rotation: ADD a key, move the signing mark, drop nothing — so the
+    // mock cannot make the card look right while the server behaviour it
+    // stands in for would be wrong.
+    for (const k of mockSigningKeys) k.is_signing = false;
+    mockSigningKeys.push({
+      key_id: `k-${mockSigningKeys.length}${"0123456789abcdef".repeat(2).slice(0, 15)}`,
+      created_ts: Math.floor(Date.now() / 1000),
+      is_signing: true,
+    });
+    return toSigningKeys({ keys: mockSigningKeys });
+  },
+
+  async removeSigningKey(keyId: string): Promise<SigningKeyView[]> {
+    const target = mockSigningKeys.find((k) => k.key_id === keyId);
+    // 🔴 THE SAME ENVELOPE THE WIRE RETURNS, not a plain Error. A mock that
+    // throws bare prose makes `e.message` carry the reason, so a caller reading
+    // the wrong field looks correct in mock mode and shows `http 409 for POST …`
+    // against the real server. That is exactly what happened here, and
+    // frontend/.claude/rules/data-layer.md requires this envelope for the reason
+    // this comment exists.
+    if (!target) {
+      throw mockApiError(
+        `http 404 for POST /api/auth/signing-keys/${keyId}/remove`,
+        404,
+        `no signing key '${keyId}'`,
+      );
+    }
+    if (target.is_signing) {
+      throw mockApiError(
+        `http 409 for POST /api/auth/signing-keys/${keyId}/remove`,
+        409,
+        `key '${keyId}' is the one currently signing and cannot be removed — rotate first, then remove it`,
+      );
+    }
+    mockSigningKeys = mockSigningKeys.filter((k) => k.key_id !== keyId);
+    return toSigningKeys({ keys: mockSigningKeys });
+  },
+
   async getAuthStatus(): Promise<AuthStatusView> {
     return { passwordSet: mockPasswordSet, mfaRequired: mockMfaActive };
   },
@@ -5968,6 +6029,10 @@ export const mockApi: Api = {
 
 // Reset hook for tests / hot-reload determinism (not used by the UI).
 export function __resetMock(): void {
+  // The ring is MUTATED by rotate/remove, so it belongs here: without this a
+  // test that rotates leaves a two-key ring for whatever runs next, and the
+  // failure lands on the innocent test.
+  mockSigningKeys = structuredClone(MOCK_WIRE_SIGNING_KEYS);
   wireMembers = structuredClone(MOCK_WIRE_MEMBERS);
   wireMonitoring = structuredClone(MOCK_WIRE_MONITORING);
   mockBinStatus.clear();

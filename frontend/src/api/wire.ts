@@ -56,9 +56,10 @@ export type WireScheduledMessage = components["schemas"]["ScheduledMessageDTO"];
  * `from_name`) and send time (`GET /api/chat/attachments?with=<member_id>`). */
 export type WireChatGalleryEntry = components["schemas"]["ChatGalleryEntryDTO"];
 
-/** Mirrors `ChatAttachmentShareLinkDTO`: the permanent single-file share link
+/** Mirrors `ChatAttachmentShareLinkDTO`: the single-file share link
  * (`GET /api/chat/attachments/{attachment_id}/share-link`) — the blob's serve
- * path carrying its `?sig=` file-level HMAC credential. */
+ * path carrying its `?sig=` file-level HMAC credential. No expiry; not
+ * permanent — it dies with the signing key it was made under (T-62). */
 export type WireChatAttachmentShareLink =
   components["schemas"]["ChatAttachmentShareLinkDTO"];
 
@@ -329,6 +330,7 @@ export type WireInsight = components["schemas"]["InsightDTO"];
  * `code` names WHICH failure ("" while healthy). Both arrive as bare wire
  * strings; the mapper is where they are narrowed. */
 export type WireBackupHealth = components["schemas"]["BackupHealthDTO"];
+export type WireSigningKeys = components["schemas"]["SigningKeysDTO"];
 
 // ── Resume summary (RESUME SUMMARY panel section, T-8b0d) ─────────────────────
 

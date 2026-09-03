@@ -31,18 +31,53 @@
     tokens carry no `machine_id`. The SSE listener projects observed position from this
     claim (spec/sse.md §5).
 - Verification MUST, in order: check the 3-segment shape; reject any header `alg` other
-  than `HS256` (no `alg:none` downgrade); compare the signature **constant-time**; require a
+  than `HS256` (no `alg:none` downgrade); compare the signature **constant-time** against
+  each key in the signing-key ring (§1.2) until one matches; require a
   numeric `exp` and reject `now >= exp` (expired); require a non-empty `sub`. Failures MUST map to 401 at the HTTP gate.
+  An expired token is expired under every key, so verification MUST stop at the first
+  `exp` failure rather than pay an HMAC per key to reach the same answer. The refusal
+  MUST NOT say WHICH key failed, or how many were tried.
 
-### 1.2 Signing secret — DB settings authority
+### 1.2 Signing keys — DB settings authority, one ring, one signer
 
-The signing secret lives in the DB settings store (`auth.jwt_secret`, base64url of the raw
-key bytes), loaded ONCE at app assembly. It is decoupled from the owner password: a
+The signing keys live in the DB settings store as a RING: `auth.jwt_keys` (a JSON array of
+`{id, key, created_ts}`, the key being base64url of the raw bytes) plus
+`auth.jwt_active_key_id`, which names the ONE key that signs. Every key in the ring
+VERIFIES; only the active one MINTS. The ring is decoupled from the owner password: a
 password change never rotates it, so already-issued tokens keep verifying.
+
+The ring is loaded at app assembly and thereafter held BY POINTER, shared by the minting
+surfaces and by the HTTP gate. Rotation therefore takes effect on the next request —
+there is no restart and no handler rebuild. (This is a reload within ONE process: the DB
+row is the durable authority, but a second server on the same database does not learn of
+a rotation until it restarts.)
+
+Two operator actions, and no timer anywhere:
+
+- **rotate** mints a key, appends it and moves the signing mark. Every existing key stays,
+  so nothing already issued stops working. The outgoing key never signs again.
+- **remove** drops a retired key, and refuses to touch the one that is signing. THIS is
+  the revocation: every token — and every attachment share-link `?sig=` credential, which
+  OpenAPI documents as "derived from the server signing secret" and which is therefore
+  governed by this ring too — produced under that key stops verifying the instant the call returns,
+  with no grace period. It is a human's decision precisely because it has no undo.
+  ⚠️ Warden credentials carry no `exp` (see "Mint surfaces and TTL semantics" below), so
+  "wait for the old tokens to expire" is not a strategy for them: they are valid until
+  their key leaves the ring.
+
+Both actions MUST write the DB BEFORE swapping memory, so a failed write cannot leave a
+process signing with a key no restart could recover.
+
+Key ids MUST be random and persisted, NEVER derived from key material. A hash-derived id
+is harmless for a random key and a password oracle for a migrated one, whose key is
+`SHA-256` over the owner password (provisioning step 2 below).
 
 Provisioning, first match wins:
 
-1. an existing DB `auth.jwt_secret` value (the steady state);
+0. an existing `auth.jwt_keys` ring (the steady state once this install has one);
+1. an existing DB `auth.jwt_secret` value — the pre-ring row, adopted VERBATIM as the
+   ring's first key and given a fresh random id, which is then persisted. The row is not
+   deleted: it is the key every already-issued token is signed with;
 2. one-shot import from a pre-settings-table install's `oc.toml`: an explicit
    `[auth].secret` (UTF-8 bytes) verbatim, else — when the file carries a password — the
    password-DERIVED secret `SHA-256(b"officraft.jwt.hs256.v1:" + password_utf8)`
@@ -189,7 +224,9 @@ ceiling for non-warden agent-token mints.
   Every failed redemption (unknown / expired / already used) is the same flat 401 with no
   distinguishing hint. The legacy `install.sh?token=` surface stays byte-identical
   indefinitely.
-- Token verification is stateless with THREE revocation cuts:
+- Token verification is stateless with FOUR revocation cuts (the fourth arrived with the
+  signing-key ring, §1.2 — and note that unlike the three below it is not a per-token cut:
+  removing a key refuses every token that key signed, at once):
   1. **owner scope — the password floor.** Owner-scope tokens whose `iat` is earlier than
      the DB `auth.password_changed_at` (stamped by `POST /api/auth/change-password`) MUST
      be refused (401).
@@ -320,8 +357,20 @@ ceiling for non-warden agent-token mints.
      Deferral is a POSTPONEMENT and not an accepted permanent design: revisit both rather
      than reading their absence as settled.
 
+  4. **every scope — a signing key leaving the ring.** Removing a key
+     (`POST /api/auth/signing-keys/{key_id}/remove`, §1.2) refuses every token that key
+     signed, whatever its scope, from the next request onward. It is the ONLY cut of the
+     four that is not per-token and not per-principal: it is per KEY, so it takes tokens
+     the operator never enumerated — including `kind="warden"` credentials, which the three
+     cuts above deliberately exempt or cannot reach and which carry no `exp` to expire out
+     of the way. That is why it is a human's decision with no timer and no undo, and why
+     the settings page states the cost before the press. It also ends every attachment
+     share-link `?sig=` produced under that key, which is not a token at all.
+
   For every other agent token — a `kind="warden"` credential, and any token on a member
-  that has never reported waking — expiry stays the only invalidation.
+  that has never reported waking — **expiry is not the only invalidation any more**: cut 4
+  reaches them, and for a warden credential it is the only cut that does. Short of that,
+  expiry remains the only one.
 
 ### 1.4 Credential renewal (`POST /api/machines/renew-credential`)
 

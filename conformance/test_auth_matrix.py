@@ -530,6 +530,25 @@ MATRIX: dict[str, Route] = {
         overrides={"owner": 409},
         body={"password": "conf-wrong-current", "code": "000000"},
     ),
+    # ── Signing-key ring (T-62) ─────────────────────────────────────────────
+    # The read is a plain owner-gated GET: ids and timestamps, never key bytes.
+    "GET /api/auth/signing-keys": Route(requires="owner"),
+    # 🔑 The owner face here REALLY ROTATES, and that is safe rather than
+    # reckless: a rotation ADDS a key and moves the signing mark, leaving every
+    # existing key in the ring. Every credential this harness is holding was
+    # signed by a key that is still there, so every later row in the run keeps
+    # authenticating. (If this row ever starts poisoning the run, the thing that
+    # broke is the transition guarantee itself — which is the point of firing it
+    # for real instead of degrading it.)
+    "POST /api/auth/signing-keys/rotate": Route(requires="owner"),
+    # 404 by design — see DEGRADED. A real target would be a key in the ring,
+    # and removing one revokes every credential it signed, this harness's
+    # included.
+    "POST /api/auth/signing-keys/{key_id}/remove": Route(
+        requires="owner",
+        path="/api/auth/signing-keys/k-no-such-key-t62/remove",
+        overrides={"owner": 404},
+    ),
     "GET /api/settings": Route(requires="admin_agent"),
     "GET /api/push/public-key": Route(requires="owner"),
     "POST /api/push/subscription": Route(
@@ -1728,6 +1747,15 @@ DEGRADED: dict[str, str] = {
         "owner face pinned at 409 (nothing armed): the positive face needs an "
         "armed factor plus a live code, which is the same shared-credential "
         "poisoning. Pinned in the server unit tests instead."
+    ),
+    "POST /api/auth/signing-keys/{key_id}/remove": (
+        "owner face uses an UNKNOWN key id (expects 404): a real target would be "
+        "a key in the live ring, and removing one revokes every token signed by "
+        "it — including the credentials this harness authenticates with, which "
+        "would poison every row after it. The authz faces are fully asserted. "
+        "The removal's own semantics (its tokens refused at the live gate, the "
+        "signing key itself refused with 409) are pinned in the server unit "
+        "tests (keyring_rotation_t62_test.go, api_signing_keys_t62_test.go)."
     ),
     "GET /api/docs/assets/{name}": (
         "probed with a missing asset name (404 across authenticated identities); "

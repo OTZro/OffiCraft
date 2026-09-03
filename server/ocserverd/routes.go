@@ -225,6 +225,39 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Summary:    "Arm the second factor by proving a code from the pending secret.",
 			MCPExclude: true,
 		},
+		// ── Signing-key ring (T-62) ──────────────────────────────────────────
+		// principalOwner + MCPExclude for the same reason the password and
+		// second-factor rows above are: these routes govern the key that
+		// authenticates EVERY caller, the calling agent included. An
+		// admin_agent that could reach them could rotate the key that governs
+		// it, or remove the key its own credential is signed under.
+		{
+			Method:     "GET",
+			Path:       "/api/auth/signing-keys",
+			Handler:    w.HandleSigningKeysApiAuthSigningKeysGet,
+			Auth:       authGated,
+			Requires:   principalOwner,
+			Summary:    "List the signing keys: id, when it was made, which one signs.",
+			MCPExclude: true,
+		},
+		{
+			Method:     "POST",
+			Path:       "/api/auth/signing-keys/rotate",
+			Handler:    w.HandleSigningKeyRotateApiAuthSigningKeysRotatePost,
+			Auth:       authGated,
+			Requires:   principalOwner,
+			Summary:    "Mint a new signing key and hand signing over to it; the old one stays, verifying.",
+			MCPExclude: true,
+		},
+		{
+			Method:     "POST",
+			Path:       "/api/auth/signing-keys/{key_id}/remove",
+			Handler:    w.HandleSigningKeyRemoveApiAuthSigningKeysKeyIdRemovePost,
+			Auth:       authGated,
+			Requires:   principalOwner,
+			Summary:    "Remove a retired key, revoking everything it signed. Refuses the signing key.",
+			MCPExclude: true,
+		},
 		{
 			Method:     "POST",
 			Path:       "/api/auth/mfa/disable",
@@ -739,7 +772,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleGetChatAttachmentShareLinkApiChatAttachmentsAttachmentIdShareLinkGet,
 			Auth:     authGated,
 			Requires: principalMachine,
-			Summary:  "Mint a permanent single-file share link (?sig= HMAC; grants read of this one attachment only). Returns {url} as a SERVER-RELATIVE path — prefix it with the origin you reach this server on to get a link you can paste to someone. The sig carries NO identity and NO expiry: whoever holds the link reads that one blob without signing in, forever, and it cannot be revoked. Mint it for deliverables you meant to hand over; do not paste it anywhere the blob itself would not belong.",
+			Summary:  "Mint a single-file share link (?sig= HMAC; grants read of this one attachment only). Returns {url} as a SERVER-RELATIVE path — prefix it with the origin you reach this server on to get a link you can paste to someone. The sig carries NO identity and NO expiry: whoever holds the link reads that one blob without signing in, for as long as the key that signed it is still in the server's signing-key ring. No single link can be withdrawn; the only way to void one is to remove that key (POST /api/auth/signing-keys/{key_id}/remove), which voids every link it signed at once. Mint it for deliverables you meant to hand over; do not paste it anywhere the blob itself would not belong.",
 			// This row used to read `MCPExclude: true, // a UI convenience
 			// seam, not an agent tool`. That call is REVERSED here, on
 			// purpose: minting is an agent seam too. An agent that produces a
@@ -752,9 +785,12 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			// principal already reached this route over REST, so no caller
 			// gains a capability it lacked. What changes is discoverability —
 			// and that is not risk-neutral: minting will happen far more often
-			// now, and every minted link is permanent, unrevocable, and
-			// credential-less (sharesig.go). Read that file before widening
-			// this seam any further.
+			// now, and every minted link is credential-less and carries no
+			// expiry (sharesig.go). Since T-62 it is not unrevocable: a link
+			// dies when the key that signed it leaves the signing-key ring —
+			// which is a COARSE revocation (it takes every link that key
+			// signed with it) and not a per-link one. Read that file before
+			// widening this seam any further.
 			MCPTool: "get_chat_attachment_share_link",
 		},
 		{

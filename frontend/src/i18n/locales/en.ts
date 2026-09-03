@@ -615,7 +615,7 @@ export const en: Dict = {
     themeImportLinkWorking: "Fetching…",
     themeImportLinkFailed: "Could not fetch that link",
     themeImportLinkShareNote:
-      "A share link carries no identity, never expires and cannot be revoked — anyone who can reach this studio and has the link can read the theme, including any private images inside it.",
+      "A share link carries no identity and never expires — anyone who can reach this studio and has the link can read the theme, including any private images inside it. A single link cannot be withdrawn; the only way to void one is coarse: remove the key that signed it under Settings › Signing keys, which voids every link that key signed at once.",
     themeImportDup: "A custom theme with that id already exists",
     themeImportReadFailed: "Could not read that file",
     themeLimitReached: "You've reached the custom-theme limit",
@@ -787,7 +787,10 @@ export const en: Dict = {
     galleryClose: "Close gallery",
     galleryPreviewHint: "Preview in a new tab",
     galleryDownloadHint: "Download",
-    // Permanent single-file share link (?sig= HMAC) — copied to the clipboard.
+    // Single-file share link (?sig= HMAC) — copied to the clipboard. No expiry,
+    // but not permanent: it follows the signing-key ring, so removing the key
+    // that signed it voids it (T-62). Kept in step with its Chinese twin in
+    // zh.ts — the first pass fixed one and not the other.
     copyShareLink: "Copy share link",
     shareLinkCopied: "Link copied",
     shareLinkCopyFailed: "Failed to copy link",
@@ -1472,6 +1475,31 @@ export const en: Dict = {
   // indicator and the monitor page's card. The PRIMARY sentence is always
   // derived from `code` (the reason* keys below); the server's `detail` is
   // shown only as secondary diagnostic text.
+  // Signing-key rotation (T-62)
+  signingKeys: {
+    title: "Signing keys",
+    intro:
+      "The server signs login credentials with a signing key. Several can exist at once: only one signs, the rest still verify — that is the transition window when a key is being replaced.",
+    loading: "Loading…",
+    signingBadge: "signing",
+    retiredBadge: "verify only",
+    createdLabel: "Created",
+    createdUnknown: "In use since before this was recorded",
+    countLabel: (n: number) => `${n} key${n === 1 ? "" : "s"} in the ring`,
+    rotateButton: "Create a new key",
+    rotateHint:
+      "Mints a new key and hands signing over to it. Nobody is logged out: the old key stays and keeps verifying, it just never signs again. Takes effect immediately — no restart.",
+    removeButton: "Remove",
+    removeConfirmTitle: "Remove this key?",
+    removeConfirmBody:
+      "Everything this key signed stops working the moment you confirm, with no grace period and no notice to anyone: credentials signed by it are refused, and file share links produced under it break too.",
+    removeConfirmWarden:
+      "⚠️ Machine (warden) credentials carry no expiry and never lapse on their own. What decides whether this is safe is whether every machine has reconnected — not how many days have passed.",
+    removeConfirmCancel: "Cancel",
+    removeConfirmOk: "Remove it",
+    actionFailed: "That action did not go through, and the server gave no reason.",
+    emptyState: "The keys could not be read.",
+  },
   backupHealth: {
     title: "Backup health",
     // `unknown` is not a quieter `healthy` — it means "we cannot tell", and
