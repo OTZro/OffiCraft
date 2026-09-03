@@ -13,7 +13,7 @@
 // `<img>` 不解碼、`getBoundingClientRect()` 全 0，所以任何「載入前後高度相同」的
 // 斷言在那一層**恆真**。這是 harness 的界限，不是取捨 —— 所以護欄在這裡。
 //
-// MUTANT（已驗紅，未截斷輸出在 DELETE-CORRECTIONS-REPORT.md）：把
+// MUTANT（已驗紅，摘要見 commit aea7182 的 [test] 段）：把
 // `.chat__msg-image` 的 `height: 220px` 換回 `height: auto; max-height: 320px`
 // ⇒ (1) 立刻紅在「這一列的高度差必須是 0」上。
 //

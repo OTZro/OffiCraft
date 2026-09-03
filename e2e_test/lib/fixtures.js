@@ -24,12 +24,14 @@ const ZIP_EMPTY_B64 = 'UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==';
 // A real PNG of a GIVEN SIZE, generated rather than pasted (3KB of base64 in
 // this file buys nothing a `zlib` call does not).
 //
-// 🔴 WHY A BIG ONE EXISTS AT ALL. A chat thumbnail has NO intrinsic size in the
-// DOM until its bytes decode — `.chat__msg-image` is width/height:auto — so an
-// undecoded image is a ZERO-HEIGHT row that grows to its real height later.
-// That is the whole mechanism behind 「上方晚載入的內容把目標擠走」, and a
-// fixture built on PNG_1x1_B64 cannot reproduce it: 1px of growth is inside
-// every tolerance in the suite. A spec that needs a reflow needs this.
+// 🔴 WHY A BIG ONE EXISTS AT ALL. It has to be real bytes that take real time
+// to arrive and decode: PNG_1x1_B64 lands in one segment, so a spec that wants
+// to hold an image OPEN in the undecoded state has nothing to hold.
+// ⚠️ It no longer reproduces a REFLOW. It used to — `.chat__msg-image` was
+// width/height:auto, so an undecoded image was a zero-height row that grew to
+// its real height later, and that was the whole mechanism behind 「上方晚載入
+// 的內容把目標擠走」. Since T-48 gave the thumbnail a fixed 220px box the row
+// is its final height before the bytes arrive, and the growth is 0px.
 function pngOfSize(w, h) {
   const zlib = require('zlib');
   const chunk = (type, data) => {
@@ -71,7 +73,7 @@ function pngOfSize(w, h) {
   ]).toString('base64');
 }
 
-/** 400x300 — renders at 300x225 under `.chat__msg-image`'s max-width. */
+/** 400x300 — drawn 293x220 inside `.chat__msg-image`'s fixed box. */
 const PNG_400x300_B64 = pngOfSize(400, 300);
 
 // A per-call unique display name. run_all always starts from a FRESH DB, but

@@ -1353,8 +1353,8 @@ export function ChatArea({
     setLatestInView(isLatestRowInView(el));
   }
   // Declared AFTER the scroll-position reactor above so it runs last in the
-  // commit: the reactor's own at-bottom auto-follow does a plain
-  // `scrollIntoView`, and this replaces it with the settling landing.
+  // commit: the reactor's own at-bottom auto-follow scrolls the zero-height
+  // sentinel, and this replaces it with a landing on the last message ROW.
   useEffect(() => {
     if (!session.pendingLatestScroll) return;
     if (messages.length === 0) return;
