@@ -27,11 +27,13 @@
 //                  there is nothing for a share link to point at and none is
 //                  rendered.
 //   - `diffParams` — a COMPARISON, named by the two addresses a /diff url spells
-//                  (T-59). No blob, so no 下載 and no file-level share link: the
-//                  url the reader clicked IS the shareable thing, and minting a
-//                  second link for a comparison that is not a file would be a
-//                  link to nothing. The body is `DiffScreen` — the same compare
-//                  screen the standalone /diff page draws.
+//                  (T-59). No blob, so no 下載 and no FILE-level share link —
+//                  there is no blob for one to point at. What it does carry is
+//                  the comparison's OWN external link, minted by
+//                  `GET /api/diff/share-link` and copied by the same icon
+//                  control the file uses (DiffShareLinkButton). The body is
+//                  `DiffScreen` — the same compare screen the standalone /diff
+//                  page draws.
 //
 // T-7e68 — ZOOM MUST AFFECT LAYOUT. A `transform: scale()` on the <img> paints
 // bigger pixels but leaves the layout box the original size, so the wrap's
@@ -67,6 +69,7 @@ import { attachmentShareLinkUrl, copyAttachmentShareLink } from "../lib/shareLin
 import type { DiffParams } from "../lib/diffLink";
 import { useEscapeLayer } from "../lib/useEscapeLayer";
 import { DiffScreen } from "./DiffScreen";
+import { DiffShareLinkButton } from "./DiffShareLinkButton";
 import { Markdown } from "./Markdown";
 import "./md-preview.css";
 import {
@@ -163,10 +166,10 @@ type MarkdownPreviewOverlayProps = {
   | {
       /** A COMPARISON, addressed by the two sides the compare url named (T-59).
        * There is no blob here at all — a comparison stopped being a file the
-       * day it became a url — so there is nothing to download and nothing to
-       * mint a file-level share link for: the url the reader clicked IS the
-       * shareable thing. The body is `DiffScreen`, the same compare screen the
-       * standalone page draws. */
+       * day it became a url — so there is nothing to download and no
+       * FILE-level share link to mint. The comparison's own external link is
+       * a different thing and IS offered, by DiffShareLinkButton. The body is
+       * `DiffScreen`, the same compare screen the standalone page draws. */
       diffParams: DiffParams;
       url?: never;
       attachmentId?: never;
@@ -702,6 +705,27 @@ export function MarkdownPreviewOverlay({
             </span>
           )}
           <div className="md-preview__actions">
+            {/* T-59 — the EXTERNAL link to this comparison, in the same slot
+             * and the same skin as the file-level share control below. The
+             * owner is looking at the comparison here and wants to hand it to
+             * someone outside the studio; until now that was a CLI action only.
+             *
+             * 🔴 A SESSION IS STRUCTURAL HERE. This overlay is only ever
+             * mounted with `diffParams` by DiffModalHost, and DiffModalHost is
+             * only mounted inside the studio, behind AuthGate. The standalone
+             * page (DiffPage) never mounts this overlay at all, so the
+             * unauthenticated reader of a ?sig= link cannot reach this button
+             * — no runtime gate can regress into offering it to them.
+             *
+             * The `sig` the clicked link may have carried rides along in
+             * `diffParams` and is dropped by the mint; the server signs the
+             * addresses and labels, never a signature. */}
+            {diffParams !== undefined && (
+              <DiffShareLinkButton
+                params={diffParams}
+                className="md-preview__download md-preview__share"
+              />
+            )}
             {/* Share needs a STORED blob id. Download only needs bytes, so it
              * also serves a staged `imageSrc`. An inline text source has
              * neither — nothing is fabricated for it. */}

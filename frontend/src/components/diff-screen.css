@@ -72,3 +72,37 @@
   margin: 0 auto;
   min-width: 0;
 }
+
+/* ── 這份比較的對外連結 (T-59, owner 2026-09-03「1. 用圖示」) ───────────────
+ * Drawn ONLY on the internal flavour of this page — see DiffPage.tsx for why
+ * the signature is the gate. The look is the preview overlay's icon control
+ * (.md-preview__download), re-stated in this stylesheet rather than borrowed
+ * from md-preview.css: this page deliberately does not import the overlay's
+ * CSS, and it is the only page in the cockpit that has to draw for a reader
+ * with no session. */
+.diff-page__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+.diff-page__share {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-sunken);
+  color: var(--color-text);
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
+}
+.diff-page__share:hover {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}

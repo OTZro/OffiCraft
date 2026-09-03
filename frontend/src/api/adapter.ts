@@ -2505,6 +2505,21 @@ export interface Api {
    */
   getDiff(params: DiffParams): Promise<DiffPairView>;
   /**
+   * Mint the EXTERNAL link to one comparison (`GET /api/diff/share-link`,
+   * T-59) — the same `/diff` page url plus the server's `?sig=`, which opens it
+   * for a reader who has no account at all.
+   *
+   * Server-RELATIVE, exactly like `getChatAttachmentShareLink`: only the
+   * browser knows the public origin, so the caller absolutizes
+   * (`lib/shareLink.ts`).
+   *
+   * `params.sig` is IGNORED — a signature is what this call produces, never an
+   * input to it. Requires a session: it is gated like every other route here,
+   * which is why the control that calls it is only ever drawn where one is
+   * certain (see components/DiffShareLinkButton.tsx).
+   */
+  getDiffShareLink(params: DiffParams): Promise<string>;
+  /**
    * Restore ONE retained revision over the LIVE document (destructive — the
    * current text becomes just another retained revision). Returns the restored
    * revision DTO; the caller re-reads the document itself, which is the only

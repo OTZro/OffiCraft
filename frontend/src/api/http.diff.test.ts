@@ -11,9 +11,15 @@
 //   4. every non-2xx becomes an ApiError carrying the unified error envelope;
 //   5. a side the server marks `gone` survives the mapping as `gone`, not as an
 //      empty text — the compare screen branches on exactly that.
+//
+// The MINT (`GET /api/diff/share-link`) is the other half of the same feature
+// and is pinned at the bottom of this file, in both faces — the http adapter's
+// and the offline mock's.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { httpApi } from "./http";
+import { mockApi } from "./mock";
+import { DIFF_PATH, parseDiffParams } from "../lib/diffLink";
 import { ApiError } from "./errors";
 import { codeForStatus } from "./errorCodes";
 import { AUTH_EXPIRED_EVENT } from "./client";
@@ -143,5 +149,77 @@ describe("getDiff", () => {
     window.removeEventListener(AUTH_EXPIRED_EVENT, expired);
     expect(expired).toHaveBeenCalledTimes(1);
     expect(localStorage.getItem(TOKEN_KEY)).toBeNull();
+  });
+});
+
+// The MINT (`GET /api/diff/share-link`, T-59) — the external, signed flavour of
+// the same url. Unlike the read above it DOES ride the typed client, so what is
+// pinned here is the query it asks for and the one value it must never forward.
+describe("getDiffShareLink", () => {
+  const MINTED = "/diff?before=att-0123456789ab&after=doc%3Ax&sig=server-made";
+
+  // The typed openapi-fetch client hands `fetch` a Request, not a url string —
+  // reading `calls[0][0]` as a string stringifies the object instead.
+  const asked = (fetchMock: { mock: { calls: unknown[][] } }) =>
+    new URL((fetchMock.mock.calls[0][0] as Request).url, "http://x");
+
+  it("asks for both sides and the labels, and returns the server-relative url", async () => {
+    const fetchMock = stubFetch(ok({ url: MINTED }));
+
+    const url = await httpApi.getDiffShareLink({
+      ...PARAMS,
+      labelBefore: "改動前",
+      labelAfter: "改動後",
+    });
+
+    expect(url).toBe(MINTED);
+    const sent = asked(fetchMock);
+    expect(sent.pathname).toBe("/api/diff/share-link");
+    expect(sent.searchParams.get("before")).toBe(PARAMS.before);
+    expect(sent.searchParams.get("after")).toBe(PARAMS.after);
+    expect(sent.searchParams.get("label_before")).toBe("改動前");
+    expect(sent.searchParams.get("label_after")).toBe("改動後");
+  });
+
+  it("never forwards a signature — the signature is what this call PRODUCES", async () => {
+    const fetchMock = stubFetch(ok({ url: MINTED }));
+
+    await httpApi.getDiffShareLink({ ...PARAMS, sig: "one-the-caller-was-holding" });
+
+    const sent = asked(fetchMock);
+    // The route declares four query parameters and `sig` is not one of them:
+    // asking the server to sign a query that already carries a signature is a
+    // question it was never given.
+    expect(sent.searchParams.get("sig")).toBeNull();
+    expect(sent.searchParams.get("label_before")).toBeNull();
+  });
+
+  it("rejects with an ApiError rather than a url the caller would paste", async () => {
+    stubFetch(refused(422));
+    await expect(httpApi.getDiffShareLink(PARAMS)).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+// The OFFLINE cockpit's face of the same mint. It has no secret and therefore
+// no verifiable credential, so what it owes is the SHAPE: a /diff url the
+// compare screen's own parser reads back, carrying a sig — otherwise the copy
+// control cannot be exercised offline at all.
+describe("mockApi.getDiffShareLink", () => {
+  it("mints a /diff url that parses back, with a sig and without the caller's", async () => {
+    const url = await mockApi.getDiffShareLink({
+      ...PARAMS,
+      labelBefore: "改動前",
+      sig: "one-the-caller-was-holding",
+    });
+
+    const parsed = parseDiffParams(url.slice(url.indexOf("?")));
+    expect(url.startsWith(DIFF_PATH)).toBe(true);
+    expect(parsed).toMatchObject({
+      before: PARAMS.before,
+      after: PARAMS.after,
+      labelBefore: "改動前",
+    });
+    expect(parsed?.sig).toBeTruthy();
+    expect(parsed?.sig).not.toBe("one-the-caller-was-holding");
   });
 });

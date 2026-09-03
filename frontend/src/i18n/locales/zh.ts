@@ -30,6 +30,12 @@ export const zh = {
     openSide: (label: string) => `單獨打開「${label}」`,
     tooLargeLead: "內容太長，無法逐行比對（",
     tooLargeTail: " 行）。",
+    // 這份比較的對外連結（server 簽章，沒有帳號的人也打得開）。owner 2026-09-03
+    // 定調「1. 用圖示」，所以這三句就是這個控制項的全部名字；失敗那句一定要
+    // 有——沒複製成功的畫面不可以長得跟複製成功一樣。
+    copyShareLink: "複製對外連結",
+    shareLinkCopied: "已複製對外連結",
+    shareLinkCopyFailed: "複製連結失敗",
   },
   // ── 即時連線中斷提示（components/ConnectionBanner）──
   // 這條橫幅存在的理由只有一個:連線死掉的畫面跟「沒有新消息」的畫面長得一模

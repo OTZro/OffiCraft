@@ -2676,6 +2676,31 @@ export const httpApi: Api = {
     return fetchDiffPair(params);
   },
 
+  async getDiffShareLink(params: DiffParams): Promise<string> {
+    // GET /api/diff/share-link?before=&after=[&label_before=][&label_after=]
+    // -> {url}: the /diff page path carrying the server's ?sig= HMAC over all
+    // four values. Unlike getDiff this one DOES ride the typed client — it is
+    // answered only for a session, so a 401 here really is a dead session and
+    // the middleware's reading of it is the right one.
+    //
+    // `params.sig` is deliberately not forwarded: the signature is the OUTPUT.
+    // Sending one back would ask the server to sign a query that includes a
+    // signature, which is not a query this route declares.
+    const wire = unwrap(
+      await client.GET("/api/diff/share-link", {
+        params: {
+          query: {
+            before: params.before,
+            after: params.after,
+            ...(params.labelBefore ? { label_before: params.labelBefore } : {}),
+            ...(params.labelAfter ? { label_after: params.labelAfter } : {}),
+          },
+        },
+      }),
+    );
+    return wire.url;
+  },
+
   async restoreDocumentHistory(
     kind: DocumentKind,
     key: string,

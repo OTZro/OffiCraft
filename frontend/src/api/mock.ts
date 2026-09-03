@@ -171,7 +171,7 @@ import {
   SEED_TASK_UNBLOCKED_MD,
 } from "./seeds";
 import { mockApiError } from "./errorCodes";
-import type { DiffParams } from "../lib/diffLink";
+import { formatDiffUrl, type DiffParams } from "../lib/diffLink";
 
 /** The offline cockpit's compare fixture — two texts that differ by one edited
  * line and one added line, so both the line-level rows and the character-level
@@ -5974,6 +5974,21 @@ export const mockApi: Api = {
       before: side(params.before, params.labelBefore, MOCK_DIFF_BEFORE),
       after: side(params.after, params.labelAfter, MOCK_DIFF_AFTER),
     };
+  },
+
+  async getDiffShareLink(params: DiffParams): Promise<string> {
+    // Mock face: the same URL SHAPE as the BE (the /diff page path + ?sig=)
+    // with a deterministic fake sig — never a verifiable credential (no secret
+    // in mock mode; the copy-link UI just needs a resolvable string). Any sig
+    // the caller happened to be holding is dropped, exactly as the real route
+    // drops it: the signature is what this call MINTS.
+    return formatDiffUrl({
+      before: params.before,
+      after: params.after,
+      labelBefore: params.labelBefore,
+      labelAfter: params.labelAfter,
+      sig: "mock-diff-share-sig",
+    });
   },
 
   async getDocumentSeed(

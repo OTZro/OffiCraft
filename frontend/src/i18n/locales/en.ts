@@ -32,6 +32,13 @@ export const en: Dict = {
     openSide: (label: string) => `Open "${label}" on its own`,
     tooLargeLead: "Too long to compare line by line (",
     tooLargeTail: " lines).",
+    // The external, server-signed link to THIS comparison. Icon-only control
+    // (owner 2026-09-03: 「1. 用圖示」), so these three strings are the whole
+    // accessible name — and the failure one has to exist, because a copy that
+    // did not happen must never look like one that did.
+    copyShareLink: "Copy external link",
+    shareLinkCopied: "External link copied",
+    shareLinkCopyFailed: "Could not copy the link",
   },
   connection: {
     lostTitle: "Live updates disconnected",
