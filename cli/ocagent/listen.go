@@ -802,9 +802,16 @@ func fetchChat(client httpClient, cfg Config, selfID string) chatFetch {
 				// next drain tries again. That is the safe direction, but SILENCE
 				// IS NOT: a drain that fetched nothing looks exactly like a drain
 				// that found nothing, and the reader would conclude there was no
-				// new chat. seeds/boot_sequence.md tells the agent that a backfill
-				// which came up short always announces itself first — this is the
-				// case that used to make that sentence false.
+				// new chat.
+				//
+				// This used to cite a sentence in seeds/boot_sequence.md as its
+				// reason. That sentence was rewritten out of the seed in this same
+				// branch (d0306390) while this comment kept pointing at it — the
+				// citation outlived what it cited, silently, which is the exact
+				// failure this line exists to prevent, one level up. The reason is
+				// therefore stated here instead of borrowed: whatever the seed
+				// happens to say today, a fetch that answered nothing must not be
+				// indistinguishable from a conversation that held nothing.
 				return chatFetch{stop: fmt.Sprintf(
 					"[ocagent] chat: 補印一頁都沒撈到（HTTP %d）—— 這不是「沒有新訊息」，"+
 						"是這次沒問到。未讀原封不動，下一次補印會再試；等不及就用 get_chat 自己撈。\n",
@@ -1352,9 +1359,20 @@ func reportChatRead(client httpClient, cfg Config, printed []map[string]any, war
 // forwards it and every copy becomes a model turn (cli/ocwarden's
 // actionableCodexListenerLine). One line per flap of a flapping endpoint is the
 // same unbounded-turn failure this ticket exists to remove. So the line is said
-// once and made to cover the whole episode instead: it states up front that the
-// batch WILL keep reprinting, which is the explanation every later reprint needs
-// and the reason none of them needs its own.
+// ONCE PER PROCESS and made to carry the explanation forward: it states up front
+// that the batch WILL keep reprinting until a receipt lands, which is the
+// explanation every later reprint needs and the reason none of them needs its own.
+//
+// 🔴 SAY THE COST OUT LOUD, because "once per process" is not "once per outage"
+// and the two were conflated here until the seventeenth review separated them.
+// The chat-fault line one screen up IS per-outage (drainWarner.chatFaultOpen,
+// plus a line when it clears). This one is not, and the difference is deliberate
+// but it is NOT free: recover, then fail a SECOND time, and the reprints come
+// back with nothing said at all. What makes that survivable is only that the
+// first line already told the reader this warning does not repeat — a reader who
+// missed that line gets no second chance. If you ever find yourself wanting the
+// per-outage shape here too, the machinery is already next door; what stopped it
+// was the codex turn budget, not the difficulty.
 func warnMarkReadFailed(warn *drainWarner, out io.Writer, peer string, status int) {
 	if out == nil {
 		return

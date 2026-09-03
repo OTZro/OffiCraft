@@ -62,10 +62,17 @@ type listener struct {
 	cursorPath string
 	winddown   *windDownHook
 	recycle    *recycleHook
-	// markWarn is the once-per-process latch for a mark-read receipt that did
-	// not land. It is NOT a chat ledger: what this listener has already surfaced
-	// is the server's unread set and nothing else (T-48, rc-224dee5770dd).
-	markWarn *drainWarner
+	// drainWarn holds the drain's two DIFFERENT latches — a mark-read receipt
+	// that did not land (once per PROCESS) and a total fetch fault (once per
+	// OUTAGE, with a line when it clears). The field was called markWarn back
+	// when there was only the first one; the second arrived and the name did
+	// not follow, which is how a reader ends up believing there is one latch
+	// with one lifetime. There are two, and their lifetimes differ on purpose —
+	// see warnMarkReadFailed and noteChatFetchFault for which is which and why.
+	//
+	// It is NOT a chat ledger: what this listener has already surfaced is the
+	// server's unread set and nothing else (T-48, rc-224dee5770dd).
+	drainWarn *drainWarner
 	// ack is the delivery gate for chat batches: non-nil ONLY when the parent
 	// asked for acks (the codex sidecar). nil ⇒ a printed line counts as
 	// delivered, which is the claude path and must stay byte-for-byte as it was.
@@ -611,10 +618,10 @@ func (l *listener) connectOnce(ctx context.Context) (opened, activity, selfExit 
 // receipt is the only thing that takes a row out of it. A caller therefore has
 // no answer left to pass in and no way to get it wrong.
 func (l *listener) drainChatNow() int {
-	if l.markWarn == nil {
-		l.markWarn = &drainWarner{}
+	if l.drainWarn == nil {
+		l.drainWarn = &drainWarner{}
 	}
-	return drainChat(l.api, l.cfg, l.out, l.markWarn, l.ack)
+	return drainChat(l.api, l.cfg, l.out, l.drainWarn, l.ack)
 }
 
 // run is the always-online listen loop. It blocks until ctx is cancelled or a self-exit
@@ -765,7 +772,7 @@ func cmdListen(cfg Config, env func(string) string, once bool, out io.Writer) in
 		cursorPath:       cursorPath(cfg),
 		winddown:         newWindDownHook(api, cfg, out),
 		recycle:          newRecycleHook(api, cfg, out),
-		markWarn:         &drainWarner{},
+		drainWarn:        &drainWarner{},
 		ack:              newAckGate(env, os.Stdin),
 		replySeen:        loadReplyCardSeen(replyCardSeenPath(cfg)),
 		taskSnaps:        map[string]taskSnap{},
