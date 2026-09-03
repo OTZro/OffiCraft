@@ -695,3 +695,85 @@ func TestMigration00068UpDownUpIsStable(t *testing.T) {
 	// direction, so a rebuild that only remembers it once shows up here.
 	migration00068AssertCodenameIndex(t, db, "staff", "second-up")
 }
+
+// 🔴 THE HAND LIST IS A CLOSED LOOP UNTIL THIS TEST EXISTS.
+//
+// migration00068Columns() is enumerated by hand ON PURPOSE (see its own comment):
+// a rebuild that forgot a column then disagrees with the list instead of quietly
+// following the mistake. That catches one direction and one only —
+// "the migration dropped a column THE LIST KNOWS ABOUT".
+//
+// It cannot catch the other direction, and that is the one that loses data:
+// SOMEBODY ADDS A 36th COLUMN TO member IN AN EARLIER MIGRATION. The list does
+// not know about it, the INSERT…SELECT below does not name it, and every
+// assertion in this file compares the list against itself — so the rebuild drops
+// the column for every existing row and nothing goes red. The real schema had
+// never entered the comparison at all.
+//
+// That is not hypothetical here. Merge order for this package is serialised and
+// this rebuild is deliberately LAST (a migration numbered below the database's
+// current version refuses to start the server at all), so every column added by
+// anything that lands first passes through this rebuild. As of 2026-09-03 there
+// is exactly one such change in flight: #387 adds member.restart_after_stop.
+//
+// So this test is the one place the LIVE schema meets the list.
+func TestMigration00068ColumnListMatchesTheLiveSchema(t *testing.T) {
+	db := migration00068World(t)
+
+	rows, err := db.Query(`SELECT name FROM pragma_table_info('member')`)
+	if err != nil {
+		t.Fatalf("pragma_table_info(member): %v", err)
+	}
+	defer rows.Close()
+	live := map[string]bool{}
+	var liveOrder []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan column name: %v", err)
+		}
+		live[name] = true
+		liveOrder = append(liveOrder, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate columns: %v", err)
+	}
+	if len(liveOrder) == 0 {
+		t.Fatalf("pragma_table_info returned no columns for member — the query, not the schema, is wrong")
+	}
+
+	listed := map[string]bool{}
+	for _, c := range migration00068Columns() {
+		listed[c] = true
+	}
+
+	var missingFromList, missingFromSchema []string
+	for _, c := range liveOrder {
+		if !listed[c] {
+			missingFromList = append(missingFromList, c)
+		}
+	}
+	for _, c := range migration00068Columns() {
+		if !live[c] {
+			missingFromSchema = append(missingFromSchema, c)
+		}
+	}
+
+	// The message has to tell whoever tripped it WHAT BREAKS and WHAT TO DO.
+	// "not equal" alone gets ignored: the person who added the column has no
+	// reason to think this file is any of their business.
+	if len(missingFromList) > 0 {
+		t.Errorf("member has %d column(s) this migration does not know about: %s\n"+
+			"⇒ You added a column to `member`. Update migration00068Columns() AND the "+
+			"INSERT…SELECT in migrations/%05d_member_kind_assistant_to_staff.sql (both "+
+			"directions, Up and Down) — otherwise that rebuild COPIES THE TABLE WITHOUT "+
+			"YOUR COLUMN and every existing row silently loses its value.",
+			len(missingFromList), strings.Join(missingFromList, ", "), migration00068Version)
+	}
+	if len(missingFromSchema) > 0 {
+		t.Errorf("migration00068Columns() names %d column(s) that member does not have: %s\n"+
+			"⇒ Either the column was dropped by an earlier migration and this list is stale, "+
+			"or the name is misspelled. The rebuild would fail on it.",
+			len(missingFromSchema), strings.Join(missingFromSchema, ", "))
+	}
+}
