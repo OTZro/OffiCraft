@@ -9,6 +9,7 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
@@ -353,6 +354,66 @@ func decodeChatAttachment(dataB64, filename, mimeType string) (*ChatAttachment, 
 	return resolveChatAttachment(raw, filename, resolved)
 }
 
+// chatAttachmentDiffMime marks a DIFF attachment: not a document, but a
+// POINTER PAIR naming the two blobs a reader wants compared (owner 2026-09-03,
+// c-95717eb161b3 — 「可以指定兩個文件位置，就可以跳出我們這個 diff 的畫面 …
+// 實際上是兩個文件連結」). Links rather than copies, so the two sides stay
+// openable on their own and nothing is stored twice.
+//
+// The type is carried by the MIME and nothing else. Not the filename, not the
+// extension, not a marker inside the label: those are read by eyes, and this
+// repo already has one identifier — `ta-` in chat text — that nothing parses
+// and everyone tracks by hand.
+//
+// ⚠️ NO `+json` SUFFIX, though that is the conventional spelling for a vendor
+// JSON type, and the reason is measured rather than stylistic: the upload seam
+// takes the type in a QUERY PARAMETER (`?mime=`), where `+` decodes to a SPACE.
+// `ocagent` escapes it (url.Values.Encode), but anything hand-built — a curl
+// line copied out of a doc, a test — stores the blob under
+// "application/vnd.officraft.diff json" and answers 200. The type is then
+// wrong, nothing complains, and the compare screen simply never opens. Dropping
+// one character deletes that failure mode instead of documenting it.
+const chatAttachmentDiffMime = "application/vnd.officraft.diff"
+
+// One side of a diff attachment. `label` is what the compare screen puts above
+// that column; empty means the caller had nothing better than the filename.
+type diffAttachmentSide struct {
+	AttachmentID string `json:"attachment_id"`
+	Label        string `json:"label,omitempty"`
+}
+
+type diffAttachmentEnvelope struct {
+	Before diffAttachmentSide `json:"before"`
+	After  diffAttachmentSide `json:"after"`
+}
+
+// validateDiffAttachment refuses a diff blob whose two sides could never be
+// resolved, so that "it was accepted" and "it will draw" cannot come apart. It
+// checks SHAPE only, deliberately: whether the two blobs still exist is not a
+// property of this request — a blob can be collected later, and a task artifact
+// whose blob is gone already reads as honestly empty rather than as an error.
+// Checking existence here would buy one class of typo at the cost of a second
+// validation site that the inline-base64 path would have to grow too.
+func validateDiffAttachment(raw []byte) error {
+	var env diffAttachmentEnvelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return chatBadRequest{"a diff attachment must be a JSON object naming its before and after sides"}
+	}
+	for _, side := range []struct {
+		name string
+		id   string
+	}{{"before", env.Before.AttachmentID}, {"after", env.After.AttachmentID}} {
+		switch {
+		case strings.TrimSpace(side.id) == "":
+			return chatBadRequest{"a diff attachment must name its " + side.name + " attachment_id"}
+		case !strings.HasPrefix(side.id, "att-"):
+			return chatBadRequest{"a diff attachment's " + side.name +
+				" attachment_id must be a stored blob id (att-…), got " + side.id}
+		}
+	}
+	return nil
+}
+
 // resolveChatAttachment builds a storable blob from RAW bytes: mime (declared
 // → sniff), the size caps, the pasted-image filename default, and a fresh id.
 // The shared tail of the base64 decode path and the streaming upload path —
@@ -364,6 +425,14 @@ func resolveChatAttachment(raw []byte, filename, mimeType string) (*ChatAttachme
 	resolved := strings.TrimSpace(mimeType)
 	if resolved == "" {
 		resolved = sniffAttachmentMime(raw)
+	}
+	// Here rather than in either caller: this is the shared tail, so the chat
+	// composer, the reply card's question and answer faces and the streaming
+	// upload all get the same refusal without any of them wiring it up.
+	if resolved == chatAttachmentDiffMime {
+		if err := validateDiffAttachment(raw); err != nil {
+			return nil, err
+		}
 	}
 	isImage := strings.HasPrefix(resolved, "image/")
 	if isImage && len(raw) > chatAttachmentImageMaxBytes {
