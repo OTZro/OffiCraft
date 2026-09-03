@@ -5,8 +5,17 @@
 // (404 on an unknown id) leaving the count consistent.
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { mockApi, __resetMock, __injectMockTask } from "./mock";
-import type { TaskArtifactView, TaskView } from "./adapter";
+import {
+  mockApi,
+  __resetMock,
+  __injectMockTask,
+  __injectMockArtifactVersions,
+} from "./mock";
+import type {
+  TaskArtifactView,
+  TaskArtifactVersionView,
+  TaskView,
+} from "./adapter";
 import { ApiError } from "./errors";
 
 function mkArtifact(over: Partial<TaskArtifactView>): TaskArtifactView {
@@ -18,6 +27,20 @@ function mkArtifact(over: Partial<TaskArtifactView>): TaskArtifactView {
     filename: "",
     mime: "",
     isImage: false,
+    attachmentId: "",
+    createdTs: 0,
+    createdBy: "mira",
+    versionCount: 1,
+    ...over,
+  };
+}
+
+function mkVersion(over: Partial<TaskArtifactVersionView>): TaskArtifactVersionView {
+  return {
+    id: 1,
+    kind: "link",
+    url: "https://x/pr/0",
+    label: "PR #0",
     attachmentId: "",
     createdTs: 0,
     createdBy: "mira",
@@ -109,4 +132,39 @@ describe("mock task artifacts", () => {
       expect(still.artifacts?.map((a) => a.id)).toEqual(["ta-1"]);
     },
   );
+});
+
+describe("mock task artifact versions (T-60)", () => {
+  it("lists the retained versions of a replaced deliverable, newest first", async () => {
+    __injectMockTask(mkTask({ artifacts: [mkArtifact({ id: "ta-1", versionCount: 3 })] }));
+    __injectMockArtifactVersions("ta-1", [
+      mkVersion({ id: 2, url: "https://x/pr/2" }),
+      mkVersion({ id: 1, url: "https://x/pr/1" }),
+    ]);
+    const versions = await mockApi.listTaskArtifactVersions("task-art", "ta-1");
+    expect(versions.map((v) => v.id)).toEqual([2, 1]);
+    expect(versions.map((v) => v.url)).toEqual(["https://x/pr/2", "https://x/pr/1"]);
+  });
+
+  it("answers an empty list for an artifact that was never replaced", async () => {
+    __injectMockTask(mkTask({ artifacts: [mkArtifact({ id: "ta-1" })] }));
+    expect(await mockApi.listTaskArtifactVersions("task-art", "ta-1")).toEqual([]);
+  });
+
+  it("is a 404 for an artifact that is not pinned on the task", async () => {
+    __injectMockTask(mkTask({ artifacts: [mkArtifact({ id: "ta-1" })] }));
+    await expect(
+      mockApi.listTaskArtifactVersions("task-art", "ta-nope"),
+    ).rejects.toMatchObject({ status: 404 } as Partial<ApiError>);
+  });
+
+  // Server parity: un-pinning deletes the versions in the same transaction, so
+  // a version list can never outlive the artifact it belongs to.
+  it("drops the retained versions when the artifact is un-pinned", async () => {
+    __injectMockTask(mkTask({ artifacts: [mkArtifact({ id: "ta-1" }), mkArtifact({ id: "ta-2" })] }));
+    __injectMockArtifactVersions("ta-1", [mkVersion({ id: 1 })]);
+    await mockApi.removeTaskArtifact("task-art", "ta-1");
+    __injectMockTask(mkTask({ id: "task-art-2", artifacts: [mkArtifact({ id: "ta-1" })] }));
+    expect(await mockApi.listTaskArtifactVersions("task-art-2", "ta-1")).toEqual([]);
+  });
 });

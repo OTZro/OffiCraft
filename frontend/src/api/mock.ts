@@ -88,6 +88,7 @@ import type {
   SseConnectionState,
   AccountCostResetReceipt,
   CostResetReceipt,
+  TaskArtifactVersionView,
 } from "./adapter";
 import type {
   WireMember,
@@ -871,6 +872,12 @@ let replyCards: ReplyCard[] = [];
 // __injectMockOutsourceWorker / __injectMockTaskType to exercise the
 // list / filter / terminate / priority / message / manual seams.
 let tasks: TaskView[] = [];
+// The retained PREVIOUS versions of a pinned deliverable (T-60), keyed by
+// artifact id — the mock's stand-in for `task_artifact_history`. Nothing in the
+// cockpit WRITES here (replace is the executing agent's MCP verb, not an owner
+// action), so the only producer is __injectMockArtifactVersions; un-pinning an
+// artifact drops its versions the way the server's transaction does.
+let artifactVersions = new Map<string, TaskArtifactVersionView[]>();
 let outsourceWorkers: OutsourceWorkerView[] = [];
 let taskManuals: TaskManualView[] = [];
 
@@ -4014,7 +4021,32 @@ export const mockApi: Api = {
     }
     t.artifacts = arts.filter((a) => a.id !== artifactId);
     t.artifactCount = t.artifacts.length;
+    // Server parity (T-60): un-pinning deletes the artifact's retained versions
+    // in the SAME transaction. A mock that kept them would let a version list
+    // outlive the artifact it belongs to — a state production cannot reach.
+    artifactVersions.delete(artifactId);
     emitTopic("task");
+  },
+
+  async listTaskArtifactVersions(
+    taskId: string,
+    artifactId: string,
+  ): Promise<TaskArtifactVersionView[]> {
+    // Mirrors handle_list_task_artifact_history (T-60): the retained PREVIOUS
+    // versions, newest first. Guard ORDER matches the server — unknown task
+    // 404 → unknown artifact 404 → wrong-task 400 — and an artifact that has
+    // never been replaced answers [] (the honest "nothing has been replaced
+    // here"), never a 404. Read-only: there is no restore verb to pair with it.
+    const t = findTask(taskId);
+    const art = (t.artifacts ?? []).find((a) => a.id === artifactId);
+    if (!art) {
+      throw mockApiError(
+        `http 404 for GET /api/tasks/${taskId}/artifact/${artifactId}/history`,
+        404,
+        `artifact '${artifactId}' not found`,
+      );
+    }
+    return structuredClone(artifactVersions.get(artifactId) ?? []);
   },
 
   async postTaskMessage(id: string, msg: TaskMessageInput): Promise<void> {
@@ -6051,6 +6083,7 @@ export function __resetMock(): void {
   chatReads.clear();
   replyCards = [];
   tasks = [];
+  artifactVersions = new Map();
   outsourceWorkers = [];
   taskManuals = [];
   mockPasswordSet = true;
@@ -6101,6 +6134,17 @@ export function __injectMockReplyCard(card: ReplyCard): void {
 // page's list / filter / terminate / priority / message seams.
 export function __injectMockTask(task: TaskView): void {
   tasks.push(task);
+  emitTopic("task");
+}
+
+// Test-only hook: land the retained PREVIOUS versions of one pinned deliverable
+// (T-60), newest first — what a sequence of `replace_task_artifact` calls would
+// have left behind. There is no cockpit write that can produce them.
+export function __injectMockArtifactVersions(
+  artifactId: string,
+  versions: TaskArtifactVersionView[],
+): void {
+  artifactVersions.set(artifactId, structuredClone(versions));
   emitTopic("task");
 }
 

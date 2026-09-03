@@ -4,8 +4,18 @@
 // fabricating a file/image.
 
 import { describe, it, expect } from "vitest";
-import { toTask, toTaskListItem, toTaskArtifact } from "./mappers";
-import type { WireTask, WireTaskListItem, WireTaskArtifact } from "./wire";
+import {
+  toTask,
+  toTaskListItem,
+  toTaskArtifact,
+  toTaskArtifactVersion,
+} from "./mappers";
+import type {
+  WireTask,
+  WireTaskListItem,
+  WireTaskArtifact,
+  WireTaskArtifactVersion,
+} from "./wire";
 
 // The generated wire types carry every field (server response DTO is handwritten
 // always-present); these helpers build complete wire objects so the tests
@@ -23,6 +33,21 @@ function wireArtifact(over: Partial<WireTaskArtifact>): WireTaskArtifact {
     created_ts: 0,
     created_by: "",
     version_count: 1,
+    ...over,
+  };
+}
+
+function wireVersion(
+  over: Partial<WireTaskArtifactVersion>,
+): WireTaskArtifactVersion {
+  return {
+    id: 1,
+    kind: "link",
+    url: "",
+    label: "",
+    attachment_id: "",
+    created_ts: 0,
+    created_by: "",
     ...over,
   };
 }
@@ -135,6 +160,47 @@ describe("toTaskArtifact", () => {
 
   it("falls back an unknown kind to link (the no-blob shape)", () => {
     expect(toTaskArtifact(wireArtifact({ id: "ta-3", kind: "video" })).kind).toBe("link");
+  });
+
+  it("carries version_count so the row can offer a versions entry", () => {
+    expect(toTaskArtifact(wireArtifact({ version_count: 4 })).versionCount).toBe(4);
+  });
+
+  it("reads an absent version_count as 0, not as one version", () => {
+    const { version_count: _dropped, ...withoutTheField } = wireArtifact({});
+    expect(
+      toTaskArtifact(withoutTheField as WireTaskArtifact).versionCount,
+    ).toBe(0);
+  });
+});
+
+describe("toTaskArtifactVersion", () => {
+  it("passes a retained version through honestly", () => {
+    expect(
+      toTaskArtifactVersion(
+        wireVersion({
+          id: 7,
+          kind: "file",
+          url: "/api/chat/attachment/att-old",
+          attachment_id: "att-old",
+          label: "v1.pdf",
+          created_ts: 1700,
+          created_by: "mira",
+        }),
+      ),
+    ).toEqual({
+      id: 7,
+      kind: "file",
+      url: "/api/chat/attachment/att-old",
+      attachmentId: "att-old",
+      label: "v1.pdf",
+      createdTs: 1700,
+      createdBy: "mira",
+    });
+  });
+
+  it("falls back an unknown kind to link (the no-blob shape)", () => {
+    expect(toTaskArtifactVersion(wireVersion({ kind: "video" })).kind).toBe("link");
   });
 });
 

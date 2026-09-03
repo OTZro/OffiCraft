@@ -45,6 +45,7 @@ function mkArtifact(over: Partial<TaskArtifactView>): TaskArtifactView {
     attachmentId: "",
     createdTs: 0,
     createdBy: "mira",
+    versionCount: 1,
     ...over,
   };
 }

@@ -89,6 +89,7 @@ import type {
   WireTaskDepRef,
   WireTaskStep,
   WireTaskArtifact,
+  WireTaskArtifactVersion,
   WireOutsourceWorker,
   WireTaskManual,
   WireTaskManualListItem,
@@ -114,6 +115,7 @@ import type {
   TaskDepRefView,
   TaskStepView,
   TaskArtifactView,
+  TaskArtifactVersionView,
   OutsourceWorkerView,
   TaskTypeView,
   TaskManualSummaryView,
@@ -507,6 +509,30 @@ export function toTaskArtifact(w: WireTaskArtifact): TaskArtifactView {
     filename: w.filename ?? "",
     mime: w.mime ?? "",
     isImage: w.is_image ?? false,
+    attachmentId: w.attachment_id ?? "",
+    createdTs: w.created_ts ?? 0,
+    createdBy: w.created_by ?? "",
+    versionCount: w.version_count ?? 0,
+  };
+}
+
+/** Map one retained PREVIOUS version of a pinned deliverable (T-60). Honest
+ * passthrough, and `versionCount`'s twin above is the reason it matters: an
+ * older server that does not send `version_count` reads as 0, which is NOT
+ * "one version" — it is "this server never said", and the card shows no
+ * versions entry rather than claiming the deliverable has never been replaced. */
+export function toTaskArtifactVersion(
+  w: WireTaskArtifactVersion,
+): TaskArtifactVersionView {
+  const kind =
+    w.kind === "file" || w.kind === "image" || w.kind === "link"
+      ? w.kind
+      : "link";
+  return {
+    id: w.id,
+    kind,
+    url: w.url ?? "",
+    label: w.label ?? "",
     attachmentId: w.attachment_id ?? "",
     createdTs: w.created_ts ?? 0,
     createdBy: w.created_by ?? "",
