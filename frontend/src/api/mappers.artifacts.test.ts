@@ -46,6 +46,8 @@ function wireVersion(
     url: "",
     label: "",
     filename: "",
+    mime: "",
+    is_image: false,
     attachment_id: "",
     created_ts: 0,
     created_by: "",
@@ -186,6 +188,8 @@ describe("toTaskArtifactVersion", () => {
           attachment_id: "att-old",
           label: "",
           filename: "v1.pdf",
+          mime: "application/pdf",
+          is_image: false,
           created_ts: 1700,
           created_by: "mira",
         }),
@@ -197,6 +201,8 @@ describe("toTaskArtifactVersion", () => {
       attachmentId: "att-old",
       label: "",
       filename: "v1.pdf",
+      mime: "application/pdf",
+      isImage: false,
       createdTs: 1700,
       createdBy: "mira",
     });
@@ -211,6 +217,13 @@ describe("toTaskArtifactVersion", () => {
 
   it("falls back an unknown kind to link (the no-blob shape)", () => {
     expect(toTaskArtifactVersion(wireVersion({ kind: "video" })).kind).toBe("link");
+  });
+
+  it("reads an image version's is_image rather than deriving it", () => {
+    const v = toTaskArtifactVersion(
+      wireVersion({ kind: "image", mime: "image/png", is_image: true }),
+    );
+    expect([v.mime, v.isImage]).toEqual(["image/png", true]);
   });
 });
 

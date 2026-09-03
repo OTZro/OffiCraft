@@ -8726,7 +8726,7 @@ export interface components {
         };
         /**
          * TaskArtifactVersionDTO
-         * @description ONE retained PREVIOUS version of a pinned deliverable (T-60). Unlike a document revision this row carries the version WHOLE rather than a size summary: an artifact version is a pointer (a blob id or a url) plus a label, so there is no prose to hold back and the listing IS the content. ``id`` is the version's own row id, ascending with the age of the write; ``kind`` always equals the live artifact's kind, which cannot change across versions; ``created_ts``/``created_by`` are when THAT version was written and by whom. A file/image version's ``attachment_id`` still resolves — the blob is kept alive for as long as the version is retained, and collected when the version falls off the end — and ``filename`` echoes that blob's own name, resolved read-time exactly like the live artifact's.
+         * @description ONE retained PREVIOUS version of a pinned deliverable (T-60). Unlike a document revision this row carries the version WHOLE rather than a size summary: an artifact version is a pointer (a blob id or a url) plus a label, so there is no prose to hold back and the listing IS the content. ``id`` is the version's own row id, ascending with the age of the write; ``kind`` always equals the live artifact's kind, which cannot change across versions; ``created_ts``/``created_by`` are when THAT version was written and by whom. A file/image version's ``attachment_id`` still resolves — the blob is kept alive for as long as the version is retained, and collected when the version falls off the end — and ``url``/``mime``/``filename``/``is_image`` echo that blob — the serve path, its content type, its own name and whether it is an image — resolved read-time exactly like the live artifact's.
          */
         TaskArtifactVersionDTO: {
             /**
@@ -8755,6 +8755,12 @@ export interface components {
              * Format: int64
              */
             id: number;
+            /**
+             * Is Image
+             * @description Whether this version's blob is an image (its mime starts with ``image/``) — the same read the live artifact's ``is_image`` is, so a reader shows a retained image version the way it shows the current one. additive-optional (absent reads as false for older servers).
+             * @default false
+             */
+            is_image: boolean;
             /** Kind */
             kind: string;
             /**
@@ -8763,7 +8769,14 @@ export interface components {
              */
             label: string;
             /**
+             * Mime
+             * @description The retained blob's own content type, resolved read-time from ``attachment_id`` (empty for a link, and for a file/image whose blob is gone). It is THIS version's mime, not the live artifact's — kind is immutable across versions but the content type is not. additive-optional (absent reads as "" for older servers).
+             * @default
+             */
+            mime: string;
+            /**
              * Url
+             * @description Where THIS version's content is. For a file/image it is the retained blob's serve path (``/api/chat/attachment/{attachment_id}``), exactly as on the live artifact — NOT the row's ``url`` column, which is empty for those kinds; for a link it is the external url that version pointed at.
              * @default
              */
             url: string;

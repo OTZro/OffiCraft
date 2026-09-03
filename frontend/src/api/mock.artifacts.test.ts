@@ -42,6 +42,8 @@ function mkVersion(over: Partial<TaskArtifactVersionView>): TaskArtifactVersionV
     url: "https://x/pr/0",
     label: "PR #0",
     filename: "",
+    mime: "",
+    isImage: false,
     attachmentId: "",
     createdTs: 0,
     createdBy: "mira",

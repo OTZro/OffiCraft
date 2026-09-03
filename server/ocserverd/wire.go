@@ -1635,6 +1635,8 @@ type taskArtifactVersionDTO struct {
 	URL          string  `json:"url"`
 	Label        string  `json:"label"`
 	Filename     string  `json:"filename"`
+	Mime         string  `json:"mime"`
+	IsImage      bool    `json:"is_image"`
 	AttachmentID string  `json:"attachment_id"`
 	CreatedTS    float64 `json:"created_ts"`
 	CreatedBy    string  `json:"created_by"`
@@ -1642,8 +1644,14 @@ type taskArtifactVersionDTO struct {
 
 // newTaskArtifactVersionDTO projects one retained version onto the wire. att is
 // the resolved chat_attachment for a file/image version (nil for a link, or
-// when the blob is gone) — only its filename rides along, honest-empty when
-// absent and never fabricated.
+// when the blob is gone) — its url/mime/filename/is_image ride along through
+// artifactBlobFacts, the SAME resolution the live projection does, honest-empty
+// when absent and never fabricated.
+//
+// 🔴 The url has to be rewritten here, not copied. `task_artifact.url` is the
+// external link for a link kind and the EMPTY STRING for a file/image, so a
+// version that carried the row's url handed the cockpit nothing to fetch and
+// every file version read as gone.
 //
 // 🔴 The filename is here because a reader deciding whether a version's bytes
 // are TEXT asks the name when the mime cannot say, and `application/octet-stream`
@@ -1660,8 +1668,8 @@ func newTaskArtifactVersionDTO(h TaskArtifactHistory, att *ChatAttachment) taskA
 		CreatedTS:    h.CreatedTS,
 		CreatedBy:    h.CreatedBy,
 	}
-	if h.Kind != ArtifactKindLink && att != nil && att.Filename != nil {
-		dto.Filename = *att.Filename
+	if b, ok := artifactBlobFacts(h.Kind, att); ok {
+		dto.URL, dto.Mime, dto.Filename, dto.IsImage = b.url, b.mime, b.filename, b.isImage
 	}
 	return dto
 }
@@ -2203,15 +2211,46 @@ func newTaskArtifactDTO(a TaskArtifact, att *ChatAttachment, retained int) taskA
 		CreatedTS:    a.CreatedTS,
 		CreatedBy:    a.CreatedBy,
 	}
-	if a.Kind != ArtifactKindLink && att != nil {
-		dto.URL = "/api/chat/attachment/" + att.ID
-		dto.Mime = att.Mime
-		if att.Filename != nil {
-			dto.Filename = *att.Filename
-		}
-		dto.IsImage = len(att.Mime) >= 6 && att.Mime[:6] == "image/"
+	if b, ok := artifactBlobFacts(a.Kind, att); ok {
+		dto.URL, dto.Mime, dto.Filename, dto.IsImage = b.url, b.mime, b.filename, b.isImage
 	}
 	return dto
+}
+
+// artifactBlobFields is the half of an artifact projection that comes from the
+// referenced blob rather than from the row.
+type artifactBlobFields struct {
+	url      string
+	mime     string
+	filename string
+	isImage  bool
+}
+
+// artifactBlobFacts resolves that half: the serve path, the mime, the blob's
+// own name and whether it is an image. ok is false for a link kind and for a
+// file/image whose blob is gone, and the caller then keeps the row's own values
+// — honest-empty, never fabricated.
+//
+// 🔴 IT IS SHARED BECAUSE THE TWO PROJECTIONS ARE ONE FACT. The live artifact
+// and a retained version of it are the same deliverable read at two moments; a
+// reader that can open one must be able to open the other. When the version
+// side had its own (shorter) answer it served the ROW's url, which for a
+// file/image is the empty string by construction — so every file version was
+// unreachable and unreadable on the real wire, while both sides' tests passed
+// against fixtures that carried a url of their own.
+func artifactBlobFacts(kind string, att *ChatAttachment) (artifactBlobFields, bool) {
+	if kind == ArtifactKindLink || att == nil {
+		return artifactBlobFields{}, false
+	}
+	b := artifactBlobFields{
+		url:     "/api/chat/attachment/" + att.ID,
+		mime:    att.Mime,
+		isImage: len(att.Mime) >= 6 && att.Mime[:6] == "image/",
+	}
+	if att.Filename != nil {
+		b.filename = *att.Filename
+	}
+	return b, true
 }
 
 // newTaskListItemDTO projects one task + its deps + pre-counted step progress

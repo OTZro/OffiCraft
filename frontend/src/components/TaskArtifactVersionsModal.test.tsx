@@ -18,6 +18,7 @@ import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { api } from "../api";
 import { TaskArtifactVersionsModal } from "./TaskArtifactVersionsModal";
+import { toTaskArtifactVersion } from "../api/mappers";
 import type {
   TaskArtifactView,
   TaskArtifactVersionView,
@@ -63,6 +64,8 @@ function mkVersion(over: Partial<TaskArtifactVersionView>): TaskArtifactVersionV
     url: "/api/chat/attachment/att-old",
     label: "spec.txt",
     filename: "spec.txt",
+    mime: "text/plain",
+    isImage: false,
     attachmentId: "att-old",
     createdTs: 1000,
     createdBy: "mira",
@@ -210,6 +213,53 @@ describe("TaskArtifactVersionsModal", () => {
     ]);
     mockedApi.getTask.mockResolvedValue(
       mkTask([mkArtifact({ label: "", filename: "recon.md", mime: "application/octet-stream" })]),
+    );
+    stubFetch({
+      "/api/chat/attachment/att-old": {
+        mime: "application/octet-stream",
+        text: "alpha\nbeta\n",
+      },
+      "/api/chat/attachment/att-live": {
+        mime: "application/octet-stream",
+        text: "alpha\ngamma\n",
+      },
+    });
+    openModal();
+
+    fireEvent.click(await screen.findByTestId("ta-versions-pane-diff"));
+    await waitFor(() => expect(screen.getByTestId("ta-versions-diff")).toBeTruthy());
+    expect(diffLinesOnScreen()).toEqual(["alpha", "beta", "gamma"]);
+  });
+
+  // 🔴 THE SHAPE THE SERVER ACTUALLY SENDS, mapped rather than invented. Every
+  // other case here builds its version through mkVersion, which hands itself a
+  // url — and a version list whose url the wire never carried is exactly how a
+  // file version that reached this panel with url "" (and was read as gone)
+  // stayed invisible to a green suite. So this one starts from the wire JSON a
+  // replaced .md report produces and runs it through the real mapper.
+  it("diffs a retained report built from the wire shape the server sends", async () => {
+    mockedApi.listTaskArtifactVersions.mockResolvedValue([
+      toTaskArtifactVersion({
+        id: 1,
+        kind: "file",
+        url: "/api/chat/attachment/att-old",
+        label: "",
+        filename: "report.md",
+        mime: "application/octet-stream",
+        is_image: false,
+        attachment_id: "att-old",
+        created_ts: 1000,
+        created_by: "mira",
+      }),
+    ]);
+    mockedApi.getTask.mockResolvedValue(
+      mkTask([
+        mkArtifact({
+          label: "",
+          filename: "report.md",
+          mime: "application/octet-stream",
+        }),
+      ]),
     );
     stubFetch({
       "/api/chat/attachment/att-old": {

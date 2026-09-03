@@ -47,13 +47,14 @@
 //     one, printed.
 //
 // WHETHER BYTES ARE TEXT IS ASKED OF THE RESPONSE, not of the artifact row.
-// `TaskArtifactVersionDTO` carries no mime (the wire has none), and borrowing
-// the LIVE artifact's mime would be answering a question about one version with
-// another version's fact — kind is immutable across versions, but a file
-// artifact may be a .txt today and have been a .pdf before. So each side is
-// fetched and the SERVER's own `Content-Type` decides, which is the same
-// authority `isInlineDisplayableMime` defers to. A response that is not text is
-// cancelled unread rather than downloaded to be thrown away.
+// A version does carry its own `mime` now, but the row's copy and the bytes'
+// content type are two statements and only the second is the one being read —
+// so each side is fetched and the SERVER's own `Content-Type` decides, which is
+// the same authority `isInlineDisplayableMime` defers to. What must never
+// happen is borrowing the LIVE artifact's mime for a version: kind is immutable
+// across versions, but a file artifact may be a .txt today and have been a .pdf
+// before. A response that is not text is cancelled unread rather than
+// downloaded to be thrown away.
 //
 // The version's `filename` is the same kind of per-version fact: the wire
 // resolves it from THAT version's retained blob, so the fallback below reads

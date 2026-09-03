@@ -436,3 +436,94 @@ func TestArtifactHistoryCarriesEachVersionsOwnFilename(t *testing.T) {
 		t.Fatalf("a link version has no blob and so no filename, got %+v", linkVersions)
 	}
 }
+
+// TestArtifactHistoryServesAFileVersionsBlobEndpoint — the version list is read
+// by a cockpit that has to FETCH what it lists, and for a file/image the only
+// address that resolves is the blob serve path. `task_artifact.url` is not it:
+// that column holds the external link for a link kind and the EMPTY STRING for
+// a file/image, so a version projection that copies the row hands the reader
+// nothing, and a client that treats a url-less version as gone is right to.
+//
+// The mime rides along for the same reason the live artifact's does — it is the
+// first word on what the bytes ARE, and is_image is the read every surface that
+// shows a deliverable makes. Asserted through the real handler rather than the
+// projection function, because copying the row's url was exactly the kind of
+// mistake a DTO-level fixture (which carries a url of its own) cannot see.
+func TestArtifactHistoryServesAFileVersionsBlobEndpoint(t *testing.T) {
+	api := newTasksTestServer(t)
+	task := createAdHocTask(t, api, "m-exec")
+	seed := func(id, mime, name string) {
+		t.Helper()
+		blobName := name
+		if err := api.dal.PutChatAttachment(ChatAttachment{
+			ID: id, Mime: mime, Data: []byte(id), Filename: &blobName,
+		}); err != nil {
+			t.Fatalf("seed blob %s: %v", id, err)
+		}
+	}
+	seed("att-report-old", "application/octet-stream", "report.md")
+	seed("att-report-new", "application/octet-stream", "report.md")
+
+	artID := fileArtifactOn(t, api, task.ID, "att-report-old")
+	if rec := replaceArtifact(t, api, task.ID, artID,
+		map[string]any{"attachment_id": "att-report-new"},
+		"m-exec", "agent"); rec.Code != http.StatusOK {
+		t.Fatalf("replace: %d %s", rec.Code, rec.Body.String())
+	}
+
+	versions := decodeBody[[]taskArtifactVersionDTO](t,
+		artifactHistory(t, api, task.ID, artID, "m-exec", "agent"))
+	if len(versions) != 1 {
+		t.Fatalf("expected exactly the replaced version, got %+v", versions)
+	}
+	if versions[0].URL != "/api/chat/attachment/att-report-old" {
+		t.Fatalf("a file version's url must be its OWN retained blob's serve path, got %+v",
+			versions[0])
+	}
+	if versions[0].Mime != "application/octet-stream" {
+		t.Fatalf("a file version must carry its own blob's mime, got %+v", versions[0])
+	}
+	if versions[0].IsImage {
+		t.Fatalf("an octet-stream version is not an image, got %+v", versions[0])
+	}
+
+	// An image deliverable answers the same three questions the other way — so a
+	// projection that hard-coded either answer cannot pass both halves.
+	seed("att-shot-old", "image/png", "shot.png")
+	seed("att-shot-new", "image/png", "shot.png")
+	imgID := decodeBody[taskArtifactReceiptDTO](t, addArtifact(t, api, task.ID,
+		map[string]any{"kind": "image", "attachment_id": "att-shot-old"},
+		"m-exec", "agent")).ArtifactID
+	if rec := replaceArtifact(t, api, task.ID, imgID,
+		map[string]any{"attachment_id": "att-shot-new"},
+		"m-exec", "agent"); rec.Code != http.StatusOK {
+		t.Fatalf("replace image: %d %s", rec.Code, rec.Body.String())
+	}
+	imgVersions := decodeBody[[]taskArtifactVersionDTO](t,
+		artifactHistory(t, api, task.ID, imgID, "m-exec", "agent"))
+	if len(imgVersions) != 1 {
+		t.Fatalf("expected exactly the replaced image version, got %+v", imgVersions)
+	}
+	if imgVersions[0].URL != "/api/chat/attachment/att-shot-old" ||
+		imgVersions[0].Mime != "image/png" || !imgVersions[0].IsImage {
+		t.Fatalf("an image version must serve its blob path, mime and is_image, got %+v",
+			imgVersions[0])
+	}
+
+	// A link version keeps the row's own external url, and has no blob to
+	// describe — the control that stops the rewrite from applying to every kind.
+	linkID := decodeBody[taskArtifactReceiptDTO](t, addArtifact(t, api, task.ID,
+		map[string]any{"kind": "link", "url": "https://x/pr/1"},
+		"m-exec", "agent")).ArtifactID
+	if rec := replaceArtifact(t, api, task.ID, linkID,
+		map[string]any{"url": "https://x/pr/2"}, "m-exec", "agent"); rec.Code != http.StatusOK {
+		t.Fatalf("replace link: %d %s", rec.Code, rec.Body.String())
+	}
+	linkVersions := decodeBody[[]taskArtifactVersionDTO](t,
+		artifactHistory(t, api, task.ID, linkID, "m-exec", "agent"))
+	if len(linkVersions) != 1 || linkVersions[0].URL != "https://x/pr/1" ||
+		linkVersions[0].Mime != "" || linkVersions[0].IsImage {
+		t.Fatalf("a link version keeps its external url and describes no blob, got %+v",
+			linkVersions)
+	}
+}

@@ -64,7 +64,9 @@ TaskArtifactVersionsModal 是任務產物「被換過幾次、換掉的是什麼
 
 差異依產物型態分三種畫面，不是一種畫面留三個洞：兩份文字餵共用的 DiffView（不新刻比對元件、不改 DiffView／lineDiff，要放寬上限只能由呼叫端傳 DiffViewOptions.maxLines）；圖片與非文字檔改成前後切換；連結列出舊網址與新網址。
 
-「這份 bytes 是不是文字」問的是回應本身的 Content-Type，不是產物列上的 mime——版本 wire 沒有 mime，而 live 產物的 mime 是另一個版本的事實。不是文字的回應不讀 body。
+「這份 bytes 是不是文字」問的是回應本身的 Content-Type，不是產物列上的 mime——列上的 mime 與 bytes 的 content type 是兩句話，讀的是後者；尤其不可拿 live 產物的 mime 去判某一版，那是另一個版本的事實。不是文字的回應不讀 body。
+
+版本 wire 的 `url`／`mime`／`filename`／`is_image` 都由 server 從那一版自己的 blob 解出，跟 live 產物走同一條解析：file/image 版本的 `url` 是 blob 端點（**不是** `task_artifact.url` 那一欄，那欄對 file/image 是空字串），照抄該欄會讓每個檔案版本在前端讀成 gone。
 
 🔴 但 mime 不是唯一判準：`text/*` 是文字、`image/*` 是圖片，兩者皆非時再看檔名副檔名（兩側同一條：filename 優先、label 次之；版本的 filename 由 wire 從它自己的 attachment_id 解出，是那一版自己的事實），命中一份封閉的文字副檔名清單就當文字讀。理由是 agent 上傳的報告回來是 `application/octet-stream`——那是上傳端「不知道」，不是「這是二進位」；只信 mime 會把報告、log、spec 這些最常見的產物全部推去前後切換，永遠 diff 不到。清單是封閉的，不在清單上的仍然不讀 body。
 
