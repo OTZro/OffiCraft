@@ -9,6 +9,7 @@
 - 乾淨 worktree 手跑 server Go tests 前，先執行 `bash bin/build-seedsdist && bash bin/build-docsdist`；`bin/ci.sh` 會自動 staging。`build-bindist` 是單檔 boot/install 的前置，不是 `go test` 的前置。
 - 有效 config 只有 `[server].port`、`[server].namespace`、`[storage].dsn`；部署用 `$OC_CONFIG`／`$OC_DATABASE_URL` 明確指定。預設 `oc.toml` 以 CWD 相對位置找，host 固定 loopback；不要把退役 key 或環境探測重新當成設定來源。
 - `bin/release`、release preflight 與「CI/main 不等於部署」遵守根檔；server 文件不另抄一份命令或 release 清單。
+- 🔴 **新增 migration 的號碼必須大於 `origin/main` 目前宣告的最大號**，兩個來源都算（`migrations/*.sql` 與 `goose.AddNamedMigration*` 註冊的 Go migration）。跳過的號碼永遠留著不補：低於已釋出最大號的新號會讓**已經在跑的站**下次開機在 `runMigrations` 停住、exit 1、不會 listen，而全新安裝完全看不出來（空白 DB 上「缺號」不存在）。這條由 `TestAStationAtTheReleasedVersionCanUpgradeToThisTree` 釘住：它照 `origin/main` 重播出一顆站台狀態的 DB 再跑 production 的 `runMigrations`。**它需要能解析 `origin/main`**，解析不到就 skip 並說明——skip 不是綠。
 
 ## 2. wire、route 與權限是同一個契約
 
