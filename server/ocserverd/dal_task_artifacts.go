@@ -177,7 +177,7 @@ func (d *DAL) DeleteTaskArtifact(id string) (bool, error) {
 }
 
 // TaskArtifactHistory is one immutable pre-write snapshot of a replaced
-// artifact (T-60, migrations/00070) — the whole replaced version, since an
+// artifact (T-60, migrations/00071) — the whole replaced version, since an
 // artifact version has no prose to hold back: a listing IS the content.
 type TaskArtifactHistory struct {
 	ID           int64
