@@ -37,12 +37,11 @@ let onLoadOlder: (() => void) | null = null;
 let hangLoadOlder = false;
 
 vi.mock("../hooks/useChat", () => ({
-  useChat: (peer: string) => {
+  useChat: () => {
     const [msgs, setMsgs] = useState<ChatMessage[]>(() => initialMessages);
     return {
       messages: msgs,
-      messagesPeer: peer,
-      peerLastRead: { peer: "", tsFor: () => 0 },
+      peerLastReadTs: 0,
       send: vi.fn(() => Promise.resolve()),
       markRead: vi.fn(() => Promise.resolve()),
       hasMore,
@@ -280,7 +279,8 @@ describe("loadOlderAnchored", () => {
   // and no AbortController, so a GET that never answers held that lock for the
   // whole session: scrollback silently stopped working in EVERY conversation,
   // with no spinner and no error. The lock now lives in the per-conversation
-  // record, so a hung request strands only the conversation it was started on.
+  // record, so a hung request strands only the conversation it was started on
+  // — and since R13-5 that record is built per MOUNT, which is what a room is.
   it("上一條對話卡住的往上捲載入,不准把切過去的那一間也鎖住", async () => {
     initialMessages = [
       mkMsg("c2", "b", "owner", 2000),
@@ -289,7 +289,7 @@ describe("loadOlderAnchored", () => {
     hangLoadOlder = true;
     const { container, rerender } = render(
       <I18nProvider>
-        <ChatArea member={BETO} members={[BETO, ALMA]} />
+        <ChatArea key={BETO.id} member={BETO} members={[BETO, ALMA]} />
       </I18nProvider>,
     );
     const list = container.querySelector(".chat__messages")!;
@@ -307,7 +307,7 @@ describe("loadOlderAnchored", () => {
     await act(async () => {
       rerender(
         <I18nProvider>
-          <ChatArea member={ALMA} members={[BETO, ALMA]} />
+          <ChatArea key={ALMA.id} member={ALMA} members={[BETO, ALMA]} />
         </I18nProvider>,
       );
     });

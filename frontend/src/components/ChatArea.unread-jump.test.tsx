@@ -38,11 +38,8 @@ import type { Member } from "../types";
 import type { ChatMessage } from "../api/adapter";
 import type { JumpOutcome } from "../hooks/useChat";
 
-// Window peer = agent "b" (Beto). Owner id is "owner". `messagesPeer` mirrors
-// useChat's contract: the peer the CURRENT messages array belongs to (set
-// together with the messages; lags one commit behind a peer switch).
+// Window peer = agent "b" (Beto). Owner id is "owner".
 let messages: ChatMessage[] = [];
-let messagesPeer = "b";
 const markRead = vi.fn(() => Promise.resolve());
 // ③ T-48: the anchor-window fetch behind 跳到原訊息. `loadAroundResult` is what
 // the fetch reports back — see useChat's JumpOutcome: the target is in the
@@ -59,8 +56,7 @@ const loadNewer = vi.fn(async () => {});
 vi.mock("../hooks/useChat", () => ({
   useChat: () => ({
     messages,
-    messagesPeer,
-    peerLastRead: { peer: "", tsFor: () => 0 },
+    peerLastReadTs: 0,
     send: vi.fn(() => Promise.resolve()),
     markRead,
     loadAround,
@@ -164,7 +160,6 @@ beforeEach(() => {
     scrollCalls.push({ el: this, args });
   } as typeof Element.prototype.scrollIntoView;
   messages = [];
-  messagesPeer = "b";
 });
 
 describe("② entry positioning (first unread)", () => {
@@ -203,20 +198,18 @@ describe("② entry positioning (first unread)", () => {
     ).toBeNull();
   });
 
-  it("switching from a NON-EMPTY thread still renders the divider (stale-peer latch regression)", () => {
-    // Bug: ChatArea is NOT remounted on a peer switch, and useChat clears its
-    // messages one commit AFTER the switch — so the entry-positioning effect
-    // used to fire with member.id = NEW peer but messages = the PREVIOUS
-    // peer's thread, latching the one-shot against stale data. Entering an
-    // unread room FROM a non-empty thread then never rendered the divider.
+  it("entering an unread room FROM a non-empty thread still renders the divider", () => {
+    // 🔴 THE ROOM IS ENTERED BY MOUNTING (T-48, R13-5). `OfficePage` renders
+    // `ChatArea` under `key={peerId}`, so leaving a settled non-empty thread for
+    // an unread room builds a NEW component: the entry-positioning one-shot is
+    // fresh, because it belongs to the mount.
     //
-    // The commit sequence below mirrors the real hook exactly (messagesPeer
-    // lags with messages):
-    //   1. viewing peer "a" with a settled non-empty thread;
-    //   2. switch to peer "b": member flips first, messages/messagesPeer are
-    //      still a's for that commit;
-    //   3. useChat's reset lands (empty thread, peer "b");
-    //   4. b's thread loads (3 inbound, unreadCount snapshot 2).
+    // The bug this replaces was reachable only while one instance was reused
+    // across rooms — the effect fired for a commit whose `member.id` was already
+    // the new peer while `messages` was still the previous peer's thread, and
+    // latched the one-shot against it, so the divider never rendered. What is
+    // asserted here is the OUTCOME that regression was about, driven the way the
+    // app drives it.
     const memberA = mkMember(0, "a", "Alma");
     const memberB = mkMember(2, "b", "Beto");
 
@@ -225,30 +218,22 @@ describe("② entry positioning (first unread)", () => {
       mkMsg("a1", "a", "owner", 900),
       mkMsg("a2", "owner", "a", 901),
     ];
-    messagesPeer = "a";
     const { container, rerender } = render(
       <I18nProvider>
-        <ChatArea member={memberA} members={[memberA, memberB]} />
+        <ChatArea key={memberA.id} member={memberA} members={[memberA, memberB]} />
       </I18nProvider>,
     );
 
-    // ② the stale commit: member is already "b", messages still a's.
-    rerender(
-      <I18nProvider>
-        <ChatArea member={memberB} members={[memberA, memberB]} />
-      </I18nProvider>,
-    );
-
-    // ③ useChat's reset commit: empty thread now owned by "b".
+    // ② switch to "b": the key changes, so this unmounts A and mounts B. Its
+    // thread starts empty, exactly as useChat's own state does on a fresh mount.
     messages = [];
-    messagesPeer = "b";
     rerender(
       <I18nProvider>
-        <ChatArea member={memberB} members={[memberA, memberB]} />
+        <ChatArea key={memberB.id} member={memberB} members={[memberA, memberB]} />
       </I18nProvider>,
     );
 
-    // ④ b's thread loads: 3 inbound, entry snapshot said 2 unread.
+    // ③ b's thread loads: 3 inbound, entry snapshot said 2 unread.
     messages = [
       mkMsg("b1", "b", "owner", 1000),
       mkMsg("b2", "b", "owner", 1001),
@@ -256,13 +241,12 @@ describe("② entry positioning (first unread)", () => {
     ];
     rerender(
       <I18nProvider>
-        <ChatArea member={memberB} members={[memberA, memberB]} />
+        <ChatArea key={memberB.id} member={memberB} members={[memberA, memberB]} />
       </I18nProvider>,
     );
 
     // The divider MUST render, anchored at the first unread (b2 — the
-    // 2nd-from-last inbound). Pre-fix the stale commit ② consumed the
-    // one-shot and no divider ever appeared.
+    // 2nd-from-last inbound).
     const divider = container.querySelector(".chat__unread-divider");
     expect(divider).not.toBeNull();
     expect(divider!.nextElementSibling?.getAttribute("data-msg-id")).toBe(

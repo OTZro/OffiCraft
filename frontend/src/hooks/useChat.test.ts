@@ -69,7 +69,6 @@ describe("useChat load routing (active vs background)", () => {
     const { result } = renderHook(() => useChat("b"));
     await waitFor(() => expect(result.current.messages).toHaveLength(1));
     expect(h.listChat).toHaveBeenCalledWith("b");
-    expect(result.current.messagesPeer).toBe("b");
   });
 
   it("a BACKGROUNDED window loads through the SAME listChat — messages still flow", async () => {
@@ -126,7 +125,12 @@ describe("useChat load routing (active vs background)", () => {
     expect(h.listChat).toHaveBeenCalledTimes(1);
   });
 
-  it("switching peers resets the thread and re-loads for the new peer", async () => {
+  // ⚠️ THE APP DOES NOT DRIVE THIS PATH ANY MORE (T-48, R13-3). `ChatArea` is
+  // mounted under `key={peerId}`, so changing room remounts this hook. What is
+  // pinned here is the SAFETY NET described at the reset in the subscription
+  // effect: a caller that swaps `withId` on a live instance converges on the new
+  // room instead of staying on the old one.
+  it("converges on the new peer when a live instance is handed a different withId", async () => {
     h.listChat.mockImplementation(async (withId: string) =>
       withId === "b"
         ? [mkMsg("c1", "b", "owner", 1000)]
@@ -137,10 +141,8 @@ describe("useChat load routing (active vs background)", () => {
       { initialProps: { id: "b" } },
     );
     await waitFor(() => expect(result.current.messages).toHaveLength(1));
-    expect(result.current.messagesPeer).toBe("b");
 
     rerender({ id: "z" });
-    await waitFor(() => expect(result.current.messagesPeer).toBe("z"));
     await waitFor(() =>
       expect(result.current.messages.map((m) => m.id)).toEqual(["c9"]),
     );
@@ -228,7 +230,7 @@ describe("useChat load routing (active vs background)", () => {
     });
 
     const { result } = renderHook(() => useChat("b"));
-    await waitFor(() => expect(result.current.peerLastRead.tsFor("b")).toBe(4242));
+    await waitFor(() => expect(result.current.peerLastReadTs).toBe(4242));
     expect(h.listChatReads).toHaveBeenCalledWith(OWNER_ID);
     expect(h.listChatReads).not.toHaveBeenCalledWith("b");
   });
@@ -240,16 +242,17 @@ describe("useChat load routing (active vs background)", () => {
     ]);
     const { result } = renderHook(() => useChat("b"));
     await waitFor(() => expect(h.listChat).toHaveBeenCalledTimes(1));
-    expect(result.current.peerLastRead.tsFor("b")).toBe(0);
+    expect(result.current.peerLastReadTs).toBe(0);
   });
 
   it("切走再切回,上一間房晚到的已讀水位不准畫成這一間的已讀勾", async () => {
-    // 🔴 T-48 R8-2。訂閱 effect 一進房就打 `void refetchReads()`,而水位是同一支
-    // useState(ChatArea 換人不會 remount),閉包捕獲的 `withId` 是**那一間**的人。
-    // 進 B、reads 還在路上、馬上切回 A,B 那通落地就把 B 的水位寫進 A 的房間
-    // —— 憑別人的水位在 A 的訊息上點亮已讀勾。一次手滑就到得了。
-    // 現在擋住它的不是某一句守衛,而是水位自己帶著「我是誰的」:B 的那筆
-    // 在 `mergePeerRead` 眼裡 peer 對不上,寫不進去。
+    // 🔴 T-48 R8-2。訂閱 effect 一進房就打 `void refetchReads()`,閉包捕獲的
+    // `withId` 是**那一間**的人。進 B、reads 還在路上、馬上切回 A,B 那通落地
+    // 就把 B 的水位寫進 A 的房間 —— 憑別人的水位在 A 的訊息上點亮已讀勾。
+    //
+    // 🔴 現在擋住它的不是任何一句守衛,而是**換房就換一份 hook**(R13-5):
+    // `ChatArea` 掛在 `key={peerId}` 底下,所以下面用 unmount／mount 驅動,
+    // 跟 app 走的是同一條路。B 那通落地時,它要寫的那個 component 已經不在了。
     h.listChat.mockResolvedValue([mkMsg("c1", "owner", "a", 1000)]);
     let landB!: (rows: unknown[]) => void;
     h.listChatReads
@@ -266,20 +269,19 @@ describe("useChat load routing (active vs background)", () => {
         { readerId: "a", peerId: OWNER_ID, lastReadTs: 100 },
       ]);
 
-    const { result, rerender } = renderHook(({ id }) => useChat(id), {
-      initialProps: { id: "a" },
-    });
-    await waitFor(() => expect(result.current.peerLastRead.tsFor("a")).toBe(100));
+    const first = renderHook(() => useChat("a"));
+    await waitFor(() => expect(first.result.current.peerLastReadTs).toBe(100));
+    first.unmount();
 
+    // 進 B(reads 卡在路上),再切回 A —— 兩次都是換一份 hook。
+    const inB = renderHook(() => useChat("b"));
     await act(async () => {
-      rerender({ id: "b" });
       await new Promise((r) => setTimeout(r, 10));
     });
-    await act(async () => {
-      rerender({ id: "a" });
-      await new Promise((r) => setTimeout(r, 10));
-    });
-    expect(result.current.peerLastRead.tsFor("a"), "前提:回到 A 的這一趟拿到的是 A 的水位").toBe(100);
+    inB.unmount();
+
+    const back = renderHook(() => useChat("a"));
+    await waitFor(() => expect(back.result.current.peerLastReadTs).toBe(100));
 
     await act(async () => {
       landB([
@@ -289,7 +291,7 @@ describe("useChat load routing (active vs background)", () => {
       await new Promise((r) => setTimeout(r, 10));
     });
     expect(
-      result.current.peerLastRead.tsFor("a"),
+      back.result.current.peerLastReadTs,
       "A 的房間不准顯示 B 的已讀水位",
     ).toBe(100);
   });
@@ -299,7 +301,7 @@ describe("useChat load routing (active vs background)", () => {
     // 也讓水位在這一趟造訪內不可下降。這是刻意的:水位講的是「已經發生過的事」,
     // 讀過不會變成沒讀過,所以「這次沒查到 receipt」從來不是反證。真實來源是
     // 一次不完整的 200,或 receipt 被硬刪(`DeleteChatReadsInvolving`)。
-    // 單調只在造訪內成立:下次進房會重新跟伺服器要。
+    // 單調只在造訪內成立:下次進房是一份新的 hook,會重新跟伺服器要。
     h.listChat.mockResolvedValue([mkMsg("c1", "owner", "b", 1000)]);
     h.listChatReads
       .mockImplementationOnce(async () => [
@@ -308,16 +310,14 @@ describe("useChat load routing (active vs background)", () => {
       .mockImplementation(async () => []);
 
     const { result } = renderHook(() => useChat("b"));
-    await waitFor(() =>
-      expect(result.current.peerLastRead.tsFor("b")).toBe(5000),
-    );
+    await waitFor(() => expect(result.current.peerLastReadTs).toBe(5000));
 
     await act(async () => {
       h.sseHandler?.("chat_read");
       await new Promise((r) => setTimeout(r, 10));
     });
     expect(
-      result.current.peerLastRead.tsFor("b"),
+      result.current.peerLastReadTs,
       "receipt 消失不准把已讀勾熄掉",
     ).toBe(5000);
   });

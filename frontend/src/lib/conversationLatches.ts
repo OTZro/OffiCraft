@@ -16,8 +16,9 @@
 //
 // (3) is R4-1, which passed 1672 tests while being a live regression. The
 // previous fix put the acquire/release pair in one function, which left the
-// mutable fields public — so the broken form was still writable, and the rule
-// in latch-inventory.md §3 literally told the next person to write it.
+// mutable fields public — so the broken form was still writable, and the
+// inventory that stood in for this file literally told the next person to
+// write it.
 //
 // So the fields are gone from the type. State lives in this module's closure;
 // there is no property to read, no property to assign, and `x as any` finds
@@ -28,8 +29,17 @@
 // conversation.
 //
 // What is deliberately NOT here: `loadSeq` / `committedSeq`. Those are a
-// MONOTONIC GLOBAL CLOCK, not latches — a ticket taken later must outrank one
-// taken earlier even across a peer switch.
+// MONOTONIC CLOCK, not latches — a ticket taken later must outrank one taken
+// earlier.
+//
+// 🔴 (1) IS NOW THE MOUNT'S JOB, AND THE STAMP IS GONE WITH IT (T-48, R13-5).
+// Every method used to take a `peer` and refuse a caller that was not this
+// record's, because ONE `useChat` instance was swapped between rooms and could
+// hold a record belonging to a room the owner had left. `ChatArea` is mounted
+// under `key={peerId}` now, so a record is built per mount and every call site
+// passed the same constant string — a comparison that could no longer fail.
+// A record still belongs to exactly one conversation; what says so is that it
+// is created by, and dies with, that conversation's hook.
 
 /** Every latch a conversation can hold. */
 export type LatchName =
@@ -53,16 +63,12 @@ export type Lease = Exclude<LatchName, "entryAnchor">;
 export type LatchRelease = () => void;
 
 export type ConversationLatches = {
-  /** The conversation this record belongs to. Readable so a holder can say
-   * which one it is; it can never be reassigned. */
-  readonly peer: string;
-  /** Take a latch. `null` means "not yours, or already held" — the caller must
-   * stand down, and there is nothing to release. The returned handle is the
-   * ONLY way back out. */
-  acquire(peer: string, name: Lease): LatchRelease | null;
-  /** Is this latch held right now? `false` for a conversation that is not
-   * this record's. */
-  isHeld(peer: string, name: LatchName): boolean;
+  /** Take a latch. `null` means "already held" — the caller must stand down,
+   * and there is nothing to release. The returned handle is the ONLY way back
+   * out. */
+  acquire(name: Lease): LatchRelease | null;
+  /** Is this latch held right now? */
+  isHeld(name: LatchName): boolean;
 };
 
 function once(drop: () => void): LatchRelease {
@@ -79,10 +85,7 @@ function once(drop: () => void): LatchRelease {
  * `anchored` = this conversation was entered AT a message id, so the thread is
  * deliberately empty until the anchor window lands and no ordinary load may
  * put the live tail on screen in the meantime. That is `entryAnchor`. */
-export function openLatches(
-  peer: string,
-  anchored: boolean,
-): ConversationLatches {
+export function openLatches(anchored: boolean): ConversationLatches {
   let entryAnchor = anchored;
   let anchorFetch = 0;
   let loadStale = false;
@@ -105,12 +108,10 @@ export function openLatches(
   };
 
   return {
-    peer,
-    isHeld(who, name) {
-      return who === peer && held(name);
+    isHeld(name) {
+      return held(name);
     },
-    acquire(who, name) {
-      if (who !== peer) return null;
+    acquire(name) {
       switch (name) {
         // Same-direction mutexes: a second holder is refused, which is how the
         // caller learns to stand down (a scroll handler firing repeatedly near

@@ -13,7 +13,11 @@ import type {
   OutsourceWorkerView,
 } from "../api/adapter";
 import { autosizeTextarea } from "../lib/autosize";
-import { getChatDraft, saveChatDraft } from "../lib/chatDraftStore";
+import {
+  getChatDraft,
+  saveChatDraftText,
+  updateChatDraftAttachments,
+} from "../lib/chatDraftStore";
 import { useChat } from "../hooks/useChat";
 import { useWorkerCodenames } from "../hooks/useWorkerCodenames";
 import { useOwnerDisplayName } from "../hooks/useOwnerName";
@@ -23,11 +27,8 @@ import {
   CHAT_MAX_ATTACHMENTS,
   useAttachmentStaging,
 } from "../hooks/useAttachmentStaging";
-import type { PendingAttachment } from "../hooks/useAttachmentStaging";
 import { useWindowActive } from "../hooks/useWindowActive";
 import { useIsMobile } from "../hooks/useIsMobile";
-import { useKeyedRecord } from "../hooks/useKeyedRecord";
-import { useKeyedState } from "../hooks/useKeyedState";
 import { enterShouldSend } from "../lib/composerKeys";
 import { chatBottomAffordance } from "../lib/chatBottomAffordance";
 import { scrollToLatest } from "../lib/scrollToLatest";
@@ -134,24 +135,23 @@ function formatTime(ts: number): string {
   });
 }
 
-/** 🔴 EVERYTHING THIS COMPONENT TRACKS PER CONVERSATION, IN ONE RECORD (T-48,
- * fourth-review rebuild).
+/** 🔴 EVERYTHING THIS COMPONENT TRACKS FOR ONE CONVERSATION, IN ONE RECORD.
  *
- * ChatArea is NOT remounted when the selected member changes (OfficePage
- * renders one instance), so every one of these used to be its own `useRef`
- * plus a line in a hand-written "did the peer change? zero these out" block.
- * That list is exactly the thing four reviews kept finding a hole in — and it
- * really did have three at the time of writing (`loadingOlder`,
- * `pendingLatestScroll`, plus the ones judged harmless). The list is now
- * machine-maintained: `useKeyedRecord` rebuilds this whole record when the
- * peer changes, and because `freshChatSession` is an object literal of the
- * full type, a field added without a reset value does not compile.
+ * 🔴 IT IS PER MOUNT, AND SINCE R13-5 THAT IS THE SAME THING AS PER
+ * CONVERSATION. `OfficePage` mounts this component under `key={peerId}`, so a
+ * switch UNMOUNTS it and the next conversation gets a new component with a new
+ * record — React's own machinery, not a second copy of it built here.
  *
- * ⚠️ WHAT DOES NOT BELONG IN HERE: DOM refs (`inputRef`, `messagesRef`, …),
- * anything whose lifetime is the COMPONENT rather than the conversation
- * (`didMountAttachRestoreRef`, `jumpSettleRef`), and anything mirroring live
- * browser state (`isComposingRef`). Each of those is annotated where it is
- * declared. */
+ * This record used to be rebuilt in place by `useKeyedRecord`, keyed on the
+ * peer, because the component was reused across conversations. Every field
+ * below is still per-conversation; nothing about what it holds changed. What
+ * went away is the rebuilding: twelve reviews' worth of "is this still my
+ * visit?" machinery existed to make one component instance behave like one
+ * instance per conversation, which is what a `key` already means (R13-5).
+ *
+ * ⚠️ WHAT DOES NOT BELONG IN HERE: DOM refs (`inputRef`, `messagesRef`, …) and
+ * anything mirroring live browser state (`isComposingRef`). Each of those is
+ * annotated where it is declared. */
 type ChatSession = {
   /** ② ENTRY POSITIONING: entering a conversation with unread messages must
    * land on the FIRST unread message, not the bottom. The anchor is derived
@@ -179,15 +179,14 @@ type ChatSession = {
   /** The UI-side in-flight lock over `useChat`'s own, so repeated scroll
    * events near the top cannot re-snapshot `prependAnchor` mid-flight.
    *
-   * 🔴 IT IS IN THIS RECORD BECAUSE IT USED TO BE THE ONE THAT WAS NOT
-   * (fourth-review R4-3). As a plain ref it was CROSS-PEER, and the argument
-   * for leaving it that way was "the try/finally releases it after one request
-   * either way". That is only true of a promise that SETTLES: `api.listChat`
-   * has neither a timeout nor an AbortController (http.ts gives a deadline to
-   * the SSE probe and to nothing else), so one hung GET froze scrollback in
-   * EVERY conversation for the rest of the session, with no spinner and no
-   * error. Per conversation, a hung request now strands only the record it was
-   * started on — and that record dies with its conversation. */
+   * 🔴 IT IS IN THIS RECORD BECAUSE IT USED TO BE A CROSS-PEER MODULE-ISH REF
+   * (fourth-review R4-3), and the argument for leaving it that way was "the
+   * try/finally releases it after one request either way". That is only true
+   * of a promise that SETTLES: `api.listChat` has neither a timeout nor an
+   * AbortController (http.ts gives a deadline to the SSE probe and to nothing
+   * else), so one hung GET froze scrollback in EVERY conversation for the rest
+   * of the session, with no spinner and no error. In this record a hung
+   * request strands only the conversation it was started on. */
   loadingOlder: boolean;
   /** One-shot: entry positioning (bottom OR first-unread) ran here. */
   initialPositioned: boolean;
@@ -231,11 +230,6 @@ type ChatSession = {
   pendingLatestScroll: boolean;
 };
 
-/** The empty thread rendered while `messages` still belongs to the room the
- * owner has just left (see `shownMessages`). Module-level so the identity is
- * stable across renders. */
-const NO_MESSAGES: ChatMessage[] = [];
-
 function freshChatSession(unreadCount: number): ChatSession {
   return {
     initialUnread: unreadCount,
@@ -253,72 +247,6 @@ function freshChatSession(unreadCount: number): ChatSession {
     pendingLatestScroll: false,
   };
 }
-
-/** A file that finished reading for a room the owner is no longer looking at —
- * another conversation, or no conversation at all because the page was left. It
- * is invisible either way (the composer renders only the rows stamped with the
- * room on screen); this is purely about not LOSING it, since the staged list is
- * wiped on the next conversation switch and dies outright on an unmount. It goes
- * into ITS OWN room's draft, which is what that room's composer restores from.
- *
- * Dedup is by `key` because the same row may already be in the draft: the
- * persist effect below saves the live staged list on every change, so a file
- * that was staged and then abandoned is in the draft AND in state.
- *
- * 🔴 THE COUNT CAP IS NOT APPLIED HERE, AND THAT IS THE FIX FOR R10-3. The
- * previous shape refused a file when the target draft already held
- * CHAT_MAX_ATTACHMENTS and reported success — the file was destroyed with no
- * notice in either room. The cap is a staging-time rule about ONE message; a
- * file that has already been read is not a candidate to refuse, it is data
- * somebody is holding. So the draft is allowed over the cap and the owner sees
- * every file waiting when they come back, with the over-cap ones there to
- * remove (§3 rule 4: blocking a commit is never a licence to destroy the file).
- *
- * ⚠️ WHAT MAKES THAT SAFE IS THE COMPOSER, NOT THE SERVER (T-48, R11-3). This
- * comment used to say the over-cap send "is refused by the server, visibly".
- * The server does refuse it (400) — but this app has no toast, no error row for
- * a failed send and no `unhandledrejection` reporter, so the refusal reaches
- * nobody: the send button stayed lit and every press did nothing, forever.
- * The composer now refuses the SEND itself, with the same 「最多 N 個檔案」
- * notice staging uses — see `overAttachmentCap` below.
- *
- * 🔴 AND THE DRAFT IS NOT THE ONLY PLACE IT HAS TO REACH (T-48, R11-2). A room
- * the owner has come BACK to already has a live composer, and that composer
- * restored its draft when it mounted — before this file existed. Writing only
- * to the draft left the file invisible AND doomed: the persist effect below
- * saves the composer's own (file-less) list on the next keystroke, over the
- * top. So the arrival is also announced to whichever composer is showing that
- * room right now. */
-function keepAttachmentsWithTheirRoom(
-  peer: string,
-  arriving: PendingAttachment[],
-): void {
-  const saved = getChatDraft(peer);
-  const kept = saved?.attachments ?? [];
-  const fresh = arriving.filter((a) => !kept.some((k) => k.key === a.key));
-  if (fresh.length > 0) {
-    saveChatDraft(peer, {
-      text: saved?.text ?? "",
-      attachments: [...kept, ...fresh],
-      replyTo: saved?.replyTo,
-    });
-  }
-  // Announced whether or not the draft write happened: the draft may already
-  // hold the row while the composer on screen does not (it mounted, restored,
-  // and the row was written after). `adoptAttachments` dedups by key.
-  liveComposers.get(peer)?.(arriving);
-}
-
-/** The composer that is showing a given room RIGHT NOW, if one is mounted —
- * keyed by peer id, at most one entry per room because only one `ChatArea`
- * exists at a time. This is the half `chatDraftStore` cannot be: the store is
- * where a file WAITS, and a composer that has already read it is not going to
- * read it again. Registration is the mounted composer's own doing (the effect
- * in `ChatArea` below), so nothing here has to be told when a room is left. */
-const liveComposers = new Map<
-  string,
-  (arriving: PendingAttachment[]) => void
->();
 
 export function ChatArea({
   member,
@@ -410,27 +338,19 @@ export function ChatArea({
   headerTaskTitle?: string;
 }) {
   const { t, msg } = useI18n();
-  // 🔴 THE PER-CONVERSATION MUTABLE STATE, REBUILT BY MACHINE (T-48). ChatArea
-  // is NOT remounted when the selected member changes (OfficePage renders one
-  // instance), so this used to be a hand-written list of ~13 assignments that
-  // four reviews kept finding holes in. `useKeyedRecord` owns the list now: a
-  // switch replaces the whole record, and an async job that captured the old
-  // one settles into an orphan instead of clearing the NEW conversation's
-  // latch. Adding a field without a reset value does not compile.
-  //
-  // 🔴 AND IT IS THIS COMPONENT'S VISIT TOKEN (T-48, R6-1). Its identity — not
-  // `member.id` — is what every "is this still mine?" question below is asked
-  // against: the React-state half (`useKeyedState(session, …)`), the draft swap
-  // and the explicit guards on the things no per-key primitive can own (the DOM
-  // and the screen). A→B→A hands back a THIRD record, so a late writer from the
-  // FIRST visit to A is recognised as late even though the peer id is equal
-  // again. See the note at the top of `useKeyedRecord`.
+  // 🔴 THE PER-CONVERSATION MUTABLE STATE (T-48). One record for this mount,
+  // and this mount IS one conversation: `OfficePage` renders this component
+  // under `key={peerId}` (R13-5), so entering another room builds a new
+  // component and a new record, and an async job started by the room the owner
+  // left settles into an orphan nobody reads.
   //
   // The entry unread snapshot lives in it, taken synchronously at the first
-  // render for this visit, strictly before any effect runs.
-  const session = useKeyedRecord(member.id, () =>
-    freshChatSession(member.unreadCount),
-  );
+  // render, strictly before any effect runs.
+  const sessionRef = useRef<ChatSession | null>(null);
+  if (sessionRef.current === null) {
+    sessionRef.current = freshChatSession(member.unreadCount);
+  }
+  const session = sessionRef.current;
 
   const isOffline = member.status === "offline";
   // T-9c3c (owner 2026-07-24, "有時候離線還是沒辦法發訊息"): a REAL roster member
@@ -463,19 +383,15 @@ export function ChatArea({
   // presence flips to waking via SSE shortly after. Optimistically disable the
   // button meanwhile so a double-tap can't fire two activates.
   //
-  // 🔴 PER VISIT, BY MACHINE (T-48, R6-1 — the census in latch-inventory §2.4
-  // had missed this pair). These two are per-conversation ("A's optimistic
-  // notice must not linger on B's now-shared wake row") and used to say so with
-  // a plain `useState` plus a hand-written reset effect keyed on `member.id` —
-  // the exact shape `useKeyedState` exists to retire, one commit late (an
-  // effect runs AFTER the frame that already showed the previous
-  // conversation's 「喚醒中…」) and with the same string-guarded async ending
-  // that R6-1 walked through: on the second visit to the same peer the reset
-  // did not fire and the first visit's verdict wrote straight into it.
-  const [wakePending, setWakePending] = useKeyedState(session, false);
+  // Per conversation ("A's optimistic notice must not linger on B's now-shared
+  // wake row"), which a plain `useState` says on its own now that the component
+  // is remounted per conversation (R13-5). It used to need a reset effect keyed
+  // on `member.id`, and that effect ran one commit AFTER the frame that already
+  // showed the previous conversation's 「喚醒中…」.
+  const [wakePending, setWakePending] = useState(false);
   // T-7fa1: the activate reported that nothing was dispatched. Distinct from
   // wakePending — "not waiting, because nothing was sent". Never both true.
-  const [wakeUndispatched, setWakeUndispatched] = useKeyedState(session, false);
+  const [wakeUndispatched, setWakeUndispatched] = useState(false);
   // The OTHER thing that clears the optimistic bridge: reality moving on this
   // member. Once presence reflects a fresh lifecycle the local optimism has
   // handed off to the real state (`waking` drives the label below), so a
@@ -492,8 +408,7 @@ export function ChatArea({
 
   const {
     messages,
-    messagesPeer,
-    peerLastRead,
+    peerLastReadTs,
     send,
     markRead,
     hasMore,
@@ -510,35 +425,6 @@ export function ChatArea({
     // viewport, the highlight and the miss notice are this component's business.
   } = useChat(member.id, jumpToMsgId);
 
-  // 🔴 ANOTHER ROOM'S THREAD IS NEVER PAINTED UNDER THIS ROOM'S HEADER (T-48,
-  // R11-1). `useChat` swaps `messages` and `messagesPeer` TOGETHER, but one
-  // commit AFTER `member` changes — this component is not remounted on a
-  // switch, so there is a committed, paintable frame in which the header, the
-  // roster selection and the composer are all B while the message list is
-  // still A's. Every EFFECT below already refuses to act on that frame
-  // (`messagesPeer !== member.id` guards the entry positioning, the scroll
-  // reactor, the mark-read and the scrollback); the RENDER did not, so A's
-  // message bodies, A's quote rows and — the tenth review's finding — an open
-  // document preview belonging to A's file chip were all drawn under B's name.
-  //
-  // The switch already flashes an empty thread one commit later (useChat's
-  // reset), so refusing to draw here shows nothing that was not about to be
-  // shown anyway. The guard is a render-time derivation rather than a rule at
-  // each of the dozen places that read a message, so a new reader of `messages`
-  // cannot forget it.
-  //
-  // 🔴 IT IS ALSO WHAT KEEPS `messagesRef`'s UNGUARDED READERS HONEST, and that
-  // was an ACCIDENT until it was written here (T-48, R12-4). The scroll
-  // container is rendered only inside the `shownMessages.length > 0` branch, so
-  // on a mismatched frame the element does not exist, `messagesRef.current` is
-  // null, and every reader — including the three that do NOT gate on
-  // `messagesPeer` (`onMessagesScroll`, which would otherwise `markRead` the
-  // PREVIOUS room's newest ts; the entry-scroll effect, which gates on
-  // `session.entryScrollPending`; and `jumpToLatest`, which is only reachable
-  // from a button drawn in that same branch) — returns at its own `if (!el)`.
-  // Anyone moving the container out of this branch, or giving it a placeholder
-  // that keeps the ref alive across the switch frame, is re-opening all three.
-  const shownMessages = messagesPeer === member.id ? messages : NO_MESSAGES;
 
   // Released-worker codenames: an ow- participant that is NOT in the live
   // `workers` list (task closed → dropped off) still has a codename on the
@@ -619,21 +505,16 @@ export function ChatArea({
   // The shared 看原訊息 exit. Declared here rather than at the top of the
   // component because it is handed `nameOf`, and `nameOf` needs the roster
   // hooks above it. It is still an unconditional top-level hook call.
-  // `session` is this component's visit token (see its declaration): the read
-  // behind 看原訊息 belongs to the visit that clicked it, not to whoever is on
-  // screen when it lands (T-48, R8-3).
-  const quotedMessage = useQuotedMessageOverlay(session, nameOf);
+  const quotedMessage = useQuotedMessageOverlay(nameOf);
   // Is the owner ACTUALLY looking (window focused + tab visible)? Read side
   // effects (mark-read below) are gated on this: a backgrounded window must
   // never consume unread state (the roster badge has to survive until the
   // owner really comes back and looks).
   const windowActive = useWindowActive();
-  // T-8aaa draft survival: seed the text from the per-peer draft store so a
-  // 跳頁-then-return (which unmounts/remounts this component) restores what the
-  // owner had typed. Lazy-init covers the FIRST mount for the initially-selected
-  // peer; a later peer SWITCH (this instance is reused, not remounted) restores
-  // in the peer-switch render block below. Staged attachments are restored
-  // alongside (they live in useAttachmentStaging, set via its API).
+  // T-8aaa draft survival: seed the text from the per-peer draft store. Both
+  // ways back into a room are the same event now — a 跳頁-then-return and a
+  // conversation switch both MOUNT this component (R13-5), so one lazy init
+  // covers both and there is no second restore path to keep consistent with it.
   const [draft, setDraft] = useState(() => getChatDraft(member.id)?.text ?? "");
   // T-4e95 「回覆這則」: the message the composer is currently replying to, or
   // null in the ordinary send state. It rides the DRAFT store, not just this
@@ -647,12 +528,15 @@ export function ChatArea({
   // The staged attachments (pasted images AND/OR picked/dropped files), held
   // until the message is sent — the SHARED staging state machine
   // (useAttachmentStaging: size/count caps, paste/pick funnels, previews).
-  // 🔴 R9-1, AND WHY IT IS NO LONGER A GUARD (owner ruling). This component is
-  // NOT remounted on a conversation switch, so a FileReader started in A can
-  // complete while B is on screen. The first fix was a commit guard on the
-  // visit token; this is the shape the owner asked for instead — each staged
-  // file carries the room it was picked for, and the composer renders only the
-  // ones stamped with the room on screen. Nothing here has to REMEMBER to ask.
+  //
+  // 🔴 THIS ROOM'S FILES ARE THIS ROOM'S DRAFT (T-48, R13-2). Naming the peer
+  // here names the slot in `chatDraftStore` the rows live in, and the hook
+  // reads that slot through `useSyncExternalStore`. A `FileReader` started here
+  // commits into this peer's slot whatever is on screen when it finishes —
+  // another room, or no room at all because the page was left — and this
+  // composer repaints the moment anything is written into the slot it is
+  // showing. That is R9-1, R10-4 and R11-2 all at once, with nothing to
+  // remember and nothing to restore.
   const {
     pendingAttachments,
     attachError,
@@ -661,9 +545,7 @@ export function ChatArea({
     onPickFile,
     removeAttachment,
     clearAttachments,
-    adoptAttachments,
-    restoreAttachments,
-  } = useAttachmentStaging(member.id, keepAttachmentsWithTheirRoom);
+  } = useAttachmentStaging(member.id);
   // What the in-cockpit full-view overlay is showing (null = closed). TWO ways
   // in, one surface: an incoming MESSAGE body (the corner 放大閱讀 button — the
   // text is already in hand, so there is nothing to fetch, download or share),
@@ -679,25 +561,23 @@ export function ChatArea({
   // measurement of a leaking document preview was filed against this state
   // while the overlay it measured was the strip's. Deleted rather than left as
   // documentation of an intention.
-  // 🔴 PER VISIT (T-48, R10-1 — the twelfth instance of this family). This was
-  // left as a plain `useState` when its twin `galleryOpen` was keyed, on the
-  // written premise that `.md-preview`'s full-screen backdrop blocks every
-  // gesture that could change the peer. The tenth review drove it and the
-  // premise is false TODAY: the site routes on the hash (`OfficePage`'s
-  // `useHashRoute`, whose `route.chatId` IS the selected peer), so the browser's
-  // back/forward buttons and any link into another conversation swap `member`
-  // without the backdrop being touched. Measured: open A's document preview,
-  // switch to B — the header says Bruno while the overlay still shows A's
-  // filename and A's content.
+  // 🔴 IT MUST NOT OUTLIVE THE CONVERSATION (T-48, R10-1). It once carried a
+  // written exemption — `.md-preview`'s full-screen backdrop blocks every
+  // gesture that could change the peer — and the premise was false: the site
+  // routes on the hash (`OfficePage`'s `useHashRoute`, whose `route.chatId` IS
+  // the selected peer), so back/forward and any link into another conversation
+  // swapped `member` without the backdrop being touched. Measured: open A's
+  // document preview, switch to B — the header said Bruno while the overlay
+  // still showed A's filename and A's content.
   //
-  // Keying the overlay is also what makes the 22 unguarded async landing points
-  // inside `MarkdownPreviewOverlay` structurally safe: the overlay itself cannot
-  // outlive the visit, so none of its writers can either.
-  const [mdPreview, setMdPreview] = useKeyedState<
+  // Remounting per conversation (R13-5) is also what makes the unguarded async
+  // landing points inside `MarkdownPreviewOverlay` structurally safe: the
+  // overlay cannot outlive the conversation, so none of its writers can either.
+  const [mdPreview, setMdPreview] = useState<
     | { kind: "message"; title: string; source: string }
     | { kind: "staged-image"; title: string; imageSrc: string }
     | null
-  >(session, null);
+  >(null);
   // 「看原訊息」 — reading that one message and showing it whole is NOT this
   // component's business any more (T-0b78). It lives in
   // hooks/useQuotedMessageOverlay. ⚠️ The quote row on a chat bubble is now the
@@ -707,36 +587,27 @@ export function ChatArea({
   // the roster-aware name this window already resolves.
   // M2-3 file & image gallery panel (header icon toggles it).
   //
-  // 🔴 PER VISIT, NOT PER OVERLAY (T-48, R9-2). §2.4 used to exempt this
-  // alongside `mdPreview` on the grounds that "the overlay covers the page, so
-  // the switch gesture is blocked". That is true of `.md-preview`
-  // (`position: fixed; inset: 0` + a backdrop) and FALSE of this one:
-  // `.chat__gallery` is `position: absolute; right: 0; width: min(340px, 100%)`
-  // — a side panel inside the chat column with no backdrop, and the roster is
-  // fully clickable beside it. Measured: open A's gallery, click B in the
-  // roster, and the header says Bruno while the panel still shows A's files
-  // labelled with A's sender name. Closing on a switch also remounts the panel,
-  // so its `entries` / `loaded` / `previewKey` start clean for the new room.
-  const [galleryOpen, setGalleryOpen] = useKeyedState(session, false);
+  // 🔴 IT MUST NOT OUTLIVE THE CONVERSATION EITHER (T-48, R9-2). The exemption
+  // it once shared with `mdPreview` ("the overlay covers the page, so the
+  // switch gesture is blocked") was doubly false here: `.chat__gallery` is
+  // `position: absolute; right: 0; width: min(340px, 100%)` — a side panel
+  // inside the chat column with no backdrop, and the roster is fully clickable
+  // beside it. Measured: open A's gallery, click B in the roster, and the
+  // header said Bruno while the panel still showed A's files labelled with A's
+  // sender name.
+  const [galleryOpen, setGalleryOpen] = useState(false);
   // The attachment whose share link was just copied (transient 「已複製」
   // feedback on that one button; null = none).
   // Inter-agent (agent↔agent) groups that the owner has EXPANDED (keyed by the
   // group's first-message id). Collapsed is the default — a group is expanded
   // only once its id lands here, so the owner opts in per block.
   //
-  // 🔴 PER VISIT (T-48, R11-9). This was the last plain `useState` in this
-  // component that outlived a conversation switch with nothing said about it —
-  // not a keyed slot, not adopted by the switch block below, not even a line of
-  // comment claiming it was deliberate. It holds MESSAGE IDS OF OTHER ROOMS,
-  // and `groupExpanded` asks `has(m.id)` of whatever is on screen now, so the
-  // only thing standing between it and a wrongly-expanded block is that message
-  // ids happen to be globally unique. That is a property of today's data, not a
-  // property of this structure — and the set never shrinks, so it only ever
-  // gets more chances to collide. Keying it costs one thing, honestly: a block
-  // opened in A is collapsed again on the way back to A, which is what every
-  // other per-conversation view state here already does.
-  const [expandedGroups, setExpandedGroups] = useKeyedState<Set<string>>(
-    session,
+  // 🔴 IT HOLDS MESSAGE IDS, SO IT MUST NOT OUTLIVE THE CONVERSATION (T-48,
+  // R11-9). `groupExpanded` asks `has(m.id)` of whatever is on screen, and the
+  // only thing that ever stood between this set and a wrongly-expanded block in
+  // another room was that message ids happen to be globally unique today — a
+  // property of the data, not of this structure, and the set never shrinks.
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
     () => new Set(),
   );
   // Expanded 判定 is membership-based (T-bf82 收折 × 分頁): a group counts as
@@ -824,17 +695,14 @@ export function ChatArea({
   // Set once per conversation when entry positioning ran: the id of the first
   // unread message. Drives the "以下是未讀訊息" divider (kept for the whole
   // session, like LINE) and the initial scroll target.
-  const [firstUnreadId, setFirstUnreadId] = useKeyedState<string | null>(
-    session,
-    null,
-  );
+  const [firstUnreadId, setFirstUnreadId] = useState<string | null>(null);
   // ① IS THE NEWEST MESSAGE IN THE VIEWPORT? The round 回到最新訊息 arrow's
   // ONLY condition (owner card rc-72054864ff88) — not "scrolled more than a
   // screen", not "a new message arrived". Measured from the scroll viewport's
   // own geometry in `onMessagesScroll` and wherever this component moves the
   // viewport itself. Starts true: every entry path lands at the bottom or
   // measures honestly before this can be read.
-  const [latestInView, setLatestInView] = useKeyedState(session, true);
+  const [latestInView, setLatestInView] = useState(true);
   // ② THE NEW-MESSAGE PREVIEW STRIP's content — the LATEST unseen inbound
   // message (sender + body), or null when there is nothing waiting.
   //
@@ -844,20 +712,20 @@ export function ChatArea({
   // and there must only ever be one of it (owner screenshot). The FIRST unseen
   // message keeps its own job — anchoring the 「以下是未讀訊息」 divider below —
   // which is why the two are tracked separately.
-  const [newMsgPreview, setNewMsgPreview] = useKeyedState<{
+  const [newMsgPreview, setNewMsgPreview] = useState<{
     id: string;
     from: string;
     body: string;
-  } | null>(session, null);
+  } | null>(null);
   // 🔴 T-48: the jump target the server has NO RECORD OF ("missing"), and — a
   // DIFFERENT fact that used to be collapsed into it — an anchor fetch that was
   // repeatedly OVERTAKEN by newer loads ("interrupted"). The fallback (open at
   // the bottom) is indistinguishable from a jump that worked, which is the very
   // silence this ticket exists to remove — so the outcome is state, and state is
   // rendered. A `console.warn` is not a user-visible thing.
-  const [jumpNotice, setJumpNotice] = useKeyedState<
+  const [jumpNotice, setJumpNotice] = useState<
     null | "missing" | "unreachable" | "interrupted"
-  >(session, null);
+  >(null);
   // How many times a jump may be re-scheduled after being overtaken. `load()`
   // is held off for the duration of the anchor fetch, so losing the race even
   // once takes a deliberate 回到最新 or a send; three is a ceiling on a loop,
@@ -869,146 +737,25 @@ export function ChatArea({
   // there until some unrelated render happened to carry it. BOUNDED: without a
   // ceiling a load that keeps winning the race turns "retry" into an unbounded
   // fetch loop, which is a worse failure than the one being fixed.
-  const [jumpRetry, setJumpRetry] = useKeyedState(session, 0);
+  const [jumpRetry, setJumpRetry] = useState(0);
   // The transient highlight on the row a jump located (cleared after the flash).
-  const [highlightMsgId, setHighlightMsgId] = useKeyedState<string | null>(
-    session,
-    null,
-  );
+  const [highlightMsgId, setHighlightMsgId] = useState<string | null>(null);
 
-  // 🔴 AND THE REACT-STATE HALF IS MACHINE-MAINTAINED TOO (T-48, R5-1). This
-  // block used to carry six hand-written `setX(null)` lines beside the draft
-  // swap — the same hand-written list `useKeyedRecord` had just removed from
-  // the ref half, with the same two holes: a seventh per-conversation state
-  // added without a seventh reset line compiles and goes green, and a setter
-  // captured by an in-flight job belonging to the PREVIOUS conversation still
-  // wrote into the CURRENT one (R5-1: an anchor fetch that ended `unreachable`
-  // after the owner had moved on pasted the old room's failure banner, retry
-  // button and all, onto the new one). Those six now declare themselves with
-  // `useKeyedState(member.id, …)`: the reset IS the initial value, and the
-  // setter is bound to the key it was taken for.
+  // T-8aaa: persist the TYPED half of the draft to the per-peer store on every
+  // change, so an unmount (跳頁 or a switch to another room) leaves the latest
+  // draft behind. An all-empty draft deletes the entry, giving the "送出 /
+  // 手動清空後歸零" behaviour for free.
   //
-  // What is genuinely left here is what no per-key primitive can do on its
-  // own: the composer is not RESET on a switch, it is swapped to the new
-  // peer's SAVED draft, which has to be read from storage and pushed through
-  // the staging API. `visitRef` is the visit mirror for this block and is
-  // therefore the one thing that cannot live in the record it mirrors; it is
-  // also why the block does not run on first mount (the draft restore below
-  // would double-apply on top of the mount-time one).
-  //
-  // 🔴 IT MIRRORS THE RECORD, NOT `member.id` (T-48, R6-1). This used to be
-  // `peerIdRef`, a string, and every async guard below then asked "is this
-  // still the same PERSON?" — which answers YES on the second visit to the
-  // same person, letting the first visit's late failure banner, its
-  // `scrollIntoView` and its wake verdict all land on a screen that is not
-  // theirs. The record's identity answers the question the guards actually
-  // mean, and answers it for the state half at the same time.
-  const visitRef = useRef(session);
-  if (visitRef.current !== session) {
-    visitRef.current = session;
-    // T-8aaa: swap the composer to the NEW peer's saved draft. Render-phase
-    // state adjustment (same pattern as the resets above) so the committed
-    // render already carries the new peer's text+attachments — no stale frame
-    // and no cross-peer mis-persist by the save effect below. Attachments come
-    // back through `restoreAttachments`, whose functional set applies the
-    // snapshot unless rows for the room being ENTERED are already staged.
-    //
-    // 🔴 THERE IS DELIBERATELY NO `clearAttachments()` HERE (T-48, R12-1). It
-    // used to lead this block, back when the staged list was not stamped with
-    // its room and a switch really did have to wipe it. Now every row and every
-    // notice says whose it is, so the only thing the call still did was destroy
-    // this room's `attachError` — DURING RENDER, before the room it belonged to
-    // could paint it. That is R11-4's bug, and R11-4's own fix (holding a notice
-    // whose target is not the current one) could not reach it: on the switch
-    // BACK INTO A the current target IS A, so the notice A raised died on entry
-    // instead of on exit — invisible either way. Removing the call is what lets
-    // 「圖片太大」 raised in A survive to be read in A.
-    //
-    // Nothing else needed it: the OLD room's rows are drained to their own draft
-    // by the staging hook's foreign-landing effect, and the room being entered
-    // has no staged rows of its own to dedupe against (that same effect emptied
-    // them when it was left).
-    const restored = getChatDraft(member.id);
-    setDraft(restored?.text ?? "");
-    // 🔴 THE TARGET MUST SWAP WITH THE PEER, and since 2026-08-21 the reason is
-    // the OPPOSITE of the one that used to be written here. The server had a
-    // `sameChatConversation` check and refused a cross-conversation `reply_to`
-    // with a 400, so forgetting this line was noisy, visible, and left the draft
-    // intact. That check is GONE (owner ruling: quoting sideways into another
-    // conversation is the use case). Forgetting this line now SENDS SUCCESSFULLY
-    // — a message to the new peer carrying a quote row built from the old
-    // conversation, which the server faithfully assembles and shows the
-    // recipient. The guard got MORE load-bearing when the refusal went away, not
-    // less: do not remove it on the belief that the server still catches this.
-    setReplyToId(restored?.replyTo ?? null);
-    if (restored && restored.attachments.length > 0) {
-      restoreAttachments(restored.attachments);
-    }
-  }
-
-  // T-8aaa: FIRST-mount attachment restore. The text is lazy-initialized above,
-  // but staged attachments live in useAttachmentStaging (starts empty) and have
-  // no external lazy init — replay the saved list once, before paint, so a
-  // remount shows the images immediately. A peer SWITCH is handled in the block
-  // above; this one-shot covers only the initial peer.
-  // ⚠️ NOT in the session record: its lifetime is the COMPONENT, not the
-  // conversation. In the record it would reset on every switch and replay the
-  // mount restore on top of the switch block's own restore, staging the
-  // attachments twice.
-  const didMountAttachRestoreRef = useRef(false);
-  useLayoutEffect(() => {
-    if (didMountAttachRestoreRef.current) return;
-    didMountAttachRestoreRef.current = true;
-    const restored = getChatDraft(member.id);
-    if (restored && restored.attachments.length > 0) {
-      restoreAttachments(restored.attachments);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // T-8aaa: persist the live draft (text + staged attachments) to the per-peer
-  // store on every change, so an unmount (跳頁) leaves the latest draft behind.
-  // Because the peer-switch block adjusts draft+attachments during render, the
-  // committed values are always consistent with `member.id` here — no stale
-  // window. An empty draft deletes the entry (saveChatDraft), giving the
-  // "送出 / 手動清空後歸零" behavior for free.
+  // 🔴 IT CANNOT TOUCH THE STAGED FILES, AND THAT IS THE POINT (T-48, R13-2 —
+  // R11-2's fix made structural). This effect used to write text AND
+  // attachments together, from this component's own state, so a file filed into
+  // the draft by a read that finished after this composer had read it was
+  // destroyed by the next keystroke. The files are no longer this component's
+  // to write back: they live in the store, and `saveChatDraftText` leaves them
+  // exactly where they are.
   useEffect(() => {
-    saveChatDraft(member.id, {
-      text: draft,
-      attachments: pendingAttachments,
-      replyTo: replyToId ?? undefined,
-    });
-  }, [member.id, draft, pendingAttachments, replyToId]);
-
-  // 🔴 A FILE CAN FINISH READING WHILE NO COMPOSER EXISTS FOR ITS ROOM, AND THE
-  // ONE THAT EXISTS NEXT HAS ALREADY READ THE DRAFT (T-48, R11-2). Pick a big
-  // file in A, leave the page, come back to A: the previous `ChatArea` is gone,
-  // so its staging hook hands the finished read to `keepAttachmentsWithTheirRoom`
-  // — which files it in A's draft. But THIS instance restored A's draft when it
-  // mounted, seconds earlier and empty, and nothing re-reads a draft after that.
-  // The file was therefore invisible here and doomed: the persist effect above
-  // writes this composer's own list back over A's draft on the next keystroke.
-  // Measured before this: the file was in the draft, absent from the screen, and
-  // gone from both after one keypress.
-  //
-  // So the store is where a file WAITS and this registry is how it ARRIVES. The
-  // callback is looked up through a ref because it is redeclared every render
-  // while the registration is per-room; `adoptAttachments` appends and dedups by
-  // key, so an arrival that the mount-time restore already covered is a no-op.
-  const adoptRef = useRef(adoptAttachments);
-  adoptRef.current = adoptAttachments;
-  useEffect(() => {
-    const adopt = (arriving: PendingAttachment[]) => adoptRef.current(arriving);
-    liveComposers.set(member.id, adopt);
-    return () => {
-      // Identity-checked: on a switch the NEW room's registration may already
-      // have replaced this entry, and deleting by key alone would unregister a
-      // composer that is very much alive.
-      if (liveComposers.get(member.id) === adopt) {
-        liveComposers.delete(member.id);
-      }
-    };
-  }, [member.id]);
+    saveChatDraftText(member.id, draft, replyToId ?? undefined);
+  }, [member.id, draft, replyToId]);
 
   // T-e987 compose seed: prefill the composer once with "[<taskNo>] " when the
   // 任務卡 label routes here, but only into an EMPTY draft (never overwrite
@@ -1033,7 +780,7 @@ export function ChatArea({
   async function loadOlderAnchored() {
     if (session.loadingOlder || !hasMore) return;
     const el = messagesRef.current;
-    if (!el || messages.length === 0 || messagesPeer !== member.id) return;
+    if (!el || messages.length === 0) return;
     session.loadingOlder = true;
     session.prependAnchor = {
       firstId: messages[0].id,
@@ -1057,7 +804,7 @@ export function ChatArea({
   useLayoutEffect(() => {
     const anchor = session.prependAnchor;
     if (!anchor) return;
-    if (messagesPeer !== member.id || messages.length === 0) return;
+    if (messages.length === 0) return;
     const idx = messages.findIndex((m) => m.id === anchor.firstId);
     if (idx <= 0) {
       // idx === 0: nothing prepended (yet) — an unrelated append committed
@@ -1073,7 +820,7 @@ export function ChatArea({
     // The one-shot entry positioning (session.initialPositioned) already ran for
     // this conversation — a prepend must never re-run it, and it doesn't:
     // the latch stays untouched here.
-  }, [messages, messagesPeer, member.id]);
+  }, [messages]);
 
   // Threshold (px) within which the viewport counts as "at the bottom" for
   // auto-follow and the read watermark.
@@ -1271,7 +1018,6 @@ export function ChatArea({
     // the room would never fill. An empty thread has nothing in the DOM, which
     // sends this straight down the fetch branch below — which is the point:
     // the FIRST request the room makes is the window around the target.
-    if (messagesPeer !== member.id) return;
     if (session.jumpConsumed === jumpToMsgId) return;
     // Raw interpolation matches the chip-jump selector above — message ids
     // are server-minted (`c-<hex>`), never arbitrary strings.
@@ -1300,32 +1046,23 @@ export function ChatArea({
         session.initialPositioned = true;
         session.prevIds = new Set(messages.map((m) => m.id));
         session.nearBottom = false;
-        const firedFor = session;
         void loadAround(jumpToMsgId).then((outcome) => {
           // 🔴 THE OWNER MAY HAVE LEFT WHILE THE PAIR WAS IN THE AIR (T-48,
-          // R5-1). Two of the three endings below reach the OUTSIDE world —
-          // `setJumpNotice` paints a banner and `endRef.scrollIntoView()` moves
-          // a viewport — and neither is addressed to a conversation, they are
-          // addressed to whatever room is on screen. Without this line a 502 on
-          // A's anchor pair, answered after the owner clicked B in the roster,
-          // hung A's 「讀不到那則訊息」 banner in B's room (with a retry button
-          // that does nothing, because B has no jump target) and scrolled B to
-          // the bottom — which, if B was itself entered AT AN ANCHOR, is the
-          // exact intermediate frame this ticket exists to delete, arriving
-          // from the previous conversation.
+          // R5-1), AND LEAVING NOW MEANS UNMOUNTING (R13-5). Two of the endings
+          // below reach outside this callback — `setJumpNotice` paints a banner
+          // and `endRef.scrollIntoView()` moves a viewport — and neither is
+          // addressed to a conversation. This used to need an explicit
+          // `visitRef.current !== firedFor` line because the component was
+          // reused between rooms: a 502 on A's anchor pair, answered after the
+          // owner clicked B in the roster, hung A's 「讀不到那則訊息」 banner in
+          // B's room with a retry button that did nothing. Under `key={peerId}`
+          // this instance is gone by then — the setter writes into a dead
+          // component and React drops it, and `endRef.current` has been nulled
+          // by the unmount — so there is nothing left for a line to check.
           //
-          // The record writes below need no guard for the same reason the
-          // latches do not: `session` is the one this render captured, so a
-          // late write lands in an orphan nobody reads. The guard is here for
-          // what a captured record cannot cover — the DOM and the screen.
-          //
-          // 🔴 IT COMPARES RECORDS, NOT PEER IDS (R6-1). Asking "is B on screen
-          // now?" let the SAME conversation's next visit through: enter A at an
-          // anchor, the pair 502s in the air, switch to B and back to A, and
-          // this callback painted the first visit's 「讀不到那則訊息」 banner
-          // (retry button and all — dead, because this visit has no jump
-          // target) onto the second visit, and scrolled it to the bottom.
-          if (visitRef.current !== firedFor) return;
+          // ⚠️ THAT IS A PROPERTY OF THE MOUNT, NOT OF THIS FILE. Rendering
+          // `ChatArea` without a key puts every one of these back, silently.
+          // `lint-chat-area-key` is what keeps it from happening.
           if (outcome === "found") return;
           if (
             outcome === "superseded" &&
@@ -1410,15 +1147,7 @@ export function ChatArea({
         };
       }
     }
-  }, [
-    jumpToMsgId,
-    messages,
-    messagesPeer,
-    member.id,
-    loadAround,
-    resetToLatest,
-    jumpRetry,
-  ]);
+  }, [jumpToMsgId, messages, loadAround, resetToLatest, jumpRetry]);
 
   // The jump highlight is a transient flash — clear it after the CSS pulse so
   // the row returns to the normal thread look.
@@ -1434,16 +1163,6 @@ export function ChatArea({
   // the bottom, else (scrolled up) arm the ① new-message chip on the first
   // fresh inbound message.
   useEffect(() => {
-    // STALE-PEER GUARD (divider-latch fix): on a peer switch this effect fires
-    // for the render where `member.id` is already the NEW peer but `messages`
-    // is still the PREVIOUS peer's thread — useChat clears the thread in its
-    // own effect, ONE COMMIT LATER. Latching entry positioning on that stale
-    // commit consumed the one-shot (session.initialPositioned) against the wrong
-    // thread, so the "以下是未讀訊息" divider never rendered when entering an
-    // unread room FROM a non-empty thread. `messagesPeer` is set TOGETHER with
-    // `messages` (single state in useChat), so it is the honest owner of the
-    // array — do nothing until the thread really belongs to this peer.
-    if (messagesPeer !== member.id) return;
     if (messages.length === 0) return;
     if (!session.initialPositioned) {
       session.initialPositioned = true;
@@ -1511,7 +1230,7 @@ export function ChatArea({
         setFirstUnreadId(inboundNew[0].id);
       }
     }
-  }, [messages, messagesPeer, member.id]);
+  }, [messages]);
 
   // ② entry scroll: once the unread divider is in the DOM, pin it to the top of
   // the viewport, then measure honestly whether that landed us at the bottom
@@ -1602,7 +1321,7 @@ export function ChatArea({
   // `scrollIntoView`, and this replaces it with the settling landing.
   useEffect(() => {
     if (!session.pendingLatestScroll) return;
-    if (messagesPeer !== member.id || messages.length === 0) return;
+    if (messages.length === 0) return;
     session.pendingLatestScroll = false;
     const el = messagesRef.current;
     if (!el) return;
@@ -1610,7 +1329,7 @@ export function ChatArea({
     jumpSettleRef.current = scrollToLatest(el);
     setLatestInView(true);
     session.nearBottom = true;
-  }, [messages, messagesPeer, member.id]);
+  }, [messages]);
   // A pending correction must not outlive the conversation it was aiming at.
   useEffect(() => () => jumpSettleRef.current?.(), []);
 
@@ -1635,17 +1354,13 @@ export function ChatArea({
   //     message landing while the window is backgrounded must NOT be consumed;
   //     the flip back to active re-runs this effect, so everything accumulated
   //     is marked read exactly when the owner returns.
-  //   • `messagesPeer === member.id` — on a peer switch `newestTs` still comes
-  //     from the PREVIOUS peer's thread for one commit; firing then would stamp
-  //     the NEW peer's watermark with the OLD thread's timestamp.
   //   • 🔴 `mayMarkRead` — the thread must be the LIVE TAIL and no jump may be
   //     in flight (T-48; see where it is derived for both halves and why).
   useEffect(() => {
     if (!windowActive) return;
-    if (messagesPeer !== member.id) return;
     if (!mayMarkRead) return;
     if (newestTs > 0) void markRead(newestTs);
-  }, [newestTs, markRead, windowActive, messagesPeer, member.id, mayMarkRead]);
+  }, [newestTs, markRead, windowActive, mayMarkRead]);
 
   // Esc handling for the full-view overlay lives inside MarkdownPreviewOverlay.
 
@@ -1691,10 +1406,6 @@ export function ChatArea({
     // nothing to do with, which the recipient then reads as context. The failure
     // mode flipped from a visible refusal to a silent mis-send.
     const sendPeer = member.id;
-    // The draft above is filed under the PEER (storage is peer-keyed); putting
-    // it back on SCREEN is a question about the visit — a re-entry to the same
-    // peer has already restored that draft from storage for itself.
-    const sendVisit = session;
     // ALL staged attachments ride the SAME message, in staged order.
     const attachments = attachmentsSnapshot.map((a) => ({
       dataB64: a.dataUri,
@@ -1716,22 +1427,20 @@ export function ChatArea({
       );
     } catch (e) {
       console.warn("ChatArea: send failed, restoring composer", e);
-      // 🔴 RESTORE INTO THE ROOM IT WAS TYPED IN — NOT the one on screen, and
-      // NOT nowhere. The first version of this guard was a bare `return` on the
-      // reasoning that "that room's draft still holds it". IT DOES NOT: the
-      // optimistic clear at the top of submit() runs while `member.id` is still
-      // the sending room, so the save effect calls saveChatDraft(sendPeer, {all
-      // empty}) — and an all-empty draft is DELETED, not stored. So the bare
-      // return traded "restored into the wrong room" (ugly, visible, and the
-      // words are still on screen) for "text, attachments AND reply target
+      // 🔴 RESTORE INTO THE ROOM IT WAS TYPED IN — NOT nowhere. An earlier
+      // version of this arm was a bare `return` on the reasoning that "that
+      // room's draft still holds it". IT DOES NOT: the optimistic clear at the
+      // top of submit() empties both halves of the draft, and an all-empty
+      // draft is DELETED from the store, not stored blank. So the bare return
+      // traded a visible mistake for "text, attachments AND reply target
       // silently gone for good, with only a console.warn". That is worse, and
-      // it is exactly what the guard was added to prevent.
+      // it is exactly what this arm exists to prevent.
       //
       // Writing to the store rather than to state also covers the case where
-      // this component is gone entirely (跳頁 mid-flight): setState on an
-      // unmounted component discards the content just as quietly.
+      // this component is gone entirely (跳頁 or a switch mid-flight): setState
+      // on an unmounted component discards the content just as quietly.
       //
-      // FIELD BY FIELD, which is the rule the state restores below already use:
+      // FIELD BY FIELD, which is the rule the state restores below also use:
       // fill only what the room does not already hold. The first version of
       // this write was all-or-nothing on the whole draft, and a reviewer found
       // the gap that opens: go back to that room, stage one image and type
@@ -1743,28 +1452,25 @@ export function ChatArea({
       // cannot occupy one composer, and theirs is the one they can see. Said
       // out loud rather than left to be discovered.
       const stored = getChatDraft(sendPeer);
-      saveChatDraft(sendPeer, {
-        text: stored && stored.text ? stored.text : draftSnapshot,
-        attachments:
-          stored && stored.attachments.length > 0
-            ? stored.attachments
-            : attachmentsSnapshot,
-        replyTo:
-          stored && stored.replyTo
-            ? stored.replyTo
-            : (replyToSnapshot ?? undefined),
-      });
-      // Not this room any more → the words are back where they were typed, and
-      // putting them on screen here would put one room's words, and one room's
-      // reply target, into another.
-      if (visitRef.current !== sendVisit) return;
-      // Restore the user's unsent content so it isn't silently lost. Only put
-      // back what the user hasn't already retyped/restaged — if they started a
-      // new draft while the send was in flight, don't clobber it.
+      saveChatDraftText(
+        sendPeer,
+        stored && stored.text ? stored.text : draftSnapshot,
+        stored && stored.replyTo ? stored.replyTo : (replyToSnapshot ?? undefined),
+      );
+      updateChatDraftAttachments(sendPeer, (prev) =>
+        prev.length > 0 ? prev : attachmentsSnapshot,
+      );
+      // 🔴 THE FILES NEED NO SECOND RESTORE, AND THE TEXT'S IS A NO-OP WHEN
+      // NOBODY IS LOOKING (T-48, R13-2/R13-5). The staged rows ARE the write
+      // above: this composer reads that slot, so if it is still on screen the
+      // files are already back. The text and the reply target live in component
+      // state, so they are put back here — and if the owner has left, this
+      // component is unmounted (`key={peerId}`) and React drops both writes,
+      // which is why there is no "is this still my room?" line: there is no
+      // other room this component can be showing.
       setDraft((cur) => (cur ? cur : draftSnapshot));
-      restoreAttachments(attachmentsSnapshot);
-      // Same rule as the text: put the target back only if the owner has not
-      // already aimed at something else while the send was in flight.
+      // Put the target back only if the owner has not already aimed at
+      // something else while the send was in flight.
       setReplyToId((cur) => (cur ? cur : replyToSnapshot));
     }
   }
@@ -1797,11 +1503,13 @@ export function ChatArea({
     // Per-message read state (LINE-style): every own message the peer's real
     // last-read watermark covers shows its own "已讀". Honest — driven only by a
     // recorded watermark, never fabricated.
-    // The watermark is asked for THIS room by name — there is no bare number to
-    // read (see useChat's PeerLastRead). A watermark still in flight for another
-    // room answers 0, which draws no tick, rather than lighting one off somebody
-    // else's reading (R8-2).
-    const read = mine && peerLastRead.tsFor(member.id) >= m.ts;
+    // 🔴 A BARE NUMBER IS SAFE AGAIN (T-48, R13-1). This used to be
+    // `peerLastRead.tsFor(member.id)`: the watermark carried the room it was
+    // for, because `useChat` was reused across rooms and could hand back the
+    // PREVIOUS room's reading for one commit — which lit a 已讀 tick off
+    // somebody else's watermark (R8-2). `useChat` is now mounted per room, so
+    // the only reading it can hand back is this room's.
+    const read = mine && peerLastReadTs >= m.ts;
     // ONE bubble per message (owner feedback): text and attachments share the
     // SAME bubble container — text on top, attachments stacked below — one
     // rounded surface, one background, so a text+attachment message reads as a
@@ -2330,7 +2038,7 @@ export function ChatArea({
       )}
 
       <div className="chat__body">
-        {shownMessages.length > 0 ? (
+        {messages.length > 0 ? (
           <>
             <div
               className="chat__messages"
@@ -2371,7 +2079,7 @@ export function ChatArea({
                * through, and the group's end pushes it off naturally (no JS
                * scroll tracking). The label is judged against the render
                * clock; per-message times keep their existing hh:mm format. */}
-              {splitByDay(shownMessages).map((day) => {
+              {splitByDay(messages).map((day) => {
                 const dayLabel = formatDayLabel(
                   day.dayTs,
                   Date.now() / 1000,
@@ -2521,14 +2229,12 @@ export function ChatArea({
                     onClick={() => {
                       setWakePending(true);
                       setWakeUndispatched(false);
-                      // 🔴 WHOSE wake this is (review r2 SHOULD-1). The
-                      // peer-keyed reset effect above is a reset, not a CANCEL:
-                      // an activate still in flight when the owner switches
-                      // peers resolves AFTER the reset and writes A's verdict
-                      // into a room that is already B's. `visitRef` is the
-                      // render-time mirror of the CURRENT visit (R6-1: the peer
-                      // id said yes to the same peer's next visit too).
-                      const firedFor = session;
+                      // 🔴 WHOSE wake this is (review r2 SHOULD-1). An activate
+                      // still in flight when the owner switches peers used to
+                      // resolve into a room that was already B's, because this
+                      // component was reused between rooms. It is unmounted with
+                      // its conversation now (R13-5), so both arms below write
+                      // into a dead component and React drops them.
                       // Revert the optimistic pending if the activate POST
                       // rejects (else the button sticks on "喚醒中…" forever) —
                       // same discipline as MemberDetailPanel's wake. The success
@@ -2540,14 +2246,12 @@ export function ChatArea({
                       // from sitting on 「喚醒中…」 for a wake nobody sent.
                       Promise.resolve(onWake())
                         .then((result) => {
-                          if (visitRef.current !== firedFor) return;
                           if (result?.activationPending) {
                             setWakePending(false);
                             setWakeUndispatched(true);
                           }
                         })
                         .catch(() => {
-                          if (visitRef.current !== firedFor) return;
                           setWakePending(false);
                         });
                     }}

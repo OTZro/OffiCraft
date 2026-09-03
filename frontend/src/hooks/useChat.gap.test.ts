@@ -286,19 +286,20 @@ describe("useChat: giving up on a seam is NEVER silent", () => {
   });
 
   it("switching peers clears the flag (it describes ONE conversation)", async () => {
+    // A switch is a REMOUNT (T-48, R13-5) — `ChatArea` is rendered under
+    // `key={peerId}` — so the new room's flag starts where a fresh hook's does.
     push("a", 30);
-    const { result, rerender } = renderHook(({ p }) => useChat(p), {
-      initialProps: { p: "b" },
-    });
-    await waitFor(() => expect(result.current.messages).toHaveLength(30));
+    const inB = renderHook(() => useChat("b"));
+    await waitFor(() => expect(inB.result.current.messages).toHaveLength(30));
     push("x", 900);
     await emit();
-    await waitFor(() => expect(result.current.gapSuspected).toBe(true));
+    await waitFor(() => expect(inB.result.current.gapSuspected).toBe(true));
+    inB.unmount();
 
     server = [];
-    rerender({ p: "c" });
-    await waitFor(() => expect(result.current.messagesPeer).toBe("c"));
-    expect(result.current.gapSuspected).toBe(false);
+    const inC = renderHook(() => useChat("c"));
+    await waitFor(() => expect(inC.result.current.messages).toEqual([]));
+    expect(inC.result.current.gapSuspected).toBe(false);
   });
 });
 

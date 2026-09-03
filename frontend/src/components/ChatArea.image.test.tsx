@@ -33,8 +33,7 @@ const imageMessage: ChatMessage = {
 vi.mock("../hooks/useChat", () => ({
   useChat: () => ({
     messages: [imageMessage],
-    messagesPeer: "m1",
-    peerLastRead: { peer: "", tsFor: () => 0 },
+    peerLastReadTs: 0,
     send: vi.fn(() => Promise.resolve()),
     markRead: vi.fn(() => Promise.resolve()),
   }),

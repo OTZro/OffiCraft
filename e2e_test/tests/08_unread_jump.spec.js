@@ -95,12 +95,13 @@ test.describe('B9 · unread — badge, entry divider anchor, 進房 mark-read, f
 
     // STALE-SWITCH REGRESSION (the old decoy workaround, inverted): ChatArea's
     // entry-positioning effect used to fire on a peer SWITCH while `messages`
-    // was still the PREVIOUS peer's loaded thread (useChat clears one commit
-    // later), latching the one-shot against stale data — switching from a
-    // NON-EMPTY thread meant the divider never rendered. Fixed by gating the
-    // effect on useChat's `messagesPeer`. So we now deliberately enter M's
-    // room FROM a settled NON-EMPTY thread: the divider assertions below only
-    // pass with the guard in place.
+    // was still the PREVIOUS peer's loaded thread (useChat cleared it one
+    // commit later), latching the one-shot against stale data — switching from
+    // a NON-EMPTY thread meant the divider never rendered. That frame is gone
+    // since T-48 R13-5: OfficePage mounts ChatArea under `key={peerId}`, so
+    // entering a room builds a fresh component whose one-shot has not been
+    // spent. We still deliberately enter M's room FROM a settled NON-EMPTY
+    // thread, because that is the path the defect lived on.
     await page.locator('.member-card', { hasText: NAME_DECOY }).click();
     await expect(
       page.locator('.chat__messages .chat__msg'),

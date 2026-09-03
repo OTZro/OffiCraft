@@ -17,8 +17,7 @@ const messages: ChatMessage[] = [];
 vi.mock("../hooks/useChat", () => ({
   useChat: () => ({
     messages,
-    messagesPeer: "m1",
-    peerLastRead: { peer: "", tsFor: () => 0 },
+    peerLastReadTs: 0,
     send: vi.fn(() => Promise.resolve()),
     markRead: vi.fn(() => Promise.resolve()),
   }),

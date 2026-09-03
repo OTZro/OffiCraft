@@ -19,7 +19,7 @@ import type { Member } from "../types";
 
 const send = vi.fn(() => Promise.resolve());
 vi.mock("../hooks/useChat", () => ({
-  useChat: () => ({ messages: [], messagesPeer: "m1", send }),
+  useChat: () => ({ messages: [], send }),
 }));
 
 const member: Member = {

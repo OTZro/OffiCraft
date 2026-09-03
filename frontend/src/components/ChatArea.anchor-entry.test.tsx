@@ -147,10 +147,15 @@ function mkMember(id: string, name: string): Member {
 const alice = mkMember(A, "Alice");
 const bruno = mkMember(B, "Bruno");
 
+// 🔴 MOUNTED THE WAY `OfficePage` MOUNTS IT (T-48, R13-5): `key={peerId}`, so a
+// room switch below is an unmount + a mount, and a jump WITHIN a room (the same
+// peer, a different `jumpToMsgId`) is a prop change on the same instance —
+// exactly the two lifetimes the app has.
 function view(m: Member, jumpToMsgId?: string) {
   return (
     <I18nProvider>
       <ChatArea
+        key={m.id}
         member={m}
         members={[alice, bruno]}
         workers={[]}
@@ -280,9 +285,8 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
   });
 
   it("上一條對話的錨點抓失敗,不准把它的橫幅貼到切過去的那一間,也不准把那一間捲到底", async () => {
-    // 🔴 第五輪 R5-1。這一族的第五個實例,而且住在上一輪治不到的那一半:
-    // `setJumpNotice` / `setJumpRetry` 是 React state,`useKeyedRecord` 管不到,
-    // 而 `endRef` 是 DOM ref —— 永遠指著**現行**那一間房。
+    // 🔴 第五輪 R5-1。這一族的第五個實例:`setJumpNotice` / `setJumpRetry` 是
+    // React state,`endRef` 是 DOM ref —— 兩者都只認**現行**那一間房。
     // `unreachable`(5xx / 連線斷)與 `missing`(404)兩條結局都在 superseded 檢查
     // 之前就 return,所以切對話之後照樣走得到:A 的失敗回呼會在 B 的房間裡掛一條
     // 不屬於 B 的「讀不到那則訊息」橫幅(附一顆按了沒反應的重試鈕,因為 B 沒有
@@ -327,12 +331,13 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
 
   it("切走再切回同一個人,上一趟的錨點失敗不准把橫幅貼到這一趟,也不准把這一趟捲到底", async () => {
     // 🔴 第六輪 R6-1。這一族的第六個實例,而且它指出了前五個共同的根:
-    // **身分被寫成「是哪一個人」,而不變量是「是哪一次造訪」**。
-    // 上一顆補的兩道防線綁的都是 `member.id` 這個字串 ——
-    // `ChatArea` 的 `peerIdRef.current !== firedFor`,以及 `useKeyedState` 的
-    // key 比對 —— A→B→**A** 回到同一個人時字串相等,**兩道同時放行**:
-    // 上一趟的「現在讀不到那則訊息」橫幅(附一顆按了沒反應的重試鈕,因為這一趟
-    // 沒有 jumpToMsgId)貼進這一趟,而且這一趟被捲到底。
+    // **身分被寫成「是哪一個人」,而不變量是「是哪一次造訪」**。當時補的兩道
+    // 防線綁的都是 `member.id` 這個字串,A→B→**A** 回到同一個人時字串相等,
+    // 兩道同時放行:上一趟的「現在讀不到那則訊息」橫幅(附一顆按了沒反應的重試
+    // 鈕,因為這一趟沒有 jumpToMsgId)貼進這一趟,而且這一趟被捲到底。
+    //
+    // 🔴 R13-5 把「哪一次造訪」交還給 React:A→B→A 是三次 mount,上一趟的回呼
+    // 寫的是一個已經被丟掉的 component。這條斷言的是同一個結果,不是同一句守衛。
     // 真人版:從連結進 A 的一則舊訊息 → 那一對 window 請求吃到 502 → 在它回來
     // 之前切到 B,再從 roster 切回 A。
     seed(A, "a", 80, 100);

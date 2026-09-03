@@ -159,32 +159,34 @@ describe("useChat scrollback (loadOlder / hasMore)", () => {
   it("切走再切回同一個人,上一趟還在飛的往上捲頁不准接到這一趟的線頭上", async () => {
     // 🔴 第六輪 R6-1,同一個根。往上捲的游標取自**上一趟**手上那條線的最舊一則;
     // 這一趟手上的可能是完全另一段(最極端的就是帶錨點進來的那個視窗)。
-    // `prev.peer !== withId` 看不到 —— 人根本沒有換。
+    //
+    // 🔴 A→B→A 是三次 mount(R13-5):`ChatArea` 掛在 `key={peerId}` 底下,所以
+    // 下面用 unmount／mount 驅動。上一趟那頁落地時,它要寫的 component 已經被
+    // React 丟掉了 —— 這條斷言守的是「thread 不共用」,共用回去就會紅。
     const hung = deferred<ChatMessage[]>();
     h.listChat.mockResolvedValueOnce(page("n", 1000, 30));
-    const { result, rerender } = renderHook(
-      ({ id }: { id: string }) => useChat(id),
-      { initialProps: { id: "a" } },
-    );
-    await waitFor(() => expect(result.current.messages).toHaveLength(30));
+    const trip1 = renderHook(() => useChat("a"));
+    await waitFor(() => expect(trip1.result.current.messages).toHaveLength(30));
 
     h.listChat.mockReturnValueOnce(hung.promise);
     let older!: Promise<void>;
     act(() => {
-      older = result.current.loadOlder();
+      older = trip1.result.current.loadOlder();
     });
 
     h.listChat.mockResolvedValue(page("b", 500, 5));
+    trip1.unmount();
+    const inB = renderHook(() => useChat("b"));
     await act(async () => {
-      rerender({ id: "b" });
       await settle();
     });
     h.listChat.mockResolvedValue(page("z", 9000, 5));
+    inB.unmount();
+    const trip2 = renderHook(() => useChat("a"));
     await act(async () => {
-      rerender({ id: "a" });
       await settle();
     });
-    const nowShowing = result.current.messages.map((m) => m.id);
+    const nowShowing = trip2.result.current.messages.map((m) => m.id);
 
     await act(async () => {
       hung.resolve(page("o", 1, 5));
@@ -192,7 +194,7 @@ describe("useChat scrollback (loadOlder / hasMore)", () => {
       await settle();
     });
     expect(
-      result.current.messages.map((m) => m.id),
+      trip2.result.current.messages.map((m) => m.id),
       "上一趟的往上捲頁不准接到這一趟的線頭上",
     ).toEqual(nowShowing);
   });
@@ -323,22 +325,21 @@ describe("useChat scrollback (loadOlder / hasMore)", () => {
   });
 
   it("switching peers resets the scrollback window (hasMore re-derives)", async () => {
+    // A switch is a REMOUNT (T-48, R13-5) — `ChatArea` is rendered under
+    // `key={peerId}` — so the new room derives `hasMore` from its own first page.
     h.listChat.mockImplementation(async (withId: string) =>
       withId === "b" ? page("n", 1000, 30) : [mkMsg("z1", "z", "owner", 1)],
     );
-    const { result, rerender } = renderHook(
-      ({ id }: { id: string }) => useChat(id),
-      { initialProps: { id: "b" } },
-    );
-    await waitFor(() => expect(result.current.messages).toHaveLength(30));
-    expect(result.current.hasMore).toBe(true);
+    const inB = renderHook(() => useChat("b"));
+    await waitFor(() => expect(inB.result.current.messages).toHaveLength(30));
+    expect(inB.result.current.hasMore).toBe(true);
+    inB.unmount();
 
-    rerender({ id: "z" });
-    await waitFor(() => expect(result.current.messagesPeer).toBe("z"));
+    const inZ = renderHook(() => useChat("z"));
     await waitFor(() =>
-      expect(result.current.messages.map((m) => m.id)).toEqual(["z1"]),
+      expect(inZ.result.current.messages.map((m) => m.id)).toEqual(["z1"]),
     );
-    expect(result.current.hasMore).toBe(false);
+    expect(inZ.result.current.hasMore).toBe(false);
   });
 });
 
@@ -933,21 +934,19 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
       .mockReturnValueOnce(above.promise)
       .mockReturnValueOnce(below.promise);
 
-    const { result, rerender } = renderHook(
-      ({ id, anchor }: { id: string; anchor?: string }) => useChat(id, anchor),
-      { initialProps: { id: "a", anchor: "a0" as string | undefined } },
-    );
+    const inA = renderHook(() => useChat("a", "a0"));
     await waitFor(() => expect(h.listChatReads).toHaveBeenCalled());
     let pending!: Promise<JumpOutcome>;
     act(() => {
-      pending = result.current.loadAround("a0");
+      pending = inA.result.current.loadAround("a0");
     });
     expect(h.listChat).not.toHaveBeenCalled();
 
     const bPage = page("z", 9000, 5);
     h.listChat.mockResolvedValue(bPage);
+    inA.unmount();
+    const inB = renderHook(() => useChat("b"));
     await act(async () => {
-      rerender({ id: "b", anchor: undefined });
       await settle();
     });
 
@@ -955,7 +954,7 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
       h.listChat.mock.calls.map((c) => c[0]),
       "切過去的那一間必須自己撈自己的最新頁",
     ).toEqual(["b"]);
-    expect(result.current.messages.map((m) => m.id)).toEqual(
+    expect(inB.result.current.messages.map((m) => m.id)).toEqual(
       bPage.map((m) => m.id),
     );
 
@@ -966,7 +965,7 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
       await pending;
       await settle();
     });
-    expect(result.current.messages.map((m) => m.id)).toEqual(
+    expect(inB.result.current.messages.map((m) => m.id)).toEqual(
       bPage.map((m) => m.id),
     );
     const before = h.listChat.mock.calls.length;
@@ -994,21 +993,20 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
       .mockReturnValueOnce(aAbove.promise)
       .mockReturnValueOnce(aBelow.promise);
 
-    const { result, rerender } = renderHook(
-      ({ id, anchor }: { id: string; anchor?: string }) => useChat(id, anchor),
-      { initialProps: { id: "a", anchor: "a0" as string | undefined } },
-    );
+    const inA = renderHook(() => useChat("a", "a0"));
     await waitFor(() => expect(h.listChatReads).toHaveBeenCalled());
     let pendingA!: Promise<JumpOutcome>;
     act(() => {
-      pendingA = result.current.loadAround("a0");
+      pendingA = inA.result.current.loadAround("a0");
     });
     // A 的回呼在切走之前就抓在手上了。
-    const staleResetToLatest = result.current.resetToLatest;
+    const staleResetToLatest = inA.result.current.resetToLatest;
 
     // B 也是跳轉進來的,它的錨點還沒有人去撈(ChatArea 的 reactor 要下一拍)。
+    // 換房＝換一份 hook(R13-5),所以 B 的閂是它自己那份紀錄上的。
+    inA.unmount();
+    const inB = renderHook(() => useChat("b", "b0"));
     await act(async () => {
-      rerender({ id: "b", anchor: "b0" });
       await settle();
     });
 
@@ -1030,7 +1028,9 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
       h.listChat.mock.calls.map((c) => c[0]),
       "B 的錨點還沒到,不准有人先把一頁最新的蓋上去",
     ).not.toContain("b");
-    expect(result.current.messages, "B 的房間還在等它自己的視窗").toEqual([]);
+    expect(inB.result.current.messages, "B 的房間還在等它自己的視窗").toEqual(
+      [],
+    );
   });
 
   it("上一條對話晚到的「回到最新」不准燒掉一張世代票,把新對話比它早起跑的載入丟掉", async () => {
@@ -1046,19 +1046,19 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
       withId === "a" ? page("a", 100, 5) : bPage.promise,
     );
 
-    const { result, rerender } = renderHook(
-      ({ id }: { id: string }) => useChat(id),
-      { initialProps: { id: "a" } },
-    );
-    await waitFor(() => expect(result.current.messages).toHaveLength(5));
+    const inA = renderHook(() => useChat("a"));
+    await waitFor(() => expect(inA.result.current.messages).toHaveLength(5));
     // A 的收尾在切走之前就抓在手上了(ChatArea 的 then 回呼)。
-    const staleResetToLatest = result.current.resetToLatest;
+    const staleResetToLatest = inA.result.current.resetToLatest;
 
+    inA.unmount();
+    const inB = renderHook(() => useChat("b"));
     await act(async () => {
-      rerender({ id: "b" });
       await settle();
     });
-    expect(result.current.messages, "前提:B 的第一次載入還在空中").toEqual([]);
+    expect(inB.result.current.messages, "前提:B 的第一次載入還在空中").toEqual(
+      [],
+    );
 
     // A 的失敗回呼這時才落地,並且發出它那次「回到最新」。
     await act(async () => {
@@ -1071,7 +1071,7 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     });
 
     expect(
-      result.current.messages.map((m) => m.id),
+      inB.result.current.messages.map((m) => m.id),
       "B 自己的第一頁不准被上一條對話燒掉的世代票丟掉",
     ).toEqual(["z0", "z1", "z2", "z3", "z4"]);
   });
@@ -1089,16 +1089,14 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
       withId === "a" ? aPage.promise : page("b", 500, 5),
     );
 
-    const { result, rerender } = renderHook(
-      ({ id, anchor }: { id: string; anchor?: string }) => useChat(id, anchor),
-      { initialProps: { id: "a", anchor: undefined as string | undefined } },
-    );
+    const trip1 = renderHook(() => useChat("a"));
     await waitFor(() => expect(h.listChat).toHaveBeenCalled());
     // 第一趟 A 的收尾在切走之前就抓在手上了(ChatArea 的 then 回呼)。
-    const staleResetToLatest = result.current.resetToLatest;
+    const staleResetToLatest = trip1.result.current.resetToLatest;
 
+    trip1.unmount();
+    const inB = renderHook(() => useChat("b"));
     await act(async () => {
-      rerender({ id: "b", anchor: undefined });
       await settle();
     });
     // …再從 roster 切回 A,而且這一趟是**帶著錨點**進來的。
@@ -1107,15 +1105,18 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     h.listChatWindow
       .mockReturnValueOnce(above.promise)
       .mockReturnValueOnce(below.promise);
+    inB.unmount();
+    const trip2 = renderHook(() => useChat("a", "a0"));
     await act(async () => {
-      rerender({ id: "a", anchor: "a0" });
       await settle();
     });
     let pending!: Promise<JumpOutcome>;
     act(() => {
-      pending = result.current.loadAround("a0");
+      pending = trip2.result.current.loadAround("a0");
     });
-    expect(result.current.messages, "前提:這一趟在等它自己的視窗").toEqual([]);
+    expect(trip2.result.current.messages, "前提:這一趟在等它自己的視窗").toEqual(
+      [],
+    );
 
     // 上一趟的「回到最新」這時才落地。
     await act(async () => {
@@ -1125,7 +1126,7 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
       await settle();
     });
     expect(
-      result.current.messages,
+      trip2.result.current.messages,
       "上一趟的最新頁不准蓋到這一趟的錨點窗上",
     ).toEqual([]);
 
@@ -1137,36 +1138,39 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
       await settle();
     });
     expect(
-      result.current.messages.length,
+      trip2.result.current.messages.length,
       "這一趟的視窗不准被上一趟燒掉的世代票判成 superseded",
     ).toBeGreaterThan(0);
   });
 
   it("切走再切回同一個人,上一趟慢回的錨點視窗不准貼進這一趟的空房間", async () => {
-    // 🔴 第七輪 R7-1,同一族的第五個 commit 點。`loadAround` 自己的成功分支只剩
-    // 兩道:開跑時抽的世代票,和 `prev.peer !== withId` 這句**字串**比對 ——
-    // 正是第六輪判定不足的那一對。世代票一定比這一趟任何載入都早;字串在回到
-    // 同一個人時兩邊都是 "a"。所以上一趟慢回(200,不是失敗)的那一對視窗會
-    // 整批貼進這一趟正在等自己視窗的空房間,把進房定位一次性消耗掉。
+    // 🔴 第七輪 R7-1,同一族的第五個 commit 點。`loadAround` 的成功分支原本只剩
+    // 兩道:開跑時抽的世代票,和 `prev.peer !== withId` 這句**字串**比對。世代票
+    // 一定比這一趟任何載入都早;字串在回到同一個人時兩邊都是 "a"。所以上一趟慢回
+    // (200,不是失敗)的那一對視窗會整批貼進這一趟正在等自己視窗的空房間,把進房
+    // 定位一次性消耗掉。
+    //
+    // 🔴 A→B→A 是三次 mount(R13-5),所以下面用 unmount／mount 驅動。上一趟那對
+    // 視窗落地時,它的 `setThread` 寫進一個 React 已經丟掉的 component。
+    //
+    // ⚠️ 這條不再斷言那次呼叫回傳 "superseded":那個回傳值是給 caller 的,而這一
+    // 趟的 caller 跟這一趟的 hook 一起被卸載了,沒有人收得到。要斷言的是房間。
     const staleAbove = deferred<ChatMessage[]>();
     const staleBelow = deferred<ChatMessage[]>();
     h.listChatWindow
       .mockReturnValueOnce(staleAbove.promise)
       .mockReturnValueOnce(staleBelow.promise);
 
-    const { result, rerender } = renderHook(
-      ({ id, anchor }: { id: string; anchor?: string }) => useChat(id, anchor),
-      { initialProps: { id: "a", anchor: "old0" as string | undefined } },
-    );
+    const trip1 = renderHook(() => useChat("a", "old0"));
     let stale!: Promise<JumpOutcome>;
     act(() => {
-      stale = result.current.loadAround("old0");
+      stale = trip1.result.current.loadAround("old0");
     });
 
-    // 中間那一間也是帶錨點進來的 —— 這段路上沒有人 commit,世代票的水位一步
-    // 都沒有動,這正是世代票攔不住晚到造訪的那條路。
+    // 中間那一間也是帶錨點進來的 —— 這段路上沒有人 commit。
+    trip1.unmount();
+    const inB = renderHook(() => useChat("b", "b0"));
     await act(async () => {
-      rerender({ id: "b", anchor: "b0" });
       await settle();
     });
     // 回到 A 的第二趟,一樣帶錨點,房間空的在等自己的視窗。
@@ -1175,30 +1179,30 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     h.listChatWindow
       .mockReturnValueOnce(above.promise)
       .mockReturnValueOnce(below.promise);
+    inB.unmount();
+    const trip2 = renderHook(() => useChat("a", "new0"));
     await act(async () => {
-      rerender({ id: "a", anchor: "new0" });
       await settle();
     });
     let pending!: Promise<JumpOutcome>;
     act(() => {
-      pending = result.current.loadAround("new0");
+      pending = trip2.result.current.loadAround("new0");
     });
-    expect(result.current.messages, "前提:這一趟在等它自己的視窗").toEqual([]);
+    expect(trip2.result.current.messages, "前提:這一趟在等它自己的視窗").toEqual(
+      [],
+    );
 
     // 上一趟的那一對 200 這時才落地。
-    let staleOutcome: JumpOutcome | undefined;
     await act(async () => {
       staleAbove.resolve(page("old", 100, 30));
       staleBelow.resolve(page("old", 129, 30));
-      staleOutcome = await stale;
+      await stale;
       await settle();
     });
     expect(
-      result.current.messages,
+      trip2.result.current.messages,
       "上一趟的錨點視窗不准貼進這一趟的空房間",
     ).toEqual([]);
-    // 回 superseded 而不是 missing:caller 的重排邏輯接得住,說「不見了」是說謊。
-    expect(staleOutcome).toBe("superseded");
 
     // …而這一趟自己的視窗照樣 commit 得了。
     above.resolve(page("new", 200, 30));
@@ -1208,7 +1212,7 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
       await settle();
     });
     expect(
-      result.current.messages.length,
+      trip2.result.current.messages.length,
       "這一趟的視窗不准被上一趟燒掉的世代票判成 superseded",
     ).toBeGreaterThan(0);
   });
@@ -1225,18 +1229,16 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
       withId === "a" ? page("z", 9000, 5) : page("b", 500, 5),
     );
 
-    const { result, rerender } = renderHook(
-      ({ id, anchor }: { id: string; anchor?: string }) => useChat(id, anchor),
-      { initialProps: { id: "a", anchor: undefined as string | undefined } },
-    );
-    await waitFor(() => expect(result.current.messages).toHaveLength(5));
+    const trip1 = renderHook(() => useChat("a"));
+    await waitFor(() => expect(trip1.result.current.messages).toHaveLength(5));
     let sending!: Promise<void>;
     act(() => {
-      sending = result.current.send("在 A 打的字");
+      sending = trip1.result.current.send("在 A 打的字");
     });
 
+    trip1.unmount();
+    const inB = renderHook(() => useChat("b"));
     await act(async () => {
-      rerender({ id: "b", anchor: undefined });
       await settle();
     });
     const above = deferred<ChatMessage[]>();
@@ -1244,15 +1246,18 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     h.listChatWindow
       .mockReturnValueOnce(above.promise)
       .mockReturnValueOnce(below.promise);
+    inB.unmount();
+    const trip2 = renderHook(() => useChat("a", "a0"));
     await act(async () => {
-      rerender({ id: "a", anchor: "a0" });
       await settle();
     });
     let pending!: Promise<JumpOutcome>;
     act(() => {
-      pending = result.current.loadAround("a0");
+      pending = trip2.result.current.loadAround("a0");
     });
-    expect(result.current.messages, "前提:這一趟在等它自己的視窗").toEqual([]);
+    expect(trip2.result.current.messages, "前提:這一趟在等它自己的視窗").toEqual(
+      [],
+    );
 
     await act(async () => {
       posted.resolve({});
@@ -1260,7 +1265,7 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
       await settle();
     });
     expect(
-      result.current.messages,
+      trip2.result.current.messages,
       "上一趟送出後的最新頁不准蓋到這一趟的錨點窗上",
     ).toEqual([]);
 
@@ -1271,7 +1276,7 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
       await settle();
     });
     expect(
-      result.current.messages.length,
+      trip2.result.current.messages.length,
       "這一趟的視窗不准被上一趟燒掉的世代票判成 superseded",
     ).toBeGreaterThan(0);
   });
@@ -1288,22 +1293,20 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
       .mockResolvedValueOnce(page("z", 9000, 5)) // 第一趟 A 的一般進房
       .mockReturnValueOnce(hang.promise); // post-send refetch 自己那通
 
-    const { result, rerender } = renderHook(
-      ({ id, anchor }: { id: string; anchor?: string }) => useChat(id, anchor),
-      { initialProps: { id: "a", anchor: undefined as string | undefined } },
-    );
-    await waitFor(() => expect(result.current.messages).toHaveLength(5));
+    const trip1 = renderHook(() => useChat("a"));
+    await waitFor(() => expect(trip1.result.current.messages).toHaveLength(5));
     let sending!: Promise<void>;
     act(() => {
-      sending = result.current.send("在 A 打的字");
+      sending = trip1.result.current.send("在 A 打的字");
     });
     await act(async () => {
       await settle();
     });
 
     // 中間那一間也是帶錨點進來的:一頁都沒有 commit,所以世代票攔不到後面那一步。
+    trip1.unmount();
+    const inB = renderHook(() => useChat("b", "b0"));
     await act(async () => {
-      rerender({ id: "b", anchor: "b0" });
       await settle();
     });
     const above = deferred<ChatMessage[]>();
@@ -1311,15 +1314,18 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     h.listChatWindow
       .mockReturnValueOnce(above.promise)
       .mockReturnValueOnce(below.promise);
+    inB.unmount();
+    const trip2 = renderHook(() => useChat("a", "a0"));
     await act(async () => {
-      rerender({ id: "a", anchor: "a0" });
       await settle();
     });
     let pending!: Promise<JumpOutcome>;
     act(() => {
-      pending = result.current.loadAround("a0");
+      pending = trip2.result.current.loadAround("a0");
     });
-    expect(result.current.messages, "前提:這一趟在等它自己的視窗").toEqual([]);
+    expect(trip2.result.current.messages, "前提:這一趟在等它自己的視窗").toEqual(
+      [],
+    );
 
     await act(async () => {
       hang.resolve(page("z", 9000, 6));
@@ -1327,11 +1333,11 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
       await settle();
     });
     expect(
-      result.current.messages,
+      trip2.result.current.messages,
       "上一趟 post-send 的最新頁不准貼進這一趟的空錨點房間",
     ).toEqual([]);
 
-    // …而這一趟自己的視窗照樣 commit 得了(守衛沒有連著把這條路關掉)。
+    // …而這一趟自己的視窗照樣 commit 得了(換房沒有連著把這條路關掉)。
     above.resolve(page("a", 100, 30));
     below.resolve(page("a", 129, 30));
     await act(async () => {
@@ -1339,7 +1345,7 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
       await settle();
     });
     expect(
-      result.current.messages.length,
+      trip2.result.current.messages.length,
       "這一趟的視窗不准被上一趟燒掉的世代票判成 superseded",
     ).toBeGreaterThan(0);
   });
@@ -1397,24 +1403,23 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
       .mockReturnValueOnce(above.promise)
       .mockReturnValueOnce(below.promise);
 
-    const { result, rerender } = renderHook(
-      ({ id, anchor }: { id: string; anchor?: string }) => useChat(id, anchor),
-      { initialProps: { id: "a", anchor: "a0" as string | undefined } },
-    );
+    const trip1 = renderHook(() => useChat("a", "a0"));
     await waitFor(() => expect(h.listChatReads).toHaveBeenCalled());
     let firstTrip!: Promise<JumpOutcome>;
     act(() => {
-      firstTrip = result.current.loadAround("a0");
+      firstTrip = trip1.result.current.loadAround("a0");
     });
 
     // 中途切去 B(一般進房),再從同一條連結回到 A —— 第二趟的錨點還沒有人去撈。
     h.listChat.mockResolvedValue(page("z", 9000, 30));
+    trip1.unmount();
+    const inB = renderHook(() => useChat("b"));
     await act(async () => {
-      rerender({ id: "b", anchor: undefined });
       await settle();
     });
+    inB.unmount();
+    const trip2 = renderHook(() => useChat("a", "a0"));
     await act(async () => {
-      rerender({ id: "a", anchor: "a0" });
       await settle();
     });
     const beforeA = h.listChat.mock.calls.filter((c) => c[0] === "a").length;
@@ -1436,8 +1441,9 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
       h.listChat.mock.calls.filter((c) => c[0] === "a").length,
       "A 的第二次進房錨點還沒撈,不准先蓋一頁最新的上去",
     ).toBe(0);
-    expect(result.current.messages, "第二趟的房間還在等它自己的視窗").toEqual(
-      [],
-    );
+    expect(
+      trip2.result.current.messages,
+      "第二趟的房間還在等它自己的視窗",
+    ).toEqual([]);
   });
 });

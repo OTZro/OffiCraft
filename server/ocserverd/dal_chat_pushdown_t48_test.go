@@ -6,18 +6,24 @@ package main
 // (ListChat + filter + slice in Go → ListChatLatest) and the unread fold
 // (ListChat + ListChatReads + UnreadCounts in Go → UnreadCountsFor).
 //
+// ⚠️ THE TWO SOURCE-GREP RULES THAT USED TO LIVE HERE ARE GONE (T-48, R13-6).
+// `TestChatListingDoesNotReadTheWholeTable` and
+// `TestUnreadCountsHaveExactlyOneEntryPoint` read production `.go` text and
+// matched strings, so extracting a handler body into a helper — no behaviour
+// change at all — flipped them. They were lint rules in the wrong house; they
+// are `bin/chat-pushdown-guard.py` now, wired into `bin/ci.sh` as
+// `lint-chat-pushdown`, with its own positive/negative controls. What is left in
+// this file asserts OUTPUTS against the pre-pushdown implementation, which is a
+// different and non-substitutable job: the lint says the fast path is the only
+// path, these say the fast path gives the same answers.
+//
 // 🔴 EQUIVALENCE IS THE REQUIREMENT, not "looks right". Each test keeps the OLD
 // implementation alive as a reference function in this file and drives BOTH
 // over the same fixtures, comparing the full result (order, content, count) —
 // a hand-written expectation would only pin what the author already believed.
 
 import (
-	"fmt"
-	"io/fs"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -217,31 +223,6 @@ func TestUnreadCountsForMatchesTheGoFold(t *testing.T) {
 	}
 }
 
-// The same guard for the cursorless chat page: the handler must not pull the
-// whole table to serve at most `limit` rows.
-func TestChatListingDoesNotReadTheWholeTable(t *testing.T) {
-	src, err := os.ReadFile("api_chat.go")
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	start := strings.Index(string(src), "func (s *apiServer) HandleListChatApiChatGet(")
-	if start < 0 {
-		t.Fatal("cannot find HandleListChatApiChatGet — the guard has gone stale")
-	}
-	body := string(src)[start:]
-	if end := strings.Index(body, "\n}\n"); end > 0 {
-		body = body[:end]
-	}
-	if strings.Contains(body, "s.dal.ListChat()") {
-		t.Fatal("HandleListChatApiChatGet reads the WHOLE chat_message table again; " +
-			"the cursorless page is s.dal.ListChatLatest (T-48)")
-	}
-	if strings.Contains(body, "s.dal.PutChatRead(") {
-		t.Fatal("HandleListChatApiChatGet writes a read receipt again — GET /api/chat " +
-			"has no watermark side effect (T-48, c-d1eea83e57d1)")
-	}
-}
-
 // ── the outsource unread faces (T-48 follow-up) ──────────────────────────────
 //
 // api_outsource.go carried THREE MORE copies of the same whole-table unread
@@ -352,113 +333,5 @@ func TestOutsourceUnreadFacesMatchTheGoFold(t *testing.T) {
 	}
 	if n := outsourceUnreadOracle(t, api.dal, wireOwnerID, workerID); n != 1 {
 		t.Fatalf("fixture: owner should have exactly 1 unread from the worker (watermark at o-2), got %d", n)
-	}
-}
-
-// 🔴 THE SINGLE-ENTRY GUARD — the one護欄 for the whole unread story.
-//
-// It scans EVERY non-test Go file in the repo and pins two facts:
-//
-//  1. s.dal.UnreadCountsFor is called from EXACTLY ONE place in production code,
-//     and that place is apiServer.unreadCountsForRequest (api_helpers.go).
-//  2. domain.UnreadCounts — the pure whole-stream fold — is called from NOWHERE
-//     in production code. It is the spec the SQL must match, nothing else, and a
-//     call to it IS a full-table read because it takes the entire chat stream as
-//     an argument.
-//
-// (1) is the point and (2) is its back door: a new surface could honour "only
-// one caller of the DAL method" and simply re-fold in Go instead, which is
-// exactly the shape the five original copies had.
-//
-// WHY AN ENTRY POINT RATHER THAN A LIST OF APPROVED SITES: the first version of
-// this guard named the two call sites T-48 was briefed on. Three more already
-// existed in api_outsource.go and it said nothing about them, because a guard
-// that enumerates cannot see what it was not told. One door is checkable; five
-// named sites are a list that goes stale the moment someone adds a sixth.
-//
-// 🔴 WHAT THIS DOES **NOT** SAY: that the surfaces behave alike. They must not.
-// The red dot filters removed members and released workers before summing, the
-// roster binds one number per member, the contractor faces index by worker id.
-// Those differences live in their own handlers on purpose — this guard is about
-// where the ALGORITHM lives, not about what each caller does with the answer.
-func TestUnreadCountsHaveExactlyOneEntryPoint(t *testing.T) {
-	const entryPoint = "func (s *apiServer) unreadCountsForRequest("
-	root, err := filepath.Abs("../..")
-	if err != nil {
-		t.Fatalf("abs: %v", err)
-	}
-	var dalCallers, goFolders []string
-	scanned := 0
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			switch d.Name() {
-			case ".git", "node_modules", "vendor", "dist", "var":
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		src, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		scanned++
-		rel, _ := filepath.Rel(root, path)
-		// The enclosing func is tracked so the ONE legal caller can be named by
-		// the function it lives in rather than by a line number that drifts.
-		enclosing := ""
-		for i, line := range strings.Split(string(src), "\n") {
-			if strings.HasPrefix(line, "func ") {
-				enclosing = line
-			}
-			code := line
-			if c := strings.Index(code, "//"); c >= 0 {
-				code = code[:c] // a comment may DISCUSS either call; only code counts
-			}
-			where := fmt.Sprintf("%s:%d: %s", rel, i+1, strings.TrimSpace(line))
-			if strings.Contains(code, "UnreadCountsFor(") &&
-				!strings.Contains(code, "func (d *DAL) UnreadCountsFor(") {
-				if !strings.HasPrefix(enclosing, entryPoint) {
-					dalCallers = append(dalCallers, where)
-				}
-			}
-			if strings.Contains(code, "UnreadCounts(") && !strings.Contains(code, "func UnreadCounts(") {
-				goFolders = append(goFolders, where)
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk: %v", err)
-	}
-	if scanned < 50 {
-		t.Fatalf("the walk only saw %d production .go files — the root is wrong and this guard proves nothing", scanned)
-	}
-	if len(dalCallers) > 0 {
-		t.Fatalf("unread counting has more than one entry point: these reach s.dal.UnreadCountsFor "+
-			"directly instead of going through apiServer.unreadCountsForRequest (T-48) —\n  %s",
-			strings.Join(dalCallers, "\n  "))
-	}
-	if len(goFolders) > 0 {
-		t.Fatalf("production code still folds unread counts in Go (domain.UnreadCounts takes the WHOLE "+
-			"chat stream, so each of these is a full-table read; go through "+
-			"apiServer.unreadCountsForRequest — T-48):\n  %s", strings.Join(goFolders, "\n  "))
-	}
-	// The scan must actually FIND the legal caller, or an entry point that was
-	// renamed or deleted would leave this test green over nothing at all.
-	helpers, err := os.ReadFile("api_helpers.go")
-	if err != nil {
-		t.Fatalf("read api_helpers.go: %v", err)
-	}
-	if i := strings.Index(string(helpers), entryPoint); i < 0 {
-		t.Fatal("apiServer.unreadCountsForRequest is gone — the entry point this guard names no longer exists")
-	} else if !strings.Contains(string(helpers)[i:i+400], "s.dal.UnreadCountsFor(") {
-		t.Fatal("apiServer.unreadCountsForRequest no longer calls s.dal.UnreadCountsFor — " +
-			"the guard above would now be vacuously green")
 	}
 }

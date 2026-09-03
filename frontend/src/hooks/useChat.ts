@@ -34,7 +34,7 @@
 // existing thread by id (older messages kept in front) instead of replacing
 // the whole array — a replace would silently eat the loaded history.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatMessage, ChatAttachmentInput } from "../api/adapter";
 import { api } from "../api";
 import { ApiError } from "../api/errors";
@@ -43,7 +43,6 @@ import { OWNER_ID } from "../lib/ownerUnread";
 import { isWindowActive } from "./useWindowActive";
 import { openLatches } from "../lib/conversationLatches";
 import type { LatchRelease } from "../lib/conversationLatches";
-import { useKeyedRecord } from "./useKeyedRecord";
 
 // 🔴 THE HOLE IN THE MIDDLE (T-b0bb). Everything from here down to
 // `mergeLatestPage` exists for ONE defect, and it is worth stating exactly,
@@ -124,18 +123,17 @@ function cmpStreamOrder(a: ChatMessage, b: ChatMessage): number {
 
 interface UseChat {
   messages: ChatMessage[];
-  // The peer id `messages` actually belongs to. On a conversation switch the
-  // hook clears the thread in an effect — ONE COMMIT AFTER the caller already
-  // renders the new peer — so for that commit `messages` is still the previous
-  // peer's thread. Consumers whose logic anchors on the thread (ChatArea's
-  // entry positioning) MUST gate on `messagesPeer === <current peer>` instead
-  // of trusting `messages` blindly.
-  messagesPeer: string;
-  // The peer's last-read watermark — VALUE AND WHOSE IT IS, in one object, and
-  // there is no way to read the number without naming the room you are drawing.
-  // See PeerLastRead: this used to be a bare `number`, and a bare number is a
-  // thing every consumer had to REMEMBER to pair with a peer check.
-  peerLastRead: PeerLastRead;
+  // The peer's last-read watermark in epoch seconds (0 = read nothing). Drives
+  // the per-message 「已讀」 badge.
+  //
+  // 🔴 IT IS A BARE NUMBER AGAIN, AND WHAT MAKES THAT SAFE IS NOT IN THIS FILE
+  // (T-48, R13-1). It was a `PeerLastRead` object — value plus whose it is —
+  // because this hook was mounted ONCE and swapped between rooms, so it could
+  // hand back the previous room's watermark for a commit (R8-2: B's reading lit
+  // 已讀 ticks on A's outgoing rows). `ChatArea` is mounted under
+  // `key={peerId}`, so this hook is mounted per room and the only watermark it
+  // can hand back is the one it fetched for its own `withId`.
+  peerLastReadTs: number;
   // Send text and/or a LIST of staged attachments (files + images mixed) — all
   // riding the SAME message.
   send: (
@@ -200,60 +198,27 @@ interface UseChat {
   resetToLatest: () => Promise<void>;
 }
 
-// 🔴 A WATERMARK THAT KNOWS WHOSE IT IS (T-48, owner ruling).
-//
-// This was `peerLastReadTs: number` — a bare value, and R8-2 was the bug that
-// shape makes: `refetchReads` fired on entry to B, the owner left before the
-// receipts landed, and B's watermark was written into A's room, lighting 已讀
-// ticks on A's outgoing rows off somebody else's reading. The fix at the time
-// was one more line somebody had to remember to write. Eleven instances of this
-// family were each "somebody did not write that line".
-//
-// So the value carries its owner, exactly like `messagesPeer` carries the
-// thread's — the shape this codebase already had. The number is reachable only
-// through `tsFor`, which is to say only by answering "whose room is this?".
-// Forgetting is not a thing you can do: there is no unanswered value to use.
-//
-// 🔴 THIS IS NOT ABOUT WHICH VISIT, AND MUST NOT BECOME ABOUT IT. A watermark
-// that lands late from the SAME peer is still that peer's own watermark, merely
-// older — dropping it as "stale" would throw away a true fact. `mergePeerRead`
-// therefore keeps the LARGER of the two (monotonic) and only refuses a
-// watermark belonging to somebody ELSE. Identity and recency are two questions;
-// one guard answering both is how R7-1 and R8-1 got misfiled.
-export interface PeerLastRead {
-  /** Whose watermark this is (the peer id it was fetched for). */
-  readonly peer: string;
-  /** The watermark in epoch seconds for the room you name, or 0 when this is
-   * not that room's watermark (and 0 when the peer has read nothing). Drives
-   * the per-message 「已讀」 badge. */
-  tsFor(peer: string): number;
-}
-
 /** The one rule for writing a watermark, so no caller carries it.
  *
- * 🔴 IT HAS A THIRD CONSEQUENCE, AND IT IS DELIBERATE (T-48, R11-7). "Keep the
- * larger" does not only rescue a late-but-true value from the same peer: it
- * makes a watermark UNABLE TO FALL for as long as this room is on screen. The
- * caller passes `ts: 0` whenever `listChatReads` comes back without a receipt
- * row, and before this function that zero turned the 已讀 ticks off. It should
- * not. A watermark is a claim about something that ALREADY HAPPENED — the peer
- * read up to here — and reading cannot be undone, so "no row this time" is
- * never evidence against a row we have already seen. Its realistic causes are a
- * partial 200 and a hard receipt delete (`DeleteChatReadsInvolving`, which takes
- * the messages with it), and in neither case is "un-tick what the owner already
- * saw" the honest answer.
+ * 🔴 KEEP THE LARGER, AND THAT IS DELIBERATE (T-48, R11-7). A watermark is a
+ * claim about something that ALREADY HAPPENED — the peer read up to here — and
+ * reading cannot be undone. The caller passes 0 whenever `listChatReads` comes
+ * back without a receipt row, and before this rule that zero turned the 已讀
+ * ticks off. It should not: "no row this time" is never evidence against a row
+ * we have already seen. Its realistic causes are a partial 200 and a hard
+ * receipt delete (`DeleteChatReadsInvolving`, which takes the messages with
+ * it), and in neither case is "un-tick what the owner already saw" honest.
  *
- * The cost is bounded on purpose: this state is per-conversation, so the
- * watermark is rebuilt from the server on the next entry to the room. Monotonic
- * within a visit, never across one. */
-export function mergePeerRead(
-  prev: { peer: string; ts: number },
-  next: { peer: string; ts: number },
-): { peer: string; ts: number } {
-  // Somebody else's room: this value has nothing to say here.
-  if (prev.peer !== next.peer) return prev;
-  // Same room, so it is ours whichever visit fetched it — take the further one.
-  return next.ts > prev.ts ? next : prev;
+ * The cost is bounded on purpose: this state is per-room and this hook is
+ * mounted per room, so the watermark is rebuilt from the server on the next
+ * entry. Monotonic within a visit, never across one.
+ *
+ * ⚠️ IT USED TO ANSWER A SECOND QUESTION — "is this even my room's watermark?"
+ * — because the hook outlived a room switch. That half is gone with the switch
+ * (R13-1); leaving it in would have been a comparison that can no longer fail.
+ */
+function mergePeerRead(prev: number, next: number): number {
+  return next > prev ? next : prev;
 }
 
 // What `loadAround` actually did, and the reason it is not a boolean (T-48, F3).
@@ -285,12 +250,15 @@ export type JumpOutcome =
 // participant's last-read watermark (the peer read our messages).
 const CHAT_TOPICS = new Set(["chat", "chat_read"]);
 
-// The thread and the peer it belongs to, updated TOGETHER (one state) so a
-// consumer can never observe new-peer identity with old-peer messages.
-// hasMore rides along for the same reason — it describes THIS peer's loaded
-// window, never the previous one's.
+// The loaded window for THE conversation this hook instance was mounted for.
+//
+// 🔴 IT USED TO CARRY A `peer` FIELD (T-48, R13-3). The hook was mounted once
+// and swapped between rooms, so there was a committed frame holding the new
+// room's identity beside the old room's messages, and every reader either
+// checked `messagesPeer` or was wrong. `ChatArea` is mounted under
+// `key={peerId}` now, so one instance of this hook belongs to one room for its
+// whole life: there is no second room for these messages to be confused with.
 interface Thread {
-  peer: string;
   messages: ChatMessage[];
   hasMore: boolean;
   // 🔴 A seam this thread could NOT close (T-b0bb): a newest page did not join
@@ -461,7 +429,6 @@ function mergeLatestPage(
   const gap = gapSuspected ?? prev.gapSuspected;
   if (prev.messages.length === 0) {
     return {
-      peer: prev.peer,
       messages: latest,
       hasMore: latest.length >= CHAT_PAGE_SIZE,
       gapSuspected: gap,
@@ -475,7 +442,6 @@ function mergeLatestPage(
     (m) => !pageIds.has(m.id) && !fillIds.has(m.id),
   );
   return {
-    peer: prev.peer,
     messages: [...older, ...fill, ...latest],
     hasMore: prev.hasMore,
     gapSuspected: gap,
@@ -505,7 +471,7 @@ function mergeLatestPage(
  * state is unreachable except through a handle); `dropDebt` is the handle for
  * the "last load never landed" debt, which is TAKEN by the load that failed
  * and PAID by the next load that lands, so it cannot live on either call's
- * stack. Both are rebuilt together by `useKeyedRecord`, keyed on the peer. */
+ * stack. Both are built together, once per mount. */
 type ConversationSlot = {
   readonly latches: ReturnType<typeof openLatches>;
   dropDebt: LatchRelease | null;
@@ -513,18 +479,12 @@ type ConversationSlot = {
 
 export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   const [thread, setThread] = useState<Thread>(() => ({
-    peer: withId,
     messages: [],
     hasMore: true,
     gapSuspected: false,
     hasNewer: false,
   }));
-  // The peer's read watermark, and the peer it belongs to, in ONE state — the
-  // same reason `Thread` keeps `peer` beside `messages` (see Thread's note).
-  const [peerRead, setPeerRead] = useState<{ peer: string; ts: number }>(() => ({
-    peer: withId,
-    ts: 0,
-  }));
+  const [peerLastReadTs, setPeerLastReadTs] = useState(0);
   // Live mirror of `thread` for the async loadOlder (a state read inside an
   // await would be a stale closure) + the in-flight lock: one older page at a
   // time, so a scroll handler firing repeatedly near the top can't stack
@@ -573,12 +533,11 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   // (see lib/conversationLatches): there is no property to read, none to
   // assign, and `as any` reaches nothing. Setting a latch means `acquire`,
   // dropping one means calling the handle `acquire` returned, and that handle
-  // is bound to THE RECORD IT CAME FROM. `useKeyedRecord` rebuilds the record
-  // when — and only when — the conversation changes.
+  // is bound to THE RECORD IT CAME FROM.
   //
   // What that buys mechanically, rather than by discipline:
   //   · A latch can never gate another conversation's load: the record is per
-  //     conversation, and `acquire`/`isHeld` refuse a peer that is not theirs.
+  //     conversation, built with the hook and dying with it.
   //   · A switch resets ALL of them at once, and `openLatches` is one function
   //     initialising the whole set — there is no per-latch reset line to miss.
   //   · "Release whatever record is current" IS NOT WRITABLE HERE. There is no
@@ -607,36 +566,29 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   //  • `loadingOlder` / `loadingNewer` — same-direction mutexes, so a scroll
   //    handler firing repeatedly cannot stack duplicate cursor requests.
   //
-  // ⚠️ NOT in here, deliberately: `loadSeqRef` / `committedSeqRef`. Those are
-  // a MONOTONIC global clock, not a latch — a ticket taken later must outrank
-  // one taken earlier even across a peer switch, and resetting them per
-  // conversation would let a stale in-flight load out-rank a fresh one.
+  // ⚠️ NOT in here, deliberately: `loadSeqRef` / `committedSeqRef`. Those are a
+  // MONOTONIC clock, not a latch — a ticket taken later must outrank one taken
+  // earlier, and resetting them mid-conversation would let a stale in-flight
+  // load out-rank a fresh one. They are `useRef`s, so they start at zero with
+  // the hook, which since R13-5 means with the conversation.
   //
-  // 🔴 KEYED ON THE CONVERSATION, NOT ON THE RENDER OR THE EFFECT RUN
-  // (fourth-review R4-2). The rebuild used to live in the subscription effect's
-  // setup body, which re-runs WITHOUT the conversation changing — StrictMode's
+  // 🔴 BUILT ONCE PER MOUNT, NOT PER RENDER OR PER EFFECT RUN (fourth-review
+  // R4-2, R13-5). The rebuild used to live in the subscription effect's setup
+  // body, which re-runs WITHOUT the conversation changing — StrictMode's
   // setup→cleanup→setup does exactly that on every mount. Rebuilding there
   // re-armed `entryAnchor` behind a `loadAround` that had already run, and
-  // ChatArea's `jumpFetchedRef` is one-shot per id, so no second `loadAround`
-  // was coming to clear it: R3-1's symptom reached without a peer switch.
-  const conv = useKeyedRecord<ConversationSlot>(withId, (peer) => ({
-    latches: openLatches(peer, entryAnchorRef.current !== undefined),
-    dropDebt: null,
-  }));
-  // 🔴 THE RECORD IS ALSO THIS HOOK'S VISIT TOKEN (T-48, R6-1), and this is the
-  // one place that has to be able to ask "is the record I captured still the
-  // live one?" from inside an async callback. `resetToLatest` writes the
-  // GLOBAL, never-reset generation clock, which is the one thing a captured
-  // record cannot protect — see the guard down there for what a peer-id
-  // comparison let through.
-  //
-  // ⚠️ THIS MIRROR IS ALSO HALF OF THE R4-1 FOOTGUN (latch-inventory §3 rule
-  // 2): with it in scope, "release whatever record is current" becomes
-  // writable again. Do not use it to acquire or release a latch — a lease
-  // handle is bound to the record it came from, and that is the whole design.
-  // It exists to ANSWER a question, never to reach a latch.
-  const convRef = useRef(conv);
-  convRef.current = conv;
+  // ChatArea's jump latch is one-shot per id, so no second `loadAround` was
+  // coming to clear it: R3-1's symptom reached without a peer switch. It then
+  // lived in a `useKeyedRecord` keyed on `withId`, which is the same thing as a
+  // mount now that `ChatArea` is mounted under `key={peerId}`.
+  const convRef = useRef<ConversationSlot | null>(null);
+  if (convRef.current === null) {
+    convRef.current = {
+      latches: openLatches(entryAnchorRef.current !== undefined),
+      dropDebt: null,
+    };
+  }
+  const conv = convRef.current;
   // 🔴 "THE LAST LOAD NEVER LANDED" (T-929f). `load()` below used to end a
   // rejection at `console.warn` and nothing else. Two failure worlds, and only
   // one of them was already covered:
@@ -673,11 +625,9 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   // here).
   //
   // ⚠️ StrictMode: the record is NOT rebuilt by this effect at all any more —
-  // `useKeyedRecord` rebuilds it during render, and only when `withId` really
-  // changes. That is what makes setup→cleanup→setup harmless: the second setup
-  // sees the same key and therefore the same record, where the old
-  // rebuild-in-the-setup-body re-armed a latch behind a job that had already
-  // run (R4-2).
+  // it is built once, during the first render of this mount. That is what makes
+  // setup→cleanup→setup harmless, where the old rebuild-in-the-setup-body
+  // re-armed a latch behind a job that had already run (R4-2).
 
   // The PEER's watermark for this conversation: the receipt whose READER is the
   // peer and whose PEER is the owner — i.e. how far the peer has read the
@@ -711,15 +661,13 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       // rows off somebody else's reading, and nothing corrects it until the next
       // `chat_read` delta or the next entry. One mis-click reaches it.
       const peerReceipt = reads.find((r) => r.readerId === withId);
-      // No visit guard here, and that is deliberate — see PeerLastRead. The
-      // value names the room it is for; `mergePeerRead` refuses another room's
-      // and keeps the larger of this room's own, so a watermark that lands after
-      // the owner has come BACK to this peer is used rather than discarded.
-      setPeerRead((prev) =>
-        mergePeerRead(prev, {
-          peer: withId,
-          ts: peerReceipt ? peerReceipt.lastReadTs : 0,
-        }),
+      // No staleness guard here, and that is deliberate: a watermark that lands
+      // late is still this room's own watermark, merely older, and
+      // `mergePeerRead` keeps the larger of the two rather than letting it fall
+      // (R11-7). This hook belongs to one room, so there is no other room's
+      // watermark that could arrive here.
+      setPeerLastReadTs((prev) =>
+        mergePeerRead(prev, peerReceipt ? peerReceipt.lastReadTs : 0),
       );
     } catch (e) {
       console.warn("useChat: reads refetch failed", e);
@@ -749,7 +697,7 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     // deliberately the same door the real fetch uses — there is no second,
     // by-name way to unlatch an anchor, because a second way is what R4-1 was.
     // The counter is left exactly as it was found.
-    conv.latches.acquire(withId, "anchorFetch")?.();
+    conv.latches.acquire("anchorFetch")?.();
     const seq = ++loadSeqRef.current;
     try {
       const next = await api.listChat(withId);
@@ -766,26 +714,13 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       // never reset (see their note), which is exactly why writing to them has
       // to be earned.
       //
-      // R5-1 spelled the guard as `threadRef.current.peer !== withId` — a
-      // STRING comparison against a ref that is shared by every conversation,
-      // so it only caught a reset that was late ACROSS peers. A→B→**A** made it
-      // say yes again: the first visit's late reset burned a ticket and pushed
-      // the newest page over the second visit's anchor window, which is the
-      // intermediate frame this ticket exists to delete. `conv` is the record
-      // this call captured; `convRef.current` is the one on screen.
-      if (convRef.current !== conv) return;
       committedSeqRef.current = seq;
-      setThread((prev) =>
-        prev.peer !== withId
-          ? prev
-          : {
-              peer: withId,
-              messages: next,
-              hasMore: next.length >= CHAT_PAGE_SIZE,
-              gapSuspected: prev.gapSuspected,
-              hasNewer: false,
-            },
-      );
+      setThread((prev) => ({
+        messages: next,
+        hasMore: next.length >= CHAT_PAGE_SIZE,
+        gapSuspected: prev.gapSuspected,
+        hasNewer: false,
+      }));
     } catch (e) {
       console.warn("useChat: resetToLatest failed", e);
     }
@@ -796,20 +731,11 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     // front) — never replace, or the loaded scrollback would vanish under the
     // owner. Takes a generation ticket like load() does — see loadSeqRef.
     //
-    // 🔴 A POST-SEND REFRESH BELONGS TO THE VISIT THAT SENT (T-48, R6-1). Its
-    // only caller is `send`, and a send survives a conversation switch: the
-    // POST is in the air, the owner clicks away and clicks back, and this
-    // refresh then commits a newest page — burning a generation ticket and, if
-    // the visit it lands in opened at an ANCHOR, replacing that window with the
-    // live tail. Same defect as `resetToLatest`'s below, one caller over; the
-    // peer id cannot see it, because the peer is the same one. The message
-    // itself is not lost: this visit's own load is what will carry it.
-    if (convRef.current !== conv) return;
     // SENDING RETURNS TO THE LIVE TAIL (T-48 ③). While the thread is an anchor
     // window the message we just sent is BEYOND it, so a merge would drop it on
     // the floor and the composer's own line would never appear. Nothing else
     // can honestly be done with a newest page here — see resetToLatest.
-    if (threadRef.current.peer === withId && threadRef.current.hasNewer) {
+    if (threadRef.current.hasNewer) {
       await resetToLatest();
       await refetchReads();
       return;
@@ -822,11 +748,7 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     let fill: ChatMessage[] = [];
     let gap: boolean | undefined;
     let superseded = seq < committedSeqRef.current;
-    if (
-      !superseded &&
-      cur.peer === withId &&
-      !pageJoinsThread(cur.messages, next)
-    ) {
+    if (!superseded && !pageJoinsThread(cur.messages, next)) {
       const r = await backfillSeam(withId, cur.messages, next);
       // A newer load committed while we were paging backwards ⇒ this page and
       // its backfill are stale. Dropping them keeps the thread in order.
@@ -840,30 +762,16 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       await refetchReads();
       return;
     }
-    // 🔴 THE GUARD AT THE TOP OF THIS FUNCTION CANNOT STAND HERE (T-48, R8-1).
-    // It ran BEFORE `await api.listChat` — two awaits ago — so it answers "was
-    // this visit current when the refresh STARTED", and the question at a
-    // commit point is "is it current NOW". Between the two, the owner can click
-    // away and click back: the generation ticket does not see it (nothing in
-    // between committed, so the watermark never moved) and `prev.peer !==
-    // withId` does not see it either (the peer is the same person). That pair
-    // is exactly the pair every earlier instance of this family was found
-    // holding. Landing here would replace THIS visit's anchor window — or the
-    // empty room still waiting for it — with the previous visit's live tail.
-    // Keep the guard at the top as well: it stops a stale visit from even
-    // entering the `resetToLatest` branch, which is a different job.
-    if (convRef.current !== conv) return;
+    // 🔴 THE ONLY THING THAT MAY STOP A COMMIT HERE IS A NEWER TICKET (T-48,
+    // R8-1, simplified by R13-3). This used to also ask "is the visit that
+    // started this refresh still on screen?", because a send survives a
+    // conversation switch and the hook did not: the POST was in the air, the
+    // owner clicked away and back, and this refresh replaced the new visit's
+    // anchor window with the previous visit's live tail. The hook is mounted per
+    // room now, so a refresh started before the switch commits into a component
+    // React has already discarded.
     committedSeqRef.current = seq;
-    setThread((prev) => {
-      // A peer switch mid-flight: this page belongs to the peer the owner has
-      // already left — DROP it (same guard loadOlder's setThread already has).
-      // The previous else-arm wrote `{ peer: withId, messages: next }`, i.e. it
-      // replaced the current conversation's thread AND re-registered the OLD
-      // peer as the thread's owner, so the window kept rendering the old
-      // conversation until some later event for the current peer overwrote it.
-      if (prev.peer !== withId) return prev;
-      return mergeLatestPage(prev, next, fill, gap);
-    });
+    setThread((prev) => mergeLatestPage(prev, next, fill, gap));
     // ⚠️ THIS PULL NO LONGER HAS A CAUSE, AND SAYING SO IS THE POINT (T-48).
     // It used to read: "listChat itself marks the owner's read watermark
     // server-side; pull the peer's watermark alongside so the badges
@@ -885,29 +793,36 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   useEffect(() => {
     let alive = true;
     // 🔴 THE LATCHES ARE NOT RESET HERE ANY MORE, AND THAT IS THE POINT
-    // (fourth-review R4-2). They are rebuilt by `useKeyedRecord` above, keyed
-    // on the conversation — this effect re-runs for reasons that have nothing
-    // to do with the conversation changing (StrictMode's setup→cleanup→setup,
-    // and any future dependency), and a rebuild here re-arms a latch behind a
-    // one-shot caller that is never coming back. It also used to pull an
-    // in-flight `loadOlder`/`loadNewer` mutex out from under itself on an
-    // unrelated re-subscribe.
+    // (fourth-review R4-2). They are built once per mount, above — this effect
+    // re-runs for reasons that have nothing to do with the conversation
+    // (StrictMode's setup→cleanup→setup, and any future dependency), and a
+    // rebuild here re-arms a latch behind a one-shot caller that is never
+    // coming back. It also used to pull an in-flight `loadOlder`/`loadNewer`
+    // mutex out from under itself on an unrelated re-subscribe.
 
-    // Switching conversations: drop the PREVIOUS peer's thread/receipt state
-    // immediately instead of letting it linger under the new peer's header
-    // until the refetch lands. ChatArea's entry positioning (first-unread jump)
-    // depends on this — it must anchor on the NEW peer's first loaded batch,
-    // never on a stale thread. No-op on first mount (already empty).
-    // hasMore resets optimistic-true; the first landed page derives it
-    // honestly (mergeLatestPage's empty-thread arm).
+    // 🔴 ONE INSTANCE OF THIS HOOK IS ONE CONVERSATION (T-48, R13-3). The
+    // supported way to change room is to MOUNT AGAIN — `ChatArea` is rendered
+    // under `key={peerId}`, and `lint-chat-area-key` keeps it that way — which
+    // is why `Thread` no longer carries the peer it belongs to and no commit
+    // point here asks whose thread it is holding.
+    //
+    // These two lines are the safety NET for a caller that swaps `withId` on a
+    // live instance instead: the thread converges on the new room rather than
+    // staying on the old one. They are not a guarantee, and the difference
+    // matters — an effect runs AFTER the commit that already painted, so such a
+    // caller still gets one frame of the previous room's messages under the new
+    // room's header. That frame is the whole of R11-1, and deleting it is what
+    // the `key` did.
+    //
+    // hasMore resets optimistic-true; the first landed page derives it honestly
+    // (mergeLatestPage's empty-thread arm).
     setThread({
-      peer: withId,
       messages: [],
       hasMore: true,
       gapSuspected: false,
       hasNewer: false,
     });
-    setPeerRead({ peer: withId, ts: 0 });
+    setPeerLastReadTs(0);
 
     // ONE load path (initial + SSE + refocus), and since T-48 ONE door: the
     // load never marks anything read, so a backgrounded window loads exactly
@@ -922,7 +837,7 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       // on a conversation switch `threadRef` is still the PREVIOUS peer's
       // thread for this tick, and that peer's anchor must not silence the new
       // conversation's first load.
-      if (threadRef.current.peer === withId && threadRef.current.hasNewer) {
+      if (threadRef.current.hasNewer) {
         return;
       }
       // 🔴 …AND NEITHER WHILE THE ANCHOR IS STILL COMING (T-48). `hasNewer`
@@ -937,8 +852,8 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       // latches refuse a peer that is not theirs, so that gate is unreachable
       // now.
       if (
-        conv.latches.isHeld(withId, "entryAnchor") ||
-        conv.latches.isHeld(withId, "anchorFetch")
+        conv.latches.isHeld("entryAnchor") ||
+        conv.latches.isHeld("anchorFetch")
       ) {
         return;
       }
@@ -966,7 +881,7 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
           const cur = threadRef.current;
           let fill: ChatMessage[] = [];
           let gap: boolean | undefined;
-          if (cur.peer === withId && !pageJoinsThread(cur.messages, next)) {
+          if (!pageJoinsThread(cur.messages, next)) {
             const r = await backfillSeam(withId, cur.messages, next);
             if (!alive) return;
             // 🔴 THE ORDERING GUARD (review B2). The backfill above is up to 6
@@ -982,17 +897,7 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
           committedSeqRef.current = seq;
           // MERGE the newest page into whatever is already loaded for this
           // peer (see mergeLatestPage) — replacing would eat the scrollback.
-          setThread((prev) =>
-            prev.peer === withId
-              ? mergeLatestPage(prev, next, fill, gap)
-              : {
-                  peer: withId,
-                  messages: next,
-                  hasMore: next.length >= CHAT_PAGE_SIZE,
-                  gapSuspected: false,
-                  hasNewer: false,
-                },
-          );
+          setThread((prev) => mergeLatestPage(prev, next, fill, gap));
         })
         .catch((e) => {
           // Same guard as the .then arm, and for a sharper reason: a load
@@ -1005,7 +910,7 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
           if (!alive) return;
           // Do NOT retry here (T-929f). Record the debt only; the SSE sink
           // below pays it on the next relevant burst.
-          conv.dropDebt = conv.latches.acquire(withId, "loadStale");
+          conv.dropDebt = conv.latches.acquire("loadStale");
           console.warn("useChat: load failed", e);
         });
     };
@@ -1063,7 +968,7 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
         // exactly when we owe one. It re-fetches the SAME newest page the lost
         // load wanted; it is not a history re-pull.
         const ourChat =
-          conv.latches.isHeld(withId, "loadStale") ||
+          conv.latches.isHeld("loadStale") ||
           (batch.topics.has("chat") &&
             (chats.length === 0 ||
               chats.some((d) => touchesThisThread(d.names))));
@@ -1139,8 +1044,8 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     // Guards: the thread must really be THIS peer's (a switch is one commit
     // behind), non-empty (no cursor yet), still paged (hasMore), and no other
     // older-page fetch may be in flight (the concurrency lock).
-    if (cur.peer !== withId || cur.messages.length === 0 || !cur.hasMore) return;
-    const release = conv.latches.acquire(withId, "loadingOlder");
+    if (cur.messages.length === 0 || !cur.hasMore) return;
+    const release = conv.latches.acquire("loadingOlder");
     if (!release) return;
     try {
       const oldest = cur.messages[0];
@@ -1148,19 +1053,10 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
         beforeTs: oldest.ts,
         beforeId: oldest.id,
       });
-      // 🔴 …AND A VISIT SWITCH MID-FLIGHT (T-48, R6-1). The cursor below was
-      // taken from the thread THIS visit was holding; a re-entry to the same
-      // peer is holding a different one (an anchor window, most sharply), so
-      // prepending this page there splices history in front of rows it does not
-      // join onto. `prev.peer !== withId` cannot see it — the peer is the same.
-      if (convRef.current !== conv) return;
       setThread((prev) => {
-        // A peer switch mid-flight: the page belongs to the OLD peer — drop it.
-        if (prev.peer !== withId) return prev;
         const have = new Set(prev.messages.map((m) => m.id));
         const older = page.filter((m) => !have.has(m.id));
         return {
-          peer: prev.peer,
           gapSuspected: prev.gapSuspected,
           hasNewer: prev.hasNewer,
           messages: [...older, ...prev.messages],
@@ -1183,9 +1079,9 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   // page LENGTH (not the merged count) is what decides whether more remains.
   const loadNewer = useCallback(async () => {
     const cur = threadRef.current;
-    if (cur.peer !== withId || cur.messages.length === 0 || !cur.hasNewer)
+    if (cur.messages.length === 0 || !cur.hasNewer)
       return;
-    const release = conv.latches.acquire(withId, "loadingNewer");
+    const release = conv.latches.acquire("loadingNewer");
     if (!release) return;
     // 🔴 THE GENERATION TICKET THIS WALK WENT WITHOUT (T-48, F2). `loadingNewer`
     // is a SAME-DIRECTION mutex and nothing more: it stops two forward pages
@@ -1213,13 +1109,8 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       // A later load committed while we were paging forwards ⇒ the thread this
       // page continues no longer exists. Drop it whole.
       if (seq < committedSeqRef.current) return;
-      // 🔴 And so does a walk left over from an earlier VISIT (T-48, R6-1) —
-      // which would otherwise burn a generation ticket in a room that never
-      // asked for a forward page, dropping the loads that room started first.
-      if (convRef.current !== conv) return;
       committedSeqRef.current = seq;
       setThread((prev) => {
-        if (prev.peer !== withId) return prev;
         const have = new Set(prev.messages.map((m) => m.id));
         const fresh = page.filter((m) => !have.has(m.id));
         return {
@@ -1275,8 +1166,8 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   // `loadAround` itself has neither an acquire nor a release to get wrong.
   // See latch-inventory.md §3.
   const withAnchorFetch = useCallback(
-    async <T,>(peer: string, body: () => Promise<T>): Promise<T> => {
-      const release = conv.latches.acquire(peer, "anchorFetch");
+    async <T,>(body: () => Promise<T>): Promise<T> => {
+      const release = conv.latches.acquire("anchorFetch");
       try {
         return await body();
       } finally {
@@ -1292,7 +1183,7 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
 
   const loadAround = useCallback(
     (msgId: string): Promise<JumpOutcome> =>
-      withAnchorFetch(withId, async () => {
+      withAnchorFetch(async () => {
         const seq = ++loadSeqRef.current;
         let older: ChatMessage[];
         let newer: ChatMessage[];
@@ -1338,31 +1229,17 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
         // goes blank, the miss notice does not light, and nothing is logged.
         // Refusing turns it into the ordinary miss, which is what it is.
         if (!window.some((m) => m.id === msgId)) return "missing";
-        // 🔴 A WINDOW LEFT OVER FROM AN EARLIER VISIT IS NOT THIS ROOM'S (T-48, R7-1).
-        // The generation ticket above is drawn when this call STARTS, so it is
-        // older than every load of the visit now on screen — in a room that has
-        // committed nothing yet (exactly the state of a room entered with an
-        // anchor) it lets the stale pair through. `prev.peer !== withId` below
-        // answers "whose rows are these", not "does this callback still count":
-        // coming back to the same person, both sides read the same string. Only
-        // the record identity separates the two visits.
-        if (convRef.current !== conv) return "superseded";
         committedSeqRef.current = seq;
-        setThread((prev) =>
-          prev.peer !== withId
-            ? prev
-            : {
-                peer: withId,
-                messages: window,
-                // A full older page means history may continue above it; a full
-                // newer page means the live tail is below it (see Thread.hasNewer).
-                // Both are self-correcting: the next page each way says otherwise
-                // by coming back short.
-                hasMore: older.length >= CHAT_PAGE_SIZE,
-                gapSuspected: prev.gapSuspected,
-                hasNewer: newer.length >= CHAT_PAGE_SIZE,
-              },
-        );
+        setThread((prev) => ({
+          messages: window,
+          // A full older page means history may continue above it; a full newer
+          // page means the live tail is below it (see Thread.hasNewer). Both are
+          // self-correcting: the next page each way says otherwise by coming
+          // back short.
+          hasMore: older.length >= CHAT_PAGE_SIZE,
+          gapSuspected: prev.gapSuspected,
+          hasNewer: newer.length >= CHAT_PAGE_SIZE,
+        }));
         return "found";
       }),
     [withId, withAnchorFetch, conv],
@@ -1380,18 +1257,9 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     [withId],
   );
 
-  const peerLastRead = useMemo<PeerLastRead>(
-    () => ({
-      peer: peerRead.peer,
-      tsFor: (peer: string) => (peer === peerRead.peer ? peerRead.ts : 0),
-    }),
-    [peerRead],
-  );
-
   return {
     messages: thread.messages,
-    messagesPeer: thread.peer,
-    peerLastRead,
+    peerLastReadTs,
     send,
     markRead,
     hasMore: thread.hasMore,

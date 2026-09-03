@@ -42,24 +42,17 @@ function mkMsg(over: Partial<ChatMessage> & { id: string }): ChatMessage {
   };
 }
 
-const FIRST_VISIT = {};
-const SECOND_VISIT = {};
-
 /** A surface that has a LOADED WINDOW of messages on screen and a control that
  * asks for one message by id. `window` is what the deleted design searched;
  * `targetId` is deliberately not in it. */
 function Harness({
   windowMsgs,
   targetId,
-  visit = FIRST_VISIT,
 }: {
   windowMsgs: ChatMessage[];
   targetId: string;
-  /** The caller's visit token. A new object stands for a new entry to a
-   * conversation — what `useKeyedRecord` hands ChatArea on every switch. */
-  visit?: object;
 }) {
-  const quoted = useQuotedMessageOverlay(visit, undefined);
+  const quoted = useQuotedMessageOverlay(undefined);
   return (
     <div>
       {windowMsgs.map((m) => (
@@ -180,11 +173,14 @@ describe("useQuotedMessageOverlay", () => {
   });
 
   it("切走再切回,上一趟點開的引用原文不准蓋在這一趟的房間上", async () => {
-    // 🔴 T-48 R8-3,這一族的第十個 commit 點。這支 hook 的 state 活在 hook 裡,
-    // 而 ChatArea 換人不會 remount —— 所以在 A 按下「看原訊息」、讀取慢、切到 B,
-    // 讀取落地時會把 A 的那則訊息以全螢幕 overlay 蓋在 B 的房間上,還會把焦點
-    // 交給一顆已經隨 A 的列消失的按鈕。§2.4 對其他 overlay 的豁免(「它蓋住整頁,
-    // 切對話的手勢被擋著」)在這裡不成立:讀取期間 overlay 根本還沒開。
+    // 🔴 T-48 R8-3。在 A 按下「看原訊息」、讀取慢、切到 B,讀取落地時不准把 A
+    // 的那則訊息以全螢幕 overlay 蓋在 B 的房間上,也不准把焦點交給一顆已經隨 A
+    // 的列消失的按鈕。「overlay 蓋住整頁所以切不了對話」這個豁免在這裡不成立:
+    // 讀取期間 overlay 根本還沒開,roster 完全點得動。
+    //
+    // 🔴 換房就是換一份 hook(R13-5):`ChatArea` 掛在 `key={peerId}` 底下,所以
+    // 下面用 key 換掉整個 Harness 來驅動,跟 app 走同一條路。這支 hook 以前為此
+    // 收一個 visit token 參數,那個參數隨著 remount 一起退場。
     let land!: (m: ChatMessage) => void;
     vi.spyOn(api, "getChatMessage").mockReturnValue(
       new Promise<ChatMessage>((r) => {
@@ -194,7 +190,7 @@ describe("useQuotedMessageOverlay", () => {
 
     const { getByText, rerender } = render(
       <I18nProvider>
-        <Harness windowMsgs={[]} targetId="c-1" visit={FIRST_VISIT} />
+        <Harness key="visit-1" windowMsgs={[]} targetId="c-1" />
       </I18nProvider>,
     );
     act(() => {
@@ -207,7 +203,7 @@ describe("useQuotedMessageOverlay", () => {
 
     rerender(
       <I18nProvider>
-        <Harness windowMsgs={[]} targetId="c-1" visit={SECOND_VISIT} />
+        <Harness key="visit-2" windowMsgs={[]} targetId="c-1" />
       </I18nProvider>,
     );
     await act(async () => {
@@ -220,7 +216,7 @@ describe("useQuotedMessageOverlay", () => {
       "上一趟的引用原文不准蓋在這一趟的房間上",
     ).toBeNull();
 
-    // …而這一趟自己按的那一次照樣開得起來(守衛沒有把這條路整個關掉)。
+    // …而這一趟自己按的那一次照樣開得起來(換房沒有把這條路整個關掉)。
     vi.spyOn(api, "getChatMessage").mockResolvedValue(
       mkMsg({ id: "c-1", body: "這一趟自己按的原文" }),
     );

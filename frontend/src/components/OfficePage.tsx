@@ -573,6 +573,26 @@ export function OfficePage() {
         </aside>
       )}
 
+      {/* 🔴 ONE MOUNTED ChatArea PER CONVERSATION, AND THE `key` IS THE WHOLE OF
+          IT (T-48, R13-5). All three branches below sit in the same position of
+          the same conditional expression, so without a key React reuses ONE
+          component instance and a conversation switch is just a prop change —
+          every piece of per-conversation state, every in-flight read and every
+          latch inside `ChatArea` and `useChat` then survives into a room it does
+          not belong to. Twelve reviews found twelve instances of that, and each
+          was answered by re-implementing `key` a little further inside: a visit
+          token, a keyed-state hook, a keyed-record hook, a machine-checked
+          census of everything that had to be keyed.
+
+          Keying the mount is the same statement, made once, by React. A switch
+          unmounts: the state goes, the DOM refs go, the setters land in a
+          discarded component, and nothing has to be enumerated. What survives on
+          purpose survives because it lives OUTSIDE the component — the draft and
+          its staged files, in `lib/chatDraftStore`, which is where a returning
+          composer reads them from anyway.
+
+          ⚠️ Removing a key here does not break a test that names it; it silently
+          reopens all twelve. `lint-chat-area-key` is what goes red instead. */}
       {showChat && (workerMember || releasedPeer || selected) && (
         <section className="office__chat">
           {isMobile && (
@@ -594,6 +614,7 @@ export function OfficePage() {
             // NO onOpenDetail (there is no live detail to open → composer stays
             // the plain locked notice). jumpToMsgId still locates the ask.
             <ChatArea
+              key={releasedPeer.id}
               member={releasedPeer}
               members={members}
               workers={outsource.workers}
@@ -612,7 +633,7 @@ export function OfficePage() {
             />
           ) : workerMember && workerPeer ? (
             // M3 §4.2 outsource chat: the SAME ChatArea as a member chat
-            // (打字/附檔/看回覆), keyed on the worker id as the chat peer.
+            // (打字/附檔/看回覆), mounted on the worker id as the chat peer.
             // Header title = 「外包 · 代號」; the subtitle is the SAME task
             // line the rail's outsource row shows — [clickable task-id chip →
             // task type], the shared OutsourceTaskLine (owner 2026-07-16:
@@ -625,6 +646,7 @@ export function OfficePage() {
             // #office/worker/<id>. The chip's stopPropagation keeps the task
             // jump from also opening that detail.
             <ChatArea
+              key={workerPeer.id}
               member={workerMember}
               members={members}
               workers={outsource.workers}
@@ -649,6 +671,7 @@ export function OfficePage() {
           ) : (
             selected && (
               <ChatArea
+                key={selected.id}
                 member={selected}
                 // The full roster resolves an inter-agent message's sender id →
                 // name (the sender may be a THIRD agent, not the window's peer).

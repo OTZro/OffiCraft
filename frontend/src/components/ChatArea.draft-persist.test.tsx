@@ -25,8 +25,7 @@ const send = vi.fn(() => Promise.resolve());
 vi.mock("../hooks/useChat", () => ({
   useChat: () => ({
     messages,
-    messagesPeer: "m1",
-    peerLastRead: { peer: "", tsFor: () => 0 },
+    peerLastReadTs: 0,
     send,
     markRead: vi.fn(() => Promise.resolve()),
   }),
@@ -58,10 +57,27 @@ function mkMember(id: string, name: string): Member {
   };
 }
 
+// 🔴 MOUNTED THE WAY `OfficePage` MOUNTS IT (T-48, R13-5): under
+// `key={peerId}`, so switching room is an unmount + a mount, exactly as it is in
+// the app. Rendering it without a key here would test a component lifetime the
+// product does not have — and it is the lifetime every bug in this file came
+// from.
 function renderChat(member: Member, draftSeed?: string) {
   return render(
     <I18nProvider>
-      <ChatArea member={member} draftSeed={draftSeed} />
+      <ChatArea key={member.id} member={member} draftSeed={draftSeed} />
+    </I18nProvider>,
+  );
+}
+
+/** Walk into another room: same render tree, different `key`. */
+function switchTo(
+  view: ReturnType<typeof renderChat>,
+  member: Member,
+): void {
+  view.rerender(
+    <I18nProvider>
+      <ChatArea key={member.id} member={member} />
     </I18nProvider>,
   );
 }
@@ -116,6 +132,7 @@ describe("ChatArea draft survival", () => {
   beforeEach(() => {
     messages = [];
     send.mockClear();
+    resetChatDrafts();
     Element.prototype.scrollIntoView = vi.fn();
   });
 
@@ -188,16 +205,15 @@ describe("ChatArea draft survival", () => {
     });
 
     it("never reaches the other peer's composer, draft or send button", async () => {
+      // 🔴 R9-1. The row is written into the slot of the peer it was PICKED for,
+      // so there is no list Kye's composer could read it out of — it is not
+      // filtered out of his room, it was never in it.
       const view = renderChat(m1);
       pick(view.container, pngFile("a-secret.png"));
       expect(HeldFileReader.held).toHaveLength(1);
 
       // The owner moves to Kye while the read is still in flight.
-      view.rerender(
-        <I18nProvider>
-          <ChatArea member={m2} />
-        </I18nProvider>,
-      );
+      switchTo(view, m2);
       expect(previewCount(view.container)).toBe(0);
       expect(sendDisabled(view.container)).toBe(true);
 
@@ -214,21 +230,21 @@ describe("ChatArea draft survival", () => {
       expect(draftNames("m1")).toEqual(["a-secret.png"]);
 
       // And it is waiting where the owner put it when they come back.
-      view.rerender(
-        <I18nProvider>
-          <ChatArea member={m1} />
-        </I18nProvider>,
-      );
+      switchTo(view, m1);
       await waitFor(() => expect(previewCount(view.container)).toBe(1));
     });
 
     it("reaches the composer that is showing its room again after a 跳頁", async () => {
       // 🔴 R11-2. R10-4 taught the unmount path to file the file in its room's
       // DRAFT, which is right — and enough only while nobody comes back. A
-      // returning composer reads the draft ONCE, on mount, and by then the read
+      // returning composer read the draft ONCE, on mount, and by then the read
       // had not landed: the file was in the draft, absent from the screen, and
       // then destroyed by the persist effect writing this composer's own
       // (file-less) list over the top on the very next keystroke.
+      //
+      // Both halves are structural now (R13-2): the composer SUBSCRIBES to its
+      // peer's slice of the store, so a late write repaints it, and the persist
+      // effect cannot write the files back because it never holds them.
       const first = renderChat(m1);
       pick(first.container, pngFile("late.png"));
       expect(HeldFileReader.held).toHaveLength(1);
@@ -257,11 +273,7 @@ describe("ChatArea draft survival", () => {
       const view = renderChat(m1);
       pick(view.container, pngFile("huge.png"));
 
-      view.rerender(
-        <I18nProvider>
-          <ChatArea member={m2} />
-        </I18nProvider>,
-      );
+      switchTo(view, m2);
       act(() => HeldFileReader.held[0].land(21 * 1024 * 1024));
 
       // Kye picked nothing; a rejection is a sentence about somebody else's
@@ -275,11 +287,7 @@ describe("ChatArea draft survival", () => {
       fireEvent.click(view.container.querySelector(".chat__send") as HTMLElement);
       await waitFor(() => expect(input(view.container).value).toBe(""));
 
-      view.rerender(
-        <I18nProvider>
-          <ChatArea member={m1} />
-        </I18nProvider>,
-      );
+      switchTo(view, m1);
       await waitFor(() =>
         expect(attachErrorText(view.container)).toBe("圖片太大（上限 20 MB）"),
       );
@@ -291,17 +299,9 @@ describe("ChatArea draft survival", () => {
       const view = renderChat(m1);
       pick(view.container, pngFile("for-mira.png"));
 
-      // A→B→A: a fresh visit token, but the room on screen IS the file's room.
-      view.rerender(
-        <I18nProvider>
-          <ChatArea member={m2} />
-        </I18nProvider>,
-      );
-      view.rerender(
-        <I18nProvider>
-          <ChatArea member={m1} />
-        </I18nProvider>,
-      );
+      // A→B→A: three mounts, and the room on screen IS the file's room.
+      switchTo(view, m2);
+      switchTo(view, m1);
       act(() => HeldFileReader.held[0].land());
 
       await waitFor(() => expect(previewCount(view.container)).toBe(1));

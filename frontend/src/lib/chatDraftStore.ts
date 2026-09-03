@@ -1,4 +1,5 @@
-// lib/chatDraftStore.ts — the composer DRAFT survival layer for the office chat.
+// lib/chatDraftStore.ts — the composer DRAFT layer for the office chat, and
+// since T-48 (R13-2) the one and only home of a chat composer's staged files.
 //
 // The bug (T-8aaa): the座艙 chat composer's draft (typed text AND staged image
 // attachments) lived ONLY in ChatArea's component state. Navigating to another
@@ -20,6 +21,23 @@
 // Keyed by CHAT PEER id (member id / outsource worker id), matching how chat
 // history and the compose seed are keyed — so each conversation carries its own
 // independent draft.
+//
+// 🔴 IT IS SUBSCRIBABLE, AND THAT IS WHAT RETIRED THE PARALLEL REGISTRY (T-48,
+// R13-2). This file used to be read once per mount (`useState(() =>
+// getChatDraft(id))`), which made it a place a file could WAIT but never a
+// place a file could ARRIVE. So a second module-level, peer-keyed table grew up
+// beside it — `liveComposers` in ChatArea — whose whole job was to tell a
+// mounted composer that a late `FileReader` had filed something into the draft
+// it had already read. The comment there said "this is the half chatDraftStore
+// cannot be". It could: it was not that the store was the wrong shape, it was
+// that nobody could subscribe to it.
+//
+// With `subscribeChatDraft` the composer's staged list IS this store's per-peer
+// slice, read through `useSyncExternalStore`. A late landing is one write here
+// and every composer showing that room repaints — mounted or not, first visit or
+// tenth. There is no registry, no adoption, no restore, and no "was this row
+// picked for the room on screen?" stamp on the row, because a row cannot be in
+// a room it was not written into.
 
 import type { PendingAttachment } from "../hooks/useAttachmentStaging";
 
@@ -37,33 +55,134 @@ export interface ChatDraft {
 }
 
 const drafts = new Map<string, ChatDraft>();
+/** The transient staging rejection (「圖片太大」/「最多 N 個檔案」) for one peer.
+ * Per peer for the same reason the file is: a size refusal is a sentence about
+ * something somebody did in ONE room, and it has to survive until that room is
+ * on screen to read it (R11-4 / R12-1). Kept out of `ChatDraft` because it is
+ * not part of what the owner composed — an empty composer with a notice is
+ * still an empty draft. */
+const attachErrors = new Map<string, string>();
+const listeners = new Map<string, Set<() => void>>();
 
-/** The saved draft for a peer, or undefined when none (never typed, or cleared
- * by a send / manual empty). */
+/** The snapshot handed back for a peer with no staged files. One frozen
+ * instance, because `useSyncExternalStore` re-renders whenever the snapshot's
+ * identity changes and a fresh `[]` per read is an infinite loop. */
+const NO_ATTACHMENTS: readonly PendingAttachment[] = Object.freeze([]);
+
+function notify(peerId: string): void {
+  const subs = listeners.get(peerId);
+  if (!subs) return;
+  for (const cb of [...subs]) cb();
+}
+
+/** Watch ONE peer's draft slice. Returns the unsubscribe. */
+export function subscribeChatDraft(peerId: string, cb: () => void): () => void {
+  let subs = listeners.get(peerId);
+  if (!subs) {
+    subs = new Set();
+    listeners.set(peerId, subs);
+  }
+  subs.add(cb);
+  return () => {
+    const live = listeners.get(peerId);
+    if (!live) return;
+    live.delete(cb);
+    if (live.size === 0) listeners.delete(peerId);
+  };
+}
+
+/** The saved draft for a peer, or undefined when none (never typed, no staged
+ * file, no reply target). */
 export function getChatDraft(peerId: string): ChatDraft | undefined {
   return drafts.get(peerId);
 }
 
-/** Persist a peer's draft. An EMPTY draft (no text, no attachments and no reply
- * target) deletes the entry instead of storing a blank — this is the "送出 /
- * 手動清空後歸零" path, so a later return finds nothing to restore (and the
- * compose seed is free to inject into the genuinely-empty composer). */
-export function saveChatDraft(peerId: string, draft: ChatDraft): void {
-  // "Empty" now includes the reply target: a composer holding ONLY a reply
-  // target (no text, no attachments) is still a composer the owner has put into
-  // a state, and dropping it on 跳頁 would silently cancel the reply.
+/** A peer's staged files — the composer's live list, not a copy of it.
+ * Referentially stable between writes, which is what makes it a legal
+ * `useSyncExternalStore` snapshot. */
+export function getChatDraftAttachments(peerId: string): PendingAttachment[] {
+  return (drafts.get(peerId)?.attachments ??
+    NO_ATTACHMENTS) as PendingAttachment[];
+}
+
+/** A peer's staging rejection notice, or null. */
+export function getChatAttachError(peerId: string): string | null {
+  return attachErrors.get(peerId) ?? null;
+}
+
+function write(peerId: string, next: ChatDraft): void {
+  // "Empty" includes the reply target: a composer holding ONLY a reply target
+  // (no text, no attachments) is still a composer the owner has put into a
+  // state, and dropping it on 跳頁 would silently cancel the reply. An empty
+  // draft is DELETED rather than stored blank — the "送出 / 手動清空後歸零"
+  // path, so a later return finds nothing to restore (and the compose seed is
+  // free to inject into the genuinely-empty composer).
   if (
-    draft.text.length === 0 &&
-    draft.attachments.length === 0 &&
-    !draft.replyTo
+    next.text.length === 0 &&
+    next.attachments.length === 0 &&
+    !next.replyTo
   ) {
-    drafts.delete(peerId);
+    if (drafts.delete(peerId)) notify(peerId);
     return;
   }
-  drafts.set(peerId, draft);
+  drafts.set(peerId, next);
+  notify(peerId);
+}
+
+/** Persist the TYPED half only, leaving the staged files exactly as they are.
+ *
+ * 🔴 THIS SPLIT IS R11-2's FIX MADE STRUCTURAL (T-48, R13-2). The composer used
+ * to persist text and attachments together, from its own component state — so a
+ * file filed into the draft by a late read was overwritten by the next
+ * keystroke, which saved the composer's own (file-less) list over the top. The
+ * files are no longer the composer's to write back: this function cannot touch them. */
+export function saveChatDraftText(
+  peerId: string,
+  text: string,
+  replyTo?: string,
+): void {
+  const cur = drafts.get(peerId);
+  write(peerId, { text, attachments: cur?.attachments ?? [], replyTo });
+}
+
+/** Functionally update a peer's staged files. The updater sees the room's own
+ * list and nobody else's, which is the whole reason the count cap and the dedup
+ * can be written without asking whose row is whose. */
+export function updateChatDraftAttachments(
+  peerId: string,
+  fn: (prev: PendingAttachment[]) => PendingAttachment[],
+): void {
+  const cur = drafts.get(peerId);
+  const prev = cur?.attachments ?? [];
+  const next = fn(prev);
+  if (next === prev) return;
+  write(peerId, {
+    text: cur?.text ?? "",
+    attachments: next,
+    replyTo: cur?.replyTo,
+  });
+}
+
+/** Raise or clear a peer's staging rejection notice. */
+export function setChatAttachError(
+  peerId: string,
+  message: string | null,
+): void {
+  const had = attachErrors.has(peerId);
+  if (message === null) {
+    if (!had) return;
+    attachErrors.delete(peerId);
+  } else {
+    if (attachErrors.get(peerId) === message) return;
+    attachErrors.set(peerId, message);
+  }
+  notify(peerId);
 }
 
 /** Test-only reset so a module-level store never leaks state across tests. */
 export function resetChatDrafts(): void {
+  const touched = new Set([...drafts.keys(), ...attachErrors.keys()]);
   drafts.clear();
+  attachErrors.clear();
+  for (const peerId of touched) notify(peerId);
 }

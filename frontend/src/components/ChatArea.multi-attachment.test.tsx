@@ -10,7 +10,10 @@ import { I18nProvider } from "../i18n";
 import { ChatArea } from "./ChatArea";
 import type { Member } from "../types";
 import type { ChatMessage } from "../api/adapter";
-import { resetChatDrafts, saveChatDraft } from "../lib/chatDraftStore";
+import {
+  resetChatDrafts,
+  updateChatDraftAttachments,
+} from "../lib/chatDraftStore";
 
 let messages: ChatMessage[] = [];
 const send = vi.fn(() => Promise.resolve());
@@ -18,8 +21,7 @@ const send = vi.fn(() => Promise.resolve());
 vi.mock("../hooks/useChat", () => ({
   useChat: () => ({
     messages,
-    messagesPeer: "m1",
-    peerLastRead: { peer: "", tsFor: () => 0 },
+    peerLastReadTs: 0,
     send,
     markRead: vi.fn(() => Promise.resolve()),
   }),
@@ -185,18 +187,16 @@ describe("ChatArea multi-attachment composer", () => {
     // send, and this app has no toast, no error row and no rejection reporter,
     // so every press did nothing with nothing on screen to explain it.
     resetChatDrafts();
-    saveChatDraft("m1", {
-      text: "",
-      attachments: Array.from({ length: 12 }, (_, i) => ({
+    updateChatDraftAttachments("m1", () =>
+      Array.from({ length: 12 }, (_, i) => ({
         key: `k${i}`,
-        target: "m1",
         dataUri: "data:text/plain;base64,aGk=",
         filename: `f${i}.txt`,
         mime: "text/plain",
         size: 2,
         isImage: false,
       })),
-    });
+    );
     const { container } = renderChat();
 
     // Every file the owner left is still there — nothing was destroyed.

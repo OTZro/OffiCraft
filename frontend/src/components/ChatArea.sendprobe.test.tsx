@@ -23,8 +23,7 @@ const send = vi.fn<(b: string) => Promise<void>>();
 vi.mock("../hooks/useChat", () => ({
   useChat: () => ({
     messages,
-    messagesPeer: "m1",
-    peerLastRead: { peer: "", tsFor: () => 0 },
+    peerLastReadTs: 0,
     send,
     markRead: vi.fn(() => Promise.resolve()),
   }),

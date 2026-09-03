@@ -14,11 +14,13 @@ import type { ChatMessage } from "../api/adapter";
 
 let messages: ChatMessage[] = [];
 
+// The stand-in answers PER ROOM, like the real hook: one instance of `useChat`
+// belongs to one peer (T-48, R13-5), so another room's thread is empty here
+// rather than being the same array under a different header.
 vi.mock("../hooks/useChat", () => ({
-  useChat: () => ({
-    messages,
-    messagesPeer: "m1",
-    peerLastRead: { peer: "", tsFor: () => 0 },
+  useChat: (withId: string) => ({
+    messages: withId === "m1" ? messages : [],
+    peerLastReadTs: 0,
     send: vi.fn(() => Promise.resolve()),
     markRead: vi.fn(() => Promise.resolve()),
   }),
@@ -107,20 +109,23 @@ describe("chat .md preview action (T-a1c4 / T-7bc2)", () => {
     expect(dl.getAttribute("download")).toBe("design.md");
   });
 
-  it("closes when the chip's own message list is no longer the one on screen", async () => {
+  it("an open document preview does not survive the room it was opened in", async () => {
     // 🔴 R10-1 / R11-1 — the leak the tenth review MEASURED, on the overlay that
-    // actually opens it. `ChatArea` is not remounted on a conversation switch
-    // and `useChat` swaps its thread one commit later, so there is a paintable
-    // frame with Bruno's header over Alice's messages; the file chip's overlay
-    // (AttachmentStrip's own state, NOT ChatArea.mdPreview) sat on top of it
-    // still showing Alice's filename and Alice's content.
+    // actually opens it. `ChatArea` used to be reused across conversations while
+    // `useChat` swapped its thread one commit later, so there was a paintable
+    // frame with Bruno's header over Alice's messages, and the file chip's
+    // overlay (AttachmentStrip's own state, NOT ChatArea.mdPreview) sat on top
+    // of it still showing Alice's filename and Alice's content.
     //
-    // What closes it is that this room no longer PAINTS another room's messages
-    // (`shownMessages`), which takes the whole row — chip, overlay and all —
-    // with it. The strip's own fix (looking the open preview up in the list it
-    // renders, rather than remembering the object) does NOT catch this case and
-    // is not what this test measures: the list handed to the strip is the same
-    // list. It is pinned separately in AttachmentStrip.test.tsx.
+    // 🔴 WHAT CLOSES IT NOW IS THE MOUNT (T-48, R13-5). The room is entered by
+    // mounting under `key={peerId}`, so leaving it unmounts the whole subtree —
+    // chip, strip and overlay. The previous fix was a render-time filter
+    // (`shownMessages`) that refused to paint another room's messages; it went
+    // with the frame it existed for. Driven here the way `OfficePage` drives it.
+    //
+    // ⚠️ THIS TEST SUPPLIES ITS OWN KEY, so it cannot see a key removed from
+    // `OfficePage` — `lint-chat-area-key` is what goes red for that. What it
+    // still catches is an overlay that outlives whatever opened it.
     globalThis.fetch = vi.fn(async () => ({
       ok: true,
       text: async () => "# 機密",
@@ -130,9 +135,10 @@ describe("chat .md preview action (T-a1c4 / T-7bc2)", () => {
         { id: "a-md", url: "/api/chat/attachment/a-md", filename: "A的機密.md", mime: "text/markdown", isImage: false },
       ]),
     ];
+    const mira = mkMember();
     const { container, rerender } = render(
       <I18nProvider>
-        <ChatArea member={mkMember()} />
+        <ChatArea key={mira.id} member={mira} />
       </I18nProvider>,
     );
     fireEvent.click(container.querySelector("button.chat__msg-file")!);
@@ -140,10 +146,11 @@ describe("chat .md preview action (T-a1c4 / T-7bc2)", () => {
       expect(document.body.querySelector(".md-preview")).toBeTruthy(),
     );
 
-    // The switch commit: member is Bruno, useChat still holds Mira's thread.
+    // Walk into Bruno's room.
+    const bruno = mkMember("m2", "Bruno");
     rerender(
       <I18nProvider>
-        <ChatArea member={mkMember("m2", "Bruno")} />
+        <ChatArea key={bruno.id} member={bruno} />
       </I18nProvider>,
     );
     expect(document.body.querySelector(".md-preview")).toBeNull();

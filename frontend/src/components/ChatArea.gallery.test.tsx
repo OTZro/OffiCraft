@@ -20,8 +20,7 @@ let messages: ChatMessage[] = [];
 vi.mock("../hooks/useChat", () => ({
   useChat: () => ({
     messages,
-    messagesPeer: "m1",
-    peerLastRead: { peer: "", tsFor: () => 0 },
+    peerLastReadTs: 0,
     send: vi.fn(() => Promise.resolve()),
     markRead: vi.fn(() => Promise.resolve()),
   }),
@@ -103,6 +102,8 @@ describe("ChatArea gallery toggle (M2-3)", () => {
     // §2.4 used to exempt this panel as an overlay whose backdrop blocks the
     // switch gesture. `.chat__gallery` has no backdrop: it is a 340px side
     // panel inside the chat column, and the roster beside it stays clickable.
+    // Driven the way `OfficePage` drives it — `key={peerId}` (R13-5) — so the
+    // switch is the unmount it is in the app.
     vi.mocked(api.listChatAttachments).mockResolvedValueOnce([
       {
         id: "att-1",
@@ -117,17 +118,19 @@ describe("ChatArea gallery toggle (M2-3)", () => {
         ts: 1,
       },
     ]);
+    const mira = mkMember();
     const view = render(
       <I18nProvider>
-        <ChatArea member={mkMember()} />
+        <ChatArea key={mira.id} member={mira} />
       </I18nProvider>,
     );
     fireEvent.click(view.container.querySelector(".chat__gallery-toggle")!);
     expect(await screen.findByText("A-的機密.png")).toBeTruthy();
 
+    const bruno = mkMember("m2", "Bruno");
     view.rerender(
       <I18nProvider>
-        <ChatArea member={mkMember("m2", "Bruno")} />
+        <ChatArea key={bruno.id} member={bruno} />
       </I18nProvider>,
     );
     expect(view.container.querySelector(".chat__gallery")).toBeNull();

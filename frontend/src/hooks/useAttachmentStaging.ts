@@ -3,8 +3,15 @@
 // 等我回覆 reply cards, B3's inline chat card) stages uploads identically:
 // same size/count caps, same paste/pick funnels, same preview shape.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useState, useSyncExternalStore } from "react";
 import { useI18n } from "../i18n";
+import {
+  getChatAttachError,
+  getChatDraftAttachments,
+  setChatAttachError,
+  subscribeChatDraft,
+  updateChatDraftAttachments,
+} from "../lib/chatDraftStore";
 
 // Client-side size guards — mirror the backend (handlers): an image/*
 // attachment is capped at 20 MB, any other file at 100 MB. We fail fast in the
@@ -29,17 +36,15 @@ export const ATTACH_ACCEPT =
  * mixed) and are sent together on the SAME message. `dataUri` is a
  * `data:<mime>;base64,…` string (what FileReader.readAsDataURL yields), `size`
  * is the raw decoded byte estimate, `key` is a client-side list identity (for
- * React keys + per-item removal — duplicate filenames are legal). */
+ * React keys + per-item removal — duplicate filenames are legal).
+ *
+ * ⚠️ THERE IS NO `target` FIELD ANY MORE, AND THAT IS THE POINT (T-48, R13-2).
+ * A row used to be stamped with the room it was picked for, because every room's
+ * rows shared one list and the composer had to filter. Rows now live IN the room
+ * they were picked for — a peer's slice of `chatDraftStore` — so "whose file is
+ * this?" is answered by where it is, not by a field somebody has to compare. */
 export interface PendingAttachment {
   key: string;
-  /** 🔴 WHOSE FILE THIS IS — the conversation/surface it was picked for, stamped
-   * at PICK time (T-48, owner ruling). The composer renders only the staged
-   * files whose `target` is the room on screen, so a read that lands seconds
-   * later, in another room, has nothing to render into: the leak R9-1 described
-   * is not blocked by a line somebody remembered to write, it has no shape to
-   * happen in. Same shape as `useChat`'s `messagesPeer` — the value carries its
-   * owner, and answering "whose is this?" is the only way to use it. */
-  target: string;
   dataUri: string;
   filename: string;
   mime: string;
@@ -64,60 +69,37 @@ export function formatAttachmentSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/** WHOSE staging this is — REQUIRED and FIRST, because every file staged here
- * is STAMPED with it and the composer shows only the files stamped with the
- * target on screen (T-48, owner ruling on R9-1).
+/** WHOSE staging this is — REQUIRED and FIRST, because it names the SLOT the
+ * files are written into, not a label they are compared against.
  *
- * 🔴 THIS HOOK HAS NO `await`, AND THAT IS WHY THE ANSWER HAD TO MOVE INTO THE
- * DATA. `stageFile` hands the file to `FileReader` and returns; the commit
- * happens later, inside `reader.onload`. Reading a 100 MB drop or a large
- * pasted screenshot takes SECONDS, and the surface that picked it can be gone
- * by then. In `ChatArea` "gone" does not mean unmounted — `OfficePage` mounts
- * it WITHOUT a `key`, so a conversation switch only swaps props and this
- * hook's state survives it. The measured result of the original shape: a file
- * picked in A appeared in B's composer, was persisted into B's DRAFT, lit B's
- * send button, and vanished from A.
+ * 🔴 THIS HOOK HAS NO `await`, AND THAT IS WHY THE SLOT HAD TO BE DURABLE.
+ * `stageFile` hands the file to `FileReader` and returns; the commit happens
+ * later, inside `reader.onload`. Reading a 100 MB drop or a large pasted
+ * screenshot takes SECONDS, and the surface that picked it can be gone by then
+ * — a different conversation on screen, or no conversation at all because the
+ * page was left. The measured results of putting that list in component state
+ * were a file appearing in the wrong room's composer (R9-1), a file destroyed
+ * by an unmount nobody was watching for (R10-4), and a file filed into a draft
+ * that the composer then overwrote (R11-2).
  *
- * The first fix was a commit guard on a visit token — a line the writer had to
- * remember. This is the second: the attachment says which room it is for, and
- * the reader (`pendingAttachments`, and therefore the previews, the send
- * button, and the draft the composer persists) cannot see a file belonging to
- * anybody else. There is no guard to forget because there is no unfiltered
- * value to reach.
+ * The commit now names its slot: `updateChatDraftAttachments(pickedFor, …)`.
+ * It does not consult the screen, it does not consult React, and it works the
+ * same whether a composer is mounted, mounted on another room, or gone.
  *
- * A caller mounted under a key that changes with the thing it belongs to
+ * A caller mounted under a key that changes with the thing it stages for
  * (`TaskCard` under `key={task.id}`, `ReplyComposer` under `key={card.id}`)
- * has exactly one target for its whole life and passes this constant, which
- * says so out loud. Both of those call sites import it — the sentence above
- * was written while they still spelled the literal out, and R11-8 caught the
- * claim before the code caught up. */
+ * passes this constant instead, and gets an EPHEMERAL slot that dies with the
+ * mount — which is the honest description of those surfaces: a card torn down
+ * mid-read has no room to come back to. Since R13-5 `ChatArea` is one of these
+ * by mounting (`OfficePage` gives it `key={peerId}`), but NOT by staging: its
+ * files outlive the visit on purpose, because the draft does. */
 export const STAGING_TARGET_PER_MOUNT = "remounts-per-conversation";
 
-/** Where a file that landed for a room OTHER than the one on screen is handed
- * for safe-keeping. The composer already cannot show it; this is about not
- * LOSING it — `staged` is state, so a file with nowhere durable to live lasts
- * exactly as long as this component and then goes silently (which is R10-4's
- * whole shape). `ChatArea` writes it into that room's own draft, which is what
- * the composer restores from on the next entry.
- *
- * ⚠️ §3 rule 4's counter-example, second instance: the COMMIT must be blocked,
- * the SAVE must not. Omitting this callback is legal for a per-mount caller,
- * which cannot produce a foreign landing while it is alive — but it is NOT
- * free (R11-8). On a CONVERSATION SWITCH the file is merely KEPT in state,
- * invisible; on an UNMOUNT there is no state left to keep it in and the file
- * is dropped, silently. `TaskCard` and `ReplyComposer` both accept that: they
- * are torn down with the thing they stage for, so a landing after their
- * unmount has no surface left to return to either. */
-export type KeepElsewhere = (
-  target: string,
-  attachments: PendingAttachment[],
-) => void;
-
 export interface AttachmentStaging {
-  /** The staged files FOR THE TARGET ON SCREEN, and nothing else. */
+  /** The staged files for this slot. */
   pendingAttachments: PendingAttachment[];
-  /** Transient rejection reason (too large / too many) raised in THIS target;
-   * null when none, and null while the reason belongs to another room. */
+  /** Transient rejection reason (too large / too many) raised in THIS slot;
+   * null when none. */
   attachError: string | null;
   /** The ONE multi-file funnel: paste, picker and drag-drop all go through
    * here, one FileReader per file. */
@@ -129,118 +111,112 @@ export interface AttachmentStaging {
    * input's value so picking the SAME file again still fires onChange. */
   onPickFile: (e: React.ChangeEvent<HTMLInputElement>) => void;
   removeAttachment: (key: string) => void;
-  /** Clear THIS target's staged files (and the visible error). Another room's
-   * pending landing is not this room's to throw away. */
+  /** Clear this slot's staged files and its visible error. */
   clearAttachments: () => void;
-  /** A file that finished reading while NO composer was mounted for its room,
-   * arriving at the composer that is showing that room now (T-48, R11-2).
-   * APPENDED, never replacing, and deduped by `key` — the mount-time draft
-   * restore may already hold the same row. The rows keep the target they were
-   * stamped with at pick time; if the owner has moved on again by the time
-   * this lands, they are simply invisible and the handoff effect above files
-   * them back into their own draft. */
-  adoptAttachments: (arriving: PendingAttachment[]) => void;
-  /** Send-failure restore: put a snapshot back UNLESS the user already staged
-   * new content while the send was in flight (never clobber fresh work). The
-   * snapshot is re-stamped with the CURRENT target — it comes out of that
-   * room's own draft, so that room is whose it is. */
-  restoreAttachments: (snapshot: PendingAttachment[]) => void;
 }
 
-/** 🔴 THE TYPE ASKS THE QUESTION BACK (T-48, R11-8). `target: string` alone
- * compiles for every caller and every mistake: pass a task id where a peer id
- * belongs and the files cross rooms, which is this family's whole shape. The
- * two overloads put the choice back where the caller must answer it —
+/** Where one surface's staged rows live. Two implementations, chosen by the
+ * `target` overload the caller picked: a peer's slice of `chatDraftStore`, or a
+ * list that dies with the mount. */
+interface StagingSlot {
+  attachments: PendingAttachment[];
+  error: string | null;
+  update: (fn: (prev: PendingAttachment[]) => PendingAttachment[]) => void;
+  setError: (message: string | null) => void;
+}
+
+const NO_UNSUBSCRIBE = () => {};
+const NO_ROWS: PendingAttachment[] = [];
+
+/** The DURABLE slot: a chat peer's own attachments, in the draft store. Reads
+ * are a subscription, so a row written by a read that finished while nobody was
+ * looking shows up the moment somebody is.
+ *
+ * `peerId === null` means the caller took the ephemeral slot instead. The hooks
+ * still run — they must, the count cannot change over a mount — but they are
+ * wired to nothing: no store key is subscribed and no snapshot is read, so this
+ * slot is inert rather than quietly attached to a key nobody writes. */
+function useDraftStoreSlot(peerId: string | null): StagingSlot {
+  const subscribe = useCallback(
+    (cb: () => void): (() => void) =>
+      peerId === null ? NO_UNSUBSCRIBE : subscribeChatDraft(peerId, cb),
+    [peerId],
+  );
+  const attachments = useSyncExternalStore(
+    subscribe,
+    useCallback(
+      () => (peerId === null ? NO_ROWS : getChatDraftAttachments(peerId)),
+      [peerId],
+    ),
+  );
+  const error = useSyncExternalStore(
+    subscribe,
+    useCallback(
+      () => (peerId === null ? null : getChatAttachError(peerId)),
+      [peerId],
+    ),
+  );
+  return {
+    attachments,
+    error,
+    update: (fn) => {
+      if (peerId !== null) updateChatDraftAttachments(peerId, fn);
+    },
+    setError: (message) => {
+      if (peerId !== null) setChatAttachError(peerId, message);
+    },
+  };
+}
+
+/** The EPHEMERAL slot: component state, gone on unmount. Correct for a surface
+ * that is torn down together with the thing it stages for — a landing after its
+ * unmount has no surface left to return to either. */
+function useEphemeralSlot(): StagingSlot {
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  return {
+    attachments,
+    error,
+    update: (fn) => setAttachments((prev) => fn(prev)),
+    setError,
+  };
+}
+
+/** 🔴 THE TYPE ASKS THE QUESTION BACK (T-48, R11-8, kept through R13-2).
+ * `target: string` alone compiles for every caller and every mistake: pass a
+ * task id where a peer id belongs and the files land in a room nobody will look
+ * in. The two overloads put the choice back where the caller must answer it —
  *
  *   · a surface that is REMOUNTED with the thing it stages for says exactly
- *     that, by passing `STAGING_TARGET_PER_MOUNT` and nothing else;
- *   · a surface that OUTLIVES the thing it stages for (a `ChatArea` that is
- *     swapped between peers without remounting) must name its target AND say
- *     where a file that lands too late is to be kept.
- *
- * Forgetting `keepElsewhere` on the second kind is now a compile error rather
- * than a file destroyed at run time by an unmount nobody was watching for. */
+ *     that, by passing `STAGING_TARGET_PER_MOUNT`, and accepts that its staged
+ *     files die with it;
+ *   · a chat composer names the PEER, and its files are that peer's draft. */
 export function useAttachmentStaging(
   target: typeof STAGING_TARGET_PER_MOUNT,
 ): AttachmentStaging;
-export function useAttachmentStaging(
-  target: string,
-  keepElsewhere: KeepElsewhere,
-): AttachmentStaging;
-export function useAttachmentStaging(
-  target: string,
-  keepElsewhere?: KeepElsewhere,
-): AttachmentStaging {
+export function useAttachmentStaging(target: string): AttachmentStaging;
+export function useAttachmentStaging(target: string): AttachmentStaging {
   const { t } = useI18n();
-  // The live target, read by the deferred `FileReader` callback so a file is
-  // stamped with the room the owner was looking at when they PICKED it.
-  const targetRef = useRef(target);
-  targetRef.current = target;
-  // Mirrored because the unmount handoff below reads it from a callback that
-  // outlives the render it was created in.
-  const keepElsewhereRef = useRef(keepElsewhere);
-  keepElsewhereRef.current = keepElsewhere;
-  // EVERY staged file, of every target. Nothing outside this hook sees it:
-  // what is exposed is the slice belonging to the target on screen.
-  const [staged, setStaged] = useState<PendingAttachment[]>([]);
-  // The rejection notice carries its room for the same reason the file does —
-  // 「檔案太大」 in a room where nobody picked a file is a sentence about
-  // somebody else's action.
-  const [attachError, setAttachError] = useState<{
-    target: string;
-    message: string;
-  } | null>(null);
-
-  // 🔴 THE PAGE ITSELF CAN BE THE ROOM THE OWNER LEFT (T-48, R10-4). An unmount
-  // does not change the target — `OfficePage` tearing `ChatArea` down leaves
-  // `member` exactly as it was — so nothing about the file's identity says
-  // "there is no composer to land in any more". React swallows the resulting
-  // `setState` silently and the effect below never runs again, so the file was
-  // destroyed by nobody's decision. This mirror is the one thing the DATA
-  // cannot say about itself, and it is read at exactly one place: the commit.
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
-
-  const pendingAttachments = useMemo(
-    () => staged.filter((a) => a.target === target),
-    [staged, target],
-  );
-
-  // A file that finished reading for a room that is NOT on screen: it is
-  // already invisible (the filter above), and this hands it to that room's own
-  // storage before the next conversation switch wipes the staged list. Driven
-  // entirely by what the attachments SAY they are for — there is no "was the
-  // visit stale?" question here, and deliberately so: the answer is in the row.
-  useEffect(() => {
-    const foreign = staged.filter((a) => a.target !== target);
-    if (foreign.length === 0 || !keepElsewhere) return;
-    const byTarget = new Map<string, PendingAttachment[]>();
-    for (const a of foreign) {
-      const list = byTarget.get(a.target);
-      if (list) list.push(a);
-      else byTarget.set(a.target, [a]);
-    }
-    for (const [owner, list] of byTarget) keepElsewhere(owner, list);
-    setStaged((prev) => prev.filter((a) => a.target === target));
-  }, [staged, target, keepElsewhere]);
+  // Both slots are built every render and one is used. `target` does not change
+  // over a mount's life at either kind of call site (the per-mount callers pass
+  // a literal; `ChatArea` is mounted under `key={peerId}`), so the choice is a
+  // constant and no hook is ever skipped.
+  const perMount = target === STAGING_TARGET_PER_MOUNT;
+  const ephemeral = useEphemeralSlot();
+  const stored = useDraftStoreSlot(perMount ? null : target);
+  const slot = perMount ? ephemeral : stored;
 
   // Read a File → data-URI, size-check (image ≤ 20 MB, other ≤ 100 MB, mirroring
   // the backend), and APPEND it to the staged attachments. Over-size → surface
   // an error, skip the file; over the COUNT cap → surface an error, drop the
   // overflow (the ones that fit stay). The count guard lives INSIDE the
-  // functional setState because FileReader completions land asynchronously —
-  // checking a stale snapshot would race a multi-file batch past the cap, and
-  // it counts only the rows belonging to the SAME target (the cap is
-  // per-message, and two rooms do not share a message).
+  // functional update because FileReader completions land asynchronously —
+  // checking a stale snapshot would race a multi-file batch past the cap.
   function stageFile(file: File) {
-    // Captured at PICK time, not at read time: this is the room the owner was
-    // looking at when they chose the file, and it rides the row from here on.
-    const pickedFor = targetRef.current;
+    // Captured at PICK time: this is the slot the owner was composing into when
+    // they chose the file, and the commit below writes into THAT slot whatever
+    // is on screen when the read finishes.
+    const pickedInto = slot;
     const reader = new FileReader();
     reader.onload = () => {
       const dataUri = typeof reader.result === "string" ? reader.result : "";
@@ -250,17 +226,15 @@ export function useAttachmentStaging(
       const size = estimateDataUriBytes(dataUri);
       const limit = isImage ? CHAT_IMAGE_MAX_BYTES : CHAT_FILE_MAX_BYTES;
       if (size > limit) {
-        setAttachError({
-          target: pickedFor,
-          message: isImage
+        pickedInto.setError(
+          isImage
             ? t.chat.imageTooLarge
             : t.chat.attachTooLarge(Math.round(limit / (1024 * 1024))),
-        });
+        );
         return;
       }
       const attachment: PendingAttachment = {
         key: `pa-${++pendingAttachmentSeq}`,
-        target: pickedFor,
         // A pasted screenshot has no filename — leave it empty and let the
         // backend default it; a picked file keeps its real name.
         filename: file.name || "",
@@ -269,26 +243,17 @@ export function useAttachmentStaging(
         size,
         isImage,
       };
-      // Nothing is mounted to hold this any more — hand it straight to its own
-      // room's storage rather than into a setState React will drop (R10-4).
-      if (!mountedRef.current) {
-        keepElsewhereRef.current?.(pickedFor, [attachment]);
-        return;
-      }
-      setStaged((prev) => {
-        if (
-          prev.filter((a) => a.target === pickedFor).length >=
-          CHAT_MAX_ATTACHMENTS
-        ) {
-          setAttachError({
-            target: pickedFor,
-            message: t.chat.attachTooMany(CHAT_MAX_ATTACHMENTS),
-          });
+      let refused = false;
+      pickedInto.update((prev) => {
+        if (prev.length >= CHAT_MAX_ATTACHMENTS) {
+          refused = true;
           return prev;
         }
-        setAttachError(null);
         return [...prev, attachment];
       });
+      pickedInto.setError(
+        refused ? t.chat.attachTooMany(CHAT_MAX_ATTACHMENTS) : null,
+      );
     };
     reader.readAsDataURL(file);
   }
@@ -314,58 +279,22 @@ export function useAttachmentStaging(
   }
 
   function removeAttachment(key: string) {
-    setStaged((prev) => prev.filter((a) => a.key !== key));
-    setAttachError(null);
+    slot.update((prev) => prev.filter((a) => a.key !== key));
+    slot.setError(null);
   }
 
   function clearAttachments() {
-    setStaged((prev) => prev.filter((a) => a.target !== targetRef.current));
-    // 🔴 THIS ROOM'S NOTICE, THE SAME WAY IT CLEARS THIS ROOM'S FILES (T-48,
-    // R11-4 / R12-1). Every remaining caller is a SEND that succeeded, and a
-    // send in B is not a reason to destroy a 「圖片太大」 that A raised and has
-    // not been shown yet — the message carries its room for the same reason
-    // the file does.
-    //
-    // ⚠️ THIS CONDITION IS NOT WHAT FIXED R11-4, and the first version of this
-    // comment claimed it was. The `ChatArea` conversation-switch block used to
-    // call `clearAttachments()` too, DURING RENDER — by which point
-    // `targetRef.current` is already the room being ENTERED, so the condition
-    // held the notice through the switch AWAY from A and then deleted it on the
-    // switch BACK INTO A, one render before A could paint it. Same invisible
-    // notice, later. What fixed it was deleting that call (see the switch block
-    // in `ChatArea`); this condition only earns its keep on the send path.
-    setAttachError((prev) =>
-      prev && prev.target !== targetRef.current ? prev : null,
-    );
-  }
-
-  function adoptAttachments(arriving: PendingAttachment[]) {
-    setStaged((prev) => {
-      const fresh = arriving.filter((a) => !prev.some((p) => p.key === a.key));
-      return fresh.length === 0 ? prev : [...prev, ...fresh];
-    });
-  }
-
-  function restoreAttachments(snapshot: PendingAttachment[]) {
-    if (snapshot.length === 0) return;
-    const owner = targetRef.current;
-    setStaged((prev) =>
-      prev.some((a) => a.target === owner)
-        ? prev
-        : [...prev, ...snapshot.map((a) => ({ ...a, target: owner }))],
-    );
+    slot.update((prev) => (prev.length === 0 ? prev : []));
+    slot.setError(null);
   }
 
   return {
-    pendingAttachments,
-    attachError:
-      attachError && attachError.target === target ? attachError.message : null,
+    pendingAttachments: slot.attachments,
+    attachError: slot.error,
     stageFiles,
     onPaste,
     onPickFile,
     removeAttachment,
     clearAttachments,
-    adoptAttachments,
-    restoreAttachments,
   };
 }
