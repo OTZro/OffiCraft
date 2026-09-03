@@ -23,6 +23,7 @@ import type { Member } from "../types";
 import type { ChatMessage, ReplyCard } from "../api/adapter";
 import { api } from "../api";
 import { __resetMock, __injectMockReplyCard } from "../api/mock";
+import { putReplyCard } from "../lib/replyCardCache";
 
 // The ChatArea integration test drives the thread through a mocked useChat
 // (the same harness as the other ChatArea test files); the direct
@@ -364,6 +365,34 @@ describe("ChatReplyCard", () => {
 
     await findAllByText("寄出");
     expect(getSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("an ANSWERED-hinted card whose only seed is the PRE-ANSWER copy refetches on expand instead of painting the chips back", async () => {
+    // The seed is captured while the card is still waiting (the row was on
+    // screen then); the answer lands elsewhere — the 等我回覆 page, another
+    // room — while no ChatReplyCard is mounted, so no reply_card delta reaches
+    // this component. The message stream is the newer truth and says ANSWERED.
+    putReplyCard(mkCard({ status: "waiting" }));
+    __injectMockReplyCard(
+      mkCard({
+        status: "answered",
+        answeredTs: Date.now() / 1000 - 60,
+        answer: { optionIdxs: [1], text: "", attachments: [] },
+      })
+    );
+    const getSpy = vi.spyOn(api, "getReplyCard");
+    const { findByTestId, queryAllByTestId, queryByPlaceholderText } =
+      renderHinted("answered");
+
+    fireEvent.click(await findByTestId("chat-reply-card-expand"));
+
+    const final = await findByTestId("final-answer");
+    expect(final.textContent).toBe("你選的AI 建議先不要");
+    expect(getSpy).toHaveBeenCalledTimes(1);
+    // The pre-answer body must never be painted: no pickable options, no
+    // composer to POST a second answer with.
+    expect(queryAllByTestId("reply-option")).toHaveLength(0);
+    expect(queryByPlaceholderText("輸入回覆…")).toBeNull();
   });
 
   it("a collapsed ANSWERED-hinted card ignores an unrelated reply_card SSE delta WITHOUT fetching (seeded statusRef — T-cdf4 extended)", async () => {

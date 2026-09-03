@@ -1,10 +1,17 @@
 // ChatReplyCard — a reply card (等我回覆卡) rendered INLINE in the chat thread
 // (SPEC §3, B3 聊天整合). The carrying message only holds `replyCardId`
-// (meta.reply_card_id), so this component refetches the SINGLE card for its
-// full shape (options / status / answer), and again on every `reply_card` SSE
-// delta — that refetch IS the two-way sync: answering on the 等我回覆 page (or
-// another window) flips this card to answered in place, and answering here
-// fans the same topic so the page's lists + nav badge update.
+// (meta.reply_card_id), so this component fetches the SINGLE card for its full
+// shape (options / status / answer). Two things have since carved exceptions
+// out of that "always fetches on mount", and both are load-bearing:
+//   · a terminal-hinted card mounts COLLAPSED and fetches only on expand
+//     (owner 已回覆卡預設不載 — see `initialStatus`);
+//   · a card the prefill cache already holds AT THE HINTED STATUS skips the
+//     mount fetch (see `skipEagerFetchRef`), because the prefill just paid for
+//     that exact GET.
+// Every `reply_card` SSE delta still refetches a non-terminal card, and that
+// refetch IS the two-way sync: answering on the 等我回覆 page (or another
+// window) flips this card to answered in place, and answering here fans the
+// same topic so the page's lists + nav badge update.
 //
 // The card interiors are the SHARED ReplyCardBody blocks (same chips / tags /
 // composer / 重新決定 flow as RepliesPage — one implementation, zero drift).
@@ -49,8 +56,10 @@ export function ChatReplyCard({
    * owner expands it, so a chat history of dozens of settled cards no longer
    * fires one getReplyCard each. A waiting hint (or null/undefined — unknown)
    * mounts EXPANDED; it used to fetch on mount unconditionally, and since T-48
-   * it fetches only when the prefill cache has no seed for it — which on
-   * `useChat`'s commit paths it always does have (see the seed note below). */
+   * it skips that fetch when the prefill cache holds a seed AGREEING with this
+   * hint — which on `useChat`'s commit paths it does (the prefill fetched it
+   * because this very message said `waiting`). A seed that DISAGREES is stale
+   * and is refetched; see the seed note below. */
   initialStatus?: ReplyCard["status"] | null;
 }) {
   const { t } = useI18n();
@@ -137,11 +146,22 @@ export function ChatReplyCard({
   // skipped: everything after it (an expand, an SSE delta, a re-answer) still
   // reads through `refetch`.
   //
-  // ⚠️ NOT `expanded`-shaped. A terminal card's lazy rule is untouched
-  // (answered/expired mount collapsed and fetch nothing — owner 已回覆卡預設
-  // 不載, measured 0 requests), and those are never prefilled either, so they
-  // never carry a seed and never reach this line.
-  const skipEagerFetchRef = useRef(seed !== null);
+  // 🔴 …AND ONLY WHILE THE SEED AGREES WITH THE MESSAGE STREAM. The seed is
+  // whatever this session last saw for this card, which is NOT necessarily
+  // whatever it is now: a card can be seeded while it is still `waiting` (the
+  // row was on screen then), be answered somewhere this component cannot hear —
+  // the 等我回覆 page, another room, with no `ChatReplyCard` mounted to receive
+  // the `reply_card` delta — and be expanded again from a message whose hint
+  // says ANSWERED. Skipping the fetch on `seed !== null` alone painted that
+  // pre-answer body: option chips and a composer over an already-answered card,
+  // one click from POSTing to it, and nothing would ever refresh it (the cache
+  // never invalidates and `pendingWaitingCardIds` skips ids already held).
+  //
+  // So the seed is only trusted when it says what the stream says. A terminal
+  // hint is never a prefill target, so an agreeing seed there can only have come
+  // from this session's own write (commitCard) — newer than the stream, not
+  // older. Any disagreement refetches.
+  const skipEagerFetchRef = useRef(seed !== null && seed.status === initialStatus);
   useEffect(() => {
     if (!expanded) return;
     if (skipEagerFetchRef.current) {
