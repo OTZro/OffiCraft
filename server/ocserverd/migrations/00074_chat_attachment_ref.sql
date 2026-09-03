@@ -161,7 +161,24 @@ BEGIN
              ELSE '[]'
         END
     ) j
-    WHERE COALESCE(json_extract(j.value, '$.id'), '') <> '';
+    -- 🔴 THE ELEMENT'S SHAPE IS PART OF THE GUARD, AND THE `CASE` IS WHY IT
+    -- HOLDS. `meta.attachments` is copied wholesale from the caller, so an
+    -- element can be ANY JSON value. Measured, with the project's own driver:
+    --   json_type(j.value)              on a text element -> malformed JSON
+    --   json_type(j.value,'$.id')       on a text element -> malformed JSON
+    -- so the obvious `json_type(j.value)='object'` guard RAISES BEFORE IT CAN
+    -- REJECT. Two things make this form safe. `j.type` is json_each's own
+    -- column and never parses. And CASE evaluates its WHENs in order and stops
+    -- — measured: `j.type='object' AND json_type(...)` survives, the SAME two
+    -- terms written the other way round raises, so AND's short-circuit here is
+    -- an evaluation-order accident, not a guarantee. Do not flatten this back
+    -- into an AND.
+    -- Requiring '$.id' to be TEXT also restores what the pre-index Go handler
+    -- did: its type assertion dropped a non-string id, where a bare extract
+    -- would store `123` and the panel would serve /api/chat/attachment/123.
+    WHERE CASE WHEN j.type <> 'object'                   THEN ''
+               WHEN json_type(j.value, '$.id') <> 'text' THEN ''
+               ELSE json_extract(j.value, '$.id') END <> '';
 END;
 -- +goose StatementEnd
 
@@ -190,7 +207,24 @@ BEGIN
              ELSE '[]'
         END
     ) j
-    WHERE COALESCE(json_extract(j.value, '$.id'), '') <> '';
+    -- 🔴 THE ELEMENT'S SHAPE IS PART OF THE GUARD, AND THE `CASE` IS WHY IT
+    -- HOLDS. `meta.attachments` is copied wholesale from the caller, so an
+    -- element can be ANY JSON value. Measured, with the project's own driver:
+    --   json_type(j.value)              on a text element -> malformed JSON
+    --   json_type(j.value,'$.id')       on a text element -> malformed JSON
+    -- so the obvious `json_type(j.value)='object'` guard RAISES BEFORE IT CAN
+    -- REJECT. Two things make this form safe. `j.type` is json_each's own
+    -- column and never parses. And CASE evaluates its WHENs in order and stops
+    -- — measured: `j.type='object' AND json_type(...)` survives, the SAME two
+    -- terms written the other way round raises, so AND's short-circuit here is
+    -- an evaluation-order accident, not a guarantee. Do not flatten this back
+    -- into an AND.
+    -- Requiring '$.id' to be TEXT also restores what the pre-index Go handler
+    -- did: its type assertion dropped a non-string id, where a bare extract
+    -- would store `123` and the panel would serve /api/chat/attachment/123.
+    WHERE CASE WHEN j.type <> 'object'                   THEN ''
+               WHEN json_type(j.value, '$.id') <> 'text' THEN ''
+               ELSE json_extract(j.value, '$.id') END <> '';
 END;
 -- +goose StatementEnd
 
@@ -219,7 +253,9 @@ END;
 --                        AND json_type(m.meta,'$.attachments') = 'array'
 --                       THEN json_extract(m.meta,'$.attachments')
 --                       ELSE '[]' END) j
---              WHERE COALESCE(json_extract(j.value,'$.id'),'') <> '');
+--              WHERE CASE WHEN j.type <> 'object'                   THEN ''
+--                          WHEN json_type(j.value,'$.id') <> 'text' THEN ''
+--                          ELSE json_extract(j.value,'$.id') END <> '');
 --    ⚠️ THE `CASE` IS PART OF THE CHECK, NOT DECORATION. Copy this verbatim.
 --    An earlier revision of this comment left the bare json_extract here after
 --    the triggers moved to CASE; run THAT and it dies with "malformed JSON" on
@@ -238,7 +274,9 @@ FROM chat_message m, json_each(
          ELSE '[]'
     END
 ) j
-WHERE COALESCE(json_extract(j.value, '$.id'), '') <> '';
+WHERE CASE WHEN j.type <> 'object'                   THEN ''
+           WHEN json_type(j.value, '$.id') <> 'text' THEN ''
+           ELSE json_extract(j.value, '$.id') END <> '';
 
 -- +goose Down
 -- 🔴 DROP THE TRIGGERS FIRST. They live on chat_message, so DROP TABLE does
