@@ -1144,6 +1144,19 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     const cur = threadRef.current;
     if (cur.messages.length === 0 || !cur.hasNewer)
       return;
+    // 🔴 AN ANCHOR WINDOW IN THE AIR OUTRANKS THIS WALK (T-48). `loadAround`
+    // takes its generation ticket first and commits last, so a forward page
+    // fired while it is still fetching commits a LATER ticket and the anchor
+    // window comes back "superseded" — which ChatArea paints as 「跳轉被打斷」
+    // over a message that is sitting right there in the database. `load()`
+    // already refuses to run against these two latches; this is the same gate
+    // on the one loader that was missing it, not a new mechanism.
+    if (
+      conv.latches.isHeld("entryAnchor") ||
+      conv.latches.isHeld("anchorFetch")
+    ) {
+      return;
+    }
     // 🔴 A SCROLL IS A RETRY, AND UNTIL THIS PARAMETER EXISTED THAT SENTENCE
     // WAS FALSE (independent review #17, F-1). The bound below is there to stop
     // the LEVEL-TRIGGERED continuation from re-asking a question it has already

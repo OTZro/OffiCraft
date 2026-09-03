@@ -658,6 +658,57 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     expect(result.current.messages.map((m) => m.id).slice(-1)).toEqual(["t1"]);
   });
 
+  it("跳轉途中的走查不准把一則存在的訊息報成「跳轉被打斷」", async () => {
+    // 🔴 症狀 3 的病灶,而且它跟捲動一點關係都沒有 —— 是請求仲裁。`loadAround`
+    // 先出發、拿較早的世代票,卻最後才提交;`loadNewer` 後出發、拿較晚的票,卻先
+    // 回來寫 `committedSeqRef`。錨點窗回來時撞上自己的 `seq < committed` 判斷,
+    // 回報 "superseded" —— 而 ChatArea 把 "superseded" 畫成 setJumpNotice
+    // ("interrupted")。⇒ 一則好端端躺在資料庫裡的訊息,螢幕上寫著「跳轉被打斷」。
+    //
+    // `load()` 早就用同一對閂擋住這一格;這條釘的是那道閘門也套在 `loadNewer`
+    // 上。把 `loadNewer` 開頭的 entryAnchor/anchorFetch 檢查拿掉,這條就紅在
+    // outcome 上("superseded"),也就是紅在「訊息存在卻報 interrupted」這件事上。
+    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
+    const { result } = renderHook(() => useChat("b"));
+    await waitFor(() => expect(result.current.messages).toHaveLength(30));
+
+    // 先落在一個「活尾巴還在窗外」的錨點窗裡 —— 這是走查唯一會跑的地形。
+    h.listChatWindow
+      .mockResolvedValueOnce(page("a", 100, 30))
+      .mockResolvedValueOnce(page("a", 129, 30));
+    await act(async () => {
+      await result.current.loadAround("a0");
+    });
+    expect(result.current.hasNewer).toBe(true);
+
+    // 第二次跳轉:兩個錨點請求都吊在空中。
+    const above = deferred<ChatMessage[]>();
+    const below = deferred<ChatMessage[]>();
+    h.listChatWindow
+      .mockReturnValueOnce(above.promise)
+      .mockReturnValueOnce(below.promise);
+    const callsBeforeJump = h.listChatWindow.mock.calls.length;
+
+    let outcome: JumpOutcome | undefined;
+    await act(async () => {
+      const jump = result.current.loadAround("z5");
+      // …而就在它還在飛的時候,走查的續走 effect 觸發了一頁往前。
+      h.listChatWindow.mockResolvedValueOnce(page("f", 400, 30));
+      await result.current.loadNewer();
+      above.resolve(page("z", 300, 30));
+      below.resolve(page("z", 329, 30));
+      outcome = await jump;
+    });
+
+    // 🔴 這一行是這條測試的心臟:訊息就在那裡(下面那一行證明它進了 thread),
+    // 而使用者被告知的卻是「跳轉被打斷」。閘門一拿掉,紅的就是這一行。
+    expect(outcome).toBe("found");
+    expect(result.current.messages.map((m) => m.id)).toContain("z5");
+    // 走查在錨點窗落地之前一個請求都不准發 —— 它一發就會搶先提交。空中只該有
+    // 錨點那一對,沒有第三個 `?start_id=`。
+    expect(h.listChatWindow.mock.calls.length).toBe(callsBeforeJump + 2);
+  });
+
   it("a FAILED READ is not a missing message —— 404/422 是不見了,其他是現在讀不到", async () => {
     // 🔴 兩個方向一起釘,而且必須一起:只釘一邊的話,「把兩種壓成同一句」照樣會過,
     // 而那正是這條要修的病。owner 開這張票的理由是「不要對使用者說不成立的話」;
