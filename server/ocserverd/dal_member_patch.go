@@ -320,6 +320,14 @@ func updatableMemberFields(fields []memberField) []memberField {
 // outsource row's changes travel on the outsource_worker projection, so a delta
 // bound to the write itself would push a member frame that path has never sent.
 // The service layer decides who publishes; the write layer only writes.
+//
+// 🔑 THAT GUARANTEE IS STRUCTURAL, AND THERE IS DELIBERATELY NO TEST FOR IT.
+// The DAL holds no reference to the hub — it cannot publish, so nothing has to
+// remember not to. A test asserting "the DAL published nothing" would be
+// asserting something the type system already makes unsayable, and a test that
+// cannot fail is worse than no test: it reads as a guard while guarding nothing.
+// If a future change gives the DAL a hub, THAT is when this property needs a
+// test, and this paragraph is the notice that it stopped being free.
 func (d *DAL) PatchMember(id string, fields ...memberField) error {
 	return patchMemberOn(d.wdb, id, fields...)
 }

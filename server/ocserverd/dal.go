@@ -3088,8 +3088,11 @@ func (d *DAL) displayNames(query string) (map[string]string, error) {
 // make the resolution finer.
 //
 // A missing row is a clean no-op (0 rows affected, no error).
+// 🔑 It goes through PatchMember rather than writing its own max() (T-63). The
+// column's monotonicity is declared on mfAgentIatFloor, and while this seam kept
+// a max() of its own the same property had TWO representations: both correct
+// today, both self-consistent, and wrong only when read together — which nobody
+// does. Nothing would have gone red on the day they diverged.
 func (d *DAL) SetMemberAgentIatFloor(id string, ts float64) error {
-	_, err := d.wdb.Exec(
-		`UPDATE member SET agent_iat_floor = max(agent_iat_floor, ?) WHERE id = ?`, ts, id)
-	return err
+	return d.PatchMember(id, mfAgentIatFloor(ts))
 }
