@@ -16,7 +16,7 @@ package main
 // half of it was already held, and the ticket's premise needed correcting:
 //
 //   - The 123 rows carrying an `mcp_tool` ARE pinned to the live server today.
-//     assets.go:catalogHashOf hashes exactly the non-MCPExclude rows of THIS
+//     catalogHashOf (assets.go) hashes exactly the non-MCPExclude rows of THIS
 //     table and the server serves that digest as /api/version's catalog_hash;
 //     conformance's test_catalog_hash_algorithm recomputes the same digest from
 //     the manifest and compares. Add or drop an MCP-visible route without
@@ -36,21 +36,29 @@ package main
 // ── WHERE THE DENOMINATOR COMES FROM ────────────────────────────────────────
 //
 // routeSpecs() (routes.go) is not a second snapshot of the surface: it IS the
-// surface. server.go:336-353 builds the mux by ranging over it — one
-// mux.Handle per row and nothing else registers a route (the only other
-// registration is the "/" static fallback). A route the server serves is a row
-// here, necessarily; there is no other door. That is why this gate is in Go and
-// not another Python list.
+// surface. buildHandler (server.go) builds the mux by ranging over it — one
+// mux.Handle per row — and the only other registration is the "/" static
+// fallback. A route the server serves is a row here, necessarily; there is no
+// other door. That is why this gate is in Go and not another Python list.
 //
-// ── WHAT THIS GATE DOES NOT DO ──────────────────────────────────────────────
+// ── WHAT THIS GATE DOES NOT DO — read before trusting it ────────────────────
 //
 // It compares MEMBERSHIP (method+path), not the auth/requires/mcp_tool columns.
 // Those are graded by live requests in test_auth_matrix.py: a row whose floor in
 // routes.go disagrees with the manifest fails there against the real server, so
 // duplicating the comparison here would add a second opinion, not a second gate.
 //
-// And, like authz_surface_gate_test.go before it, this file cannot judge whether
-// an exemption's REASON is honest. A well-keyed entry with a fluent excuse
+// AND THE EXEMPTION LISTS ARE NOT COMPILER-PROOF. exemptRoute() is the intended
+// door and its four parameters make an unreasoned entry impossible to WRITE
+// through it — but routeExemption is an ordinary struct in this package, so a
+// struct literal that fills only method and path compiles fine. What stops that
+// literal is the RUNTIME check below (a reason under exemptionReasonFloor, an
+// empty ruling, and a stale entry each redden), not the type system. The one
+// thing that IS structural is reach: the type, the constructor and both lists
+// live in this _test.go file, so no product code can name them at all.
+//
+// Nor can this file judge whether a reason is HONEST — like
+// authz_surface_gate_test.go before it, a well-keyed entry with a fluent excuse
 // passes. What it buys is that adding one MUST appear in the diff, next to a
 // name and a ruling, where a reviewer sees it.
 
@@ -63,16 +71,11 @@ import (
 )
 
 // ── the exemption shape ─────────────────────────────────────────────────────
-//
-// STRUCTURAL, not procedural. An exemption exists only as the return value of
-// exemptRoute(), whose four positional parameters make "I skipped the reason"
-// a COMPILE error rather than a review miss. Both the type and the constructor
-// live in this _test.go file, so no product code can reach them — the same
-// shape the repo used for its test-only exemption setters.
-//
-// The runtime gate below then refuses a shrug: a reason under
-// exemptionReasonFloor characters, or an empty ruling, or an entry that no
-// longer matches anything, all redden.
+
+// routeExemption is one deliberate absence. Build it with exemptRoute: the
+// four parameters are what make "I skipped the reason" something you have to
+// go out of your way to do. See the header for what this does and does not
+// stop.
 type routeExemption struct {
 	method string
 	path   string
@@ -84,7 +87,7 @@ type routeExemption struct {
 // "legacy"; it cannot stop a fluent sentence, and it is not meant to.
 const exemptionReasonFloor = 40
 
-// exemptRoute is the ONLY way to build a routeExemption. Every field is
+// exemptRoute is the intended way to build a routeExemption — every field is
 // required by the signature.
 //
 //	method, path — must match a row exactly ({param} names included)
@@ -139,6 +142,33 @@ func routeKey(method, path string) string {
 	return strings.ToUpper(method) + " " + path
 }
 
+// ── the comparison ──────────────────────────────────────────────────────────
+//
+// 🔴 ONE implementation, called by the gate AND by the gate's own control. The
+// first version of this file had the control exercising a helper only it used,
+// so deleting the gate's real comparison left BOTH tests green — measured by
+// the T-61 independent review, which is exactly the shape this file exists to
+// end. Keep them on the same function: the control's teeth are only worth
+// anything while the thing it bites is the thing that ships.
+//
+// missing = served, not listed, not exempt. stale = listed, not served, not
+// exempt. Both sorted, so failure output is stable.
+func routeParityDiff(served, listed, unlistedExempt, unservedExempt map[string]bool) (missing, stale []string) {
+	for k := range served {
+		if !listed[k] && !unlistedExempt[k] {
+			missing = append(missing, k)
+		}
+	}
+	for k := range listed {
+		if !served[k] && !unservedExempt[k] {
+			stale = append(stale, k)
+		}
+	}
+	sort.Strings(missing)
+	sort.Strings(stale)
+	return missing, stale
+}
+
 // TestEveryServedRouteIsInThePermissionManifest is the gate. Both directions,
 // every offender named.
 func TestEveryServedRouteIsInThePermissionManifest(t *testing.T) {
@@ -185,20 +215,8 @@ func TestEveryServedRouteIsInThePermissionManifest(t *testing.T) {
 	unserved := exemptionIndex(t, listedButUnserved, listed,
 		"listed-but-unserved", "the manifest no longer lists it")
 
-	// (2) The comparison itself.
-	var missing, stale []string
-	for k := range served {
-		if !listed[k] && !unlisted[k] {
-			missing = append(missing, k)
-		}
-	}
-	for k := range listed {
-		if !served[k] && !unserved[k] {
-			stale = append(stale, k)
-		}
-	}
-	sort.Strings(missing)
-	sort.Strings(stale)
+	// (2) The comparison itself — the same function the control below bites.
+	missing, stale := routeParityDiff(served, listed, unlisted, unserved)
 
 	for _, k := range missing {
 		t.Errorf("SERVED BUT NOT IN THE PERMISSION MANIFEST: %s\n"+
@@ -265,12 +283,14 @@ func exemptionIndex(
 	return index
 }
 
-// TestRouteManifestParityGateIsNotVacuous is the gate's own positive control.
-// It proves the comparison HAS teeth by running it over a doctored copy of the
-// two corpora: a served row the manifest does not carry, and a manifest row the
-// server does not serve. If either synthetic difference goes unnoticed here, the
-// real comparison above is decoration.
-func TestRouteManifestParityGateIsNotVacuous(t *testing.T) {
+// TestRouteParityDiffReportsBothDirections is the gate's control, and it bites
+// routeParityDiff — the SAME function the gate calls. Gut that function and
+// this test reddens with it; that is the whole point, and it is the property
+// the first version of this file did not have.
+//
+// It runs over the REAL corpora with one synthetic key added, so a corpus that
+// stopped being populated fails here too.
+func TestRouteParityDiffReportsBothDirections(t *testing.T) {
 	served := map[string]bool{}
 	for _, s := range defaultRouteSpecs() {
 		served[routeKey(s.Method, s.Path)] = true
@@ -280,28 +300,38 @@ func TestRouteManifestParityGateIsNotVacuous(t *testing.T) {
 		listed[routeKey(r.Method, r.Path)] = true
 	}
 	if len(served) == 0 || len(listed) == 0 {
-		t.Fatal("empty corpus — the control below would pass vacuously")
+		t.Fatal("empty corpus — every assertion below would pass vacuously")
 	}
 
 	const ghost = "GET /api/t61-route-that-does-not-exist"
 	if served[ghost] || listed[ghost] {
 		t.Fatalf("%s is a real route now; pick another synthetic key", ghost)
 	}
+	none := map[string]bool{}
 
-	// direction 1: served, unlisted.
-	if diff := onlyIn(withKey(served, ghost), listed); len(diff) != 1 || diff[0] != ghost {
-		t.Errorf("the served-but-unlisted comparison did not report a route that is "+
-			"served and unlisted: got %v", diff)
+	// direction 1: served, unlisted → reported as missing, and ONLY it.
+	missing, stale := routeParityDiff(withKey(served, ghost), listed, none, none)
+	if len(missing) != 1 || missing[0] != ghost {
+		t.Errorf("a served, unlisted route was not reported: missing=%v", missing)
 	}
-	// direction 2: listed, unserved.
-	if diff := onlyIn(withKey(listed, ghost), served); len(diff) != 1 || diff[0] != ghost {
-		t.Errorf("the listed-but-unserved comparison did not report a route that is "+
-			"listed and unserved: got %v", diff)
+	if len(stale) != 0 {
+		t.Errorf("adding a served route invented a stale finding: %v", stale)
 	}
-	// and the undoctored corpora must NOT produce that finding, or the control
-	// above would fire for any input at all.
-	if diff := onlyIn(served, withKey(listed, ghost)); t61Contains(diff, ghost) {
-		t.Errorf("the comparison reports %s as served-only without it being served", ghost)
+
+	// direction 2: listed, unserved → reported as stale, and ONLY it.
+	missing, stale = routeParityDiff(served, withKey(listed, ghost), none, none)
+	if len(stale) != 1 || stale[0] != ghost {
+		t.Errorf("a listed, unserved route was not reported: stale=%v", stale)
+	}
+	if len(missing) != 0 {
+		t.Errorf("adding a manifest row invented a missing finding: %v", missing)
+	}
+
+	// and an exemption must actually silence the finding it names — the escape
+	// hatch has to work, or the gate is unusable and someone will delete it.
+	missing, _ = routeParityDiff(withKey(served, ghost), listed, map[string]bool{ghost: true}, none)
+	if len(missing) != 0 {
+		t.Errorf("a served-but-unlisted exemption did not silence its own route: %v", missing)
 	}
 }
 
@@ -311,24 +341,4 @@ func withKey(set map[string]bool, key string) map[string]bool {
 		out[k] = true
 	}
 	return out
-}
-
-func onlyIn(a, b map[string]bool) []string {
-	var out []string
-	for k := range a {
-		if !b[k] {
-			out = append(out, k)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
-func t61Contains(list []string, want string) bool {
-	for _, v := range list {
-		if v == want {
-			return true
-		}
-	}
-	return false
 }

@@ -126,9 +126,15 @@ fi
 # routes_manifest.json is a FROZEN committed snapshot (it was mechanically
 # extracted from the retired Python route table, no longer in this repo — and is now
 # wire-freeze material alongside spec/*.json: change it spec-first, through the
-# owner). The suite itself pins it against the live server: test_openapi_covers_
-# manifest locks manifest ≡ spec operations, and the auth matrix locks every
-# row's requires against live behaviour — a drifted manifest goes red in the run.
+# owner). What this suite pins against the LIVE server is each listed row's
+# behaviour — the auth matrix locks every row's requires against real requests,
+# and test_catalog_hash_algorithm locks the mcp_tool rows to the digest the
+# server serves. test_openapi_covers_manifest is NOT that: both sides of it are
+# hand-written, so it catches a spec/manifest disagreement and nothing else.
+# The row set itself is pinned to the route table by
+# TestEveryServedRouteIsInThePermissionManifest (T-61), which is a Go test —
+# a route the manifest never learned about cannot be caught from in here,
+# because everything in here starts from the manifest.
 
 # Leftover guard — never stomp whatever already listens on the port.
 if [[ "$CONF_PORT" != "0" ]] && lsof -nP -iTCP:"$CONF_PORT" -sTCP:LISTEN >/dev/null 2>&1; then

@@ -1,4 +1,4 @@
-"""REST happy-path face — every served route, minimum-viable identity, spec shape.
+"""REST happy-path face — every manifest row, minimum-viable identity, spec shape.
 
 Second conformance batch. The auth matrix (test_auth_matrix.py) pins WHO may
 call each route; this file pins WHAT a permitted call returns: for every row of
@@ -17,8 +17,11 @@ Coverage has the same teeth as the matrix: ``test_happy_covers_manifest``
 fails the run when a manifest row is neither in ``HAPPY`` nor in the explicit
 ``SKIPPED_HAPPY`` table (reason required), and
 ``test_openapi_covers_manifest`` pins the manifest row set to the frozen
-``spec/openapi.json`` operations — a new server route reddens BOTH snapshots
-before it can ship untested.
+``spec/openapi.json`` operations. Both of those compare the manifest to another
+hand-written list, so neither notices a route the server serves that the
+manifest never learned about — that leg is
+``TestEveryServedRouteIsInThePermissionManifest`` (T-61, in Go, over the route
+table the mux is built from).
 
 Rows that serve non-JSON bytes (binaries, install.sh, chat attachment blob) or
 a non-OpenAPI protocol (MCP JSON-RPC) carry ``nonjson`` with a reason: status
