@@ -436,10 +436,6 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   const view = useThreadCommit();
   const thread = view.thread;
   const [peerLastReadTs, setPeerLastReadTs] = useState(0);
-  // Live mirror of `thread` for the async loadOlder (a state read inside an
-  // await would be a stale closure) + the in-flight lock: one older page at a
-  // time, so a scroll handler firing repeatedly near the top can't stack
-  // duplicate cursor requests.
   // 🔴 LOAD GENERATIONS (T-b0bb, review B2). Before the backfill, a load was
   // "fetch → commit" with ZERO awaits in between, so two overlapping loads
   // could only interleave if the network answered out of order. The backfill

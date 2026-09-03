@@ -301,7 +301,7 @@ describe("useChat: a failed load is marked and paid on the next relevant event",
     // closure and its successor and made the leak reachable; the effect's
     // `if (!alive) return;` was the only thing stopping it. Rooms are separate
     // MOUNTS now, so the record the dead load reaches is its own and its
-    // `setThread` lands in a component React has discarded. This case therefore
+    // commit lands in a component React has discarded. This case therefore
     // pins the property rather than one guard: it reddens if the debt or the
     // thread is ever hoisted somewhere the two rooms share. StrictMode is kept
     // because it is how main.tsx mounts the app.

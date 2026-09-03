@@ -1187,7 +1187,13 @@ export function ChatArea({
     // ResizeObserver used to re-centre for 2.6s; measured cost of removing
     // it: the target ends up ~400-419px below the fold on a 394-433px
     // viewport — a whole screen — and the highlight pulse goes with it.
-    // The owner named that cost and took it. Do not add a compensator.
+    // The owner named that cost and took it.
+    // ⚠️ BUT THE TWO SOURCES THAT RULING NAMES ARE BOTH CLOSED AT SOURCE NOW,
+    // not compensated for here: a thumbnail has a fixed 220px box (office.css
+    // `.chat__msg-image`) and a WAITING reply card is in hand before its rows
+    // are committed (`lib/threadCommit` → `lib/replyCardCache`). What is still
+    // accepted is late content of every OTHER kind.
+    // Do not add a compensator.
   }, [jumpToMsgId, messages, loadAround, resetToLatest, jumpRetry]);
 
   // The jump highlight is a transient flash — clear it after the CSS pulse so

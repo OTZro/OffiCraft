@@ -378,8 +378,8 @@ describe("useChat: a seam that takes MORE THAN ONE backfill page", () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // OVERLAPPING LOADS (review B2). The backfill turned a load from "fetch, then
-// setThread with nothing in between" into "fetch, up to 6 round-trips, THEN
-// setThread" — and it opens that window only during a burst, i.e. exactly when
+// commit with nothing in between" into "fetch, up to 6 round-trips, THEN
+// commit" — and it opens that window only during a burst, i.e. exactly when
 // the peer is still talking and another load is most likely to start and finish
 // inside it. Measured on the unguarded code: 75 rows, none missing, none
 // duplicated, and the newest 5 rendered at the TOP of the conversation.

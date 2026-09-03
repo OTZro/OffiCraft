@@ -661,7 +661,7 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
   it("跳轉途中的走查不准把一則存在的訊息報成「跳轉被打斷」", async () => {
     // 🔴 症狀 3 的病灶,而且它跟捲動一點關係都沒有 —— 是請求仲裁。`loadAround`
     // 先出發、拿較早的世代票,卻最後才提交;`loadNewer` 後出發、拿較晚的票,卻先
-    // 回來寫 `committedSeqRef`。錨點窗回來時撞上自己的 `seq < committed` 判斷,
+    // 回來把 commit 的世代水位推高。錨點窗回來時撞上自己的 `seq < committed` 判斷,
     // 回報 "superseded" —— 而 ChatArea 把 "superseded" 畫成 setJumpNotice
     // ("interrupted")。⇒ 一則好端端躺在資料庫裡的訊息,螢幕上寫著「跳轉被打斷」。
     //
@@ -1245,7 +1245,8 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
   it("上一條對話晚到的「回到最新」不准燒掉一張世代票,把新對話比它早起跑的載入丟掉", async () => {
     // 🔴 第五輪 R5-1 的附帶。`resetToLatest` 的 peer 守衛原本只掛在 `setThread`
     // 上,`committedSeqRef.current = seq` 卻是**無條件**寫的。
-    // `loadSeqRef` / `committedSeqRef` 是刻意全域、刻意不重置的單調時鐘,所以一次
+    // 世代票(今天是 `lib/threadCommit` 的 `takeTicket` 與 commit 自己的水位)是
+    // 刻意跨載入、刻意不重置的單調時鐘,所以一次
     // 晚到的跨對話 `resetToLatest`(ChatArea 的錨點失敗回呼在訊息列空的時候正好
     // 會發一次)會把水位推高,然後把自己那一頁丟掉 —— 而新對話**比它早起跑**、
     // 票號比較低的那次載入,接著被靜靜判成 superseded。沒有 spinner、沒有錯誤,
@@ -1360,7 +1361,7 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     // 定位一次性消耗掉。
     //
     // 🔴 A→B→A 是三次 mount(R13-5),所以下面用 unmount／mount 驅動。上一趟那對
-    // 視窗落地時,它的 `setThread` 寫進一個 React 已經丟掉的 component。
+    // 視窗落地時,它的 commit 寫進一個 React 已經丟掉的 component。
     //
     // ⚠️ 這條不再斷言那次呼叫回傳 "superseded":那個回傳值是給 caller 的,而這一
     // 趟的 caller 跟這一趟的 hook 一起被卸載了,沒有人收得到。要斷言的是房間。

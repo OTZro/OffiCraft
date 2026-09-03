@@ -884,7 +884,7 @@ describe("③ jump-to-origin (跳到原訊息, B3)", () => {
     // taken anywhere near it.
     expect(markRead).not.toHaveBeenCalled();
 
-    // The anchor window lands — this is what useChat's setThread does.
+    // The anchor window lands — this is what useChat's loadAround commit does.
     messages = [
       mkMsg("c-ancient", "b", "owner", 10),
       mkMsg("c-after", "b", "owner", 11),

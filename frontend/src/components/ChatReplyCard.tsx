@@ -48,7 +48,9 @@ export function ChatReplyCard({
    * fetch — owner rule 已回覆卡預設不載: the full card loads only when the
    * owner expands it, so a chat history of dozens of settled cards no longer
    * fires one getReplyCard each. A waiting hint (or null/undefined — unknown)
-   * loads eagerly, exactly as before this prop existed. */
+   * mounts EXPANDED; it used to fetch on mount unconditionally, and since T-48
+   * it fetches only when the prefill cache has no seed for it — which on
+   * `useChat`'s commit paths it always does have (see the seed note below). */
   initialStatus?: ReplyCard["status"] | null;
 }) {
   const { t } = useI18n();
@@ -70,7 +72,7 @@ export function ChatReplyCard({
   const [actionError, setActionError] = useState<string | null>(null);
   // Lazy-load gate: a terminal-hinted card (answered/expired) starts COLLAPSED
   // (no fetch) and loads its full shape only on expand; every other case
-  // starts expanded and loads eagerly.
+  // starts expanded, and fetches unless the seed above already answered it.
   const lazyTerminal =
     initialStatus === "answered" || initialStatus === "expired";
   const [expanded, setExpanded] = useState(!lazyTerminal);
