@@ -540,22 +540,25 @@ func (s *apiServer) armMemberOwnerOpHandover(m *Member, op string) bool {
 // 在線上」 says nothing about how long ago the 下線 was — and it is pinned by
 // TestRelocateAfterAConvergedStopWakesTheMember below, whose fixture carries the
 // REAL row shape a converged stop leaves behind.
-// 🔴 IT COVERS THE STAFF MEMBER FACE ONLY, AND NOBODY HAS RULED ON THE OTHER
-// ONE. Measured, not assumed: this gate has exactly three call sites and all
-// three are in api_members.go (換 model, 改機器, 重新聚焦). api_outsource.go and
-// worker_spawn.go mention RestartAfterStop / stampRestartIntent /
-// clearRestartIntent / consumeRestartAfterStop ZERO times — the outsource worker
-// face keeps its own StoppingSince ladder and has no queued-「起來」 at all, so
-// 改機器 on a stopped WORKER still just saves the pin and waits for 活化
-// (TestRelocateStoppedWorker_SavesPinWithoutReviving pins exactly that, and its
-// fixture has the same never-anchored shape this gate's own tests had to be
-// corrected for).
+// ⚠️ IT USED TO SAY 「IT COVERS THE STAFF MEMBER FACE ONLY, AND NOBODY HAS RULED
+// ON THE OTHER ONE」, and both halves of that have since stopped being true.
+// T-65 包② put the question to the owner and he answered it (rc-bc1b029a3aa2,
+// 2026-08-30: 「一個重啟的 intention 遇上一個更強硬的下線規則 他的方式是沿用強硬
+// 下線規則 但是附加上線規則」), so this gate now has SIX call sites: the three
+// staff ones in api_members.go (換 model, 改機器, 重新聚焦) plus the three worker
+// ones, which reach it through queueWorkerRestartAfterStop below — the worker
+// refocus handler, the model handler's held-down branch (api_outsource.go), and
+// respawnWorkerForOwnerOp's held-down arm (worker_spawn.go).
 //
-// THAT ASYMMETRY IS NOT A DECISION. The owner's 2026-08-30 [0] ruling was asked
-// and answered about members; whether the worker face should follow was never
-// put to him, so it is neither deliberately different nor an oversight to fix
-// here — it is an open question, and it is written down rather than left silent
-// so the next reader does not mistake the silence for an answer.
+// 🔴 THE ONE CLAIM WORTH KEEPING FROM THE OLD TEXT, because it is a trap rather
+// than a fact about the past: TestRelocateStoppedWorker_SavesPinWithoutReviving
+// is BLIND to all of that. Its fixture reaches desired_state=offline by writing
+// the field directly, so it never acquires a stopping_since anchor, so this gate
+// is FALSE for it and it stays green both before and after the change. It is not
+// a signal in either direction. If it ever goes red, the reading is NOT 「the
+// spec flipped」 — it means this gate stopped being consulted and workers nobody
+// ever asked to stop are being booted by an edit. The anchored fixture lives in
+// outsource_restart_after_stop_t65_test.go (seedStoppedAnchoredWorker).
 func aStopWasEverAskedFor(m Member) bool {
 	return m.StoppingSince > 0.0
 }
@@ -662,5 +665,145 @@ func (s *apiServer) consumeRestartAfterStop(m *Member, now float64) bool {
 	}
 	reconcileLog("%s: stop converged and a 重啟 was queued behind it — desired_state "+
 		"back to online", m.ID)
+	return true
+}
+
+// ── the OUTSOURCE face of the same ruling (T-65 包②) ─────────────────────────
+//
+// 🔴 THE ASYMMETRY THE COMMENT ON aStopWasEverAskedFor NAMED IS CLOSED HERE, and
+// it is closed by owner ruling rather than by symmetry-for-its-own-sake. That
+// comment said the worker face 「keeps its own StoppingSince ladder and has no
+// queued-「起來」 at all」 and that whether it should follow 「was never put to
+// him」. It was put to him: rc-bc1b029a3aa2, 2026-08-30 — 「一個重啟的 intention
+// 遇上一個更強硬的下線規則 他的方式是沿用強硬下線規則 但是附加上線規則」.
+//
+// TWO RULES, KEPT SEPARATE, exactly as the staff face keeps them:
+//
+//	下線用多強  RATCHET. Untouched here. A queued 起來 never rolls a 加速停止
+//	            back to a 停止, and the three worker 下線 verbs keep their own
+//	            ladder (armRefocusEpoch / stopEpochAnchor) unchanged.
+//	要不要起來  LAST WRITER WINS. Every 下線 verb clears it, every 重啟 verb
+//	            (重新聚焦 / 改機器 / 換 model) sets it.
+//
+// WHY THESE ARE WORKER FUNCTIONS RATHER THAN CALLS INTO THE STAFF ONES. The
+// projection would allow it — an ow- row IS a member row — but the PERSISTENCE
+// would not. putMember fans a MEMBER delta, and persistMemberOpReceipt's own
+// header states the rule this obeys: an ow- id's changes travel on the
+// outsource_worker projection, so worker callers write the receipt through
+// s.dal.SetMemberOpReceipt and publish through publishOutsourceWorker. Routing a
+// worker through consumeRestartAfterStop would fan the wrong topic at the wrong
+// audience and re-open the question of whether putMember is safe under
+// outsourceMu (measured: it is — api_members.go touches that mutex nowhere — but
+// that is a property nothing enforces, and this way nothing has to).
+
+// queueWorkerRestartAfterStop is the WORKER half of stampRestartIntent, gate
+// included: it records 「這一輪下線收口之後把它帶起來」 on a stopped worker and
+// reports whether it did.
+//
+// The gate is aStopWasEverAskedFor on the member projection — the SAME predicate,
+// not a copy of it — for the reason that predicate's own comment gives: a worker
+// nobody has ever asked to stop has no 下線 for an 上線 rule to be added to, and
+// editing its machine or model before its first start must not boot it.
+//
+// It mutates ONLY the flag and the receipt. The stop, its stage and its four
+// anchors are left exactly as the 下線 verb wrote them — 「沿用強硬下線規則」 in
+// one function.
+func (s *apiServer) queueWorkerRestartAfterStop(w *OutsourceWorker, op string, now float64) bool {
+	if w.DesiredState != DesiredStateOffline || !aStopWasEverAskedFor(memberFromWorker(*w)) {
+		return false
+	}
+	w.RestartAfterStop = true
+	stampOpReceipt(&w.LastOp, &w.LastOpOK, &w.LastOpLog, &w.LastOpReason, &w.LastOpAt,
+		reconcileCmdStart, memberRestartQueuedReceipt(op), now)
+	return true
+}
+
+// persistWorkerRestartIntent stores BOTH things queueWorkerRestartAfterStop
+// mutated, because they land through two different writers and forgetting either
+// one fails silently in a different way.
+//
+//   - the flag rides the whole-row write (mfRestartAfterStop is not insertOnly);
+//   - the five last_op* columns left that write in T-55 批次B and land through
+//     SetMemberOpReceipt.
+//
+// Order: the row first, the sentence second — every other site in this package
+// orders it that way, and for the same reason: a receipt explains a change that
+// is already stored, never one that failed.
+func (s *apiServer) persistWorkerRestartIntent(w OutsourceWorker) error {
+	if err := s.dal.PutOutsourceWorker(w); err != nil {
+		return err
+	}
+	return s.dal.SetMemberOpReceipt(w.ID, w.LastOp, w.LastOpOK, w.LastOpLog,
+		w.LastOpReason, w.LastOpAt)
+}
+
+// clearWorkerRestartIntent is the 後蓋前 half that makes the negative control
+// hold: 重新聚焦 → 強制停止 must still end with the worker DOWN. Every worker
+// 下線 verb calls it, so the last button the owner pressed is the one that
+// decides. It writes nothing on its own — the anchors those handlers already
+// persist ride the same PutOutsourceWorker this flag does.
+func clearWorkerRestartIntent(w *OutsourceWorker) {
+	w.RestartAfterStop = false
+}
+
+// consumeWorkerRestartAfterStop is the worker twin of consumeRestartAfterStop:
+// the ONE place a queued 起來 is spent, at the converged-offline edge.
+//
+// 🔴 WHERE IT IS CALLED FROM IS NOT A DETAIL. Its staff twin lives in
+// reconcileOne, so the obvious worker home is reconcileWorkerLiveness — and that
+// home is UNREACHABLE for the entire population this function exists for.
+// runOutsourceTick's per-worker switch `continue`s on `DesiredState == offline`
+// in the assigned branch and gates the active branch on
+// `fresh.DesiredState != offline`; a stopped worker never reaches the FSM at
+// all. That is the same shape as the bug being fixed one layer up — an intent
+// recorded on a row nothing ever looks at again — so the call site is ABOVE both
+// filters, in the tick's own loop.
+//
+// It waits for the SESSION TO BE GONE, not for a clock and not for a
+// stopped-report, which is its twin's rule verbatim: a 強制停止 whose kill is
+// still in flight must not be restarted underneath itself.
+//
+// The anchors it clears are the restart handler's list plus waking_since, which
+// is its twin's list minus forced_stop_at — that column is the durable record
+// that the PREVIOUS session was cut off and is deliberately never cleared by a
+// boot (migrations/00057).
+// Callers hold s.outsourceMu.
+func (s *apiServer) consumeWorkerRestartAfterStop(w *OutsourceWorker, now float64) bool {
+	if !w.RestartAfterStop || w.Status == WorkerStatusReleased {
+		return false
+	}
+	if w.DesiredState != DesiredStateOffline || s.hub.IsOnline(w.ID) {
+		return false
+	}
+	w.RestartAfterStop = false
+	w.DesiredState = DesiredStateOnline
+	w.StoppingSince = 0.0
+	w.StoppedSince = 0.0
+	w.WakingSince = 0.0
+	w.RefocusSince = 0.0
+	w.RefocusOp = ""
+	stampOpReceipt(&w.LastOp, &w.LastOpOK, &w.LastOpLog, &w.LastOpReason, &w.LastOpAt,
+		reconcileCmdStart, spawnReasonHeldDown+": the stop the owner asked for has "+
+			"landed — starting this worker again, which is what the 重啟 he pressed "+
+			"during the wind-down asked for", now)
+	// BEFORE the row write, for the reason persistMemberWindDownAnchors spells
+	// out: the four anchors left the whole-row writer in T-55 批次C, so the four
+	// clears above are IN MEMORY ONLY until this lands.
+	if err := s.persistWorkerWindDownAnchors(*w); err != nil {
+		outsourceLog("%s: queued restart-after-stop anchor persist failed: %v", w.ID, err)
+		return false
+	}
+	if err := s.dal.PutOutsourceWorker(*w); err != nil {
+		outsourceLog("%s: queued restart-after-stop persist failed: %v", w.ID, err)
+		return false
+	}
+	// Not fatal: the worker IS up, and refusing to return true would re-arm an
+	// intent that has already been spent. Logged, and the tick moves on with a
+	// stale explanation on the row — the same trade its staff twin makes.
+	if err := s.dal.SetMemberOpReceipt(w.ID, w.LastOp, w.LastOpOK, w.LastOpLog,
+		w.LastOpReason, w.LastOpAt); err != nil {
+		outsourceLog("%s: queued restart-after-stop receipt persist failed: %v", w.ID, err)
+	}
+	s.publishOutsourceWorker(*w, triggerServer)
 	return true
 }

@@ -4135,7 +4135,7 @@ type ServerInterface interface {
 	// Change (換 model) an outsource worker's model/effort (same floor as the staff model edit).
 	// (POST /api/outsource-workers/{id}/model)
 	HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost(w http.ResponseWriter, r *http.Request, id string)
-	// Refocus (換手) an outsource worker's context (owner/admin agent, online-only else 409).
+	// Refocus (換手) an outsource worker's context; on a STOPPED worker it queues the 起來 instead of refusing (owner/admin agent).
 	// (POST /api/outsource-workers/{id}/refocus)
 	HandleRefocusOutsourceWorkerApiOutsourceWorkersIdRefocusPost(w http.ResponseWriter, r *http.Request, id string)
 	// Relocate an outsource worker to a machine (admin-gated).

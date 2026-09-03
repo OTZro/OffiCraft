@@ -1237,7 +1237,7 @@ func memberFromWorker(w OutsourceWorker) Member {
 		// existing row — which makes this line what decides whether a mid-wake
 		// anchor survives the next worker write. Dropping it back to a constant
 		// re-opens the exact bug.
-		WakingSince:        w.WakingSince,
+		WakingSince: w.WakingSince,
 		// 🔴 CARRIED, NOT ZEROED (T-65 包②) — and unlike WakingSince above, this one
 		// is load-bearing on a column the whole-row upsert ACTIVELY WRITES rather
 		// than merely fails to refresh. mfRestartAfterStop is not insertOnly, so

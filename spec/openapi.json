@@ -15135,7 +15135,7 @@
     },
     "/api/outsource-workers/{id}/refocus": {
       "post": {
-        "description": "Refocus (換手) an outsource worker (T-32e1): the worker twin of refocus_member. Stamps refocus_since, then kills the current session and re-spawns it so a FRESH worker picks the SAME bound task back up from its task plan / step notes (a worker has no member fold — continuity lives in the task). ONLINE-ONLY: 409 unless the worker is active with a live session; 409 for a stopped worker (restart first); 404 unknown/released. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Floor admin_agent (route requires=admin_agent, T-6020 — 外包對齊正職, the same floor as worker relocate); a plain agent is a flat 403. ⚠️ T-ed79 moved ONE of the T-6020 four off this floor — set_outsource_worker_model, owner 2026-08-21 — and this row was NOT part of that ruling. Exposed as an MCP tool since T-6020.",
+        "description": "Refocus (換手) an outsource worker (T-32e1): the worker twin of refocus_member. Stamps refocus_since, then kills the current session and re-spawns it so a FRESH worker picks the SAME bound task back up from its task plan / step notes (a worker has no member fold — continuity lives in the task). Needs a live session: 409 unless the worker is active and connected; 404 unknown/released. 🔴 A STOPPED WORKER IS NO LONGER A 409 (T-65 包②; owner 2026-08-30, rc-bc1b029a3aa2: 「一個重啟的 intention 遇上一個更強硬的下線規則 他的方式是沿用強硬下線規則 但是附加上線規則」). Pressed on a worker whose stop is in flight — or has already landed — it answers 200 and QUEUES the start: restart_after_stop is set, the stop keeps its stage and all four of its anchors, no refocus epoch is opened (that stamp has no reader with no session), and the worker is brought back up once the stop converges. The 409 SURVIVES for a worker nobody has ever asked to stop (no stopping_since anchor): there is no 下線 for an 上線 rule to be added to, so an edit must not boot it. The owner mental model: an outsource worker is just a member the system creates and deletes, so it reuses the SAME lifecycle mechanisms. Floor admin_agent (route requires=admin_agent, T-6020 — 外包對齊正職, the same floor as worker relocate); a plain agent is a flat 403. ⚠️ T-ed79 moved ONE of the T-6020 four off this floor — set_outsource_worker_model, owner 2026-08-21 — and this row was NOT part of that ruling. Exposed as an MCP tool since T-6020.",
         "operationId": "handle_refocus_outsource_worker_api_outsource_workers__id__refocus_post",
         "parameters": [
           {
@@ -15190,14 +15190,14 @@
             "description": "Server error (unified error envelope)."
           }
         },
-        "summary": "Refocus (換手) an outsource worker's context (owner/admin agent, online-only else 409).",
+        "summary": "Refocus (換手) an outsource worker's context; on a STOPPED worker it queues the 起來 instead of refusing (owner/admin agent).",
         "x-mcp": {
           "include": true,
           "order": 87,
           "name": "refocus_outsource_worker",
-          "description": "Refocus (換手) an outsource worker (owner/admin agent, online-only else 409).",
+          "description": "Refocus (換手) an outsource worker (owner/admin agent). Needs a live session, 409 otherwise — EXCEPT on a worker whose stop is in flight or has landed, where it answers 200 and QUEUES the restart (restart_after_stop); the stop itself is honoured as-is. A worker nobody ever asked to stop is still a 409.",
           "legacy": {
-            "descriptor": "{\n      \"description\": \"Refocus (\\u63db\\u624b) an outsource worker (owner/admin agent, online-only else 409).\",\n      \"inputSchema\": {\n        \"properties\": {\n          \"id\": {\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"id\"\n        ],\n        \"type\": \"object\"\n      },\n      \"name\": \"refocus_outsource_worker\"\n    }"
+            "descriptor": "{\n      \"description\": \"Refocus (\\u63db\\u624b) an outsource worker (owner/admin agent). Needs a live session, 409 otherwise \\u2014 EXCEPT on a worker whose stop is in flight or has landed, where it answers 200 and QUEUES the restart (restart_after_stop); the stop itself is honoured as-is. A worker nobody ever asked to stop is still a 409.\",\n      \"inputSchema\": {\n        \"properties\": {\n          \"id\": {\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"id\"\n        ],\n        \"type\": \"object\"\n      },\n      \"name\": \"refocus_outsource_worker\"\n    }"
           }
         }
       }
