@@ -300,8 +300,14 @@ func winddownKindFor(op string) (kind string, clocked bool) {
 }
 
 // armRefocusEpoch is the ONE way a refocus epoch is opened. It MUTATES m and
-// persists nothing: every caller folds it into its own single putMember, so the
-// stamp and whatever else that write carries are one row write and one delta.
+// persists nothing: every caller folds it into its own putMember, so the epoch
+// and whatever else that write carries land together.
+//
+// ⚠️ THAT IS THE EPOCH ALONE, not 「everything the handler is doing」 (T-55). The
+// launch intents and the five receipt columns have their own sole writers now,
+// so a caller of this function typically performs TWO writes and the ordering
+// between them is argued at the call site. Do not read this paragraph as a
+// promise that a handler using it is atomic.
 //
 // 🔴 The two zeroed anchors are the whole reason this is a named function and
 // not four hand-written lines. A NEW epoch must never inherit the PREVIOUS
@@ -428,8 +434,20 @@ func (s *apiServer) memberOwnerOpHandoverArmable(m Member, op string) bool {
 
 // armMemberOwnerOpHandover stamps a FRESH refocus epoch on the member when
 // there is state to flush, and reports whether it did. It MUTATES m and
-// persists nothing: the caller folds this into its own single putMember so the
-// owner's change and the epoch are one atomic write and one delta.
+// persists nothing: the caller folds the epoch into its own putMember.
+//
+// ⚠️ THE EPOCH IS ALL THAT WRITE CARRIES. This sentence used to say the owner's
+// change and the epoch were "one atomic write and one delta"; T-55 made both
+// halves false, in two steps. The first batch moved the launch intents out of
+// PutMember's SET list, so the CHANGE stopped riding that write; the second
+// moved the five receipt columns, so the RECEIPT stopped riding it too and the
+// handler now fans two member deltas rather than one. Nothing here is atomic
+// with anything: a caller performs two or three writes and argues their order at
+// its own call site (HandleUpdateMember has the one that actually matters).
+//
+// The same correction was made to armRefocusEpoch above, to this file's header,
+// and to both stampOpReceipt shells — this function was the one that got missed,
+// and it is the one HandleUpdateMember actually calls.
 //
 // The stale wind-down anchors are cleared with the stamp — a new epoch never
 // inherits an old latch, which is also what makes the "already collected" arm
