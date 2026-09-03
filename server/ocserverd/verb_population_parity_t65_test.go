@@ -14,10 +14,36 @@ package main
 //
 // Every field that is expected to end up the same is asserted equal, and every
 // field that ends up DIFFERENT must appear in knownDivergences with a sentence
-// saying why it is different TODAY. An unlisted difference fails by name; a
-// listed row whose two sides have converged fails as stale. That is what makes
-// this table the mechanical guard for every later T-65 package: converging one
-// verb means deleting its rows here, and nothing else can delete them quietly.
+// saying why it is different TODAY.
+//
+// 🔴 WHAT IN THIS FILE IS ACTUALLY SENSITIVE TO PRODUCTION CODE — read this
+// before trusting a green run here as a behaviour guard:
+//
+//	ONLY block ① of TestVerbPopulationParityMatrix (`gotStaff != c.wantStaff` /
+//	`gotOutsource != c.wantOutsource`, 7 verbs × 2 populations = 14 assertions)
+//	and TestAcceleratedStopWorkerHasAnExtraLifecycleGate call a handler and
+//	compare what came back. Those are the mutant killers.
+//
+// Everything else here — the `UNDOCUMENTED DIVERGENCE` and `STALE WHITELIST
+// ROW` branches, the orphan-row check, and
+// TestVerbPopulationParityWhitelistIsExplained — compares LITERALS DECLARED IN
+// THIS FILE against OTHER LITERALS DECLARED IN THIS FILE (`c.wantStaff` vs
+// `c.wantOutsource`, and knownDivergences against the case list). Not one of
+// their operands is read out of a handler, so their verdict cannot change when
+// production code changes. Independent review measured both directions:
+// introducing a brand-new divergence in api_members.go raised block ①, never
+// `UNDOCUMENTED DIVERGENCE`; and genuinely CONVERGING a whitelisted cell in
+// api_outsource.go raised block ①, never `STALE WHITELIST ROW`.
+//
+// They are kept because they are still worth their line count — as a lint THIS
+// FILE runs on ITSELF. They catch a human editing the whitelist wrong: a row
+// added for a cell no case exercises, a row left behind after its two literals
+// were converged by hand, a divergence introduced into the literals without a
+// reason written next to it. That is a real failure mode (whoever converges a
+// verb in a later T-65 package edits both literals AND this whitelist), and the
+// orphan check has been demonstrated to fire on it. Just do not read them as a
+// guard over the handlers: converging a verb for real is caught by block ①,
+// and the whitelist edit that must follow is caught by these.
 //
 // 🔴 TWO RULES THIS FILE IS BOUND BY, both learned the expensive way:
 //
@@ -120,7 +146,12 @@ var knownDivergences = []knownDivergence{
 		verb: "起來", field: "waking_since",
 		why: "正職 activate assigns m.WakingSince = 0.0 (api_members.go, " +
 			"HandleActivateMember…) and waking_since is NOT in singleColumnOwnedFields, " +
-			"so PutMember carries the clear. 外包 restart deliberately does NOT clear it: " +
+			"so PutMember carries the clear. (That registry is declared in the TEST file " +
+			"single_column_writes_t14_test.go — `var singleColumnOwnedFields` at the top " +
+			"of it, with a length assertion pinning it at 17 entries; grepping only " +
+			"non-test .go files will not find it. Its last four entries are the wind-down " +
+			"anchors stopping_since / stopped_since / refocus_since / refocus_op, and " +
+			"waking_since is absent from all 17.) 外包 restart deliberately does NOT clear it: " +
 			"its 🔴 block says notifyWorkerSpawn stamps a fresh anchor on the re-dispatch, " +
 			"and names the residue it leaves (a failed re-dispatch reads 喚醒中 until the " +
 			"TTL lapses) as 「the same 正職／外包 divergence T-14 exists to delete」.",
@@ -170,12 +201,32 @@ var knownDivergences = []knownDivergence{
 	{
 		verb: "強制停止", field: "stopping_since",
 		why: "外包 force-stop pulls a FUTURE anchor back: `if worker.StoppingSince <= 0.0 " +
-			"|| worker.StoppingSince > forcedAt { worker.StoppingSince = forcedAt }`. " +
-			"正職 force-stop has only the first arm: `if m.StoppingSince <= 0.0 { " +
-			"m.StoppingSince = nowSecs() }`, so a future stamp survives. 🔴 THE CODE " +
-			"CARRIES NO EXPLANATION FOR THE EXTRA ARM — no comment on either side mentions " +
-			"it, and git blame was not consulted. Reason待補: recorded as observed, " +
-			"deliberately NOT rationalised here.",
+			"|| worker.StoppingSince > forcedAt { worker.StoppingSince = forcedAt }` " +
+			"(api_outsource.go). 正職 force-stop has only the first arm: `if " +
+			"m.StoppingSince <= 0.0 { m.StoppingSince = nowSecs() }` (api_members.go), so " +
+			"a future stamp survives. 🔴 THE SECOND ARM IS LOAD-BEARING AND ITS REASON IS " +
+			"ON THE RECORD: `git log -S 'worker.StoppingSince > forcedAt' -- " +
+			"server/ocserverd/api_outsource.go` returns exactly one commit, 7bc889c3 " +
+			"(T-c996, #245), whose message says the two anchors are stamped together " +
+			"because 「forcedEpochLive scopes the record to a live epoch (forced_stop_at " +
+			">= stopping_since); one without the other leaves a worker that announced its " +
+			"own wind-down reading as \"still working its close-out\", which is the arm " +
+			"that speaks」. forcedEpochLive (api_members.go) is `ForcedStopAt > 0 && " +
+			"StoppingSince > 0 && ForcedStopAt >= StoppingSince`, so the pull-back is what " +
+			"keeps that invariant true: force-stop sets ForcedStopAt = forcedAt, and a " +
+			"stopping_since ahead of forcedAt would make forcedEpochLive FALSE. " +
+			"⇒ THE DIRECTION OF THIS ROW IS THE OPPOSITE OF WHAT IT LOOKS LIKE: the side " +
+			"that may be defective is 正職, which lacks the arm — a staff row whose " +
+			"stopping_since sat in the future would come out of 強制停止 reading as a " +
+			"GRACEFUL wind-down still in progress (notice sent, deadline granted, " +
+			"加速停止 admitted), which is precisely the state T-c996 removed. " +
+			"⚠️ REACHABILITY, stated with its scope: independent review grepped every " +
+			"`.StoppingSince = ` assignment in non-test server code and found the staff-" +
+			"side writers all write nowSecs() / now / 0.0 / stopEpochAnchor(…, nowSecs()) " +
+			"— that grep found NO production path that stamps a FUTURE staff " +
+			"stopping_since. That is the reach of one grep, not a proof of impossibility. " +
+			"So today the divergence is unreachable in effect; if a path is ever found or " +
+			"added, the fix belongs on the 正職 side (give it the second arm), not here.",
 	},
 }
 
@@ -648,11 +699,18 @@ func parityCases() []verbCase {
 
 // ── the matrix test ──────────────────────────────────────────────────────────
 
-// TestVerbPopulationParityMatrix is the guard. For every 動詞 × 人口 cell it
-// pins the terminal row against a hand-written literal (which is what kills a
-// behaviour mutant on either side), then compares the two literals field by
-// field: fields that agree MUST also agree in the two observed rows, and fields
-// that disagree MUST carry a knownDivergences row explaining today's difference.
+// TestVerbPopulationParityMatrix has two halves that must not be confused.
+//
+// Block ① is the guard: for every 動詞 × 人口 cell it pins the terminal row the
+// handler actually produced against a hand-written literal. That is the only
+// part of this function that can see production code, and it is what kills a
+// behaviour mutant on either side.
+//
+// Block ② and the orphan check are a lint over this file's own literals: fields
+// whose two literals disagree MUST carry a knownDivergences row, fields whose
+// two literals agree must NOT, and every whitelist row must name a cell the
+// matrix runs. They keep the whitelist in step with the literals when a human
+// edits either. They do not observe the handlers — see the file header.
 func TestVerbPopulationParityMatrix(t *testing.T) {
 	idx := divergenceIndex()
 	seen := map[[2]string]bool{}
@@ -673,7 +731,11 @@ func TestVerbPopulationParityMatrix(t *testing.T) {
 					c.verb, c.note, c.wantOutsource, gotOutsource)
 			}
 
-			// ② the matrix itself.
+			// ② the whitelist lint. Both operands below (`want`, `other`) are
+			// literals declared in THIS file, and so is knownDivergences — this
+			// loop cannot see production code at all. It exists to stop a human
+			// editing the literals and the whitelist out of step. See the 🔴
+			// block in the file header.
 			for _, f := range parityFields {
 				key := [2]string{c.verb, f}
 				want := c.wantStaff.field(f)
@@ -693,22 +755,28 @@ func TestVerbPopulationParityMatrix(t *testing.T) {
 					t.Errorf("STALE WHITELIST ROW %s|%s: both populations now end %v, so this "+
 						"divergence is CLOSED. Delete the knownDivergences row (it still says: %s)",
 						c.verb, f, want, d.why)
-				case want == other:
-					// The parity claim, asserted on the OBSERVED rows and not only on
-					// the two literals — belt and braces, and it is the assertion that
-					// still fires if both literals are edited in lockstep.
-					if gs, go_ := gotStaff.field(f), gotOutsource.field(f); gs != go_ {
-						t.Errorf("PARITY BROKEN %s|%s: 正職 ends %v, 外包 ends %v. These two "+
-							"are meant to be the same and nothing in knownDivergences allows "+
-							"them to differ.", c.verb, f, gs, go_)
-					}
 				}
+				// There used to be a third branch here comparing the OBSERVED
+				// rows (`gotStaff.field(f) != gotOutsource.field(f)`) on every
+				// agreeing field, announcing itself as "the assertion that still
+				// fires if both literals are edited in lockstep". That claim was
+				// false and the branch was dead weight: reaching it needs
+				// want == other, and if block ① passed then gotStaff == wantStaff
+				// and gotOutsource == wantOutsource, so the two observed values
+				// are equal by substitution. It could only ever print a second
+				// line underneath a block ① failure — never fire alone. Deleted
+				// rather than re-commented: a guard that cannot fail on its own is
+				// exactly what this ticket exists to remove (cf. #401).
 			}
 		})
 	}
 
 	// Every whitelist row must belong to a cell this table actually exercises —
-	// otherwise a row could be kept alive by a verb that no longer runs.
+	// otherwise a row could be kept alive by a verb that no longer runs. This is
+	// a lint over the two literal lists in this file (knownDivergences vs
+	// parityCases), not a handler assertion; it fires when a human adds a row
+	// naming a verb/field the matrix does not run. Demonstrated to fire: adding
+	// a whitelist row for a verb that is not in parityCases reddens it.
 	var orphans []string
 	for k := range idx {
 		if !seen[k] {
@@ -725,6 +793,10 @@ func TestVerbPopulationParityMatrix(t *testing.T) {
 // TestVerbPopulationParityWhitelistIsExplained keeps the whitelist honest: a row
 // with no `why` is a divergence nobody has looked at, and the whole value of the
 // table is that each surviving difference carries its reason.
+//
+// It is a lint over knownDivergences — a literal in this file — and touches no
+// handler. It cannot detect anything about production code; it detects a human
+// adding a whitelist row without writing down the reason.
 func TestVerbPopulationParityWhitelistIsExplained(t *testing.T) {
 	for _, d := range knownDivergences {
 		if d.verb == "" || d.field == "" {
