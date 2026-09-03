@@ -1462,6 +1462,114 @@ func collectChatMetaRefs(tx *sql.Tx, query string, into map[string]bool, args ..
 
 // ── chat attachments ─────────────────────────────────────────────────────────
 
+// ChatAttachmentRef mirrors one row of chat_attachment_ref — the gallery's
+// index over chat_message.meta.attachments (migration 00074). Sender,
+// Recipient and TS are a SNAPSHOT of the owning message, and Ord is the
+// attachment's position in that message's posted array.
+//
+// 🔴 THIS DAL NEVER WRITES THIS TABLE. Three triggers on chat_message do
+// (insert / update / delete), so the index stays true no matter which writer
+// stores the message and whether or not it opened a transaction. Do not add a
+// Go write path here: it would be correct only while every writer goes
+// through it, and the day one does not there is no signal.
+//
+// ⚠️ Ord is NOT dense: a ref filtered out for having no id leaves a hole, so
+// never assume 0,1,2,... without gaps.
+type ChatAttachmentRef struct {
+	MessageID    string
+	Ord          int
+	AttachmentID string
+	Sender       string
+	Recipient    string
+	TS           float64
+	Mime         string
+	Filename     string
+}
+
+const chatAttachmentRefColumns = `message_id, ord, attachment_id, sender, recipient, ts, mime, filename`
+
+// chatAttachmentRefBefore reports whether a sorts before b in the gallery's
+// order: newest first, then the message stream's own (ts, id) tie-break, then
+// the attachment's position inside its message.
+//
+// 🔴 The message tie-break is ASCENDING on purpose. The pre-index handler read
+// the whole table in (ts, id) ASC and re-sorted it with a STABLE sort on ts
+// DESC, so equal-ts messages kept ascending id order. Flipping it here would
+// change what the panel shows for messages posted in the same second — a
+// visible change nobody asked for.
+func chatAttachmentRefBefore(a, b ChatAttachmentRef) bool {
+	if a.TS != b.TS {
+		return a.TS > b.TS
+	}
+	if a.MessageID != b.MessageID {
+		return a.MessageID < b.MessageID
+	}
+	return a.Ord < b.Ord
+}
+
+// listChatAttachmentRefsOneSided reads the rows of ONE side of the
+// conversation, already in gallery order. `extra` is appended to the WHERE.
+func (d *DAL) listChatAttachmentRefsOneSided(column, peer, extra string) ([]ChatAttachmentRef, error) {
+	rows, err := d.rdb.Query(
+		`SELECT `+chatAttachmentRefColumns+` FROM chat_attachment_ref
+		 WHERE `+column+` = ?`+extra+`
+		 ORDER BY ts DESC, message_id ASC, ord ASC`, peer)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ChatAttachmentRef
+	for rows.Next() {
+		var r ChatAttachmentRef
+		if err := rows.Scan(&r.MessageID, &r.Ord, &r.AttachmentID,
+			&r.Sender, &r.Recipient, &r.TS, &r.Mime, &r.Filename); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// ListChatAttachmentRefsFor returns every attachment of the member's
+// conversations (sender OR recipient), newest→oldest, read from the index
+// instead of scanning chat_message.
+//
+// 🔴 TWO SINGLE-SIDED QUERIES MERGED IN GO, NOT `sender = ? OR recipient = ?`.
+// Measured: the OR form makes SQLite answer with MULTI-INDEX OR and then a
+// TEMP B-TREE over every matching row — it throws away the ordering the two
+// indexes already provide. Each single-sided query is fully satisfied by its
+// index (no "USE TEMP B-TREE FOR ORDER BY" in the plan), so both arrive sorted
+// and merging them is linear.
+//
+// 🔴 The recipient side excludes sender = recipient. A self-message matches
+// BOTH sides, so without this it comes back twice (verified by seeding one:
+// OR form = 1 row, two-query form = 2). There are none today and nothing
+// prevents one.
+func (d *DAL) ListChatAttachmentRefsFor(peer string) ([]ChatAttachmentRef, error) {
+	sent, err := d.listChatAttachmentRefsOneSided("sender", peer, "")
+	if err != nil {
+		return nil, err
+	}
+	received, err := d.listChatAttachmentRefsOneSided(
+		"recipient", peer, " AND sender <> recipient")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ChatAttachmentRef, 0, len(sent)+len(received))
+	i, j := 0, 0
+	for i < len(sent) && j < len(received) {
+		if chatAttachmentRefBefore(received[j], sent[i]) {
+			out = append(out, received[j])
+			j++
+			continue
+		}
+		out = append(out, sent[i])
+		i++
+	}
+	out = append(out, sent[i:]...)
+	return append(out, received[j:]...), nil
+}
+
 // ChatAttachment mirrors the chat_attachment table (blob apart from the
 // message; the message meta refs are the only linkage). Filename nil = pasted
 // image with no name.
