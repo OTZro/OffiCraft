@@ -124,3 +124,89 @@ for (const width of [390, 1280]) {
     expect(overflow.panel, "the panel must not scroll sideways").toBe(0);
   });
 }
+
+/* ── 兩份都要是連結 (owner 2026-09-03, c-944088dceab0) ────────────────────────
+ *
+ * What the attachment stores has been a POINTER PAIR since the first round —
+ * that is why nothing is copied and no side can drift. What the owner asked for
+ * is the other half of that sentence: from the comparison, be able to go and
+ * read one side on its own.
+ *
+ * Asserted here rather than in jsdom because the thing that must be true is
+ * "the reader ends up looking at that side's text": the switch is a real click
+ * on a real heading inside the real overlay, and the text that comes up has to
+ * be the SAME bytes the diff was drawn from — not a re-read of a live document,
+ * which could answer differently a second later and leave the two screens
+ * disagreeing about what "this side" says.
+ *
+ * MUTANT (run, verified red): pass `diffPair.after` where the single-side view
+ * reads `diffPair.before` → "should be showing the BEFORE side alone" fails on
+ * the BRAVO/bravo pair. The two sides differ by case only on purpose — a mutant
+ * that swaps them must not be able to hide behind similar-looking text. */
+test("each side heading opens THAT side on its own, and comes back", async ({
+  mount,
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.route("**/api/chat/attachment/**", (route) => {
+    const url = route.request().url();
+    const body = url.includes("att-0123456789ab") ? BEFORE : AFTER;
+    return route.fulfill({ status: 200, contentType: "text/plain", body });
+  });
+
+  await mount(<DiffAttachmentOverlayStory />);
+  await expect(page.getByTestId("md-preview-diff")).toBeVisible();
+
+  await page.getByTestId("diff-view-side-before").click();
+  const side = page.getByTestId("md-preview-diff-side");
+  await expect(side).toBeVisible();
+  await expect(page.getByTestId("md-preview-diff-side-title")).toHaveText("改動前");
+  // The heading alone would pass on the wrong side's text; the CONTENT is what
+  // says which side the reader is actually looking at.
+  await expect(side.locator("pre")).toContainText("bravo");
+  await expect(side.locator("pre")).not.toContainText("BRAVO");
+  // The comparison is gone while one side is open — two diff surfaces on screen
+  // at once would leave "which one am I reading" to the reader.
+  await expect(page.getByTestId("md-preview-diff")).toHaveCount(0);
+
+  await page.getByTestId("md-preview-diff-side-back").click();
+  await expect(page.getByTestId("md-preview-diff")).toBeVisible();
+
+  await page.getByTestId("diff-view-side-after").click();
+  await expect(page.getByTestId("md-preview-diff-side-title")).toHaveText("改動後");
+  await expect(page.getByTestId("md-preview-diff-side").locator("pre")).toContainText("BRAVO");
+});
+
+/* Coming back must land in the layout the reader LEFT. Opening a side unmounts
+ * DiffView, so a mode kept inside it comes back as 單欄 — measured, not
+ * theorised: the first cut of this feature did exactly that and the browser
+ * check caught it. It is the same shape of quiet wrongness as the off-screen
+ * column: the control you pressed silently stops being pressed.
+ *
+ * MUTANT (run, verified red): drop `mode`/`onModeChange` from the DiffView call
+ * in the overlay (back to component-local state) → "expected data-mode=split,
+ * got unified". */
+test("returning from a side keeps the comparison layout the reader chose", async ({
+  mount,
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.route("**/api/chat/attachment/**", (route) => {
+    const url = route.request().url();
+    const body = url.includes("att-0123456789ab") ? BEFORE : AFTER;
+    return route.fulfill({ status: 200, contentType: "text/plain", body });
+  });
+
+  await mount(<DiffAttachmentOverlayStory />);
+  const diff = page.getByTestId("md-preview-diff");
+  await expect(diff).toHaveAttribute("data-mode", "unified");
+
+  await page.getByTestId("diff-view-mode-split").click();
+  await expect(diff).toHaveAttribute("data-mode", "split");
+
+  await page.getByTestId("diff-view-side-before").click();
+  await expect(page.getByTestId("md-preview-diff-side")).toBeVisible();
+  await page.getByTestId("md-preview-diff-side-back").click();
+
+  await expect(page.getByTestId("md-preview-diff")).toHaveAttribute("data-mode", "split");
+});

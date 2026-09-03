@@ -161,3 +161,73 @@ test("split: each line-number gutter is tinted STRONGER than its own text cell",
     "the two gutters must not collapse to one colour"
   ).toBeGreaterThan(30);
 });
+
+/* ── 兩欄對照 must actually SHOW two columns (owner 2026-09-03, c-f56f272e19e2)
+ *
+ * The owner found this himself, on his own material: he pressed 兩欄對照 and got
+ * a screen indistinguishable from 單欄. Nothing errored. The table is
+ * `width: max-content`, so ONE line longer than the panel widens the whole
+ * table and the right half queues up past the edge — measured at 5024px of
+ * table inside a 1332px box, with the right column starting at x=2566 on a
+ * 1440-wide viewport. A wider screen does not rescue it (the host has a
+ * max-width of its own).
+ *
+ * The tests above cannot catch this and never could: they mount with
+ * `longLine={false}` ON PURPOSE (the colour assertions need a table that is not
+ * wide by force), so the one input that triggers the defect is excluded from
+ * them by design. This guard is the mirror — it mounts WITH the long line and
+ * asserts the only thing the reader actually cares about: can I see the second
+ * column.
+ *
+ * It asserts POSITION, not the CSS. `table-layout: fixed` is today's fix; a
+ * later one may split the panel differently. What must not change is that the
+ * right half lands inside the box.
+ *
+ * MUTANT (run, verified red): delete the `.diff-view__table--split` rule block
+ * from diff-view.css → "right column starts at 2557.5px but the scroll box ends
+ * at 918px" — this test alone goes red, the three colour tests above stay green
+ * (they mount without the long line). */
+test("split: the right column is INSIDE the panel even with an unwrappable line", async ({
+  mount,
+  page,
+}) => {
+  await page.setViewportSize({ width: 1000, height: 900 });
+  const cmp = await mount(<DiffViewStory width={900} />);
+  await cmp.getByTestId("diff-view-mode-split").click();
+  await expect(cmp.locator(REPLACED).first()).toBeAttached();
+
+  const box = await cmp.locator(".diff-view__scroll").boundingBox();
+  const right = await cmp.locator(`${REPLACED} td:nth-child(4)`).first().boundingBox();
+  if (box === null || right === null) throw new Error("no layout box");
+
+  expect(
+    right.x,
+    `right column starts at ${right.x}px but the scroll box ends at ${box.x + box.width}px`
+  ).toBeLessThan(box.x + box.width);
+  // …and it must not merely peek in: the reader has to be able to READ it.
+  expect(
+    box.x + box.width - right.x,
+    "the right column must have real width inside the panel, not a sliver"
+  ).toBeGreaterThan(80);
+
+  // The two sides stay row-aligned — the reason the unified sheet refuses to
+  // wrap. Here they share one <tr>, so a wrapped line grows the row for BOTH.
+  const l = await cmp.locator(`${REPLACED} td:nth-child(1)`).first().boundingBox();
+  const r = await cmp.locator(`${REPLACED} td:nth-child(4)`).first().boundingBox();
+  if (l === null || r === null) throw new Error("no gutter box");
+  expect(Math.abs(l.y - r.y), "the two line-number gutters must stay level").toBeLessThan(2);
+});
+
+/* The other half of the contract: 單欄 must NOT be changed by the fix above. It
+ * keeps `pre` and its horizontal scroll — that is where a long line is allowed
+ * to run off the side, because there is only one column and nothing gets hidden
+ * BEHIND it. Without this, "make split fit" could be satisfied by wrapping
+ * everywhere, which would quietly rewrite the unified view the owner has been
+ * reading since 7/31. */
+test("unified keeps its horizontal scroll for a long line", async ({ mount, page }) => {
+  await page.setViewportSize({ width: 1000, height: 900 });
+  const cmp = await mount(<DiffViewStory width={900} />);
+  const scroll = cmp.locator(".diff-view__scroll");
+  const overflow = await scroll.evaluate((el) => el.scrollWidth - el.clientWidth);
+  expect(overflow, "單欄 must still scroll sideways for an unwrappable line").toBeGreaterThan(0);
+});

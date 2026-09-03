@@ -52,6 +52,7 @@ var messageKeys = map[string]bool{
 	"chat.interAgentExpandMany":                        true,
 	"chat.interAgentExpandOne":                         true,
 	"chat.mdPreview.close":                             true,
+	"chat.mdPreview.diffSideBack":                      true,
 	"chat.mdPreview.diffSideCurrent":                   true,
 	"chat.mdPreview.diffSideGone":                      true,
 	"chat.mdPreview.diffSideSeed":                      true,

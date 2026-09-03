@@ -28,6 +28,8 @@ export const en: Dict = {
     viewUnified: "Single column",
     viewSplit: "Side by side",
     wholeDocNote: "Whole document (nothing folded)",
+    // The heading over one side, when the host can show that side on its own.
+    openSide: (label: string) => `Open "${label}" on its own`,
     tooLargeLead: "Too long to compare line by line (",
     tooLargeTail: " lines).",
   },
@@ -814,6 +816,10 @@ export const en: Dict = {
       // marks every one of its lines as deleted, which is a confident wrong
       // answer rather than a missing one.
       diffSideGone: "One side of this comparison is no longer there, so it cannot be drawn.",
+      // Shown while ONE side is open on its own; takes the reader back to the
+      // comparison rather than closing the overlay, because they got here from
+      // inside it.
+      diffSideBack: "Back to comparison",
       unavailable: "This file cannot be previewed. Please download it.",
       // T-36 — same "cannot be drawn here", but when the header's new-tab
       // button is present the line must point at THAT, not back at Download:

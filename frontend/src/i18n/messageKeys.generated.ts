@@ -51,6 +51,7 @@ export const MESSAGE_KEYS: readonly string[] = [
   "chat.interAgentExpandMany",
   "chat.interAgentExpandOne",
   "chat.mdPreview.close",
+  "chat.mdPreview.diffSideBack",
   "chat.mdPreview.diffSideCurrent",
   "chat.mdPreview.diffSideGone",
   "chat.mdPreview.diffSideSeed",

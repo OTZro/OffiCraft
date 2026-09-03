@@ -344,4 +344,48 @@ describe("DiffView", () => {
       labelled.container.querySelector(".diff-view__label--after")?.textContent
     ).toBe("+現在");
   });
+  /* 兩側標題可以點 (owner 2026-09-03, c-944088dceab0「兩份應該都要是連結」).
+   *
+   * The affordance is OPTIONAL on purpose, and that is the part worth pinning:
+   * the document-history screen is already looking at the document both sides
+   * belong to, so a link there would go nowhere. A heading must therefore be a
+   * button exactly when the host handed over somewhere to go — never a button
+   * that does nothing, which is the failure this whole round started from (a
+   * mode switch that looked live and wasn't). */
+  it("leaves the side headings as plain text when the host cannot open a side", () => {
+    const { container } = renderDiff("alpha", "ALPHA");
+    expect(container.querySelector("button.diff-view__label--link")).toBeNull();
+    expect(
+      container.querySelector(".diff-view__label--before")?.tagName
+    ).toBe("SPAN");
+  });
+
+  it("turns each side heading into a button that opens THAT side", () => {
+    const opened: string[] = [];
+    const { getByTestId } = render(
+      <I18nProvider>
+        <DiffView
+          before="alpha"
+          after="ALPHA"
+          beforeLabel="版本 #1"
+          afterLabel="目前存檔內容"
+          onOpenSide={(side) => opened.push(side)}
+        />
+      </I18nProvider>
+    );
+
+    const before = getByTestId("diff-view-side-before");
+    const after = getByTestId("diff-view-side-after");
+    expect(before.tagName).toBe("BUTTON");
+    expect(after.tagName).toBe("BUTTON");
+    // The label the reader reads is what the tooltip names — a heading that
+    // says 「版本 #1」 must not offer to open something else.
+    expect(before.getAttribute("title")).toBe(zh.diff.openSide("版本 #1"));
+    expect(after.getAttribute("title")).toBe(zh.diff.openSide("目前存檔內容"));
+
+    fireEvent.click(before);
+    fireEvent.click(after);
+    // Order matters: clicking the RED heading must not open the green side.
+    expect(opened).toEqual(["before", "after"]);
+  });
 });

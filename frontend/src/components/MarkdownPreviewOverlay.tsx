@@ -65,7 +65,7 @@ import {
 import { authedAttachmentUrl } from "../api/http";
 import { attachmentShareLinkUrl, copyAttachmentShareLink } from "../lib/shareLink";
 import { useEscapeLayer } from "../lib/useEscapeLayer";
-import { DiffView } from "./DiffView";
+import { DiffView, type DiffMode } from "./DiffView";
 import { Markdown } from "./Markdown";
 import "./md-preview.css";
 import {
@@ -197,6 +197,16 @@ export function MarkdownPreviewOverlay({
   // "this document would not load" and "one half of the comparison is gone" are
   // different facts about different objects.
   const [diffSideGone, setDiffSideGone] = useState(false);
+  /** Which single side of a compare is being read on its own, or null while the
+   * comparison itself is on screen (owner 2026-09-03, c-944088dceab0: 「兩份應
+   * 該都要是連結」). It is a VIEW of the pair already in hand — not a second
+   * fetch — so the text shown here is byte-for-byte the text the diff was drawn
+   * from; going and re-reading a live side would let the two disagree. */
+  const [diffSide, setDiffSide] = useState<"before" | "after" | null>(null);
+  /** 單欄 / 兩欄對照, held HERE rather than inside DiffView, because opening one
+   * side unmounts it — see the `mode` prop's note in DiffView. Coming back from
+   * a side must land the reader in the layout they left. */
+  const [diffMode, setDiffMode] = useState<DiffMode>("unified");
   // The text to render. An inline source is authoritative and synchronous — it
   // never passes through the loading/error states, which only describe a fetch.
   const image = imageSrc !== undefined || (mime?.startsWith("image/") ?? false);
@@ -318,6 +328,8 @@ export function MarkdownPreviewOverlay({
     setDiffPair(null);
     setFailed(false);
     setDiffSideGone(false);
+    setDiffSide(null);
+    setDiffMode("unified");
     // encodeURIComponent, not concatenation: the id is data the pair carries,
     // and a blob stored before the server started checking the id's SHAPE can
     // still hold "att-/../../api/version". Concatenated, the browser normalises
@@ -1067,12 +1079,42 @@ export function MarkdownPreviewOverlay({
              * rulings, and the two would start to drift. */
             diffPair === null ? (
               <div className="md-preview__status">{t.chat.mdPreview.loading}</div>
+            ) : diffSide !== null ? (
+              /* ONE side, on its own. `pre` and not Markdown on purpose: what a
+               * side IS here is the exact text that went into the comparison,
+               * and rendering it would hide the very whitespace and markers the
+               * reader came to check. */
+              <div className="md-preview__side" data-testid="md-preview-diff-side">
+                <button
+                  type="button"
+                  className="md-preview__side-back"
+                  data-testid="md-preview-diff-side-back"
+                  onClick={() => setDiffSide(null)}
+                >
+                  {t.chat.mdPreview.diffSideBack}
+                </button>
+                <div
+                  className="md-preview__side-title"
+                  data-testid="md-preview-diff-side-title"
+                >
+                  {(diffSide === "before"
+                    ? diffPair.beforeLabel
+                    : diffPair.afterLabel) ??
+                    (diffSide === "before" ? t.diff.beforeLabel : t.diff.afterLabel)}
+                </div>
+                <pre className="md-preview__text">
+                  {diffSide === "before" ? diffPair.before : diffPair.after}
+                </pre>
+              </div>
             ) : (
               <DiffView
                 before={diffPair.before}
                 after={diffPair.after}
                 beforeLabel={diffPair.beforeLabel}
                 afterLabel={diffPair.afterLabel}
+                onOpenSide={setDiffSide}
+                mode={diffMode}
+                onModeChange={setDiffMode}
                 testId="md-preview-diff"
               />
             )
