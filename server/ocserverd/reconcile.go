@@ -1461,6 +1461,16 @@ func (s *apiServer) armDecidedHandover(memberID string, decision reconcileDecisi
 	if err := s.persistMemberWindDownAnchors(*fresh); err != nil {
 		reconcileLog("%s: %s wind-down ANCHOR write failed, row write not attempted: %v",
 			memberID, decision.ArmHandoverOp, err)
+		// 🔴 THE RETURN IS THE POINT, and this site is the one that needed it
+		// spelled out: the four sibling sites are inside loops and `continue` on
+		// the same failure, so the guard there is structural. Here it is not.
+		// Falling through would run the whole-row write, which FANS THE MEMBER
+		// DELTA — and the recycle hook in cli/ocagent keys on that delta to go
+		// read refocus_since. It would read 0, conclude no wind-down was armed,
+		// and the arm would silently evaporate. The next tick re-decides, so
+		// bailing here costs one tick; fanning a delta for an epoch that is not
+		// on the row costs the arm.
+		return
 	}
 	if err := s.putMember(*fresh, triggerServer); err != nil {
 		reconcileLog("%s: %s wind-down arm persist failed: %v",

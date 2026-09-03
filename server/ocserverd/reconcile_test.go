@@ -41,9 +41,12 @@ func testAgent(id string) Member {
 // which is what every caller has always meant by it.
 //
 // 🔴 THE SECOND WRITE IS NOT REDUNDANT (T-55). The four wind-down anchors left
-// PutMember's DO UPDATE SET, so on a row that already exists the upsert above
-// carries 31 columns and silently drops stopping_since / stopped_since /
-// refocus_since / refocus_op. Fixtures that re-seed a row to open or close a
+// PutMember's DO UPDATE SET, so on a row that ALREADY EXISTS the upsert above
+// silently drops stopping_since / stopped_since / refocus_since / refocus_op.
+// (An earlier version of this sentence said the upsert "carries 31 columns".
+// That was the INSERT list minus four; the DO UPDATE SET list is shorter still,
+// because every other migrated column is missing from it too. The count is not
+// restated here — singleColumnOwnedFields is the enforced answer.) Fixtures that re-seed a row to open or close a
 // wind-down — and there are dozens — would then be asserting against anchors
 // they never actually planted, and the tests would go GREEN while testing
 // nothing. Planting them through their sole writer is what keeps the helper's

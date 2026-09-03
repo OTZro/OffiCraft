@@ -71,13 +71,19 @@ func TestWindDownAnchors_LandBeforeTheRowWriteThatFansTheDelta(t *testing.T) {
 	}
 
 	// 🔴 THE ASSERTION THIS FILE EXISTS FOR.
+	//
+	// It proves the ORDER mechanically: desired_state can only still be online if
+	// the whole-row write never ran, and it never ran because the anchor write
+	// failed first. 下線 is used because it is the one face that moves both a
+	// carried column and an anchor, which is what makes the proxy readable at all
+	// — the consumer-side half of the argument (that a delta fanned ahead of the
+	// anchors is a WRONG ANSWER, not just an untidy one) is pinned separately on
+	// the refocus face, where the hook that reads these columns actually keys.
 	got, _ := s.dal.GetMember("m-anchor-order")
 	if got == nil || got.DesiredState != before.DesiredState {
 		t.Fatalf("desired_state = %q after the failed anchor write, want it "+
-			"UNCHANGED (%q). The anchors must land BEFORE the whole-row write: "+
-			"that write fans the member delta, and the wind-down hook keys on the "+
-			"delta to go read these four columns — so a delta sent ahead of them "+
-			"tells the agent there is no wind-down in progress",
+			"UNCHANGED (%q) — the whole-row write must not have run, because the "+
+			"anchors land before it",
 			got.DesiredState, before.DesiredState)
 	}
 
@@ -235,9 +241,13 @@ func TestEveryWindDownFacePersistsItsAnchors(t *testing.T) {
 // TestFixtureSeeds_ReallyPlantTheAnchors is a tripwire on THE FIX, not on the
 // product code.
 //
-// Nineteen fixtures across this suite plus the two shared helpers now plant the
-// four anchors through their sole writer, because a whole-row fixture write can
-// no longer move them. Those seeds have the SAME failure mode as the thing they
+// Fixtures across this suite — the shared helpers and a long tail of direct call
+// sites — now plant the four anchors through their sole writer, because a
+// whole-row fixture write can no longer move them. (No count is given: the first
+// version of this comment said "nineteen fixtures plus the two shared helpers"
+// and both numbers were wrong within the same change — there is a THIRD helper of
+// that shape, putGateMember, and an independent review is what found it. An
+// unenforced count in a comment is a claim nobody re-checks.) Those seeds have the SAME failure mode as the thing they
 // repair: get a field wrong, drop one, let a later write clobber them, and the
 // residue is 0/"" — which is indistinguishable from never having seeded at all.
 // The tests that depend on them would go green having exercised the wrong state.
@@ -321,4 +331,74 @@ func TestFixtureSeeds_ReallyPlantTheAnchors(t *testing.T) {
 		// is planting somewhere nothing reads.
 		assertPlanted(t, s, "ow-seed", "seedWorkerAnchors")
 	})
+}
+
+// TestRefocusFansNoDeltaWhenItsAnchorWriteFails is the CONSUMER-SIDE half, and it
+// is on the face where the argued race is real.
+//
+// The ordering test above proves the two writes happen in the stated order. This
+// one proves WHY that order matters, and it has to be a different face to do it:
+// the wind-down hook (cli/ocagent shouldWindDown) refetches only desired_state,
+// which still rides the whole-row write — so on 下線 the order is invisible to the
+// agent. The RECYCLE hook is the one that refetches the row and reads
+// refocus_since, and refocus is its face. Fan a member delta for a refocus whose
+// epoch has not landed and that hook reads 0, concludes nothing was armed, and
+// the owner's 重新聚焦 evaporates with a 200 already sent.
+//
+// So: block the anchor write, drive refocus, and assert NO member delta was
+// fanned. Under the reversed order the row write runs, the delta goes out, and
+// the agent is told to go look at an epoch that is not there.
+//
+// The retry at the end is the positive control — without it "no frame" would also
+// be satisfied by a listener that never receives anything.
+func TestRefocusFansNoDeltaWhenItsAnchorWriteFails(t *testing.T) {
+	s := newReconcileTestServer(t)
+	putWarden(t, s, "mach-a")
+	m := testAgent("m-refocus-order")
+	m.DesiredMachineID = "mach-a"
+	putTestMember(t, s, m)
+	l := connectOnline(t, s, "m-refocus-order")
+	drainHubFrames(l)
+
+	if _, err := s.dal.wdb.Exec(`CREATE TRIGGER t55c_block_refocus
+		BEFORE UPDATE OF refocus_since ON member
+		BEGIN SELECT RAISE(ABORT, 't55c: anchor write blocked'); END;`); err != nil {
+		t.Fatalf("install the blocking trigger: %v", err)
+	}
+
+	refocus := func() *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		s.HandleRefocusMemberApiMembersMemberIdRefocusPost(rec,
+			taskReq(t, "POST", "/api/members/m-refocus-order/refocus", nil,
+				wireOwnerID, "owner"), "m-refocus-order")
+		return rec
+	}
+
+	if rec := refocus(); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("a blocked anchor write must fail the request, got %d %s",
+			rec.Code, rec.Body.String())
+	}
+	assertNoFrame(t, l, "a refocus whose epoch never landed")
+	if got, _ := s.dal.GetMember("m-refocus-order"); got == nil || got.RefocusSince != 0 {
+		t.Fatalf("fixture is blind: the blocked write must have left refocus_since at 0, got %v",
+			got.RefocusSince)
+	}
+
+	if _, err := s.dal.wdb.Exec(`DROP TRIGGER t55c_block_refocus`); err != nil {
+		t.Fatalf("drop the blocking trigger: %v", err)
+	}
+
+	// POSITIVE CONTROL: the same call, unblocked, must land the epoch AND fan.
+	if rec := refocus(); rec.Code != http.StatusOK {
+		t.Fatalf("retry: %d %s", rec.Code, rec.Body.String())
+	}
+	after, _ := s.dal.GetMember("m-refocus-order")
+	if after == nil || after.RefocusSince <= 0 || after.RefocusOp != refocusOpRefocus {
+		t.Fatalf("the retry must arm the epoch, got since=%v op=%q",
+			after.RefocusSince, after.RefocusOp)
+	}
+	if l.pop() == nil {
+		t.Fatal("control broken: a SUCCESSFUL refocus fanned no frame either, so " +
+			"the no-frame assertion above proved nothing about ordering")
+	}
 }

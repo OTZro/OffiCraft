@@ -88,6 +88,21 @@ func (s *apiServer) persistMemberOpReceipt(m Member, trigger string) error {
 //
 // On a row that does not exist yet the UPDATE is a clean no-op and PutMember's
 // INSERT carries the four itself, so the order is correct for a new row too.
+//
+// ⚠️ WHAT THIS ORDER COSTS, said plainly because an independent review had to ask
+// for it. The failure used to be atomic: one write, so it either happened or it
+// did not. Now the anchors are already DURABLE when the row write fails, and that
+// is a state that could not exist before: the row is on a wind-down rung with
+// whatever clock that rung carries, NO delta was fanned, and the owner got a 500.
+// It is bounded and recoverable — an equal-rank verb re-stamps, and any later
+// write to the row fans a delta that wakes the hook — but the ladder gate
+// (winddownStageMayAdvanceTo) refuses a LOWER rung, so after a failed 加速停止 the
+// owner's plain 重新聚焦 bounces until 加速停止 is pressed again.
+//
+// The order is still the right side of the trade: the failure it prevents (the
+// agent reads "no wind-down" and never stops) is unbounded and silent, while the
+// one it creates is bounded, visible as a 500, and re-armable. That is the
+// argument — not that this direction is free.
 func (s *apiServer) persistMemberWindDownAnchors(m Member) error {
 	return s.dal.SetMemberWindDownAnchors(m.ID, m.StoppingSince, m.StoppedSince,
 		m.RefocusSince, m.RefocusOp)
