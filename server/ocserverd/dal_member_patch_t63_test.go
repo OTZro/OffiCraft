@@ -149,9 +149,22 @@ func TestPatchMemberUnknownIDIsACleanNoOp(t *testing.T) {
 	}
 }
 
-// TestTheThreeNULLRulesStoreRealSQLNULL is the guard the round-trip test above
-// structurally CANNOT be: "" and SQL NULL both scan back as the zero value, so
-// no amount of comparing Members can tell them apart. It asks the database.
+// TestTheThreeNULLRulesStoreRealSQLNULL asks the DATABASE what was stored,
+// because a Member-level comparison is the wrong instrument here — for ONE of
+// the three columns it is the wrong instrument in principle, and for the other
+// two it was merely the wrong fixture.
+//
+// 🔴 THAT DISTINCTION IS WORTH GETTING RIGHT, because the first version of this
+// comment collapsed the two cases and taught something false. scanMember reads
+// linked_task_id and last_op_ok through sql.NullString / sql.NullBool and only
+// assigns the pointer when Valid, so NULL and the zero value ARE distinguishable
+// in a Member — seeding a non-zero value first would have caught those two.
+// codename is the one that is structurally invisible: scanMember assigns
+// codename.String unconditionally, so SQL NULL and "" both arrive as "", and no
+// comparison of Members can ever tell them apart.
+//
+// Asking the database covers all three the same way and does not depend on which
+// case each column happens to be in.
 //
 // The rules matter for three different reasons. codename "" → NULL keeps the
 // PARTIAL UNIQUE codename index from colliding across the many codename-less
@@ -178,6 +191,16 @@ func TestTheThreeNULLRulesStoreRealSQLNULL(t *testing.T) {
 		return n == 1
 	}
 	cols := []string{"codename", "linked_task_id", "last_op_ok"}
+	// Each column's OWN consequence. Printing one column's rationale for all
+	// three is how a failure message starts teaching the wrong thing.
+	whyNULL := map[string]string{
+		"codename": "the partial UNIQUE codename index collides across every " +
+			"codename-less staff row once they stop being mutually-distinct NULLs",
+		"linked_task_id": `"" is a task id nothing can join on, so an unbound ` +
+			"member starts matching rows it has no binding to",
+		"last_op_ok": `false means "the op failed"; NULL means "no op reported ` +
+			`yet", and the cockpit renders those differently`,
+	}
 
 	t.Run("through the whole-row INSERT", func(t *testing.T) {
 		d := newTestDAL(t)
@@ -190,10 +213,9 @@ func TestTheThreeNULLRulesStoreRealSQLNULL(t *testing.T) {
 		}
 		for _, c := range cols {
 			if !isNull(t, d, "m-1", c) {
-				t.Errorf("member.%s stored a zero VALUE where the rule says SQL NULL. "+
-					"The rule lives on that column's constructor in "+
-					"dal_member_patch.go; for codename this is what stops the partial "+
-					"UNIQUE index colliding across every codename-less row.", c)
+				t.Errorf("member.%s stored a zero VALUE where the rule says SQL NULL: %s. "+
+					"The rule lives on that column's constructor in dal_member_patch.go.",
+					c, whyNULL[c])
 			}
 		}
 	})
@@ -237,8 +259,8 @@ func TestTheThreeNULLRulesStoreRealSQLNULL(t *testing.T) {
 // do it through PatchMember.
 //
 // MUTANT: make patchMemberOn skip fields flagged insertOnly. Without this test
-// the new file stays green (the behavioural fallout lands two packages away, in
-// the agent-iat-floor and owner-intent guards), and the doc comment on
+// the new file stays green (the behavioural fallout lands in OTHER FILES of this
+// same package — the agent-iat-floor and owner-intent guards), and the doc comment on
 // memberField would be describing a property nothing checked.
 func TestInsertOnlyDoesNotSuppressAColumnTheCallerNAMES(t *testing.T) {
 	d := newTestDAL(t)
