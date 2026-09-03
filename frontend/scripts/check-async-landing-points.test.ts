@@ -87,7 +87,10 @@ describe("check-async-landing-points", () => {
   it("reddens when a landing point DISAPPEARS, so the register cannot describe code that is gone", () => {
     const { code, out } = run((edit) =>
       edit("hooks/useAttachmentStaging.ts", (code) =>
-        code.replace("const reader = new FileReader();", "const reader = fr();"),
+        code.replace(
+          "const reader = new FileReader();",
+          "const reader = fr();",
+        ),
       ),
     );
     expect(code, out).not.toBe(0);
@@ -114,7 +117,7 @@ describe("check-async-landing-points", () => {
       edit(CHAT_AREA, (code) =>
         code.replace(
           "export function ChatArea({",
-          'const liveComposers = new Map<string, () => void>();\nexport function ChatArea({',
+          "const liveComposers = new Map<string, () => void>();\nexport function ChatArea({",
         ),
       ),
     );
@@ -129,7 +132,9 @@ describe("check-async-landing-points", () => {
       ),
     );
     expect(code, out).not.toBe(0);
-    expect(out).toContain("registered module-level state that no longer exists");
+    expect(out).toContain(
+      "registered module-level state that no longer exists",
+    );
     expect(out).toContain("lib/chatDraftStore.ts | drafts");
   });
 
@@ -139,20 +144,62 @@ describe("check-async-landing-points", () => {
   // separate cases rather than folded together because each one is a different
   // author writing the same table in the spelling that came naturally.
   describe.each([
-    ["an array-literal table", "const liveComposers: { peerId: string; repaint: () => void }[] = [];"],
-    ["an object-literal table", "const liveComposers: Record<string, () => void> = {};"],
-    ["a Map seeded from an expression", "const liveComposers = new Map<string, () => void>(Object.entries({}));"],
-    ["the registered shape with a trailing comment", "const liveComposers = new Map<string, () => void>(); // per-room repaint table"],
+    [
+      "an array-literal table",
+      "const liveComposers: { peerId: string; repaint: () => void }[] = [];",
+    ],
+    [
+      "an object-literal table",
+      "const liveComposers: Record<string, () => void> = {};",
+    ],
+    [
+      "a Map seeded from an expression",
+      "const liveComposers = new Map<string, () => void>(Object.entries({}));",
+    ],
+    [
+      "the registered shape with a trailing comment",
+      "const liveComposers = new Map<string, () => void>(); // per-room repaint table",
+    ],
   ])("a second per-room table written as %s", (_name, decl) => {
     it("reddens", () => {
       const { code, out } = run((edit) =>
         edit(CHAT_AREA, (code) =>
-          code.replace("export function ChatArea({", `${decl}\nexport function ChatArea({`),
+          code.replace(
+            "export function ChatArea({",
+            `${decl}\nexport function ChatArea({`,
+          ),
         ),
       );
       expect(code, out).not.toBe(0);
       expect(out).toContain("components/ChatArea.tsx | liveComposers");
     });
+  });
+
+  it("reddens on a per-room table mutated THROUGH a getter, the fifth evasion (R17 A-7)", () => {
+    // The seventeenth review measured this one green. It defeats both of the
+    // clauses that would otherwise catch it, and it does so honestly rather than
+    // by spelling: the seed is non-empty, so "an empty container is a promise to
+    // write to it" does not fire; and the receiver of `.push` is a CallExpression
+    // under a `!`, so the write-through clause — which used to require a bare
+    // identifier there — did not see a name to attribute it to.
+    //
+    // It matters more than the four shapes already listed as out of reach,
+    // because it is the one a person would REACH FOR: seeding a table and then
+    // appending into a room's slot is ordinary code, not a way around a check.
+    // It was also missing from the ceiling list, which made the list itself
+    // misleading — four named shapes read as the whole boundary.
+    const { code, out } = run((edit) =>
+      edit(CHAT_AREA, (code) =>
+        code.replace(
+          "export function ChatArea({",
+          'const roomBuf = new Map<string, string[]>([["seed", []]]);\n' +
+            "function stashForRoom(peer: string, v: string) { roomBuf.get(peer)!.push(v); }\n" +
+            "export function ChatArea({",
+        ),
+      ),
+    );
+    expect(code, out).not.toBe(0);
+    expect(out).toContain("components/ChatArea.tsx | roomBuf");
   });
 
   it("reddens on a per-room table in src/api, which the state census walks and the await census does not (R16 D-3)", () => {
@@ -164,7 +211,7 @@ describe("check-async-landing-points", () => {
       edit("api/http.ts", (code) =>
         code.replace(
           "let sseSource",
-          'const lastSeenPerRoom = new Map<string, string>();\nlet sseSource',
+          "const lastSeenPerRoom = new Map<string, string>();\nlet sseSource",
         ),
       ),
     );

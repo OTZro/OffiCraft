@@ -100,7 +100,11 @@ const SRC = process.env.ASYNC_LANDING_SRC
   ? resolve(process.env.ASYNC_LANDING_SRC)
   : resolve(dirname(fileURLToPath(import.meta.url)), "..", "src");
 const ENTRY = join(SRC, "components", "ChatArea.tsx");
-const rel = (file) => file.slice(SRC.length + 1).split("\\").join("/");
+const rel = (file) =>
+  file
+    .slice(SRC.length + 1)
+    .split("\\")
+    .join("/");
 
 // 🔴 TWO POPULATIONS, TWO BOUNDARIES, WRITTEN DOWN SEPARATELY (T-48, R16 D-3).
 // There used to be one `inScope`, excluding `src/api`, and the reason recorded
@@ -191,39 +195,178 @@ const REGISTRY = [
   //     UNMOUNTS them, so React drops every write these make. ───
   // ⚠️ The key is the ONLY thing saving these: none of them carries a guard of
   // its own. Hoisting any of them above the keyed element reopens R9-1's shape.
-  { file: "components/AttachmentStrip.tsx", kind: ".then/.catch/.finally", count: 2, verdict: "share-link copy; keyed row, and the id is globally unique" },
-  { file: "components/AttachmentStrip.tsx", kind: "setTimeout/setInterval", count: 1, verdict: "the 已複製 flash; keyed row, cleared on unmount" },
-  { file: "components/ChatReplyCard.tsx", kind: "await", count: 4, verdict: "refetch / doAnswer / doReanswer; keyed row" },
-  { file: "components/ChatReplyCard.tsx", kind: ".then/.catch/.finally", count: 2, verdict: "the same three calls' arms; keyed row, unmounted by the switch" },
-  { file: "components/ChatReplyCard.tsx", kind: "subscribe", count: 1, verdict: "card SSE; unsubscribed in the effect cleanup" },
-  { file: "components/ReplyCardBody.tsx", kind: "await", count: 2, verdict: "answer submit; keyed row / keyed card" },
-  { file: "components/ReplyComposer.tsx", kind: "await", count: 1, verdict: "send; keyed row / keyed card, and its staging declares \"remounts-per-conversation\"" },
+  {
+    file: "components/AttachmentStrip.tsx",
+    kind: ".then/.catch/.finally",
+    count: 2,
+    verdict: "share-link copy; keyed row, and the id is globally unique",
+  },
+  {
+    file: "components/AttachmentStrip.tsx",
+    kind: "setTimeout/setInterval",
+    count: 1,
+    verdict: "the 已複製 flash; keyed row, cleared on unmount",
+  },
+  {
+    file: "components/ChatReplyCard.tsx",
+    kind: "await",
+    count: 4,
+    verdict: "refetch / doAnswer / doReanswer; keyed row",
+  },
+  {
+    file: "components/ChatReplyCard.tsx",
+    kind: ".then/.catch/.finally",
+    count: 2,
+    verdict: "the same three calls' arms; keyed row, unmounted by the switch",
+  },
+  {
+    file: "components/ChatReplyCard.tsx",
+    kind: "subscribe",
+    count: 1,
+    verdict: "card SSE; unsubscribed in the effect cleanup",
+  },
+  {
+    file: "components/ReplyCardBody.tsx",
+    kind: "await",
+    count: 2,
+    verdict: "answer submit; keyed row / keyed card",
+  },
+  {
+    file: "components/ReplyComposer.tsx",
+    kind: "await",
+    count: 1,
+    verdict:
+      'send; keyed row / keyed card, and its staging declares "remounts-per-conversation"',
+  },
 
   // ─── ChatArea itself. Since R13-5 `OfficePage` mounts it under
   //     `key={peerId}`, so a conversation switch unmounts it and every setter
   //     below writes into a component React has discarded. That is what
   //     `lint-chat-area-key` keeps true; there is no per-callback guard left. ──
-  { file: "components/ChatArea.tsx", kind: "await", count: 2, verdict: "submit(); the room's own draft is written to the store BEFORE the on-screen restore, so a failed send survives even when nobody is looking (§3 rule 4)" },
-  { file: "components/ChatArea.tsx", kind: ".then/.catch/.finally", count: 3, verdict: "loadAround + the wake button's two arms; all three write only this room's state, and this room is this mount" },
-  { file: "components/ChatArea.tsx", kind: "setTimeout/setInterval", count: 2, verdict: "highlight clear + centring settle; cleared in the effect cleanup, and the state they write dies with the room" },
-  { file: "components/ChatArea.tsx", kind: "subscribe", count: 1, verdict: "the composer's own draft-TEXT subscription (R14-1.3), onto this peer's slice; a failed send's words are written to the store and this is what puts them back on screen. React unsubscribes on unmount, and the room is this mount" },
-  { file: "components/ChatArea.tsx", kind: "Observer", count: 1, verdict: "centring ResizeObserver; disconnected in the same cleanup" },
-  { file: "hooks/useChat.ts", kind: "await", count: 17, verdict: "one hook instance per room (R13-3), so a commit from a room the owner has left lands in a discarded component; the generation clock is what orders the commits WITHIN a room" },
-  { file: "hooks/useChat.ts", kind: ".then/.catch/.finally", count: 2, verdict: "load()'s arms; the effect's own `alive` flag, re-asked after every await" },
-  { file: "hooks/useChat.ts", kind: "addEventListener", count: 2, verdict: "focus / visibilitychange; removed in the same effect's cleanup" },
-  { file: "hooks/useChat.ts", kind: "subscribe", count: 1, verdict: "the SSE delta sink; unsubscribed in the same cleanup" },
-  { file: "hooks/useQuotedMessageOverlay.tsx", kind: "await", count: 1, verdict: "open(); its state dies with the room that opened it (R13-5), and `busyRef` keeps one click to one request" },
-  { file: "hooks/useAttachmentStaging.ts", kind: "FileReader/Image handler", count: 2, verdict: "🔴 R9-1 lived here with ZERO guard and no `await` to hint at one. Now the commit NAMES ITS SLOT: `updateChatDraftAttachments(peer, …)` writes into the draft of the room the file was picked for, whatever is on screen and whether or not any composer is mounted. R9-1, R10-4 and R11-2 have no shape left to happen in (S12/S13/S14/S18/S19/S20)" },
-  { file: "hooks/useAttachmentStaging.ts", kind: "subscribe", count: 1, verdict: "the one `subscribe` callback both `useSyncExternalStore` calls share, onto this peer's draft slice; React unsubscribes on unmount, and a per-mount caller gets `peerId === null` and subscribes to nothing at all" },
-  { file: "lib/chatDraftStore.ts", kind: "subscribe", count: 1, verdict: "the per-peer draft subscription; each composer unsubscribes on unmount, and a write is delivered to whoever is showing that peer — which is the point" },
-  { file: "lib/chatDraftStore.ts", kind: "queueMicrotask", count: 1, verdict: "the chat page's notice scope closing one microtask late (R16 D-2), so StrictMode's synchronous setup→cleanup→setup cannot destroy a refusal raised before the mount. It drops only the peers that had a notice AT CLOSE TIME, so a FileReader landing in that gap is not swept up by a decision that predates it, and it bails if a surface reopened the scope" },
+  {
+    file: "components/ChatArea.tsx",
+    kind: "await",
+    count: 2,
+    verdict:
+      "submit(); the room's own draft is written to the store BEFORE the on-screen restore, so a failed send survives even when nobody is looking (§3 rule 4)",
+  },
+  {
+    file: "components/ChatArea.tsx",
+    kind: ".then/.catch/.finally",
+    count: 3,
+    verdict:
+      "loadAround + the wake button's two arms; all three write only this room's state, and this room is this mount",
+  },
+  {
+    file: "components/ChatArea.tsx",
+    kind: "setTimeout/setInterval",
+    count: 2,
+    verdict:
+      "highlight clear + centring settle; cleared in the effect cleanup, and the state they write dies with the room",
+  },
+  {
+    file: "components/ChatArea.tsx",
+    kind: "subscribe",
+    count: 1,
+    verdict:
+      "the composer's own draft-TEXT subscription (R14-1.3), onto this peer's slice; a failed send's words are written to the store and this is what puts them back on screen. React unsubscribes on unmount, and the room is this mount",
+  },
+  {
+    file: "components/ChatArea.tsx",
+    kind: "Observer",
+    count: 1,
+    verdict: "centring ResizeObserver; disconnected in the same cleanup",
+  },
+  {
+    file: "hooks/useChat.ts",
+    kind: "await",
+    count: 17,
+    verdict:
+      "one hook instance per room (R13-3), so a commit from a room the owner has left lands in a discarded component; the generation clock is what orders the commits WITHIN a room",
+  },
+  {
+    file: "hooks/useChat.ts",
+    kind: ".then/.catch/.finally",
+    count: 2,
+    verdict:
+      "load()'s arms; the effect's own `alive` flag, re-asked after every await",
+  },
+  {
+    file: "hooks/useChat.ts",
+    kind: "addEventListener",
+    count: 2,
+    verdict: "focus / visibilitychange; removed in the same effect's cleanup",
+  },
+  {
+    file: "hooks/useChat.ts",
+    kind: "subscribe",
+    count: 1,
+    verdict: "the SSE delta sink; unsubscribed in the same cleanup",
+  },
+  {
+    file: "hooks/useQuotedMessageOverlay.tsx",
+    kind: "await",
+    count: 1,
+    verdict:
+      "open(); its state dies with the room that opened it (R13-5), and `busyRef` keeps one click to one request",
+  },
+  {
+    file: "hooks/useAttachmentStaging.ts",
+    kind: "FileReader/Image handler",
+    count: 2,
+    verdict:
+      "🔴 R9-1 lived here with ZERO guard and no `await` to hint at one. Now the commit NAMES ITS SLOT: `updateChatDraftAttachments(peer, …)` writes into the draft of the room the file was picked for, whatever is on screen and whether or not any composer is mounted. R9-1, R10-4 and R11-2 have no shape left to happen in (S12/S13/S14/S18/S19/S20)",
+  },
+  {
+    file: "hooks/useAttachmentStaging.ts",
+    kind: "subscribe",
+    count: 1,
+    verdict:
+      "the one `subscribe` callback both `useSyncExternalStore` calls share, onto this peer's draft slice; React unsubscribes on unmount, and a per-mount caller gets `peerId === null` and subscribes to nothing at all",
+  },
+  {
+    file: "lib/chatDraftStore.ts",
+    kind: "subscribe",
+    count: 1,
+    verdict:
+      "the per-peer draft subscription; each composer unsubscribes on unmount, and a write is delivered to whoever is showing that peer — which is the point",
+  },
+  {
+    file: "lib/chatDraftStore.ts",
+    kind: "queueMicrotask",
+    count: 1,
+    verdict:
+      "the chat page's notice scope closing one microtask late (R16 D-2), so StrictMode's synchronous setup→cleanup→setup cannot destroy a refusal raised before the mount. It drops only the peers that had a notice AT CLOSE TIME, so a FileReader landing in that gap is not swept up by a decision that predates it, and it bails if a surface reopened the scope",
+  },
 
   // ─── Rendered by ChatArea without a key of their own — they live and die
   //     with ChatArea, which lives and dies with the conversation. ───
-  { file: "components/ChatGalleryPanel.tsx", kind: ".then/.catch/.finally", count: 2, verdict: "gallery fetch; `alive` + deps [member.id], and the panel dies with the room" },
-  { file: "components/ChatGalleryPanel.tsx", kind: "addEventListener", count: 1, verdict: "Escape layer; removed on unmount" },
-  { file: "components/ChatGalleryPanel.tsx", kind: "subscribe", count: 1, verdict: "gallery SSE; unsubscribed on unmount" },
-  { file: "components/Avatar.tsx", kind: "JSX onLoad/onError", count: 1, verdict: "<img onError>; records the URL that failed, which can never match another avatar, and the [personal, theme] effect clears it" },
+  {
+    file: "components/ChatGalleryPanel.tsx",
+    kind: ".then/.catch/.finally",
+    count: 2,
+    verdict:
+      "gallery fetch; `alive` + deps [member.id], and the panel dies with the room",
+  },
+  {
+    file: "components/ChatGalleryPanel.tsx",
+    kind: "addEventListener",
+    count: 1,
+    verdict: "Escape layer; removed on unmount",
+  },
+  {
+    file: "components/ChatGalleryPanel.tsx",
+    kind: "subscribe",
+    count: 1,
+    verdict: "gallery SSE; unsubscribed on unmount",
+  },
+  {
+    file: "components/Avatar.tsx",
+    kind: "JSX onLoad/onError",
+    count: 1,
+    verdict:
+      "<img onError>; records the URL that failed, which can never match another avatar, and the [personal, theme] effect clears it",
+  },
   // ⚠️ WHO UNMOUNTS THIS OVERLAY — four mount points, two owners, and the
   // eleventh review caught this line claiming one of them for all four (R11-10).
   // `ChatArea` mounts it three times from `mdPreview`; `AttachmentStrip` mounts
@@ -232,11 +375,39 @@ const REGISTRY = [
   // task-artifacts popover. That one is bounded instead by the list it renders:
   // the preview is looked up in `attachments` every render, so it cannot survive
   // the list it was opened from (R11-1).
-  { file: "components/MarkdownPreviewOverlay.tsx", kind: "await", count: 1, verdict: "share-link copy; writes only this overlay's own state, and the overlay dies with whatever opened it" },
-  { file: "components/MarkdownPreviewOverlay.tsx", kind: ".then/.catch/.finally", count: 5, verdict: "blob fetch + copy; writes only this overlay's own state, and the overlay dies with whatever opened it" },
-  { file: "components/MarkdownPreviewOverlay.tsx", kind: "setTimeout/setInterval", count: 2, verdict: "the 已複製 flash timers; write only this overlay's own state" },
-  { file: "components/MarkdownPreviewOverlay.tsx", kind: "addEventListener", count: 13, verdict: "keydown pager, wheel/touch/gesture zoom, resize, pointermove; all removed on unmount, and the overlay unmounts with whatever opened it" },
-  { file: "components/MarkdownPreviewOverlay.tsx", kind: "JSX onLoad/onError", count: 1, verdict: "<img onLoad> sizing; writes only this overlay's own layout" },
+  {
+    file: "components/MarkdownPreviewOverlay.tsx",
+    kind: "await",
+    count: 1,
+    verdict:
+      "share-link copy; writes only this overlay's own state, and the overlay dies with whatever opened it",
+  },
+  {
+    file: "components/MarkdownPreviewOverlay.tsx",
+    kind: ".then/.catch/.finally",
+    count: 5,
+    verdict:
+      "blob fetch + copy; writes only this overlay's own state, and the overlay dies with whatever opened it",
+  },
+  {
+    file: "components/MarkdownPreviewOverlay.tsx",
+    kind: "setTimeout/setInterval",
+    count: 2,
+    verdict: "the 已複製 flash timers; write only this overlay's own state",
+  },
+  {
+    file: "components/MarkdownPreviewOverlay.tsx",
+    kind: "addEventListener",
+    count: 13,
+    verdict:
+      "keydown pager, wheel/touch/gesture zoom, resize, pointermove; all removed on unmount, and the overlay unmounts with whatever opened it",
+  },
+  {
+    file: "components/MarkdownPreviewOverlay.tsx",
+    kind: "JSX onLoad/onError",
+    count: 1,
+    verdict: "<img onLoad> sizing; writes only this overlay's own layout",
+  },
   // ⚠️ READ THIS BEFORE TRUSTING ANY VERDICT HERE. The five rows above used to
   // point at an exemption reading: `.md-preview` is `position: fixed; inset: 0`
   // with a backdrop, so while it is open nothing can change the peer. It was
@@ -247,19 +418,91 @@ const REGISTRY = [
   // theoretical one.
 
   // ─── Global / conversation-independent ───
-  { file: "hooks/sharedServerSettings.ts", kind: "addEventListener", count: 2, verdict: "storage + auth invalidation; global, not per conversation" },
-  { file: "hooks/useIsMobile.ts", kind: "addEventListener", count: 1, verdict: "matchMedia breakpoint; global" },
-  { file: "hooks/useWindowActive.ts", kind: "addEventListener", count: 3, verdict: "focus/blur/visibility; global" },
-  { file: "hooks/useOwnerName.tsx", kind: ".then/.catch/.finally", count: 4, verdict: "the owner's own nickname; global, one provider" },
-  { file: "hooks/useWorkerCodenames.ts", kind: ".then/.catch/.finally", count: 2, verdict: "module-level cache keyed by globally-unique `ow-` ids; setTick only asks for a repaint" },
-  { file: "lib/deltaSink.ts", kind: "queueMicrotask", count: 1, verdict: "one coalescing decision per burst; the sink is torn down with its subscription" },
-  { file: "lib/escapeLayers.ts", kind: "addEventListener", count: 1, verdict: "the shared Escape stack; layers deregister on unmount" },
-  { file: "lib/hashRoute.ts", kind: "addEventListener", count: 1, verdict: "hashchange; it is the thing that CHANGES the conversation, not something that outlives one" },
-  { file: "lib/hashRoute.ts", kind: "subscribe", count: 1, verdict: "route subscribers; same" },
-  { file: "lib/scrollToLatest.ts", kind: "setTimeout/setInterval", count: 1, verdict: "settle timer; writes scrollTop on an element handed in by the caller, and the caller clears it" },
-  { file: "lib/scrollToLatest.ts", kind: "Observer", count: 1, verdict: "ResizeObserver on that same element; disconnected by the same caller" },
-  { file: "lib/shareLink.ts", kind: "await", count: 3, verdict: "returns a value to its caller; commits nothing itself. The count was 2 while this census counted LINES — one line here holds two awaits (R10-5 B5)" },
-  { file: "lib/sharedSnapshot.ts", kind: ".then/.catch/.finally", count: 1, verdict: "single-flight settings snapshot; global generation, not per conversation" },
+  {
+    file: "hooks/sharedServerSettings.ts",
+    kind: "addEventListener",
+    count: 2,
+    verdict: "storage + auth invalidation; global, not per conversation",
+  },
+  {
+    file: "hooks/useIsMobile.ts",
+    kind: "addEventListener",
+    count: 1,
+    verdict: "matchMedia breakpoint; global",
+  },
+  {
+    file: "hooks/useWindowActive.ts",
+    kind: "addEventListener",
+    count: 3,
+    verdict: "focus/blur/visibility; global",
+  },
+  {
+    file: "hooks/useOwnerName.tsx",
+    kind: ".then/.catch/.finally",
+    count: 4,
+    verdict: "the owner's own nickname; global, one provider",
+  },
+  {
+    file: "hooks/useWorkerCodenames.ts",
+    kind: ".then/.catch/.finally",
+    count: 2,
+    verdict:
+      "module-level cache keyed by globally-unique `ow-` ids; setTick only asks for a repaint",
+  },
+  {
+    file: "lib/deltaSink.ts",
+    kind: "queueMicrotask",
+    count: 1,
+    verdict:
+      "one coalescing decision per burst; the sink is torn down with its subscription",
+  },
+  {
+    file: "lib/escapeLayers.ts",
+    kind: "addEventListener",
+    count: 1,
+    verdict: "the shared Escape stack; layers deregister on unmount",
+  },
+  {
+    file: "lib/hashRoute.ts",
+    kind: "addEventListener",
+    count: 1,
+    verdict:
+      "hashchange; it is the thing that CHANGES the conversation, not something that outlives one",
+  },
+  {
+    file: "lib/hashRoute.ts",
+    kind: "subscribe",
+    count: 1,
+    verdict: "route subscribers; same",
+  },
+  {
+    file: "lib/scrollToLatest.ts",
+    kind: "setTimeout/setInterval",
+    count: 1,
+    verdict:
+      "settle timer; writes scrollTop on an element handed in by the caller, and the caller clears it",
+  },
+  {
+    file: "lib/scrollToLatest.ts",
+    kind: "Observer",
+    count: 1,
+    verdict:
+      "ResizeObserver on that same element; disconnected by the same caller",
+  },
+  {
+    file: "lib/shareLink.ts",
+    kind: "await",
+    count: 3,
+    verdict:
+      "returns a value to its caller; commits nothing itself. The count was 2 while this census counted LINES — one line here holds two awaits (R10-5 B5)",
+  },
+  {
+    file: "lib/sharedSnapshot.ts",
+    kind: ".then/.catch/.finally",
+    count: 1,
+    verdict:
+      "single-flight settings snapshot; global generation, not per conversation",
+  },
 ];
 
 /** MODULE-LEVEL MUTABLE STATE, across the whole walk (T-48, R14-3.1 / R16 D-3).
@@ -269,8 +512,16 @@ const REGISTRY = [
  * the component state with the room. Each row says WHAT KEYS IT — and "keyed by
  * peer" is the only answer that makes a per-conversation table safe. The
  * deleted `liveComposers` (a second peer-keyed table, in `ChatArea.tsx`, not in
- * the store) is the shape this exists to catch coming back, under any name and
+ * the store) is the shape this exists to catch coming back — under any NAME, and
  * in any file the chat surface imports.
+ *
+ * 🔴 "UNDER ANY NAME" IS THE TRUE HALF; "IN ANY SHAPE" WAS NEVER CLAIMED AND
+ * MUST NOT BE READ IN (R17 A-7). Renaming and moving are closed: the rule is
+ * about declarations and write-throughs, not about spellings. The SHAPE of the
+ * declaration is a different axis and it has a ceiling, written out on
+ * scanModuleState. This sentence used to run the two together, and sixty lines
+ * below it the ceiling contradicted it — two sentences in one file disagreeing
+ * about the same guarantee, with the confident one on top.
  *
  * WHAT COUNTS AS STATE is decided by the AST, not by a line pattern — see
  * `scanModuleState` for the three clauses and, more importantly, for the shapes
@@ -286,32 +537,161 @@ const REGISTRY = [
  * reach another. The eight rows below from `api/http.ts` are the answer to
  * that: the SSE transport is exactly where a per-room cache would be put. */
 const MODULE_STATE = [
-  { file: "api/http.ts", name: "sseSubscribers", verdict: "the set of delta sinks on the ONE app-wide EventSource; a subscriber is a callback that its own hook removes on unmount, and no room's data is stored here — only who to hand a delta to" },
-  { file: "api/http.ts", name: "sseSource", verdict: "the single live EventSource, or null; a connection is not per conversation and holds no room's value" },
-  { file: "api/http.ts", name: "sseVisibilityHandler", verdict: "the one visibilitychange listener paired with that connection, kept so it can be removed again; global" },
-  { file: "api/http.ts", name: "sseState", verdict: "the connection's own state machine (idle/connecting/open/…); describes the socket, not any room" },
-  { file: "api/http.ts", name: "sseStateSubscribers", verdict: "repaint callbacks for that connection banner; each unsubscribes on unmount, and the value delivered is the socket's state" },
-  { file: "api/http.ts", name: "sseRetryTimer", verdict: "the reconnect backoff timer handle; one connection, one timer, no room in it" },
-  { file: "api/http.ts", name: "sseRetryAttempt", verdict: "the backoff index for that timer; a counter, not a value any room can read back" },
-  { file: "api/http.ts", name: "sseGapPending", verdict: "one boolean saying a resync is owed after a dropped connection; it triggers a refetch in every mounted hook rather than carrying data itself" },
-  { file: "api/errorCodes.ts", name: "ERROR_CODE_VOCABULARY", verdict: "the closed error-code vocabulary, built once from the checked-in spec JSON and only ever asked `.has(…)`; a lookup table, identical for every room" },
-  { file: "hooks/useAttachmentStaging.ts", name: "pendingAttachmentSeq", verdict: "a monotonic key mint for staged rows; carries no per-conversation meaning and is never read back" },
-  { file: "hooks/useAttachmentStaging.ts", name: "NO_ROWS", verdict: "the one empty list handed to a caller with no peer, so `useSyncExternalStore` sees a stable snapshot; never written to, and a peerless composer has no room to leak into" },
-  { file: "hooks/useWorkerCodenames.ts", name: "cache", verdict: "keyed by the globally-unique `ow-` worker id, which names one worker in every room alike" },
-  { file: "hooks/useWorkerCodenames.ts", name: "inflight", verdict: "the same `ow-` ids, de-duplicating requests; not per conversation" },
-  { file: "hooks/useWorkerCodenames.ts", name: "listeners", verdict: "repaint callbacks for that global cache; each unsubscribes on unmount" },
-  { file: "lib/chatDraftStore.ts", name: "drafts", verdict: "keyed by PEER — the one table that survives a room switch on purpose, because a draft is what the owner has composed and not yet sent" },
-  { file: "lib/chatDraftStore.ts", name: "attachErrors", verdict: "keyed by PEER, and dropped when the last chat surface closes its scope (R14-2.1 / R16 D-2) so a refusal cannot outlive the surface that raised it" },
-  { file: "lib/chatDraftStore.ts", name: "listeners", verdict: "keyed by PEER; a write notifies only that room's subscribers" },
-  { file: "lib/chatDraftStore.ts", name: "attachErrorScopes", verdict: "how many chat surfaces hold the notice scope open (R16 D-2); a count, so no room's value can be stashed in it — the peers a close will drop live in that close's own closure" },
-  { file: "lib/chatDraftStore.ts", name: "scopeEpoch", verdict: "which scope-close a deferred sweep belongs to, so StrictMode's synchronous remount cancels the sweep its own fake cleanup queued (R16 D-2); a counter, carrying no peer" },
-  { file: "lib/escapeLayers.ts", name: "layers", verdict: "🔴 REGISTERED BY R16 D-3, having been in the walk and invisible to the regex census the whole time. The Esc stack: one entry per dismissible surface, pushed by that surface's effect and spliced out by the same effect's cleanup. Not keyed at all and deliberately so — the owner of a key press is decided by DOM CONTAINMENT at dispatch time, not by any id — and it holds callbacks, never a room's data, so a stale entry is impossible rather than merely unlikely (a forced unmount still runs the cleanup, which is the only release path)" },
-  { file: "lib/escapeLayers.ts", name: "listening", verdict: "one boolean saying whether the shared keydown listener is attached; layers deregister on unmount" },
-  { file: "lib/sharedSnapshot.ts", name: "registry", verdict: "the set of global settings snapshots to reset on auth change; global by definition, not per conversation" },
-  { file: "lib/themeBundleCore.ts", name: "THEME_TOKEN_SET", verdict: "a closed allowlist built once from the generated THEME_COLOR_TOKENS and only ever asked `.has(…)`; a lookup table, identical for every room" },
-  { file: "lib/themeBundleCore.ts", name: "THEME_FONT_TOKEN_SET", verdict: "the same, over THEME_FONT_TOKENS; read-only membership, no room in it" },
-  { file: "lib/themeBundleCore.ts", name: "SAFE_FONT_STACK_SET", verdict: "the same, over SAFE_FONT_FAMILIES' stacks; the font-injection allowlist, read-only" },
-  { file: "lib/themeWording.ts", name: "MESSAGE_KEY_SET", verdict: "a closed allowlist built once from the generated MESSAGE_KEYS and only ever asked `.has(…)`; a lookup table, identical for every room" },
+  {
+    file: "api/http.ts",
+    name: "sseSubscribers",
+    verdict:
+      "the set of delta sinks on the ONE app-wide EventSource; a subscriber is a callback that its own hook removes on unmount, and no room's data is stored here — only who to hand a delta to",
+  },
+  {
+    file: "api/http.ts",
+    name: "sseSource",
+    verdict:
+      "the single live EventSource, or null; a connection is not per conversation and holds no room's value",
+  },
+  {
+    file: "api/http.ts",
+    name: "sseVisibilityHandler",
+    verdict:
+      "the one visibilitychange listener paired with that connection, kept so it can be removed again; global",
+  },
+  {
+    file: "api/http.ts",
+    name: "sseState",
+    verdict:
+      "the connection's own state machine (idle/connecting/open/…); describes the socket, not any room",
+  },
+  {
+    file: "api/http.ts",
+    name: "sseStateSubscribers",
+    verdict:
+      "repaint callbacks for that connection banner; each unsubscribes on unmount, and the value delivered is the socket's state",
+  },
+  {
+    file: "api/http.ts",
+    name: "sseRetryTimer",
+    verdict:
+      "the reconnect backoff timer handle; one connection, one timer, no room in it",
+  },
+  {
+    file: "api/http.ts",
+    name: "sseRetryAttempt",
+    verdict:
+      "the backoff index for that timer; a counter, not a value any room can read back",
+  },
+  {
+    file: "api/http.ts",
+    name: "sseGapPending",
+    verdict:
+      "one boolean saying a resync is owed after a dropped connection; it triggers a refetch in every mounted hook rather than carrying data itself",
+  },
+  {
+    file: "api/errorCodes.ts",
+    name: "ERROR_CODE_VOCABULARY",
+    verdict:
+      "the closed error-code vocabulary, built once from the checked-in spec JSON and only ever asked `.has(…)`; a lookup table, identical for every room",
+  },
+  {
+    file: "hooks/useAttachmentStaging.ts",
+    name: "pendingAttachmentSeq",
+    verdict:
+      "a monotonic key mint for staged rows; carries no per-conversation meaning and is never read back",
+  },
+  {
+    file: "hooks/useAttachmentStaging.ts",
+    name: "NO_ROWS",
+    verdict:
+      "the one empty list handed to a caller with no peer, so `useSyncExternalStore` sees a stable snapshot; never written to, and a peerless composer has no room to leak into",
+  },
+  {
+    file: "hooks/useWorkerCodenames.ts",
+    name: "cache",
+    verdict:
+      "keyed by the globally-unique `ow-` worker id, which names one worker in every room alike",
+  },
+  {
+    file: "hooks/useWorkerCodenames.ts",
+    name: "inflight",
+    verdict:
+      "the same `ow-` ids, de-duplicating requests; not per conversation",
+  },
+  {
+    file: "hooks/useWorkerCodenames.ts",
+    name: "listeners",
+    verdict:
+      "repaint callbacks for that global cache; each unsubscribes on unmount",
+  },
+  {
+    file: "lib/chatDraftStore.ts",
+    name: "drafts",
+    verdict:
+      "keyed by PEER — the one table that survives a room switch on purpose, because a draft is what the owner has composed and not yet sent",
+  },
+  {
+    file: "lib/chatDraftStore.ts",
+    name: "attachErrors",
+    verdict:
+      "keyed by PEER, and dropped when the last chat surface closes its scope (R14-2.1 / R16 D-2) so a refusal cannot outlive the surface that raised it",
+  },
+  {
+    file: "lib/chatDraftStore.ts",
+    name: "listeners",
+    verdict: "keyed by PEER; a write notifies only that room's subscribers",
+  },
+  {
+    file: "lib/chatDraftStore.ts",
+    name: "attachErrorScopes",
+    verdict:
+      "how many chat surfaces hold the notice scope open (R16 D-2); a count, so no room's value can be stashed in it — the peers a close will drop live in that close's own closure",
+  },
+  {
+    file: "lib/chatDraftStore.ts",
+    name: "scopeEpoch",
+    verdict:
+      "which scope-close a deferred sweep belongs to, so StrictMode's synchronous remount cancels the sweep its own fake cleanup queued (R16 D-2); a counter, carrying no peer",
+  },
+  {
+    file: "lib/escapeLayers.ts",
+    name: "layers",
+    verdict:
+      "🔴 REGISTERED BY R16 D-3, having been in the walk and invisible to the regex census the whole time. The Esc stack: one entry per dismissible surface, pushed by that surface's effect and spliced out by the same effect's cleanup. Not keyed at all and deliberately so — the owner of a key press is decided by DOM CONTAINMENT at dispatch time, not by any id — and it holds callbacks, never a room's data, so a stale entry is impossible rather than merely unlikely (a forced unmount still runs the cleanup, which is the only release path)",
+  },
+  {
+    file: "lib/escapeLayers.ts",
+    name: "listening",
+    verdict:
+      "one boolean saying whether the shared keydown listener is attached; layers deregister on unmount",
+  },
+  {
+    file: "lib/sharedSnapshot.ts",
+    name: "registry",
+    verdict:
+      "the set of global settings snapshots to reset on auth change; global by definition, not per conversation",
+  },
+  {
+    file: "lib/themeBundleCore.ts",
+    name: "THEME_TOKEN_SET",
+    verdict:
+      "a closed allowlist built once from the generated THEME_COLOR_TOKENS and only ever asked `.has(…)`; a lookup table, identical for every room",
+  },
+  {
+    file: "lib/themeBundleCore.ts",
+    name: "THEME_FONT_TOKEN_SET",
+    verdict:
+      "the same, over THEME_FONT_TOKENS; read-only membership, no room in it",
+  },
+  {
+    file: "lib/themeBundleCore.ts",
+    name: "SAFE_FONT_STACK_SET",
+    verdict:
+      "the same, over SAFE_FONT_FAMILIES' stacks; the font-injection allowlist, read-only",
+  },
+  {
+    file: "lib/themeWording.ts",
+    name: "MESSAGE_KEY_SET",
+    verdict:
+      "a closed allowlist built once from the generated MESSAGE_KEYS and only ever asked `.has(…)`; a lookup table, identical for every room",
+  },
 ];
 
 /** The ONE caller `useQuotedMessageOverlay` is allowed to have (T-48, R14-1.6).
@@ -372,7 +752,8 @@ const resolveSpec = (fromFile, spec) => {
     // `existsSync` alone matched the DIRECTORY `./foo` for `import "./foo"`,
     // which only ever stayed harmless because the scope filter dropped it
     // before anything tried to read it (R16 D-3).
-    if (existsSync(c) && statSync(c).isFile() && !/\.(css|json|svg)$/.test(c)) return c;
+    if (existsSync(c) && statSync(c).isFile() && !/\.(css|json|svg)$/.test(c))
+      return c;
   }
   return null;
 };
@@ -425,10 +806,28 @@ function walkFromChatArea(scope) {
 
 // ── MODULE-LEVEL MUTABLE STATE, BY AST ───────────────────────────────────────
 const MUTATING_METHODS = new Set([
-  "set", "add", "delete", "clear", "push", "pop", "shift", "unshift",
-  "splice", "sort", "reverse", "fill", "copyWithin",
+  "set",
+  "add",
+  "delete",
+  "clear",
+  "push",
+  "pop",
+  "shift",
+  "unshift",
+  "splice",
+  "sort",
+  "reverse",
+  "fill",
+  "copyWithin",
 ]);
-const CONTAINER_CTORS = new Set(["Map", "Set", "WeakMap", "WeakSet", "Array", "Object"]);
+const CONTAINER_CTORS = new Set([
+  "Map",
+  "Set",
+  "WeakMap",
+  "WeakSet",
+  "Array",
+  "Object",
+]);
 
 const unwrap = (e) => {
   while (
@@ -444,9 +843,29 @@ const unwrap = (e) => {
   return e;
 };
 
+/** The name a write lands ON, dug out from under whatever was wrapped around it.
+ *
+ * 🔴 THE WRAPPERS ARE NOT DECORATION — one of them was a live hole (R17 A-7).
+ * `roomBuf.get(peer)!.push(v)` mutates a per-room table and the census passed it,
+ * because the receiver of `.push` is a CallExpression under a `!` rather than a
+ * bare identifier. That is the FIFTH evasion of this rule and it was not on the
+ * ceiling list, which made the list itself misleading: a reader would have taken
+ * the four named shapes for the whole boundary.
+ *
+ * So this walks calls, non-null assertions, parens and casts as well as property
+ * and element access. It OVER-approximates on purpose — `makeTable().rows.push(x)`
+ * is attributed to `makeTable` — and over-approximating can only ever ADD a row
+ * to the register, never hide one (see mutatedNames). */
 const rootIdentifier = (e) => {
-  while (ts.isPropertyAccessExpression(e) || ts.isElementAccessExpression(e)) {
-    e = e.expression;
+  for (;;) {
+    if (ts.isPropertyAccessExpression(e) || ts.isElementAccessExpression(e))
+      e = e.expression;
+    else if (ts.isCallExpression(e)) e = e.expression;
+    else if (ts.isNonNullExpression(e)) e = e.expression;
+    else if (ts.isParenthesizedExpression(e)) e = e.expression;
+    else if (ts.isAsExpression(e) || ts.isTypeAssertionExpression(e))
+      e = e.expression;
+    else break;
   }
   return ts.isIdentifier(e) ? e.text : null;
 };
@@ -463,10 +882,10 @@ function mutatedNames(files) {
       if (
         ts.isCallExpression(n) &&
         ts.isPropertyAccessExpression(n.expression) &&
-        MUTATING_METHODS.has(n.expression.name.text) &&
-        ts.isIdentifier(n.expression.expression)
+        MUTATING_METHODS.has(n.expression.name.text)
       ) {
-        out.add(n.expression.expression.text);
+        const r = rootIdentifier(n.expression.expression);
+        if (r) out.add(r);
       }
       if (
         ts.isBinaryExpression(n) &&
@@ -510,10 +929,15 @@ function provablyNonEmpty(init, consts, depth = 0) {
   const e = unwrap(init);
   if (!e || depth > 2) return false;
   if (ts.isArrayLiteralExpression(e)) {
-    return e.elements.length > 0 && e.elements.every((x) => !ts.isSpreadElement(x));
+    return (
+      e.elements.length > 0 && e.elements.every((x) => !ts.isSpreadElement(x))
+    );
   }
   if (ts.isObjectLiteralExpression(e)) {
-    return e.properties.length > 0 && e.properties.every((x) => !ts.isSpreadAssignment(x));
+    return (
+      e.properties.length > 0 &&
+      e.properties.every((x) => !ts.isSpreadAssignment(x))
+    );
   }
   if (ts.isIdentifier(e) && consts.has(e.text)) {
     return provablyNonEmpty(consts.get(e.text), consts, depth + 1);
@@ -524,7 +948,8 @@ function provablyNonEmpty(init, consts, depth = 0) {
 const containerArgs = (init) => {
   const e = unwrap(init);
   if (!e) return null;
-  if (ts.isArrayLiteralExpression(e) || ts.isObjectLiteralExpression(e)) return [e];
+  if (ts.isArrayLiteralExpression(e) || ts.isObjectLiteralExpression(e))
+    return [e];
   if (
     ts.isNewExpression(e) &&
     ts.isIdentifier(e.expression) &&
@@ -562,7 +987,25 @@ const containerArgs = (init) => {
  * static field, a module-level regex's `lastIndex`, and state stashed on an
  * imported object. Those are not closed by adding a fourth clause of the same
  * kind — the honest boundary is "declared here, or written through here", and
- * anything outside it is a REVIEW's job, not this script's. */
+ * anything outside it is a REVIEW's job, not this script's.
+ *
+ * 🔴 THIS LIST WAS WRONG ONCE, AND THE WAY IT WAS WRONG IS THE WARNING (R17 A-7).
+ * It named four shapes and a fifth was live: `roomBuf.get(peer)!.push(v)` — seed
+ * the table, then append into a room's slot. It is now CLOSED (rootIdentifier
+ * digs through calls, `!`, parens and casts, and the selftest pins it), but the
+ * lesson is not the shape, it is that a list of exceptions reads as a boundary.
+ * A reader takes "here are the four" for "there are four". If you find a sixth,
+ * the list was never the boundary — "declared here, or written through here" is.
+ *
+ * 🔑 AND THE REASON IT STAYED OPEN WAS A MEASUREMENT NOBODY RE-TOOK. Widening
+ * this rule was refused on the grounds that a shape-only prototype produced 82
+ * register rows, and an unread register is the failure mode. That number was
+ * real — for a DIFFERENT rule. It came from matching on shape alone (every
+ * top-level container, written to or not); this widening only changes WHERE a
+ * write-through is allowed to point, so the population it admits is the same
+ * one. Measured after the change: still 26 rows. ⇒ An estimate taken against
+ * one design does not transfer to another that merely sounds similar, and the
+ * cost of re-measuring here was one command. */
 function scanModuleState(file, mutated, consts) {
   const names = [];
   for (const st of ast(file).statements) {
@@ -575,7 +1018,10 @@ function scanModuleState(file, mutated, consts) {
         continue;
       }
       const args = containerArgs(d.initializer);
-      if (args && !(args.length > 0 && args.every((a) => provablyNonEmpty(a, consts)))) {
+      if (
+        args &&
+        !(args.length > 0 && args.every((a) => provablyNonEmpty(a, consts)))
+      ) {
         names.push(d.name.text);
       }
     }
@@ -614,7 +1060,9 @@ function overlayBindings(files) {
       for (const st of ast(file).statements) {
         const spec = st.moduleSpecifier;
         const target =
-          spec && ts.isStringLiteral(spec) ? resolveSpec(file, spec.text) : null;
+          spec && ts.isStringLiteral(spec)
+            ? resolveSpec(file, spec.text)
+            : null;
         if (ts.isImportDeclaration(st) && target) {
           const b = st.importClause?.namedBindings;
           if (b && ts.isNamespaceImport(b)) {
@@ -623,13 +1071,15 @@ function overlayBindings(files) {
           if (b && ts.isNamedImports(b)) {
             for (const el of b.elements) {
               const source = (el.propertyName ?? el.name).text;
-              if (exportedAs.get(target)?.has(source)) note(get(locals, file), el.name.text);
+              if (exportedAs.get(target)?.has(source))
+                note(get(locals, file), el.name.text);
             }
           }
         }
         if (ts.isExportDeclaration(st)) {
           if (target && !st.exportClause) {
-            for (const n of exportedAs.get(target) ?? []) note(get(exportedAs, file), n);
+            for (const n of exportedAs.get(target) ?? [])
+              note(get(exportedAs, file), n);
           }
           if (st.exportClause && ts.isNamedExports(st.exportClause)) {
             for (const el of st.exportClause.elements) {
@@ -738,7 +1188,9 @@ for (const r of REGISTRY) {
 //    async census keeps `src/api` out (126 unrelated `await`s), the state census
 //    does not (an SSE transport is where a per-room cache would land).
 const files = walkFromChatArea(ASYNC_SCOPE);
-const stateFiles = walkFromChatArea(STATE_SCOPE).filter((f) => !STATE_SKIP.test(rel(f)));
+const stateFiles = walkFromChatArea(STATE_SCOPE).filter(
+  (f) => !STATE_SKIP.test(rel(f)),
+);
 
 // 3b. A path alias the walk cannot follow drops files SILENTLY, which is how a
 //     population census dies. There is no alias today; if one appears, stop.
@@ -763,7 +1215,9 @@ if (files.length <= 30) {
 //    grew, and a register row describing code that no longer exists all read out
 //    of the same comparison.
 const found = scan(files);
-const registered = new Map(REGISTRY.map((r) => [`${r.file} | ${r.kind}`, r.count]));
+const registered = new Map(
+  REGISTRY.map((r) => [`${r.file} | ${r.kind}`, r.count]),
+);
 const rows = (m) => [...m].map(([k, n]) => `${k} | ${n}`).sort();
 const foundRows = rows(found);
 const regRows = rows(registered);
@@ -795,7 +1249,9 @@ for (const file of stateFiles) {
 const regState = MODULE_STATE.map((r) => `${r.file} | ${r.name}`);
 for (const r of MODULE_STATE) {
   if (r.verdict.trim().length < 20) {
-    problems.push(`${r.file} | ${r.name}: module state with nothing said about what keys it is not registered`);
+    problems.push(
+      `${r.file} | ${r.name}: module state with nothing said about what keys it is not registered`,
+    );
   }
 }
 const newState = foundState.filter((r) => !regState.includes(r)).sort();
@@ -814,14 +1270,18 @@ if (goneState.length > 0) {
 // 6. The quoted-message overlay's caller list, over the WHOLE tree. Its state
 //    is protected by its caller's key and by nothing else.
 const callers = overlayCallers(allSourceFiles(SRC));
-if (JSON.stringify(callers) !== JSON.stringify([...QUOTED_OVERLAY_CALLERS].sort())) {
+if (
+  JSON.stringify(callers) !== JSON.stringify([...QUOTED_OVERLAY_CALLERS].sort())
+) {
   problems.push(
     `useQuotedMessageOverlay's callers changed:\n    calling:    ${callers.join(", ") || "(nobody)"}\n    registered: ${QUOTED_OVERLAY_CALLERS.join(", ")}\n  The overlay keeps NO room stamp of its own — it relies on its caller being unmounted by a room switch. A caller keyed on anything but the peer paints one room's message over another (R8-3).`,
   );
 }
 
 if (problems.length > 0) {
-  console.error("[async-landing] FAIL — the chat surface's async census is out of date.");
+  console.error(
+    "[async-landing] FAIL — the chat surface's async census is out of date.",
+  );
   console.error(
     "Each row answers: when this callback commits, can the screen have moved on — and what stops the write from landing in the wrong place?",
   );
