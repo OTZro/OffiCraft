@@ -442,8 +442,14 @@ func TestMemberColumnPropertiesAreDeclaredInOnePlace(t *testing.T) {
 	}
 	for col := range gotForwardOnly {
 		if !wantForwardOnly[col] {
-			t.Errorf("member.%s became forwardOnly. If it really only ever moves "+
-				"forward that is a good change — bump this list and say so.", col)
+			t.Errorf("member.%s became forwardOnly.\n"+
+				"🔴 BEFORE you bump this list: find every single-column setter that "+
+				"writes this column and check it goes through PatchMember. A setter "+
+				"writing its own `col = ?` beside a forwardOnly declaration walks the "+
+				"value BACKWARDS while the whole-row door holds — one property, two "+
+				"representations, and nothing red. That is the exact bug "+
+				"SetMemberForcedStopAt had. Converge the setter FIRST, then bump this "+
+				"list.", col)
 		}
 	}
 

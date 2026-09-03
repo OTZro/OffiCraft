@@ -42,12 +42,20 @@ import "strings"
 //     here is the bug those carve-outs were for. It does NOT mean the column is
 //     unwritable — a targeted patch that NAMES the column writes it, which is
 //     exactly what SetMemberModel and its siblings do.
+//
 //   - forwardOnly says the column only ever MOVES FORWARD: the update becomes
 //     max(col, ?), so a writer holding a stale (or zero) value cannot walk it
 //     back. It is the owner's answer for 「只能往前的欄位」 (rc-78cb22a6de94),
 //     and it is a property of the COLUMN, declared once beside it — adding
 //     another such column is one more constructor with forwardOnly:true, not an
 //     if-branch someone has to remember to extend.
+//
+//     🔴 ADDING forwardOnly TO A COLUMN IS NOT COMPLETE ON ITS OWN. Every
+//     single-column setter that writes that column must ALSO go through
+//     PatchMember, or it keeps its own `col = ?` and walks the value backwards
+//     while the whole-row door holds it — one property, two representations,
+//     and nothing goes red. That is precisely what SetMemberForcedStopAt did
+//     before T-63. Converge the setters first, then declare the flag.
 type memberField struct {
 	col         string
 	val         any
