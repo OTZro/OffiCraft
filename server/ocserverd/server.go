@@ -324,6 +324,23 @@ func shareSigGate(keys *keyring, raw, authed http.Handler) http.Handler {
 
 // ── app assembly ─────────────────────────────────────────────────────────────
 
+// buildAPIHandler is the PRODUCTION assembly seam: it is the only place that
+// decides which key ring the gate gets, and it always answers api.keys.
+//
+// 🔴 IT EXISTS SO THAT DECISION IS TESTABLE. buildHandler takes a ring as a
+// parameter because a handful of tests must hand it a DIFFERENT one (a nil ring
+// is how auth_refusal_exits_t14_test.go reaches the "auth not configured"
+// exit). That parameter is also how the gate and the mint could silently drift
+// apart: hand buildHandler a ring that is not api.keys and every rotation moves
+// the minting half while the verifying half stays behind — signed tokens the
+// server itself refuses, and nothing in the tree would have gone red. Wrapping
+// the one production call in a named function puts that line under test
+// (keyring_rotation_t62_test.go) instead of leaving it as an argument nobody
+// guards.
+func buildAPIHandler(api *apiServer, lookup func(id string) (*Member, error)) (http.Handler, error) {
+	return buildHandler(specsFor(api), api.keys, lookup, api.authPasswordChangedAt)
+}
+
 // buildHandler assembles the mux from the route table: boot assertions FIRST
 // (fail closed — a bad table is an error, never a served app), then each row
 // registered with its auth + RBAC chokes. Mirrors create_app + register_routes.
@@ -649,9 +666,7 @@ func cmdServe(env func(string) string, noReconcile, noOutsource bool, out io.Wri
 		fmt.Fprintf(out, "[ocserverd] FATAL: claim token: %v\n", err)
 		return 1
 	}
-	// api.keys, not a second ring: the gate and the mint must be looking at the
-	// SAME ring, or a rotation would move one and leave the other behind.
-	handler, err := buildHandler(specsFor(api), api.keys, dal.GetMember, api.authPasswordChangedAt)
+	handler, err := buildAPIHandler(api, dal.GetMember)
 	if err != nil {
 		fmt.Fprintf(out, "[ocserverd] FATAL: %v\n", err)
 		return 1
