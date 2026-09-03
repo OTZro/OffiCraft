@@ -454,8 +454,18 @@ func TestDrainChat_FetchFault_LeavesTheWholeWindowUnread(t *testing.T) {
 	cfg := markCfg(srv.URL, t.TempDir())
 
 	var out bytes.Buffer
-	if n := drainChat(srv.Client(), cfg, &out, &markReadWarner{}, nil); n != 0 || out.Len() != 0 {
-		t.Fatalf("faulting drain: n=%d out=%q, want 0 and silence", n, out.String())
+	// It used to want SILENCE here. Silence was the bug: a drain that fetched
+	// nothing prints exactly what a drain that found nothing prints, so the
+	// reader concludes there is no new chat. The window really is untouched
+	// (asserted below) — but that has to be SAID, and it has to say it is not
+	// "no messages", because that is the wrong conclusion it exists to prevent.
+	if n := drainChat(srv.Client(), cfg, &out, &markReadWarner{}, nil); n != 0 {
+		t.Fatalf("faulting drain returned n=%d, want 0; out = %q", n, out.String())
+	}
+	if !strings.Contains(out.String(), "一頁都沒撈到") ||
+		!strings.Contains(out.String(), "這不是「沒有新訊息」") {
+		t.Fatalf("a faulted drain must announce itself AND rule out the wrong "+
+			"conclusion; out = %q", out.String())
 	}
 	if got := len(srv.unreadIDs("kyle")); got != 2 {
 		t.Fatalf("a faulted drain moved the server's unread set to %d rows, want 2 — "+

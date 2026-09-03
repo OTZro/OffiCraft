@@ -797,7 +797,18 @@ func fetchChat(client httpClient, cfg Config, selfID string) chatFetch {
 		list, listOK := env["messages"].([]any)
 		if status != 200 || !listOK {
 			if page == 1 {
-				return chatFetch{} // total fault: not "no messages"
+				// TOTAL FAULT — and it says so. Nothing was fetched, so nothing
+				// prints and nothing is receipted; the window stays unread and the
+				// next drain tries again. That is the safe direction, but SILENCE
+				// IS NOT: a drain that fetched nothing looks exactly like a drain
+				// that found nothing, and the reader would conclude there was no
+				// new chat. seeds/boot_sequence.md tells the agent that a backfill
+				// which came up short always announces itself first — this is the
+				// case that used to make that sentence false.
+				return chatFetch{stop: fmt.Sprintf(
+					"[ocagent] chat: 補印一頁都沒撈到（HTTP %d）—— 這不是「沒有新訊息」，"+
+						"是這次沒問到。未讀原封不動，下一次補印會再試；等不及就用 get_chat 自己撈。\n",
+					status)}
 			}
 			return chatFetch{rows: rows, stop: fmt.Sprintf(
 				"[ocagent] chat: 補印在第 %d 頁斷掉了（已經撈到 %d 則）—— 未讀沒撈完，"+
@@ -1070,7 +1081,9 @@ func drainChat(client httpClient, cfg Config, out io.Writer, warn *markReadWarne
 		fmt.Fprint(out, msgs.stop)
 	}
 	if msgs.rows == nil {
-		return 0 // fetch fault: print nothing, file nothing — it is still unread
+		// Fetch fault: file nothing — it is still unread. The caveat above has
+		// already been printed, so this is not a silent return.
+		return 0
 	}
 	// delivered stays true on the claude path: nothing there can fail to deliver.
 	delivered := true
