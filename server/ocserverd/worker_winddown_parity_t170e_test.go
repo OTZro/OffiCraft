@@ -324,6 +324,7 @@ func TestStaleStopping_AnOnlineWorkerIsSweptToo(t *testing.T) {
 	if err := api.dal.PutOutsourceWorker(*w); err != nil {
 		t.Fatalf("put worker: %v", err)
 	}
+	seedWorkerAnchors(t, api, *w)
 
 	api.runOutsourceTick(now)
 
@@ -347,6 +348,7 @@ func TestStaleStopping_AnOnlineWorkerIsSweptToo(t *testing.T) {
 		if err := api.dal.PutOutsourceWorker(*w); err != nil {
 			t.Fatalf("put worker: %v", err)
 		}
+		seedWorkerAnchors(t, api, *w)
 		api.runOutsourceTick(now)
 		got, _ := api.dal.GetOutsourceWorker(id)
 		if got.StoppingSince == 0.0 {

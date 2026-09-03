@@ -37,10 +37,18 @@ func newWorkerTestServer(t *testing.T) *apiServer {
 		assetRoot(t.TempDir()))
 }
 
+// putWorkerFixture seeds a worker row so that the ROW ENDS UP LOOKING LIKE `w`.
+// The second write is the wind-down anchors, for putTestMember's reason (T-55) —
+// a worker row IS a member row (PutOutsourceWorker is PutMember of the
+// projection), so it drops exactly the same four columns on an existing row.
 func putWorkerFixture(t *testing.T, s *apiServer, w OutsourceWorker) OutsourceWorker {
 	t.Helper()
 	if err := s.dal.PutOutsourceWorker(w); err != nil {
 		t.Fatalf("put worker: %v", err)
+	}
+	if err := s.dal.SetMemberWindDownAnchors(w.ID, w.StoppingSince, w.StoppedSince,
+		w.RefocusSince, w.RefocusOp); err != nil {
+		t.Fatalf("seed wind-down anchors for %s: %v", w.ID, err)
 	}
 	return w
 }

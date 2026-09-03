@@ -1806,6 +1806,12 @@ func (s *apiServer) openOwnerOpHandover(w OutsourceWorker, op string) bool {
 	w.RefocusOp = proj.RefocusOp
 	w.StoppingSince = proj.StoppingSince
 	w.StoppedSince = proj.StoppedSince
+	if err := s.persistWorkerWindDownAnchors(w); err != nil {
+		outsourceLog("%s %s (%s): refocus ANCHOR write failed (%v) — falling back to an "+
+			"immediate respawn so the owner's action is not lost", op, w.ID, w.Codename, err)
+		s.respawnWorkerForOwnerOpNow(w, op)
+		return true
+	}
 	if err := s.dal.PutOutsourceWorker(w); err != nil {
 		outsourceLog("%s %s (%s): refocus stamp failed (%v) — falling back to an "+
 			"immediate respawn so the owner's action is not lost", op, w.ID, w.Codename, err)
@@ -2163,6 +2169,10 @@ func (s *apiServer) clearWorkerRefocus(id, reason string) {
 	fresh.RefocusOp = ""
 	fresh.StoppingSince = 0.0
 	fresh.StoppedSince = 0.0
+	if err := s.persistWorkerWindDownAnchors(*fresh); err != nil {
+		outsourceLog("refocus clear %s (%s): ANCHOR write failed: %v", id, reason, err)
+		return
+	}
 	if err := s.dal.PutOutsourceWorker(*fresh); err != nil {
 		outsourceLog("refocus clear %s (%s): persist failed: %v", id, reason, err)
 		return
@@ -2258,6 +2268,10 @@ func (s *apiServer) collectWorkerHandover(w OutsourceWorker, reason, trigger str
 	if w.StoppedSince <= 0.0 {
 		w.StoppedSince = nowSecs()
 	}
+	if err := s.persistWorkerWindDownAnchors(w); err != nil {
+		outsourceLog("handover collect %s (%s): stopped-latch ANCHOR write failed: %v", w.ID, reason, err)
+		return false
+	}
 	if err := s.putMember(memberFromWorker(w), trigger); err != nil {
 		outsourceLog("handover collect %s (%s): stopped latch failed: %v", w.ID, reason, err)
 		return false
@@ -2268,6 +2282,10 @@ func (s *apiServer) collectWorkerHandover(w OutsourceWorker, reason, trigger str
 			return false
 		}
 		w.StoppedSince = prior
+		if err := s.persistWorkerWindDownAnchors(w); err != nil {
+			outsourceLog("handover collect %s (%s): latch-rollback ANCHOR write failed: %v",
+				w.ID, reason, err)
+		}
 		if err := s.dal.PutOutsourceWorker(w); err != nil {
 			outsourceLog("handover collect %s (%s): latch rollback failed: %v",
 				w.ID, reason, err)
@@ -2292,6 +2310,10 @@ func (s *apiServer) collectWorkerHandover(w OutsourceWorker, reason, trigger str
 func (s *apiServer) collectWorkerStop(w OutsourceWorker, reason, trigger string) {
 	if w.StoppedSince <= 0.0 {
 		w.StoppedSince = nowSecs()
+	}
+	if err := s.persistWorkerWindDownAnchors(w); err != nil {
+		outsourceLog("stop collect %s (%s): stopped-latch ANCHOR write failed: %v", w.ID, reason, err)
+		return
 	}
 	if err := s.putMember(memberFromWorker(w), trigger); err != nil {
 		outsourceLog("stop collect %s (%s): stopped latch failed: %v", w.ID, reason, err)
@@ -2357,6 +2379,9 @@ func (s *apiServer) workerReportWaking(id string, model *string, trigger string)
 	if model != nil {
 		m.ActualModel = *model
 	}
+	if err := s.persistMemberWindDownAnchors(m); err != nil {
+		return nil, err
+	}
 	if err := s.putMember(m, trigger); err != nil {
 		return nil, err
 	}
@@ -2383,6 +2408,9 @@ func (s *apiServer) workerReportStopping(id, trigger string) (*Member, error) {
 		w.StoppingSince = nowSecs()
 	}
 	m := memberFromWorker(*w)
+	if err := s.persistMemberWindDownAnchors(m); err != nil {
+		return nil, err
+	}
 	if err := s.putMember(m, trigger); err != nil {
 		return nil, err
 	}
@@ -2434,6 +2462,9 @@ func (s *apiServer) workerReportStopped(id, trigger string) (*Member, error) {
 			// to prove only one kill goes out, and it is the same latency staff
 			// have.
 			w.StoppedSince = nowSecs()
+			if err := s.persistWorkerWindDownAnchors(*w); err != nil {
+				return nil, err
+			}
 			if err := s.putMember(memberFromWorker(*w), trigger); err != nil {
 				return nil, err
 			}
@@ -2455,6 +2486,9 @@ func (s *apiServer) workerReportStopped(id, trigger string) (*Member, error) {
 			return &m, nil
 		}
 		w.StoppedSince = nowSecs()
+		if err := s.persistWorkerWindDownAnchors(*w); err != nil {
+			return nil, err
+		}
 		if err := s.putMember(memberFromWorker(*w), trigger); err != nil {
 			return nil, err
 		}
@@ -2492,6 +2526,9 @@ func (s *apiServer) workerRestartSelf(id string, now float64, trigger string) (*
 	w.RefocusOp = proj.RefocusOp
 	w.StoppingSince = proj.StoppingSince
 	w.StoppedSince = proj.StoppedSince
+	if err := s.persistWorkerWindDownAnchors(*w); err != nil {
+		return nil, err
+	}
 	if err := s.dal.PutOutsourceWorker(*w); err != nil {
 		return nil, err
 	}

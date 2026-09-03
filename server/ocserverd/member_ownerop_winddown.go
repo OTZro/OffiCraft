@@ -300,14 +300,17 @@ func winddownKindFor(op string) (kind string, clocked bool) {
 }
 
 // armRefocusEpoch is the ONE way a refocus epoch is opened. It MUTATES m and
-// persists nothing: every caller folds it into its own putMember, so the epoch
-// and whatever else that write carries land together.
+// persists nothing; the caller writes.
 //
-// ⚠️ THAT IS THE EPOCH ALONE, not 「everything the handler is doing」 (T-55). The
-// launch intents and the five receipt columns have their own sole writers now,
-// so a caller of this function typically performs TWO writes and the ordering
-// between them is argued at the call site. Do not read this paragraph as a
-// promise that a handler using it is atomic.
+// ⚠️ AND THE EPOCH NO LONGER RIDES THE CALLER'S putMember — it is the part that
+// stopped riding it. T-55's third batch moved the four columns this function
+// writes out of PutMember's DO UPDATE SET, so the caller persists the epoch
+// through persistMemberWindDownAnchors (BEFORE its row write, for the reason
+// argued there) and the row write carries everything else. An earlier version of
+// this paragraph said the epoch and the rest "land together"; that is now exactly
+// backwards, and it is the third sentence in this ticket to go stale by restating
+// which columns a write carries. The standing answer is singleColumnOwnedFields.
+// Do not read anything here as a promise that a handler using this is atomic.
 //
 // 🔴 The two zeroed anchors are the whole reason this is a named function and
 // not four hand-written lines. A NEW epoch must never inherit the PREVIOUS

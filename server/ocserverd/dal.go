@@ -468,10 +468,6 @@ func (d *DAL) PutMember(m Member) error {
 			last_machine_id = excluded.last_machine_id,
 			session_boot_ts = excluded.session_boot_ts,
 			waking_since = excluded.waking_since,
-			stopping_since = excluded.stopping_since,
-			stopped_since = excluded.stopped_since,
-			refocus_since = excluded.refocus_since,
-			refocus_op = excluded.refocus_op,
 			roster_status = excluded.roster_status,
 			linked_task_id = excluded.linked_task_id,
 			codename = excluded.codename,
@@ -531,6 +527,31 @@ func (d *DAL) PutMember(m Member) error {
 			-- new row is born with the intent it was created with;
 			-- SetMemberDesiredMachineID / SetMemberModel / SetMemberRuntime /
 			-- SetMemberEffort are the only writers that move them.
+			--
+			-- stopping_since, stopped_since, refocus_since and refocus_op are
+			-- DELIBERATELY ABSENT (T-55) — the four WIND-DOWN ANCHORS, which
+			-- together date one rung of the 下線 → 加速 → 強制 ladder and the
+			-- 換手 epoch riding on it. Three families of writer move them and
+			-- none of them share a lock: the owner verbs (deactivate /
+			-- accelerated-stop / force-stop / refocus), the agent reporting on
+			-- ITSELF (report_stopping / report_stopped / report_waking), and the
+			-- reconcile tick's recycle passes. Each reaches this statement
+			-- holding a snapshot read before the others landed. While the four
+			-- rode this list, an owner face that touched something else entirely
+			-- put its pre-stop snapshot back over an anchor the agent had just
+			-- written — stopped_since to 0 — and the collect that keys on it
+			-- never fired, so the member sat in a wind-down that had in fact
+			-- already finished. Nothing goes red; the ladder simply disagrees
+			-- with what happened.
+			--
+			-- 🔴 ONE WRITER FOR FOUR COLUMNS, for SetMemberOpReceipt's reason:
+			-- armRefocusEpoch writes all four in one breath and the readers take
+			-- them together (StopIntent is stopping_since > 0; the ladder gate
+			-- compares the refocus epoch against the stop anchors), so any moment
+			-- with some landed and some not is a rung nobody stood on.
+			-- SetMemberWindDownAnchors is the only writer that moves them; the
+			-- INSERT still carries all four so a new row is born on the rung it
+			-- was created with.
 			-- Guarded by TestPutMemberNeverOverwritesSingleColumnOwnedFields:
 			-- putting any of these four back into this list turns it red NAMING
 			-- the column.`,
@@ -682,6 +703,35 @@ func (d *DAL) SetMemberSessionBootTS(id string, ts float64) error {
 // A missing row is a clean no-op (0 rows affected, no error).
 func (d *DAL) SetMemberWakingSince(id string, ts float64) error {
 	_, err := d.wdb.Exec(`UPDATE member SET waking_since = ? WHERE id = ?`, ts, id)
+	return err
+}
+
+// SetMemberWindDownAnchors writes the four wind-down anchor columns and NOTHING
+// else (T-55) — stopping_since / stopped_since / refocus_since / refocus_op, the
+// rung of the 下線 → 加速 → 強制 ladder a member is standing on plus the 換手
+// epoch opened on it. It is the sole writer of all four; PutMember carries them
+// on INSERT and none of them in its DO UPDATE SET.
+//
+// 🔴 FOUR COLUMNS, ONE WRITER — the same shape as SetMemberOpReceipt and for the
+// same reason. armRefocusEpoch stamps all four at once, and the readers consume
+// them together: StopIntent is stopping_since > 0, the ladder gate weighs the
+// refocus epoch against both stop anchors, and the collect fires on
+// stopped_since while refocus_op still names which verb opened the window. Four
+// separate writers would manufacture, on every stamp, a moment in which the row
+// describes a rung nobody ever stood on.
+//
+// ⚠️ forced_stop_at is NOT here and must not join: it is the durable record that
+// a session was cut off, and PutMember keeps it precisely because max() lets it
+// move forward only (see the SET list). A setter that assigned it would hand
+// every caller the ability to move it backwards.
+//
+// A missing row is a clean no-op (0 rows affected, no error).
+func (d *DAL) SetMemberWindDownAnchors(id string, stoppingSince, stoppedSince,
+	refocusSince float64, refocusOp string) error {
+	_, err := d.wdb.Exec(
+		`UPDATE member SET stopping_since = ?, stopped_since = ?,
+			refocus_since = ?, refocus_op = ? WHERE id = ?`,
+		stoppingSince, stoppedSince, refocusSince, refocusOp, id)
 	return err
 }
 
