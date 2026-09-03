@@ -76,7 +76,28 @@ export function ChatReplyCard({
   // subscription. Everything after mount comes from this component's own reads
   // and writes, which are the newer truth (see `readGenRef`).
   const seed = useState(() => getCachedReplyCard(replyCardId) ?? null)[0];
-  const [card, setCard] = useState<ReplyCard | null>(seed);
+  // 🔴 …BUT A SEED THE STREAM HAS ALREADY OVERTAKEN IS NOT PAINTED (T-48,
+  // independent review F-G). The note below explains why a DISAGREEING seed is
+  // refetched — and it used to read as though "refetched" meant "not painted".
+  // It did not: `skipEagerFetchRef` consulted the agreement, `useState` did not,
+  // so the first frame still came from the stale seed. In one direction that
+  // matters: a seed saying `waiting` under a message hint that says the card is
+  // SETTLED paints option chips and a composer over an already-answered card,
+  // one click from POSTing to it, for the frames until the refetch lands.
+  //
+  // ONLY that direction. The other one — a settled seed under a `waiting` hint —
+  // is this session's own newer write, invites no action, and is still painted,
+  // because refusing to paint it would put the row back into the "mounts small,
+  // then grows" shape (+254px) that seeding exists to remove. A waiting-under-
+  // terminal seed costs nothing to withhold: that hint also mounts the card
+  // COLLAPSED, so there is no body to hold a height open in the first place.
+  const seedOvertaken =
+    seed !== null &&
+    seed.status === "waiting" &&
+    (initialStatus === "answered" || initialStatus === "expired");
+  const [card, setCard] = useState<ReplyCard | null>(
+    seedOvertaken ? null : seed,
+  );
   const [loadError, setLoadError] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   // Lazy-load gate: a terminal-hinted card (answered/expired) starts COLLAPSED

@@ -373,24 +373,47 @@ describe("ChatReplyCard", () => {
     // room — while no ChatReplyCard is mounted, so no reply_card delta reaches
     // this component. The message stream is the newer truth and says ANSWERED.
     putReplyCard(mkCard({ status: "waiting" }));
-    __injectMockReplyCard(
-      mkCard({
-        status: "answered",
-        answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdxs: [1], text: "", attachments: [] },
-      })
-    );
+    const mockAnswered = mkCard({
+      status: "answered",
+      answeredTs: Date.now() / 1000 - 60,
+      answer: { optionIdxs: [1], text: "", attachments: [] },
+    });
+    __injectMockReplyCard(mockAnswered);
     const getSpy = vi.spyOn(api, "getReplyCard");
     const { findByTestId, queryAllByTestId, queryByPlaceholderText } =
       renderHinted("answered");
 
+    // 🔴 HELD IN FLIGHT ON PURPOSE (independent review F-G). "Refetches instead
+    // of painting the chips back" is a claim about the frames BETWEEN the expand
+    // and the response — and this test used to assert it only AFTER the response
+    // had landed, which every implementation passes. The seed was still painted
+    // first: `skipEagerFetchRef` consulted the agreement, `useState(seed)` did
+    // not. Let the read hang, and the frame is measurable.
+    let release: () => void = () => {};
+    getSpy.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve(mockAnswered);
+        }),
+    );
+
     fireEvent.click(await findByTestId("chat-reply-card-expand"));
+
+    expect(
+      queryAllByTestId("reply-option"),
+      "the pre-answer chips were painted from a seed the message stream has already overtaken — one click from POSTing to an answered card",
+    ).toHaveLength(0);
+    expect(queryByPlaceholderText("輸入回覆…")).toBeNull();
+
+    await act(async () => {
+      release();
+      await new Promise((r) => setTimeout(r, 0));
+    });
 
     const final = await findByTestId("final-answer");
     expect(final.textContent).toBe("你選的AI 建議先不要");
     expect(getSpy).toHaveBeenCalledTimes(1);
-    // The pre-answer body must never be painted: no pickable options, no
-    // composer to POST a second answer with.
+    // …and still not painted after it lands.
     expect(queryAllByTestId("reply-option")).toHaveLength(0);
     expect(queryByPlaceholderText("輸入回覆…")).toBeNull();
   });
