@@ -541,4 +541,101 @@ describe("MarkdownPreviewOverlay 複製分享連結 (T-d10b)", () => {
     const { container: warning } = render(<AlertTriangleIcon size={14} />);
     expect(failed.innerHTML).toBe(warning.innerHTML);
   });
+
+  // T-59 — the COMPARE attachment. Its bytes are a pointer pair, so the overlay
+  // makes three fetches (the pair, then the two blobs it names) and hands the
+  // two texts to the SAME DiffView the document version history uses.
+  describe("compare attachment", () => {
+    const PAIR = JSON.stringify({
+      before: { attachment_id: "att-old", label: "9/2 21:12" },
+      after: { attachment_id: "att-new", label: "目前存檔內容" },
+    });
+
+    /** Answer per blob id; a null body is a blob that will not load. */
+    const serve = (bodies: Record<string, string | null>) =>
+      vi.fn(async (input: unknown) => {
+        const asked = String(input);
+        for (const [id, body] of Object.entries(bodies)) {
+          if (!asked.includes(id)) continue;
+          return body === null
+            ? { ok: false, status: 404, text: async () => "" }
+            : { ok: true, text: async () => body };
+        }
+        throw new Error("unexpected fetch: " + asked);
+      }) as unknown as typeof fetch;
+
+    const openCompare = () =>
+      render(
+        <I18nProvider>
+          <MarkdownPreviewOverlay
+            title="change.diff"
+            url="/api/chat/attachment/att-pair"
+            attachmentId="att-pair"
+            mime="application/vnd.officraft.diff"
+            onClose={() => {}}
+          />
+        </I18nProvider>,
+      );
+
+    it("resolves both sides and compares them in the shared diff surface", async () => {
+      globalThis.fetch = serve({
+        "att-pair": PAIR,
+        "att-old": "alpha\nbravo\ncharlie",
+        "att-new": "alpha\nBRAVO\ncharlie",
+      });
+
+      openCompare();
+
+      await waitFor(() => expect(screen.getByTestId("md-preview-diff")).toBeTruthy());
+      // The changed line appears on both sides — i.e. a real comparison of the
+      // two RESOLVED blobs, not of the pointer pair's own JSON.
+      expect(screen.getByText("bravo")).toBeTruthy();
+      expect(screen.getByText("BRAVO")).toBeTruthy();
+      // The pointer pair's own text must never be what gets compared.
+      expect(screen.queryByText(/attachment_id/)).toBeNull();
+    });
+
+    // A pair whose second blob is gone must say so. Rendering the half it DID
+    // get would draw every line of the surviving side as a deletion — a
+    // confident, wrong answer to "what changed".
+    it("reports a failure when one of the two sides cannot be loaded", async () => {
+      globalThis.fetch = serve({
+        "att-pair": PAIR,
+        "att-old": "alpha\nbravo",
+        "att-new": null,
+      });
+
+      openCompare();
+
+      await waitFor(() =>
+        expect(screen.getByText("無法載入預覽")).toBeTruthy(),
+      );
+      expect(screen.queryByTestId("md-preview-diff")).toBeNull();
+      expect(screen.queryByText("bravo")).toBeNull();
+    });
+
+    // The type is the MIME. A text file that happens to be NAMED like a diff is
+    // still a text file — keying on the extension would make the compare screen
+    // open on documents that carry no pointer pair at all.
+    it("does not treat a text attachment named like a diff as a comparison", async () => {
+      globalThis.fetch = serve({ "att-doc": "# just a document" });
+
+      render(
+        <I18nProvider>
+          <MarkdownPreviewOverlay
+            title="change.diff"
+            url="/api/chat/attachment/att-doc"
+            attachmentId="att-doc"
+            mime="text/markdown"
+            onClose={() => {}}
+          />
+        </I18nProvider>,
+      );
+
+      await waitFor(() =>
+        expect(screen.getByRole("heading", { name: "just a document" })).toBeTruthy(),
+      );
+      expect(screen.queryByTestId("md-preview-diff")).toBeNull();
+    });
+  });
 });

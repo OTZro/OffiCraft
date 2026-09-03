@@ -59,6 +59,7 @@ import { useI18n } from "../i18n";
 import { authedAttachmentUrl } from "../api/http";
 import { attachmentShareLinkUrl, copyAttachmentShareLink } from "../lib/shareLink";
 import { useEscapeLayer } from "../lib/useEscapeLayer";
+import { DiffView } from "./DiffView";
 import { Markdown } from "./Markdown";
 import "./md-preview.css";
 import {
@@ -163,6 +164,15 @@ export function MarkdownPreviewOverlay({
 }: MarkdownPreviewOverlayProps) {
   const { t } = useI18n();
   const [fetched, setFetched] = useState<string | null>(null);
+  /** The two sides of a compare attachment, once BOTH have arrived. Held as one
+   * value rather than two so there is no render in which one side is text and
+   * the other is still null — that would draw a diff against nothing. */
+  const [diffPair, setDiffPair] = useState<{
+    before: string;
+    after: string;
+    beforeLabel?: string;
+    afterLabel?: string;
+  } | null>(null);
   const [failed, setFailed] = useState(false);
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
@@ -179,7 +189,11 @@ export function MarkdownPreviewOverlay({
   // never passes through the loading/error states, which only describe a fetch.
   const image = imageSrc !== undefined || (mime?.startsWith("image/") ?? false);
   const previewableText = isPreviewableTextAttachment(mime ?? "text/markdown", title);
-  const unavailable = url !== undefined && !image && !previewableText;
+  // A compare attachment IS renderable here — it just needs two fetches instead
+  // of one — so it must not fall into `unavailable`, which is the "this overlay
+  // cannot draw it, offer the tab instead" state.
+  const diff = url !== undefined && isDiffAttachment(mime ?? "");
+  const unavailable = url !== undefined && !image && !previewableText && !diff;
   // T-36 — WHOSE CALL IS "opens in a tab"? THE SERVER'S. This mirrors
   // api_chat.go's isPreviewableMime, which is what decides between
   // `Content-Disposition: inline` and `attachment` on the serve route. Offering
@@ -281,8 +295,48 @@ export function MarkdownPreviewOverlay({
   // Fetch the markdown text once (the authed blob URL — same ?token= gate the
   // download/thumbnail paths use). A non-ok response / network error surfaces
   // the honest error state, never a blank render.
+  // The compare attachment takes THREE fetches, not one: the pointer pair, then
+  // the two blobs it names. Its own effect rather than a branch inside the one
+  // below, because the failure it has to report is different — "one of the two
+  // sides is gone" is not "this document would not load", and a compare with
+  // one side missing must not quietly render as a diff against nothing.
   useEffect(() => {
-    if (url === undefined || image || unavailable) return;
+    if (!diff || url === undefined) return;
+    let alive = true;
+    setDiffPair(null);
+    setFailed(false);
+    const sideURL = (id: string) => authedAttachmentUrl("/api/chat/attachment/" + id);
+    const text = async (u: string) => {
+      const response = await fetch(u);
+      if (!response.ok) throw new Error(`http ${response.status}`);
+      return response.text();
+    };
+    (async () => {
+      const pair = parseDiffAttachment(await text(authedAttachmentUrl(url)));
+      if (pair === null) throw new Error("not a compare attachment");
+      const [before, after] = await Promise.all([
+        text(sideURL(pair.before.attachment_id!)),
+        text(sideURL(pair.after.attachment_id!)),
+      ]);
+      if (alive) {
+        setDiffPair({
+          before,
+          after,
+          beforeLabel: pair.before.label,
+          afterLabel: pair.after.label,
+        });
+      }
+    })().catch((e) => {
+      if (alive) setFailed(true);
+      console.warn("MarkdownPreviewOverlay: compare load failed", e);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [diff, url]);
+
+  useEffect(() => {
+    if (url === undefined || image || unavailable || diff) return;
     let alive = true;
     setFetched(null);
     setFailed(false);
@@ -301,7 +355,7 @@ export function MarkdownPreviewOverlay({
     return () => {
       alive = false;
     };
-  }, [url, image, unavailable]);
+  }, [url, image, unavailable, diff]);
 
   // Mint the share link for the tab anchor. Only for an attachment the browser
   // would actually DISPLAY — a downloadable one gets no anchor, so it needs no
@@ -879,6 +933,22 @@ export function MarkdownPreviewOverlay({
             </div>
           ) : failed ? (
             <div className="md-preview__status">{t.chat.mdPreview.error}</div>
+          ) : diff ? (
+            /* The compare screen is DiffView and only DiffView — the same one
+             * the document version history uses. A second diff renderer here
+             * would be a second authority on the owner's six 2026-07-31
+             * rulings, and the two would start to drift. */
+            diffPair === null ? (
+              <div className="md-preview__status">{t.chat.mdPreview.loading}</div>
+            ) : (
+              <DiffView
+                before={diffPair.before}
+                after={diffPair.after}
+                beforeLabel={diffPair.beforeLabel}
+                afterLabel={diffPair.afterLabel}
+                testId="md-preview-diff"
+              />
+            )
           ) : source === null ? (
             <div className="md-preview__status">{t.chat.mdPreview.loading}</div>
           ) : (
@@ -959,4 +1029,43 @@ export function looksInteractiveInNewTab(mime: string, filename: string): boolea
  * narrow: HTML/PDF and arbitrary text/* remain outside this preview contract. */
 export function isPreviewableTextAttachment(mime: string, filename: string): boolean {
   return isMarkdownAttachment(mime, filename) || /\.(txt|log)$/i.test(filename);
+}
+
+/** The compare attachment (T-59): its bytes are not a document at all but a
+ * PAIR OF POINTERS at the two blobs to put side by side — owner 2026-09-03,
+ * 「可以指定兩個文件位置，就可以跳出我們這個 diff 的畫面」.
+ *
+ * Keyed on the MIME alone, exactly as the server types it, and NOT on the
+ * filename: a `.diff` extension on an ordinary text file must keep opening as
+ * text, and a compare attachment named anything at all must still compare. */
+export const DIFF_ATTACHMENT_MIME = "application/vnd.officraft.diff";
+
+export function isDiffAttachment(mime: string): boolean {
+  return mime.split(";")[0]!.trim().toLowerCase() === DIFF_ATTACHMENT_MIME;
+}
+
+/** One side of a compare attachment, as the server stores it. */
+interface DiffAttachmentSide {
+  attachment_id?: string;
+  label?: string;
+}
+
+/** Parse the pointer pair. Returns null for anything that is not one — the
+ * server refuses these at upload, so a null here means a blob stored before
+ * that guard existed, or one hand-written past it. */
+export function parseDiffAttachment(
+  raw: string
+): { before: DiffAttachmentSide; after: DiffAttachmentSide } | null {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const { before, after } = parsed as {
+      before?: DiffAttachmentSide;
+      after?: DiffAttachmentSide;
+    };
+    if (!before?.attachment_id || !after?.attachment_id) return null;
+    return { before, after };
+  } catch {
+    return null;
+  }
 }
