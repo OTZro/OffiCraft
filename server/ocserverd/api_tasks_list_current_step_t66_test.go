@@ -257,7 +257,10 @@ func t66AllStepStatuses(t *testing.T) []string {
 // alone. Go then skips a step SQL still points at, and the two rules disagree on
 // exactly the tasks whose plan contains that status — which is why the corpus
 // has to contain EVERY status, derived, rather than the ones somebody typed.
-// Verified by planting that mutant; transcript in evidence-current-step-drift.txt.
+// Verified by planting that mutant (add waiting_external to StepIsTerminal and
+// leave the SQL alone): four assertions plus the anti-vacuity floor all fire.
+// The transcript is pinned to task T-66 as an artifact — it is NOT a file in
+// this repo, so do not go looking for one.
 func TestTaskListCurrentStepRuleIsTheSharedOne(t *testing.T) {
 	s := t66Server(t)
 	statuses := t66AllStepStatuses(t)

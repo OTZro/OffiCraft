@@ -121,8 +121,10 @@ func TestTaskTableReadPatternKnowsItsOwnBoundary(t *testing.T) {
 // counting driver was blind to step reads: a per-task `ListTaskSteps` inside the
 // list handler — the dumbest possible N+1, one round trip per row on an
 // UNCAPPED endpoint — left `TestTaskListTaskReadsDoNotGrowWithDepCount` fully
-// GREEN. That was measured, not reasoned about; the transcript is in
-// evidence-n1-guard-before.txt. The hole was in the PATTERN, not the seam.
+// GREEN. That was measured, not reasoned about: the planted N+1 left the guard
+// at `--- PASS`, and the raw transcript is pinned to task T-66 as an artifact
+// (it is NOT a file in this repo — do not go looking for one).
+// The hole was in the PATTERN, not the seam.
 //
 // It is a SEPARATE counter rather than a widening of `taskTableRead` on purpose:
 // the two tables have different constant budgets (one `task` read vs. the light
@@ -581,8 +583,10 @@ func TestTaskListTaskReadsDoNotGrowWithDepCount(t *testing.T) {
 	// current_step_id/current_step_name 的來源必須是一句 grouped 查詢,和
 	// AllTaskStepProgress 同一個形狀。MUTANT:在 handler 的迴圈裡放一句逐票
 	// `s.dal.ListTaskSteps(t.ID)`,many.step 就會隨母體(1 + dep 數)成長。
-	// 🔴 在這個 barrel 加進來之前,那顆 mutant 是全綠的 —— 見
-	// evidence-n1-guard-before.txt / evidence-n1-guard-after.txt。
+	// 🔴 在這個 barrel 加進來之前,那顆 mutant 是全綠的 —— 種下去跑,護欄回
+	// `--- PASS`;補上之後同一顆(shasum 逐字相同)回「2 個 dep → 5 次,25 個
+	// dep → 28 次(N+1)」。兩段逐字輸出釘在 T-66 這張票上,**不是 repo 裡的
+	// 檔案**,不要去找。
 	if many.step != few.step {
 		t.Fatalf("一次 list 請求的 task_step 讀取次數隨母體成長了:%d 個 dep → %d 次,"+
 			"%d 個 dep → %d 次(N+1)\nfew:\n  %s\nmany:\n  %s",
