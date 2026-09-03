@@ -1154,7 +1154,7 @@ func (s *apiServer) HandleGetChatAttachmentShareLinkApiChatAttachmentsAttachment
 	}
 	writeJSON(w, http.StatusOK, ChatAttachmentShareLinkDTO{
 		Url: "/api/chat/attachment/" + attachmentId +
-			"?sig=" + shareSigFor(s.secret, attachmentId),
+			"?sig=" + shareSigForRing(s.keys, attachmentId),
 	})
 }
 

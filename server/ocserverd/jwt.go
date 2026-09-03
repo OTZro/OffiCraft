@@ -174,3 +174,38 @@ func deriveSecretFromPassword(password string) []byte {
 	sum := sha256.Sum256(append([]byte("officraft.jwt.hs256.v1:"), password...))
 	return sum[:]
 }
+
+// ── multi-key verification ───────────────────────────────────────────────────
+
+// verifyJWTAnyKey verifies a token against every key in the ring, the signing
+// key first (keyring.verifySecrets orders them). A token verifies if ANY key in
+// the ring signed it — that is what lets a rotation happen without invalidating
+// the tokens already in circulation, and what makes REMOVING a key the act that
+// actually revokes them.
+//
+// 🔴 THE RETURNED ERROR IS THE LAST KEY'S, AND THAT IS DELIBERATE. An expired
+// token fails every key with errExpiredToken, so the caller still gets
+// errExpiredToken rather than a generic refusal; a forged one fails every key
+// with a signature error. What must never happen is a per-key error that tells
+// the caller WHICH key failed — the refusal says a token did not verify, never
+// anything about the ring.
+func verifyJWTAnyKey(kr *keyring, token string, now int64) (map[string]any, error) {
+	secrets := kr.verifySecrets()
+	if len(secrets) == 0 {
+		return nil, fmt.Errorf("%w: server has no signing key", errInvalidToken)
+	}
+	var lastErr error
+	for _, secret := range secrets {
+		claims, err := verifyJWT(token, secret, now)
+		if err == nil {
+			return claims, nil
+		}
+		// An expired token is expired under every key; stop rather than pay an
+		// HMAC per key to reach the same answer.
+		if errors.Is(err, errExpiredToken) {
+			return nil, err
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}

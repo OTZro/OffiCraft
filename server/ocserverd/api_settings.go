@@ -361,11 +361,11 @@ func (s *apiServer) HandleChangePasswordApiAuthChangePasswordPost(w http.Respons
 // settingsMu (they pass the ttl they read under it) — the mint itself touches
 // no guarded state.
 func (s *apiServer) writeOwnerToken(w http.ResponseWriter, ttl, now int64) {
-	if len(s.secret) == 0 {
+	if len(s.keys.signingSecret()) == 0 {
 		writeError(w, http.StatusUnauthorized, "auth not configured")
 		return
 	}
-	token, err := mintJWT(wireOwnerID, "owner", ttl, s.secret, now, "")
+	token, err := mintJWT(wireOwnerID, "owner", ttl, s.keys.signingSecret(), now, "")
 	if err != nil {
 		internalError(w, err)
 		return

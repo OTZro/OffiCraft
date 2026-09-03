@@ -48,3 +48,38 @@ func shareSigFor(secret []byte, attachmentID string) string {
 func verifyShareSig(secret []byte, attachmentID, sig string) bool {
 	return hmac.Equal([]byte(shareSigFor(secret, attachmentID)), []byte(sig))
 }
+
+// ── multi-key share signatures (T-62) ────────────────────────────────────────
+//
+// 🔴 A SHARE SIGNATURE IS A FUNCTION OF THE SIGNING KEY, so the key ring
+// governs share links exactly as it governs tokens: new links are signed under
+// the key that currently signs, and an existing link keeps working while the
+// key that produced it is still IN the ring. Removing that key invalidates
+// every link made under it, with no grace period and no notice to whoever holds
+// the link — the same act, and the same instant, as the tokens it revokes.
+// That coupling is intentional: a key being removed because it may have leaked
+// must not leave the file-reading half of its authority alive.
+
+// shareSigForRing computes the signature for a NEW link under the key that
+// currently signs. Returns "" when the ring has no signing key.
+func shareSigForRing(kr *keyring, attachmentID string) string {
+	secret := kr.signingSecret()
+	if len(secret) == 0 {
+		return ""
+	}
+	return shareSigFor(secret, attachmentID)
+}
+
+// verifyShareSigAnyKey accepts a signature produced under ANY key still in the
+// ring. Constant-time per key (verifyShareSig), deny when the ring is empty.
+func verifyShareSigAnyKey(kr *keyring, attachmentID, sig string) bool {
+	ok := false
+	for _, secret := range kr.verifySecrets() {
+		// No early exit: every key is compared so the time taken does not say
+		// WHICH key matched, or whether an early key matched at all.
+		if verifyShareSig(secret, attachmentID, sig) {
+			ok = true
+		}
+	}
+	return ok
+}
