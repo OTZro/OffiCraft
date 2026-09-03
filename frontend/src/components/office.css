@@ -1697,14 +1697,33 @@
 /* An image attachment renders INSIDE the message bubble (below the text, in
  * the attachment stack); capped width, a slightly tighter radius so it nests
  * cleanly inside the bubble's 12px corners. */
+/* 🔴 THE BOX IS A FIXED SIZE, AND THE IMAGE IS FITTED INTO IT (T-48, owner
+ * rc-7a6a159a102f 「圖片我們在聊天視窗是不是可以給固定的尺寸？我們要看還是會點開
+ * 來看」). This used to be `width/height: auto` under a 300x320 cap, which means
+ * the row had NO height at all until the bytes decoded and then jumped to the
+ * image's real one — measured +46.7 to +318px per image, and that reflow is the
+ * main source of 「跳轉之後上方的圖片把目標擠走」 (measured +418.69px on a 433px
+ * viewport, a whole screen). A reserved box removes the reflow at its source
+ * rather than compensating for it afterwards.
+ *
+ * HEIGHT 220px, and the number is chosen against what the common case renders
+ * at TODAY: a 4:3 photo or screenshot filled the old 300px width at 225px tall,
+ * so it now renders 293x220 — a ~5px change for the aspect most chat images
+ * actually have. It is also strictly under the old 320px cap, so no thumbnail
+ * gets TALLER than it could before; the tallest (portrait) ones get shorter.
+ *
+ * `contain`, NOT `cover`: the whole image is shown, letterboxed — wide images
+ * get bars left/right, tall ones top/bottom. The owner asked for the picture to
+ * stay legible as a thumbnail and to be opened for detail; cropping it here
+ * would take away the "what is this" the thumbnail exists to answer.
+ *
+ * The WIDTH keeps the behaviour it had — capped at 300px, shrinking with a
+ * narrow bubble so a phone never overflows — it is only the height that stopped
+ * being decided by the image. */
 .chat__msg-image {
   display: block;
-  /* The thumbnail obeys both its desktop cap and the bubble's available
-   * inline size. A fixed 300px cap overflows a narrow mobile bubble. */
-  max-width: min(300px, 100%);
-  max-height: 320px;
-  width: auto;
-  height: auto;
+  width: min(300px, 100%);
+  height: 220px;
   border-radius: 8px;
   border: 1px solid color-mix(in srgb, var(--color-overlay) 6%, transparent);
   object-fit: contain;
