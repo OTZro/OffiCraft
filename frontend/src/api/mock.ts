@@ -872,7 +872,16 @@ let replyCards: ReplyCard[] = [];
 // §5.1) — the owner creates every type. Tests inject via __injectMockTask /
 // __injectMockOutsourceWorker / __injectMockTaskType to exercise the
 // list / filter / terminate / priority / message / manual seams.
-let tasks: TaskView[] = [];
+// 🔴 THE STORE HOLDS EACH ARTIFACT WHOLE, which is why the row type is not
+// plain `TaskView`. T-66 narrowed `TaskView.artifacts` to an id+label INDEX,
+// but an index is a READ SHAPE, not what a store keeps: the server's store
+// holds the full deliverable and its two reads project from it (`get_task` →
+// the index, `list_task_artifacts` → the full rows). A mock whose store held
+// only the index could not answer the second read at all — which is exactly
+// how it came to `return []` and tell a reader 「還沒有產物」 about a task whose
+// badge had just said N.
+export type MockTaskRow = Omit<TaskView, "artifacts"> & { artifacts?: TaskArtifactView[] };
+let tasks: MockTaskRow[] = [];
 let outsourceWorkers: OutsourceWorkerView[] = [];
 let taskManuals: TaskManualView[] = [];
 
@@ -1182,7 +1191,7 @@ function findTaskManual(typeKey: string): TaskManualView {
   return m;
 }
 
-function findTask(id: string): TaskView {
+function findTask(id: string): MockTaskRow {
   const t = tasks.find((x) => x.id === id);
   if (!t) {
     throw mockApiError(
@@ -3589,7 +3598,15 @@ export const mockApi: Api = {
       })),
       // Full task carries the artifact INDEX (T-66: id + label per deliverable);
       // count kept == length (server parity). The full rows are listTaskArtifacts.
-      artifacts: task.artifacts ?? [],
+      //
+      // 🔴 PROJECTED, not passed through. The store row holds each artifact
+      // whole, and a `TaskArtifactView` is structurally a `TaskArtifactRefView`
+      // too — so handing the stored row straight back type-checks and would
+      // quietly make mock mode the ONE place a task read carries url / mime /
+      // filename. The cockpit would then render from the task read here and
+      // 404 against a real server. The mapper is the guard, so the mock has to
+      // narrow exactly like it does.
+      artifacts: (task.artifacts ?? []).map((a) => ({ id: a.id, label: a.label })),
       artifactCount: (task.artifacts ?? []).length,
     };
   },
@@ -3632,17 +3649,22 @@ export const mockApi: Api = {
     // Mirrors GET /api/tasks/{task_id}/artifacts (T-66): the WHOLE ticket's
     // deliverables, each in full, in one call.
     //
-    // 🔴 The mock task fixtures have never carried artifacts (nothing in mock
-    // mode pins one — there is no addTaskArtifact here), so every task answers
-    // an EMPTY set. That is the honest projection of the fixtures, not a stub:
-    // a mock that invented deliverables would make the fetch-on-open path look
-    // exercised when the fixtures say there is nothing to open, and would make
-    // mock mode the only place the panel ever has rows.
+    // 🔴 THE ROWS COME OFF THE TASK, and a `[]` here would be a lie the reader
+    // can see. This used to `return []` under a comment claiming the mock
+    // fixtures never carry artifacts — false in this very file: `getTask`
+    // reads `task.artifacts`, `removeTaskArtifact` writes it, and
+    // `__injectMockTask` lands whole sets. The visible effect of the lie was
+    // the one thing TaskArtifactsPopover says it must never do: the badge
+    // saying 「產物 N」 over a panel saying 「還沒有產物」.
+    //
+    // Deliberately UNFILTERED and unpaged: the server's handler answers the
+    // whole ticket's set in one call, which is the shape the panel opens onto.
+    // Cloned so a caller mutating a row cannot reach into the store.
     //
     // `findTask` still runs, so an unknown task id is a not-found here exactly
     // as it is against a real server — never a silent [].
-    findTask(taskId);
-    return [];
+    const task = findTask(taskId);
+    return structuredClone(task.artifacts ?? []);
   },
 
   async getTaskCount(): Promise<TaskCountView> {
@@ -6153,8 +6175,14 @@ export function __injectMockReplyCard(card: ReplyCard): void {
 // create_task would arrive server-side. The mock UI itself never fabricates a
 // task (see the tasks note) — this exists so tests can exercise the tasks
 // page's list / filter / terminate / priority / message seams.
-export function __injectMockTask(task: TaskView): void {
-  tasks.push(task);
+export function __injectMockTask(task: TaskView | MockTaskRow): void {
+  // A plain `TaskView` is accepted because most callers only care about the
+  // list / filter / terminate seams and pass no artifacts at all. The cast is
+  // the one place the two artifact shapes meet: a caller that DOES pass rows is
+  // passing STORE rows (whole deliverables), which is what `listTaskArtifacts`
+  // hands back — pass index-only rows here and that read answers index-only
+  // rows, which is the honest consequence of what was put in.
+  tasks.push(task as MockTaskRow);
   emitTopic("task");
 }
 
