@@ -1,9 +1,15 @@
 -- +goose Up
 -- 🔴 THE NUMBER IS STILL ONLY TRUE AS OF THE LAST SCAN. See the header of
--- 00075_chat_message_recipient_sender_ts.sql -- the pair moved together from
--- 00072/00073 on 2026-09-04, and the re-scan instructions there apply to this
--- file too. This one MUST stay ABOVE 00075: it drops and recreates `member`,
--- and the rebuild only carries the columns named below.
+-- 00075_chat_message_recipient_sender_ts.sql: BOTH constraints written there
+-- apply to this file too, and they are two, not one -- ① re-scan for a
+-- COLLISION across all remote branches, and ② this package LANDS LAST, because
+-- its numbers sit above the in-flight 00071 (#400) and 00074 (#407). The pair
+-- moved together from 00072/00073 on 2026-09-04.
+--
+-- ⚠️ THIS FILE HAS NO ORDER DEPENDENCE ON 00075. The line here used to read
+-- "This one MUST stay ABOVE 00075", and it was false: 00075 creates an index on
+-- `chat_message`, while the DROP TABLE below drops `member`, which cannot touch
+-- it. Swapping the two is not a data bug.
 -- 🔴 THE COLUMN LIST BELOW IS THE WHOLE RISK. Anything added to `member` by a
 -- migration numbered BELOW this one and not named here is dropped for every
 -- existing row, silently. That is not hypothetical: #387 landed
