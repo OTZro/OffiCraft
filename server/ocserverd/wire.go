@@ -1668,7 +1668,7 @@ func newTaskArtifactVersionDTO(h TaskArtifactHistory, att *ChatAttachment) taskA
 		CreatedTS:    h.CreatedTS,
 		CreatedBy:    h.CreatedBy,
 	}
-	if b, ok := artifactBlobFacts(h.Kind, att); ok {
+	if b, ok := artifactBlobFacts(att); ok && h.Kind != ArtifactKindLink {
 		dto.URL, dto.Mime, dto.Filename, dto.IsImage = b.url, b.mime, b.filename, b.isImage
 	}
 	return dto
@@ -2211,7 +2211,7 @@ func newTaskArtifactDTO(a TaskArtifact, att *ChatAttachment, retained int) taskA
 		CreatedTS:    a.CreatedTS,
 		CreatedBy:    a.CreatedBy,
 	}
-	if b, ok := artifactBlobFacts(a.Kind, att); ok {
+	if b, ok := artifactBlobFacts(att); ok && a.Kind != ArtifactKindLink {
 		dto.URL, dto.Mime, dto.Filename, dto.IsImage = b.url, b.mime, b.filename, b.isImage
 	}
 	return dto
@@ -2238,8 +2238,15 @@ type artifactBlobFields struct {
 // file/image is the empty string by construction — so every file version was
 // unreachable and unreadable on the real wire, while both sides' tests passed
 // against fixtures that carried a url of their own.
-func artifactBlobFacts(kind string, att *ChatAttachment) (artifactBlobFields, bool) {
-	if kind == ArtifactKindLink || att == nil {
+// The artifact-kind test deliberately lives at each CALL SITE rather than in
+// here. The identity scanners (authz_surface_gate_test's mentionsIdentity and
+// lifecycle_identity_gate_t170e) recognise a `.Kind` SELECTOR inside a
+// comparison and are blind to a bare `kind` ident, so folding the predicate
+// into this helper deleted it from both ledgers with nothing going red — the
+// exact reshape this package's own gate header forbids. Visibility to the
+// scanners beats saving the repeated line.
+func artifactBlobFacts(att *ChatAttachment) (artifactBlobFields, bool) {
+	if att == nil {
 		return artifactBlobFields{}, false
 	}
 	b := artifactBlobFields{

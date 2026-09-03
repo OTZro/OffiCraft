@@ -505,22 +505,25 @@ var identityGateExpectedCount = map[string]int{
 // 還是不是未完成狀態」. Anything else is either a different axis (machine vs
 // person, task-executor vs member), a genuine wire/storage projection, or a
 // divergence that needs a ruling. Say which, in the reason.
-// 🔴 A NAMED DEBT: THIS LEDGER HAS NO "EVERY ENTRY IS STILL SCANNED" TOOTH.
-// An entry whose predicate later moves or is rewritten stays here, silently, and
-// the ledger starts overstating what it covers — with nothing red to say so.
-// This is not hypothetical: on 2026-09-03 a T-60 refactor lifted
-// `a.Kind != ArtifactKindLink` out of newTaskArtifactDTO into the shared
-// artifactBlobFacts helper, and that entry went stale THE MOMENT the refactor
-// landed. No test failed on the staleness itself.
+// 🔑 AN ORDINARY REFACTOR IS ENOUGH TO MAKE A REGISTRATION LIE, and it did on
+// 2026-09-03: a T-60 refactor lifted `a.Kind != ArtifactKindLink` out of
+// newTaskArtifactDTO into an artifactBlobFacts helper that took a BARE `kind`
+// string. The scanners recognise a `.Kind` SELECTOR and are blind to a bare
+// ident, so the predicate vanished from this ledger's view entirely — and the
+// entry naming it was DELETED to keep the stale check below green. The gate
+// went quiet by going blind, which is the one outcome its own header forbids.
 //
-// 🔑 The lesson worth carrying: AN ORDINARY REFACTOR IS ENOUGH TO MAKE A
-// REGISTRATION LIE — nobody has to do anything wrong. So this is a matter of
-// when, not whether.
+// ⚠️ An earlier draft of this comment claimed this ledger HAS NO "every entry is
+// still scanned" tooth. That was false, and the tooth is in this very file:
+// TestIdentityGatesAreEachOnTheRecord's `stale` pass (search "A STALE entry is a
+// finding too") errors on any entry the scan no longer finds. Nothing went
+// stale here BECAUSE the entry was deleted rather than left behind — which is
+// why the tooth stayed green while coverage shrank.
 //
-// The tooth already exists next door and can be copied verbatim:
-// nonCallerKindPredicates in authz_surface_gate_test.go is held by
-// TestNonCallerKindRegistryEntriesStillExist, which fails when a registered
-// predicate is no longer found by the scan.
+// 🔴 So the tooth that is genuinely missing is the OTHER direction: nothing
+// fails when an entry is DELETED alongside the reshape that hid its predicate.
+// The fix applied here was to put the predicate back where the scanners can see
+// it (at each call site) and re-register it, not to widen the scanners.
 var identityGateLedger = map[string]string{
 
 	// ── the ONE slot the 正職／外包 difference is allowed to live in ──────────
@@ -1026,6 +1029,12 @@ var identityGateLedger = map[string]string{
 	"api_tasks.go :: HandleReplaceTaskArtifactApiTasksTaskIdArtifactArtifactIdReplacePost :: art.Kind == ArtifactKindLink": "" +
 		"NOT an identity gate — the same artifact kind picking which content rules apply " +
 		"(a link carries a url, a file carries an attachment).",
+	"wire.go :: newTaskArtifactDTO :: a.Kind != ArtifactKindLink": "" +
+		"NOT an identity gate — the wire twin of the artifact-kind test above.",
+	"wire.go :: newTaskArtifactVersionDTO :: h.Kind != ArtifactKindLink": "" +
+		"NOT an identity gate — the same artifact kind read off a RETAINED VERSION " +
+		"row (T-60), deciding whether that version has a blob whose filename and mime " +
+		"the reader can resolve. The wire twin of the history handler's entry above.",
 	"api_tasks_handoff.go :: applyHandoffPlan :: plan.Kind switch case HandoffFollowUp": "" +
 		"NOT an identity gate — HANDOFF-PLAN kind (none / follow-up / return to " +
 		"creator). Caught by the switch shape, which exists for the member-kind switch " +
