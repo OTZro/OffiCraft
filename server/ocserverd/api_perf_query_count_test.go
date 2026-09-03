@@ -145,9 +145,10 @@ func TestTaskTableReadPatternKnowsItsOwnBoundary(t *testing.T) {
 // `ListTaskSteps(t.ID)` sitting there costs 1 extra query in both, the two
 // tallies stay equal, and the constant bound (`few.step > 3`) still passes. That
 // is a REAL N+1 on the unfiltered/default list, and this guard is blind to it.
-// Owner ruling (T-66): 那是真的洞,但這一輪不補 — it is out of this ticket's
-// scope, and closing it needs a second axis (vary the number of RETURNED rows,
-// not just the population). 不要以為這道護欄守得比上面這段更多。
+// T-66 的執行者判斷(不是 owner 裁定,沒有人向他請示過這一格): 那是真的洞,
+// 但這一輪不補 — it is out of this ticket's scope, and closing it needs a
+// second axis (vary the number of RETURNED rows, not just the population).
+// 不要以為這道護欄守得比上面這段更多。
 var taskStepTableRead = regexp.MustCompile(
 	`(?i)\b(?:from|join)\s+(?:[a-z_][a-z0-9_]*\.)?` +
 		"(?:\"task_step\"|'task_step'|`task_step`|\\[task_step\\]|task_step\\b)")
