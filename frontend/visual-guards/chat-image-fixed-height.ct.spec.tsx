@@ -16,6 +16,9 @@
 // MUTANT（已驗紅，未截斷輸出在 DELETE-CORRECTIONS-REPORT.md）：把
 // `.chat__msg-image` 的 `height: 220px` 換回 `height: auto; max-height: 320px`
 // ⇒ (1) 立刻紅在「這一列的高度差必須是 0」上。
+//
+// MUTANT 2（已驗紅）：把 `object-fit: scale-down` 換回 `contain`
+// ⇒ 「小圖不准被放大」那一條紅在畫出來的尺寸上：80x60 的圖被放大成 291x218。
 import { test, expect } from "@playwright/experimental-ct-react";
 import { ChatImageSizeStory } from "./stories/ChatImageSizeStory";
 
@@ -26,7 +29,7 @@ function pngDataUri(w: number, h: number): string {
   // A 1x1 PNG scaled by the browser is enough — `object-fit` cares about the
   // INTRINSIC ratio, and the intrinsic ratio is what an SVG can state exactly.
   return `data:image/svg+xml,${encodeURIComponent(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="${w}" height="${h}" fill="%23c33"/></svg>`,
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="${w}" height="${h}" fill="lime"/></svg>`,
   )}`;
 }
 
@@ -69,7 +72,54 @@ async function heightAcrossLoad(
         objectFit: getComputedStyle(i).objectFit,
       };
     });
-  return { before, after, beforeAfterRowTop, afterAfterRowTop, img };
+  return { cmp, before, after, beforeAfterRowTop, afterAfterRowTop, img };
+}
+
+/** The size the image is actually PAINTED at inside its box, in CSS px.
+ *
+ * 🔴 `getBoundingClientRect()` cannot answer this. The box is a fixed
+ * `min(300px,100%) x 220px` whether the image is upscaled into it or drawn small
+ * and centred — the element rect reads 293x220 either way, so a rect-based
+ * assertion would be green under both. Only the pixels distinguish them: the
+ * element is screenshotted, decoded back INSIDE the page (Node here has no PNG
+ * decoder) and scanned for the fixture's fill colour. Desktop Chrome runs at
+ * deviceScaleFactor 1, so one screenshot pixel is one CSS px. */
+async function paintedSize(
+  page: Parameters<Parameters<typeof test>[1]>[0]["page"],
+  shot: Buffer,
+) {
+  return page.evaluate(async (b64) => {
+    const blob = await (await fetch(`data:image/png;base64,${b64}`)).blob();
+    const bmp = await createImageBitmap(blob);
+    const canvas = document.createElement("canvas");
+    canvas.width = bmp.width;
+    canvas.height = bmp.height;
+    const ctx = canvas.getContext("2d")!;
+    ctx.drawImage(bmp, 0, 0);
+    const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (let y = 0; y < canvas.height; y += 1) {
+      for (let x = 0; x < canvas.width; x += 1) {
+        const i = (y * canvas.width + x) * 4;
+        const lime =
+          data[i + 3] > 200 &&
+          data[i + 1] > 180 &&
+          data[i] < 120 &&
+          data[i + 2] < 120;
+        if (!lime) continue;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+    return maxX < 0
+      ? { w: 0, h: 0 }
+      : { w: maxX - minX + 1, h: maxY - minY + 1 };
+  }, shot.toString("base64"));
 }
 
 for (const width of [390, 1280]) {
@@ -105,7 +155,7 @@ for (const width of [390, 1280]) {
       ).toBe(0);
 
       // 完整顯示,不裁切:整張圖縮進框內。`cover` 會裁掉,owner 明確不要。
-      expect(m.img.objectFit).toBe("contain");
+      expect(m.img.objectFit).toBe("scale-down");
 
       // 框本身是固定的:高度就是 CSS 說的那個數字,寬度照舊受 300px / 容器寬夾住。
       expect(m.img.h, `框高必須固定 —— 量到 ${JSON.stringify(m.img)}`).toBe(220);
@@ -115,6 +165,46 @@ for (const width of [390, 1280]) {
     });
   }
 }
+
+test("小圖不准被放大 —— 框照樣是固定的 220,圖照原尺寸畫在框裡", async ({
+  mount,
+  page,
+}) => {
+  const m = await heightAcrossLoad(mount, page, 390, { w: 80, h: 60 });
+
+  expect(
+    m.img.naturalH,
+    `the image must actually have decoded (got ${JSON.stringify(m.img)})`,
+  ).toBe(60);
+
+  // 零回流那一半對小圖同樣要成立 —— 換 `object-fit` 不准動到預留的框。
+  expect(
+    m.after - m.before,
+    `含小圖那一列的高度在載入前後必須完全一樣 —— 量到 ${JSON.stringify(m)}`,
+  ).toBe(0);
+  expect(
+    m.afterAfterRowTop - m.beforeAfterRowTop,
+    `下一列不准被推走 —— 量到 ${JSON.stringify(m)}`,
+  ).toBe(0);
+  expect(m.img.h, `框高必須固定 —— 量到 ${JSON.stringify(m.img)}`).toBe(220);
+
+  const painted = await paintedSize(
+    page,
+    await m.cmp.getByTestId("chat-image").screenshot(),
+  );
+  expect(
+    painted.w,
+    `80x60 的小圖必須照原尺寸畫,不准放大填滿框 —— 畫出來是 ${JSON.stringify(painted)}`,
+  ).toBeLessThanOrEqual(81);
+  expect(
+    painted.h,
+    `80x60 的小圖必須照原尺寸畫,不准放大填滿框 —— 畫出來是 ${JSON.stringify(painted)}`,
+  ).toBeLessThanOrEqual(61);
+  expect(
+    Math.min(painted.w, painted.h),
+    `圖必須真的畫出來了,否則整條是空綠 —— 畫出來是 ${JSON.stringify(painted)}`,
+  ).toBeGreaterThanOrEqual(59);
+});
 
 test("框的尺寸不歸主題管 —— 換一套 theme token,幾何逐位元相同", async ({
   mount,

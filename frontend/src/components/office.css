@@ -1712,10 +1712,17 @@
  * actually have. It is also strictly under the old 320px cap, so no thumbnail
  * gets TALLER than it could before; the tallest (portrait) ones get shorter.
  *
- * `contain`, NOT `cover`: the whole image is shown, letterboxed — wide images
- * get bars left/right, tall ones top/bottom. The owner asked for the picture to
- * stay legible as a thumbnail and to be opened for detail; cropping it here
- * would take away the "what is this" the thumbnail exists to answer.
+ * `scale-down`, NOT `cover` and NOT `contain`: the whole image is shown,
+ * letterboxed — wide images get bars left/right, tall ones top/bottom. The owner
+ * asked for the picture to stay legible as a thumbnail and to be opened for
+ * detail; cropping it here would take away the "what is this" the thumbnail
+ * exists to answer. `scale-down` renders as whichever of `none` and `contain` is
+ * SMALLER, so anything bigger than the box behaves exactly as `contain` did,
+ * while a small image — a 60x40 icon, a small pasted screenshot — is drawn at
+ * its natural size, centred, instead of being blown up ~3.7x into a soft, blurry
+ * 293x220. `contain` upscales; that is the one thing it does that nobody asked
+ * for. Fixed height, whole image, no crop all survive the swap — the box is
+ * unchanged, so the zero-reflow property is untouched.
  *
  * The WIDTH keeps the behaviour it had — capped at 300px, shrinking with a
  * narrow bubble so a phone never overflows — it is only the height that stopped
@@ -1726,7 +1733,7 @@
   height: 220px;
   border-radius: 8px;
   border: 1px solid color-mix(in srgb, var(--color-overlay) 6%, transparent);
-  object-fit: contain;
+  object-fit: scale-down;
 }
 /* A clickable image (thread + composer preview) opens the shared full-view
  * overlay (md-preview.css). T-f014 retired the separate `chat__lightbox`
