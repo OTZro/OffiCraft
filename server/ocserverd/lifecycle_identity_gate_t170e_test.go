@@ -507,6 +507,19 @@ var identityGateLedger = map[string]string{
 		"spawn/stop candidate, it is the thing that EXECUTES them — unless it is being " +
 		"uninstalled, which is the one case the reconcile tick must still drive. A " +
 		"machine-vs-person axis, not the 正職／外包 one.",
+	"lifecycle_roster.go :: lifecycleTickDriverFor :: m.Kind == KindOutsource": "" +
+		"WHICH HALF of the merged tick drives the row — NOT whether the row is treated " +
+		"differently. This is the 正職／外包 split that already exists and has never been " +
+		"written down: it is a side effect of dal.ListMembers being `WHERE kind != " +
+		"'outsource'`, which is today the ONLY thing keeping one row out of both FSMs " +
+		"in a single tick. T-14 項目 6 merges that clause away; this expression is the " +
+		"same split re-sited into a named total predicate FIRST, so the invariant " +
+		"becomes falsifiable (TestLifecycleTickDriver_EveryRowHasExactlyOneDriver) " +
+		"instead of implicit in a query. It adds no differentiated TREATMENT — both " +
+		"halves run the same shared formalities and the same entry filter — so the " +
+		"owner's 2026-08-26 question is answered by: this branch is the routing that " +
+		"the two-executor split needs while it exists, and deleting it is the follow-up " +
+		"card (retire the outsource half), not this step.",
 	"lifecycle_roster.go :: lifecycleRosterPasses :: m.Kind != KindOutsource": "" +
 		"recycle_loop_break's AppliesTo — THE one declared staff-only formality, and " +
 		"the mechanism working as designed: a worker already has a loop-break in " +

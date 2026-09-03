@@ -433,6 +433,18 @@ func (s *apiServer) runOutsourceTick(now float64) {
 	s.runWorkerLifecyclePasses(workers, now)
 
 	for _, w := range workers {
+		// WHICH HALF drives this row (lifecycle_roster.go) — the twin of the
+		// guard at the head of runReconcileTick's candidate loop, asked here for
+		// the same reason and in the same position: before anything decides
+		// anything about the row. A NO-OP TODAY, deliberately: ListOutsourceWorkers
+		// returns kind='outsource' rows only and the driver hands every one of
+		// them to this half. It is here so BOTH halves state their claim BY NAME,
+		// which is what lets the parity test assert the two claims never overlap
+		// and never both abstain — an invariant that today rests entirely on a
+		// SQL WHERE clause and would rest on nothing once that clause is merged.
+		if lifecycleTickDriverFor(memberFromWorker(w)) != driverOutsource {
+			continue
+		}
 		// A refused live-worker kill (owner 停止/relocate toward a warden that
 		// dropped offline) is parked, never lost — re-fire it FIRST, before any
 		// branch below can re-spawn onto the same machine (P5a rework).
