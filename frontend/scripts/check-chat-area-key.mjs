@@ -44,6 +44,13 @@
 // a literal, and an id borrowed from nowhere on this element — are no longer
 // silent.
 //
+// ⚠️ A BARE VARIABLE (`key={peerId}`) IS REFUSED ON PURPOSE, and it is the one
+// thing this rule cannot do better: from source text alone `key={peerId}` and
+// `key={CHAT_KEY}` are the same shape, and one of them is the defect. So the key
+// has to name the room through something the element also holds — write
+// `key={member.id}` beside `member={member}`. The failure message says exactly
+// that, and must keep naming a form this rule actually accepts.
+//
 // Run: `npm run lint:chat-area-key` (also wired into bin/ci.sh).
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -196,7 +203,7 @@ if (missing.length > 0 || constant.length > 0) {
   console.error(
     "  the defect family T-48 spent twelve review rounds on. Mount it as",
   );
-  console.error("  `<ChatArea key={peerId} …>`.");
+  console.error("  `<ChatArea key={member.id} member={member} …>`.");
   process.exit(1);
 }
 
