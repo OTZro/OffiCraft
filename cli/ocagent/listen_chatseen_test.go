@@ -106,7 +106,7 @@ func TestListenerRun_FirstEver_SilentBaseline_ThenPersists(t *testing.T) {
 		t.Fatal("a missing state file must yield an UNPRIMED store")
 	}
 	var out bytes.Buffer
-	drainChat(srv.Client(), cfg, seen, &out, !seen.primed)
+	drainChat(srv.Client(), cfg, seen, &out, !seen.primed, nil)
 
 	if out.Len() != 0 {
 		t.Fatalf("first-ever drain must print NOTHING, got %q", out.String())
@@ -127,7 +127,7 @@ func TestListenerRun_ColdStart_BackfillsWhatArrivedWhileDown(t *testing.T) {
 	// process #1 — first ever: silent baseline.
 	var out1 bytes.Buffer
 	s1 := loadChatSeen(chatSeenPath(cfg))
-	drainChat(srv.Client(), cfg, s1, &out1, !s1.primed)
+	drainChat(srv.Client(), cfg, s1, &out1, !s1.primed, nil)
 	if out1.Len() != 0 {
 		t.Fatalf("process #1 must be silent, got %q", out1.String())
 	}
@@ -141,7 +141,7 @@ func TestListenerRun_ColdStart_BackfillsWhatArrivedWhileDown(t *testing.T) {
 	if !s2.primed {
 		t.Fatal("a persisted baseline must load PRIMED")
 	}
-	n := drainChat(srv.Client(), cfg, s2, &out2, !s2.primed)
+	n := drainChat(srv.Client(), cfg, s2, &out2, !s2.primed, nil)
 
 	if n != 2 {
 		t.Fatalf("backfill count = %d want 2", n)
@@ -162,7 +162,7 @@ func TestListenerRun_ColdStart_BackfillsWhatArrivedWhileDown(t *testing.T) {
 	// process #3 — nothing new arrived: silence.
 	var out3 bytes.Buffer
 	s3 := loadChatSeen(chatSeenPath(cfg))
-	if n3 := drainChat(srv.Client(), cfg, s3, &out3, !s3.primed); n3 != 0 || out3.Len() != 0 {
+	if n3 := drainChat(srv.Client(), cfg, s3, &out3, !s3.primed, nil); n3 != 0 || out3.Len() != 0 {
 		t.Fatalf("re-open with nothing new: n=%d out=%q, want 0 and silence", n3, out3.String())
 	}
 }
@@ -273,7 +273,7 @@ func TestLoadChatSeen_CorruptOrMissing_ReprimesSilently(t *testing.T) {
 				t.Fatal("a corrupt state file must load UNPRIMED")
 			}
 			var out bytes.Buffer
-			drainChat(srv.Client(), cfg, s, &out, !s.primed)
+			drainChat(srv.Client(), cfg, s, &out, !s.primed, nil)
 			if out.Len() != 0 {
 				t.Fatalf("corrupt-file reboot must be silent, got %q", out.String())
 			}
@@ -293,7 +293,7 @@ func TestLoadChatSeen_EmptyArrayIsPrimed(t *testing.T) {
 
 	s1 := loadChatSeen(chatSeenPath(cfg))
 	var out bytes.Buffer
-	drainChat(srv.Client(), cfg, s1, &out, !s1.primed)
+	drainChat(srv.Client(), cfg, s1, &out, !s1.primed, nil)
 	if got := readSeenFile(t, chatSeenPath(cfg)); len(got) != 0 {
 		t.Fatalf("empty inbox baseline = %v want []", got)
 	}
@@ -304,7 +304,7 @@ func TestLoadChatSeen_EmptyArrayIsPrimed(t *testing.T) {
 		t.Fatal("`[]` on disk IS a baseline — must load PRIMED")
 	}
 	out.Reset()
-	drainChat(srv.Client(), cfg, s2, &out, !s2.primed)
+	drainChat(srv.Client(), cfg, s2, &out, !s2.primed, nil)
 	if !strings.Contains(out.String(), "chat from boss (#m1)") {
 		t.Fatalf("first message after an empty baseline must backfill; out = %q", out.String())
 	}
@@ -332,7 +332,7 @@ func TestDrainChat_BacklogOverCap_TruncatesOldestAndSaysSo(t *testing.T) {
 	}
 	s := loadChatSeen(chatSeenPath(cfg))
 	var out bytes.Buffer
-	if n := drainChat(srv.Client(), cfg, s, &out, false); n != total {
+	if n := drainChat(srv.Client(), cfg, s, &out, false, nil); n != total {
 		t.Fatalf("returned count = %d want the full unread count %d", n, total)
 	}
 
@@ -363,7 +363,7 @@ func TestDrainChat_BacklogOverCap_TruncatesOldestAndSaysSo(t *testing.T) {
 	// dropped-but-announced messages are recorded: the next drain is silent.
 	out.Reset()
 	s2 := loadChatSeen(chatSeenPath(cfg))
-	if n := drainChat(srv.Client(), cfg, s2, &out, false); n != 0 || out.Len() != 0 {
+	if n := drainChat(srv.Client(), cfg, s2, &out, false, nil); n != 0 || out.Len() != 0 {
 		t.Fatalf("truncated messages must still be marked seen: n=%d out=%q", n, out.String())
 	}
 }
@@ -386,13 +386,13 @@ func TestDrainChat_FetchFault_LeavesStateUntouched(t *testing.T) {
 
 	var out bytes.Buffer
 	s := loadChatSeen(chatSeenPath(cfg))
-	drainChat(srv.Client(), cfg, s, &out, true)
+	drainChat(srv.Client(), cfg, s, &out, true, nil)
 	before := readSeenFile(t, chatSeenPath(cfg))
 
 	atomic.StoreInt32(&fail, 1)
 	s2 := loadChatSeen(chatSeenPath(cfg))
 	out.Reset()
-	if n := drainChat(srv.Client(), cfg, s2, &out, false); n != 0 || out.Len() != 0 {
+	if n := drainChat(srv.Client(), cfg, s2, &out, false, nil); n != 0 || out.Len() != 0 {
 		t.Fatalf("faulting drain: n=%d out=%q, want 0 and silence", n, out.String())
 	}
 	after := readSeenFile(t, chatSeenPath(cfg))
@@ -409,14 +409,14 @@ func TestDrainChat_PrunesIdsGoneFromTheAuthority(t *testing.T) {
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle", Home: home}
 	var out bytes.Buffer
 	s := loadChatSeen(chatSeenPath(cfg))
-	drainChat(srv.Client(), cfg, s, &out, true)
+	drainChat(srv.Client(), cfg, s, &out, true, nil)
 	if got := readSeenFile(t, chatSeenPath(cfg)); len(got) != 3 {
 		t.Fatalf("baseline = %v want 3 ids", got)
 	}
 	srv.setList(msgsJSON("m3", "m4")) // m1/m2 aged out of the window
 	s2 := loadChatSeen(chatSeenPath(cfg))
 	out.Reset()
-	drainChat(srv.Client(), cfg, s2, &out, false)
+	drainChat(srv.Client(), cfg, s2, &out, false, nil)
 	got := readSeenFile(t, chatSeenPath(cfg))
 	if len(got) != 2 || got[0] != "m3" || got[1] != "m4" {
 		t.Fatalf("pruned set = %v want [m3 m4]", got)
@@ -658,7 +658,7 @@ func TestChatSeen_PersistFailure_AnnouncesInsteadOfRelapsingSilently(t *testing.
 
 	var out bytes.Buffer
 	s := loadChatSeen(chatSeenPath(cfg))
-	drainChat(srv.Client(), cfg, s, &out, !s.primed)
+	drainChat(srv.Client(), cfg, s, &out, !s.primed, nil)
 
 	// the write really did fail — otherwise this test proves nothing.
 	if _, err := os.ReadFile(chatSeenPath(cfg)); err == nil {
@@ -686,7 +686,7 @@ func TestChatSeen_PersistFailure_AnnouncesInsteadOfRelapsingSilently(t *testing.
 	// ONCE per process: drainChat also runs on every inbound delta, and a
 	// repeated warning would drown the very context the cap protects.
 	out.Reset()
-	drainChat(srv.Client(), cfg, s, &out, false)
+	drainChat(srv.Client(), cfg, s, &out, false, nil)
 	if strings.Contains(out.String(), "chat-seen 寫不進去") {
 		t.Fatalf("the warning must not repeat within one process; out = %q", out.String())
 	}
@@ -709,7 +709,7 @@ func TestChatSeen_PersistFailure_AfterAGoodWrite_RePrintsInsteadOfSwallowing(t *
 	// a healthy baseline lands first — this is what makes it the OTHER branch.
 	var out bytes.Buffer
 	s0 := loadChatSeen(chatSeenPath(cfg))
-	drainChat(srv.Client(), cfg, s0, &out, !s0.primed)
+	drainChat(srv.Client(), cfg, s0, &out, !s0.primed, nil)
 	if !s0.primed {
 		t.Fatal("setup: the first write must succeed")
 	}
@@ -725,7 +725,7 @@ func TestChatSeen_PersistFailure_AfterAGoodWrite_RePrintsInsteadOfSwallowing(t *
 	srv.setList(msgsJSON("m1", "m2"))
 	out.Reset()
 	s1 := loadChatSeen(chatSeenPath(cfg))
-	drainChat(srv.Client(), cfg, s1, &out, !s1.primed)
+	drainChat(srv.Client(), cfg, s1, &out, !s1.primed, nil)
 	if c := strings.Count(out.String(), "chat from boss (#m2)"); c != 1 {
 		t.Fatalf("this process must still surface m2 once, got %d; out = %q", c, out.String())
 	}
@@ -740,7 +740,7 @@ func TestChatSeen_PersistFailure_AfterAGoodWrite_RePrintsInsteadOfSwallowing(t *
 	if !s2.primed {
 		t.Fatal("the stale baseline is still on disk, so this boot loads PRIMED")
 	}
-	drainChat(srv.Client(), cfg, s2, &out, !s2.primed)
+	drainChat(srv.Client(), cfg, s2, &out, !s2.primed, nil)
 	if c := strings.Count(out.String(), "chat from boss (#m2)"); c != 1 {
 		t.Fatalf("next boot must RE-print m2 (not swallow it), got %d; out = %q", c, out.String())
 	}
@@ -766,7 +766,7 @@ func TestChatSeen_PersistSuccess_SaysNothing(t *testing.T) {
 	cfg := Config{Base: srv.URL, Token: "t", ID: "kyle", Home: home}
 	var out bytes.Buffer
 	s := loadChatSeen(chatSeenPath(cfg))
-	drainChat(srv.Client(), cfg, s, &out, !s.primed)
+	drainChat(srv.Client(), cfg, s, &out, !s.primed, nil)
 	if !s.primed {
 		t.Fatal("a healthy write must prime")
 	}

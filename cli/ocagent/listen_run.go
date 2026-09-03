@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -61,10 +62,14 @@ type listener struct {
 	cursorPath string
 	winddown   *windDownHook
 	recycle    *recycleHook
-	seen       *chatSeen           // persisted id-keyed unread cursor for drain_chat
-	replySeen  *replyCardSeen      // persisted answered-card dedup (drain + live delta)
-	taskSnaps  map[string]taskSnap // per-task last-seen state (the "what moved" diff)
-	once       bool                // single-connect test hook (mirrors --once)
+	seen       *chatSeen // persisted id-keyed unread cursor for drain_chat
+	// ack is the delivery gate for chat batches: non-nil ONLY when the parent
+	// asked for acks (the codex sidecar). nil ⇒ a printed line counts as
+	// delivered, which is the claude path and must stay byte-for-byte as it was.
+	ack       *ackGate
+	replySeen *replyCardSeen      // persisted answered-card dedup (drain + live delta)
+	taskSnaps map[string]taskSnap // per-task last-seen state (the "what moved" diff)
+	once      bool                // single-connect test hook (mirrors --once)
 }
 
 // newSSEStreamClient builds the long-lived HTTP client for the SSE downlink. Timeout
@@ -105,6 +110,16 @@ const (
 	noticeDisconnected = "listen: disconnected"
 	noticeConnected    = "listen: connected"
 	noticeGivingUp     = "listen: giving up"
+
+	// noticeBatch is the END-OF-BATCH marker of the ack protocol (T-48), and it
+	// is deliberately spelled with the same `listen:` head as the three notices
+	// above — for the OPPOSITE reason. Those are carved OUT of the sidecar's
+	// blanket transport filter so they reach the agent; this one must be
+	// swallowed BY it, because it is a line the two processes say to each other
+	// and not a line anybody should read. The head is what guarantees that: any
+	// `[ocagent] listen: …` line the sidecar does not recognise is dropped, so a
+	// marker can never become a turn on the model.
+	noticeBatch = "listen: batch"
 )
 
 func (l *listener) logf(format string, args ...any) {
@@ -588,7 +603,7 @@ func (l *listener) drainChatNow() int {
 	if l.seen == nil {
 		l.seen = loadChatSeen(chatSeenPath(l.cfg))
 	}
-	return drainChat(l.api, l.cfg, l.seen, l.out, !l.seen.primed)
+	return drainChat(l.api, l.cfg, l.seen, l.out, !l.seen.primed, l.ack)
 }
 
 // run is the always-online listen loop. It blocks until ctx is cancelled or a self-exit
@@ -742,6 +757,7 @@ func cmdListen(cfg Config, env func(string) string, once bool, out io.Writer) in
 		winddown:         newWindDownHook(api, cfg, out),
 		recycle:          newRecycleHook(api, cfg, out),
 		seen:             loadChatSeen(chatSeenPath(cfg)),
+		ack:              newAckGate(env, os.Stdin),
 		replySeen:        loadReplyCardSeen(replyCardSeenPath(cfg)),
 		taskSnaps:        map[string]taskSnap{},
 		once:             once,

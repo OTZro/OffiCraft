@@ -90,3 +90,50 @@ func TestListenNoticePrefixesMatchTheSidecarConsumer(t *testing.T) {
 			"codex session.", consumer, transportHead)
 	}
 }
+
+// ── THE ACK PROTOCOL'S TWO COPIES (T-48) ────────────────────────────────────
+// The batch marker and the env var that turns the protocol on are the same
+// physical two-copy problem as the notices above, with a worse failure mode:
+// they do not merely go quiet, they go quiet in the direction of DATA LOSS.
+//
+//   - the marker head moves ⇒ the sidecar never recognises the end of a batch,
+//     never answers, and every chat drain blocks forever on an ack that is not
+//     coming. The member goes deaf and nothing reports it.
+//   - the env var name moves ⇒ the listener never enters ack mode, goes back to
+//     treating "printed" as "delivered", and every message the sidecar fails to
+//     put in the model's conversation is marked read anyway — which is the whole
+//     of what this protocol exists to prevent.
+func TestAckProtocolLiteralsMatchTheSidecarConsumer(t *testing.T) {
+	const consumer = "../ocwarden/codex_session.go"
+
+	source, err := os.ReadFile(consumer)
+	if err != nil {
+		t.Fatalf("cannot read the sidecar half of the ack protocol (%s): %v", consumer, err)
+	}
+	text := string(source)
+
+	// The marker must still be a line the sidecar's blanket transport filter
+	// swallows — otherwise protocol chatter starts becoming turns on the model.
+	if !strings.HasPrefix(agentLinePrefix+noticeBatch, agentLinePrefix+"listen:") {
+		t.Fatalf("the batch marker %q no longer wears the transport head, so the "+
+			"sidecar would forward it to the agent as content",
+			agentLinePrefix+noticeBatch)
+	}
+	marker := regexp.MustCompile(`noticeBatchPrefix\s*=\s*` +
+		regexp.QuoteMeta(`"`+agentLinePrefix+noticeBatch+` "`))
+	if !marker.MatchString(text) {
+		t.Errorf("%s no longer declares noticeBatchPrefix = %q.\n"+
+			"This module prints that marker at the end of every gated chat batch "+
+			"and then BLOCKS until the sidecar answers it. If the consumer stops "+
+			"recognising it, no answer is ever sent and every drain hangs.",
+			consumer, agentLinePrefix+noticeBatch+" ")
+	}
+
+	env := regexp.MustCompile(`listenAckEnv\s*=\s*` + regexp.QuoteMeta(`"`+listenAckEnv+`"`))
+	if !env.MatchString(text) {
+		t.Errorf("%s no longer declares listenAckEnv = %q.\n"+
+			"That is the only signal this listener has that its stdout is being "+
+			"carried by somebody else. Without it the listener silently returns to "+
+			"marking undelivered messages read.", consumer, listenAckEnv)
+	}
+}

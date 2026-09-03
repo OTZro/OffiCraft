@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -814,6 +815,112 @@ func attachmentSummary(m map[string]any) string {
 const chatBacklogPrintCap = 20
 
 // ---------------------------------------------------------------------------
+// batch acknowledgement — the codex sidecar's delivery receipt (T-48).
+// ---------------------------------------------------------------------------
+
+// listenAckEnv is the ONE runtime signal that this listener's stdout is not the
+// agent's own transcript. A claude member reads these lines directly, so a
+// printed line IS a delivered line; a codex member reads them through the
+// ocwarden sidecar, which has to turn each line into an App Server turn — and
+// that turn can be REFUSED. Printing is then no evidence of anything.
+//
+// 🔴 IT IS AN ENV VAR THE PARENT SETS, AND NOTHING ELSE. Not a tty check, not a
+// parent-process sniff, not "OC_ID looks like a codex member": every one of
+// those guesses answers wrongly in some real configuration, and the direction it
+// is wrong in (ack mode with nobody to answer) HANGS the drain. The only party
+// that knows this listener is being consumed is the process that started it, so
+// it says so out loud (cli/ocwarden/codex_session.go sets it on the child).
+const listenAckEnv = "OC_LISTEN_ACK"
+
+// ackGate is the listener half of that protocol: it prints the end-of-batch
+// marker and blocks until the consumer answers `ack <token>` / `nack <token>` on
+// stdin. A nil gate is the claude path — no marker, no wait, always yes — so the
+// non-ack behaviour is not a branch that can rot but the absence of an object.
+type ackGate struct {
+	answers <-chan string
+	next    int // monotonic batch token
+	wait    time.Duration
+}
+
+// ackWaitTimeout bounds how long one batch may hold the listener.
+//
+// 🔴 WHY THERE IS A DEADLINE AT ALL. Waiting for the verdict is the whole point
+// of this gate, but the wait happens on the listener's ONLY thread: while it
+// blocks, this member receives nothing — no chat, no cards, no tasks. An
+// unbounded wait therefore turns one unanswerable batch into a member that is
+// deaf for the rest of its life, and NOTHING says so. That is worse than the
+// false tick this gate exists to remove: a tick is wrong about the past, a deaf
+// listener is wrong about everything after it.
+//
+// Timing out is SAFE in the direction that matters. It is treated exactly like
+// a nack — no receipt filed, the ids not recorded — so the same lines are
+// printed again on the next drain. The cost of being wrong here is a repeat;
+// the cost of waiting forever is silence.
+const ackWaitTimeout = 30 * time.Second
+
+// newAckGate returns nil (⇒ the claude path) unless the parent asked for acks.
+func newAckGate(env func(string) string, answers io.Reader) *ackGate {
+	if env == nil || env(listenAckEnv) != "1" || answers == nil {
+		return nil
+	}
+	// The scanner runs on its own goroutine so `confirm` can select against a
+	// deadline: a bufio.Scanner read cannot be cancelled once it has begun.
+	lines := make(chan string, 8)
+	go func() {
+		defer close(lines)
+		sc := bufio.NewScanner(answers)
+		for sc.Scan() {
+			lines <- sc.Text()
+		}
+	}()
+	return &ackGate{answers: lines, wait: ackWaitTimeout}
+}
+
+// confirm prints `[ocagent] listen: batch <token>` and waits for the verdict on
+// that exact token. True ⇒ the batch reached the agent's conversation and the
+// caller may file the read receipt and record the ids; false ⇒ it did not, and
+// the caller must do NEITHER, so the next drain prints the same lines again.
+//
+// The marker deliberately wears the `listen:` head: it is protocol, not content,
+// and that head is what the sidecar's blanket filter swallows — so it can never
+// become a turn on the model.
+//
+// A closed stdin (the consumer died) answers false for the same reason a nack
+// does: nobody can say the message was delivered.
+func (g *ackGate) confirm(out io.Writer) bool {
+	if g == nil {
+		return true
+	}
+	g.next++
+	token := strconv.Itoa(g.next)
+	fmt.Fprintf(out, "%s%s %s\n", agentLinePrefix, noticeBatch, token)
+	deadline := time.After(g.wait)
+	for {
+		select {
+		case line, open := <-g.answers:
+			if !open {
+				return false // stdin closed: nobody can say it was delivered
+			}
+			verb, arg, _ := strings.Cut(strings.TrimSpace(line), " ")
+			if strings.TrimSpace(arg) != token {
+				continue // an answer to a batch that is no longer open
+			}
+			return verb == "ack"
+		case <-deadline:
+			// Said out loud, and deliberately WITHOUT the `listen:` head, so it
+			// is one of the few lines that reaches the agent itself: from here
+			// on this member is running again but those messages were not
+			// delivered, and it is the only party that can go and look.
+			fmt.Fprintf(out, "%s等不到「已送達」的回覆（batch %s，等了 %s）—— "+
+				"這一批訊息**沒有**被算成你看過了，下一次補印會再送一次。"+
+				"如果這行一直出現，收訊這條路的另一端有問題。\n",
+				agentLinePrefix, token, g.wait)
+			return false
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // per-agent chat unread cursor (persisted — cold-start backfill).
 // ---------------------------------------------------------------------------
 
@@ -992,13 +1099,21 @@ func (s *chatSeen) warnWriteFailed(out io.Writer, err error) {
 // chatBacklogPrintCap). A fetch fault prints nothing and leaves the persisted
 // cursor untouched, so the next drain retries the same window.
 // R7: reads ONLY the refetched authority, never a delta. Mirrors drain_chat.
-func drainChat(client httpClient, cfg Config, seen *chatSeen, out io.Writer, silent bool) int {
+//
+// `gate` (nil on the claude path) makes "printed" stop meaning "delivered": with
+// a gate the receipt and the seen ids wait for the consumer's ack, so a batch the
+// codex sidecar could not get into the model's conversation is drained again next
+// time instead of being silently marked read. See ackGate.
+func drainChat(client httpClient, cfg Config, seen *chatSeen, out io.Writer, silent bool, gate *ackGate) int {
 	sid := strings.ToLower(strings.TrimSpace(cfg.ID))
 	now := float64(time.Now().Unix())
 	msgs := fetchChat(client, cfg, cfg.ID)
 	if msgs == nil {
 		return 0 // fetch fault: print nothing and leave the persisted set untouched
 	}
+	// delivered stays true on the claude path and on a silent baseline: nothing
+	// was surfaced that anybody could fail to deliver.
+	delivered := true
 	unread := make([]map[string]any, 0, len(msgs))
 	for _, m := range msgs {
 		if strings.ToLower(strings.TrimSpace(strOrEmpty(m["to"]))) != sid {
@@ -1066,7 +1181,19 @@ func drainChat(client httpClient, cfg Config, seen *chatSeen, out io.Writer, sil
 		// or agent-visible event, so it must trail the print it is claiming. A
 		// crash between the fetch and the loop above therefore leaves no receipt
 		// and the next drain re-prints — the safe direction.
-		reportChatRead(client, cfg, show, seen, out)
+		//
+		// UNDER AN ACK GATE the print is not the delivery (see ackGate): the
+		// codex sidecar still has to get these lines into the model's
+		// conversation, and that can fail. So the receipt — and the seen ids
+		// below — wait for its verdict. An empty batch is not gated: there is
+		// nothing to confirm and nothing that could be lost, and blocking on a
+		// round trip for zero lines would only add a way to hang.
+		if len(show) > 0 {
+			delivered = gate.confirm(out)
+		}
+		if delivered {
+			reportChatRead(client, cfg, show, seen, out)
+		}
 	}
 	// REBUILD from the refetched authority rather than only adding: an id absent
 	// from the list has aged out of the server's window and can never drain
@@ -1078,6 +1205,23 @@ func drainChat(client httpClient, cfg Config, seen *chatSeen, out io.Writer, sil
 		}
 		if mid := strOrEmpty(m["id"]); mid != "" {
 			next[mid] = true
+		}
+	}
+	// A BATCH NOBODY CONFIRMED LEAVES NO TRACE. The rebuild above is keyed on
+	// the refetched window alone, so it would quietly record every id this drain
+	// just failed to deliver — and because the rebuild REPLACES the set rather
+	// than adding to it, the loss would be permanent: the next drain would find
+	// them seen and never print them again. Dropping them here is what makes
+	// "the next drain prints it again" true rather than a wish.
+	//
+	// EVERY unread id, not only the printed ones: the lines the backlog cap
+	// dropped were announced by the 略過 N 則 line, which is in this same
+	// undelivered batch — so nothing about this window reached the agent.
+	if !delivered {
+		for _, m := range unread {
+			if mid := strOrEmpty(m["id"]); mid != "" {
+				delete(next, mid)
+			}
 		}
 	}
 	seen.m = next

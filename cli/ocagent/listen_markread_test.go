@@ -142,7 +142,7 @@ func TestDrainChat_SilentBaseline_FilesNoReadReceipt(t *testing.T) {
 	seen := loadChatSeen("")
 	var out bytes.Buffer
 
-	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), seen, &out, true)
+	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), seen, &out, true, nil)
 
 	if out.Len() != 0 {
 		t.Fatalf("precondition: a silent baseline must print nothing, got %q", out.String())
@@ -164,7 +164,7 @@ func TestDrainChat_FetchFault_FilesNoReadReceipt(t *testing.T) {
 	}))
 	defer srv.Close()
 	var out bytes.Buffer
-	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), loadChatSeen(""), &out, false)
+	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), loadChatSeen(""), &out, false, nil)
 	if marks != 0 {
 		t.Fatalf("a failed chat refetch filed %d read receipt(s), want 0", marks)
 	}
@@ -183,7 +183,7 @@ func TestDrainChat_ReadReceiptIsFiledOnlyAfterTheLineIsPrinted(t *testing.T) {
 	srv.beforeMark = func() { printedWhenMarked = out.String() }
 	srv.mu.Unlock()
 
-	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), loadChatSeen(""), out, false)
+	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), loadChatSeen(""), out, false, nil)
 
 	if len(srv.snapshot()) != 1 {
 		t.Fatalf("precondition: want exactly one receipt, got %+v", srv.snapshot())
@@ -209,7 +209,7 @@ func TestDrainChat_MultipleSenders_EachMarkedToItsOwnWatermark(t *testing.T) {
 	srv := newMarkReadServer(t, list)
 	var out bytes.Buffer
 
-	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), loadChatSeen(""), &out, false)
+	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), loadChatSeen(""), &out, false, nil)
 
 	calls := srv.snapshot()
 	sort.Slice(calls, func(i, j int) bool { return calls[i].Peer < calls[j].Peer })
@@ -257,7 +257,7 @@ func TestDrainChat_BacklogCap_SweepsDroppedOlderLinesOfASurvivingSender(t *testi
 	srv := newMarkReadServer(t, "["+strings.Join(msgs, ",")+"]")
 	var out bytes.Buffer
 
-	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), loadChatSeen(""), &out, false)
+	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), loadChatSeen(""), &out, false, nil)
 
 	if !strings.Contains(out.String(), "略過") {
 		t.Fatalf("a drain over the cap must announce what it skipped; got:\n%s", out.String())
@@ -285,7 +285,7 @@ func TestDrainChat_BacklogCap_SweepsDroppedOlderLinesOfASurvivingSender(t *testi
 func TestDrainChat_MessageWithoutTs_FilesNoReceipt(t *testing.T) {
 	srv := newMarkReadServer(t, `[{"id":"m1","from":"boss","to":"kyle","body":"hi"}]`)
 	var out bytes.Buffer
-	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), loadChatSeen(""), &out, false)
+	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), loadChatSeen(""), &out, false, nil)
 	if !strings.Contains(out.String(), "#m1") {
 		t.Fatalf("precondition: the line must still print, got %q", out.String())
 	}
@@ -422,7 +422,7 @@ func TestDrainChat_MarkReadRejected_WarnsOncePerProcess(t *testing.T) {
 	seen := loadChatSeen("")
 	var out bytes.Buffer
 
-	drainChat(srv.Client(), cfg, seen, &out, false)
+	drainChat(srv.Client(), cfg, seen, &out, false, nil)
 	if c := strings.Count(out.String(), "mark-read"); c != 1 {
 		t.Fatalf("a rejected receipt warned %d times, want exactly 1; out = %q", c, out.String())
 	}
@@ -451,7 +451,7 @@ func TestDrainChat_MarkReadRejected_WarnsOncePerProcess(t *testing.T) {
 		tsMsg("m2", "boss", "kyle", now-20),
 	}, ",") + "]")
 	out.Reset()
-	drainChat(srv.Client(), cfg, seen, &out, false)
+	drainChat(srv.Client(), cfg, seen, &out, false, nil)
 	if strings.Contains(out.String(), "mark-read") {
 		t.Fatalf("the warning must not repeat every drain; second drain out = %q", out.String())
 	}
@@ -485,7 +485,7 @@ func TestDrainChat_MarkReadBodyMatchesFrozenSchema(t *testing.T) {
 	}, ",")+"]")
 	var out bytes.Buffer
 
-	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), loadChatSeen(""), &out, false)
+	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), loadChatSeen(""), &out, false, nil)
 
 	bodies := srv.rawBodies()
 	if len(bodies) != 2 {
@@ -585,3 +585,195 @@ func TestListenerRun_ReconnectBackfill_PrintsThenFilesReadReceipt(t *testing.T) 
 			"(all receipts: %+v)", got, now-10, srv.snapshot())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// GUARDRAIL ④ — "printed" is not "delivered" when somebody else has to carry
+// the line the rest of the way (T-48, the ack protocol).
+//
+// A claude member reads these lines directly, so printing IS delivery. A codex
+// member reads them through the ocwarden sidecar, which turns each line into an
+// App Server turn — and that turn can be REFUSED. The listener used to file the
+// receipt and record the id regardless, so a refused message was marked read,
+// dropped from the unread window, and never printed again: gone, with every
+// party believing it had landed.
+// ---------------------------------------------------------------------------
+
+func ackEnv(v string) func(string) string {
+	return func(key string) string {
+		if key == listenAckEnv {
+			return v
+		}
+		return ""
+	}
+}
+
+// The claude path must not move by one byte: no marker on stdout, no wait for
+// anything, receipt filed exactly as before.
+func TestDrainChat_WithoutTheAckEnv_PrintsNoMarkerAndStillFilesTheReceipt(t *testing.T) {
+	now := float64(time.Now().Unix())
+	srv := newMarkReadServer(t, "["+tsMsg("m1", "boss", "kyle", now-30)+"]")
+	seen := loadChatSeen("")
+	seen.primed = true
+	var out bytes.Buffer
+
+	// stdin is deliberately a reader that would BLOCK FOREVER if anything read
+	// it: the claude path must never wait for an answer nobody is going to send.
+	gate := newAckGate(ackEnv(""), blockingReader{})
+	if gate != nil {
+		t.Fatalf("OC_LISTEN_ACK is unset, so there is no consumer to ack — the gate " +
+			"must not exist at all")
+	}
+
+	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), seen, &out, false, gate)
+
+	if strings.Contains(out.String(), noticeBatch) {
+		t.Errorf("the claude transcript grew a protocol line it has no reader for: %q",
+			out.String())
+	}
+	if calls := srv.snapshot(); len(calls) != 1 || calls[0].Peer != "boss" {
+		t.Errorf("the claude path stopped filing its own receipts: %+v", calls)
+	}
+	if !seen.m["m1"] {
+		t.Error("the claude path stopped recording what it printed; the next drain " +
+			"will print it all over again")
+	}
+}
+
+// A gate exists only when the parent process asked for one.
+func TestNewAckGate_OnlyOnTheParentsExplicitRequest(t *testing.T) {
+	for value, want := range map[string]bool{"1": true, "": false, "0": false, "true": false} {
+		got := newAckGate(ackEnv(value), strings.NewReader("")) != nil
+		if got != want {
+			t.Errorf("OC_LISTEN_ACK=%q ⇒ gate=%v, want %v — a gate nobody answers "+
+				"hangs the drain, and a missing gate marks undelivered mail read",
+				value, got, want)
+		}
+	}
+}
+
+// The ack path: marker out, verdict in, and only THEN the receipt.
+func TestDrainChat_AckedBatch_FilesTheReceiptAndRecordsTheIDs(t *testing.T) {
+	now := float64(time.Now().Unix())
+	srv := newMarkReadServer(t, "["+tsMsg("m1", "boss", "kyle", now-30)+"]")
+	seen := loadChatSeen("")
+	seen.primed = true
+	var out bytes.Buffer
+
+	gate := newAckGate(ackEnv("1"), strings.NewReader("ack 1\n"))
+	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), seen, &out, false, gate)
+
+	if !strings.Contains(out.String(), agentLinePrefix+noticeBatch+" 1") {
+		t.Fatalf("the listener never told the sidecar where the batch ended, so no "+
+			"ack can ever arrive and this drain hangs forever; out = %q", out.String())
+	}
+	if calls := srv.snapshot(); len(calls) != 1 {
+		t.Errorf("an acked batch must still file its receipt: %+v", calls)
+	}
+	if !seen.m["m1"] {
+		t.Error("an acked batch must be recorded, or it re-prints forever")
+	}
+}
+
+// 🔴 THE WHOLE POINT. No ack ⇒ no receipt, no seen id, and the SAME message on
+// the next drain.
+// A consumer that goes quiet must not take this member's hearing with it: the
+// wait for a verdict happens on the listener's ONLY thread, so an unbounded one
+// turns a single unanswerable batch into a member that receives nothing ever
+// again — and nothing anywhere says so.
+func TestDrainChat_AckThatNeverArrives_TimesOutSaysSoAndKeepsTheMessageUnread(t *testing.T) {
+	now := float64(time.Now().Unix())
+	srv := newMarkReadServer(t, "["+tsMsg("m1", "boss", "kyle", now-30)+"]")
+	cfg := markCfg(srv.URL, t.TempDir())
+	seen := loadChatSeen(chatSeenPath(cfg))
+	seen.primed = true
+	var out bytes.Buffer
+
+	// A pipe nobody ever writes to: the consumer is alive (stdin is open) and
+	// simply never answers. A closed stdin is the OTHER case and already covered.
+	answers, quiet := io.Pipe()
+	defer quiet.Close()
+	gate := newAckGate(ackEnv("1"), answers)
+	gate.wait = 20 * time.Millisecond
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		drainChat(srv.Client(), cfg, seen, &out, false, gate)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the drain never returned: an unanswered batch blocked the listener " +
+			"forever, which is this member going permanently deaf")
+	}
+
+	if calls := srv.snapshot(); len(calls) != 0 {
+		t.Errorf("a message whose delivery was never confirmed was marked read: %+v", calls)
+	}
+	if seen.m["m1"] {
+		t.Error("an unconfirmed message was recorded as surfaced, so no later drain " +
+			"can print it again")
+	}
+	if !strings.Contains(out.String(), "等不到") {
+		t.Errorf("the timeout must say so — a silent one is indistinguishable from a "+
+			"delivery that worked; out = %q", out.String())
+	}
+	// The warning must NOT wear the transport head, or the sidecar swallows it
+	// and the one party who could go and look never hears about it.
+	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		if strings.Contains(line, "等不到") && strings.HasPrefix(line, agentLinePrefix+"listen:") {
+			t.Errorf("the timeout warning must not start with %q; got %q",
+				agentLinePrefix+"listen:", line)
+		}
+	}
+}
+
+func TestDrainChat_UnackedBatch_LeavesTheMessageUnreadUnseenAndReprintable(t *testing.T) {
+	now := float64(time.Now().Unix())
+	list := "[" + tsMsg("m1", "boss", "kyle", now-30) + "]"
+	srv := newMarkReadServer(t, list)
+	home := t.TempDir()
+	cfg := markCfg(srv.URL, home)
+	seen := loadChatSeen(chatSeenPath(cfg))
+	seen.primed = true
+	var out bytes.Buffer
+
+	// An answer for a DIFFERENT batch must not be mistaken for this one's.
+	gate := newAckGate(ackEnv("1"), strings.NewReader("ack 7\nnack 1\n"))
+	drainChat(srv.Client(), cfg, seen, &out, false, gate)
+
+	if !strings.Contains(out.String(), "chat from boss (#m1") {
+		t.Fatalf("precondition: the line must be printed before anyone can fail to "+
+			"deliver it; out = %q", out.String())
+	}
+	if calls := srv.snapshot(); len(calls) != 0 {
+		t.Errorf("a message that never reached the agent was marked read: %+v — the "+
+			"sender now sees a ✓ for something nobody was ever shown", calls)
+	}
+	if seen.m["m1"] {
+		t.Fatal("an undelivered message was recorded as surfaced; the seen set is " +
+			"rebuilt from the refetched window, so this drops it for good and no " +
+			"later drain can ever print it again")
+	}
+
+	// The recovery this exists for: the next drain prints it again.
+	var out2 bytes.Buffer
+	gate2 := newAckGate(ackEnv("1"), strings.NewReader("ack 1\n"))
+	seen2 := loadChatSeen(chatSeenPath(cfg))
+	if n := drainChat(srv.Client(), cfg, seen2, &out2, false, gate2); n != 1 {
+		t.Fatalf("the next drain reported %d unread, want 1", n)
+	}
+	if !strings.Contains(out2.String(), "chat from boss (#m1") {
+		t.Fatalf("the undelivered message never came back; out = %q", out2.String())
+	}
+	if calls := srv.snapshot(); len(calls) != 1 {
+		t.Errorf("the re-delivered batch was acked, so its receipt must now be "+
+			"filed exactly once: %+v", calls)
+	}
+}
+
+// blockingReader never returns from Read: any wait on it is a hang, which is
+// what the claude-path assertion above needs in order to mean anything.
+type blockingReader struct{}
+
+func (blockingReader) Read([]byte) (int, error) { select {} }
