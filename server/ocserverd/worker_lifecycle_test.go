@@ -242,9 +242,19 @@ func TestWorkerReportStopped_CollectsHandover(t *testing.T) {
 	}
 }
 
-// TestRefocusWorker_Rejects: the online-only + stopped + unknown/released gates.
-// Mutants: (a) dropping the online gate → the offline case 200s; (b) dropping the
-// stopped gate → the stopped case 200s; each hand-verified red.
+// TestRefocusWorker_Rejects: the online-only + never-stopped + unknown/released
+// gates. Mutants: (a) dropping the online gate → the offline case 200s;
+// (b) dropping the aStopWasEverAskedFor gate → case (b) 200s; each hand-verified
+// red.
+//
+// ⚠️ CASE (b) NO LONGER MEANS WHAT ITS NAME SAYS (T-65 包②). 「stopped」 stopped
+// being a refusal: a worker whose stop is in flight — or has landed — now gets a
+// 200 and a QUEUED 起來 (restart_after_stop), by owner ruling 2026-08-30. What
+// case (b) actually pins is the NARROWER survivor: its fixture reaches
+// desired_state=offline by writing the field directly, so it never acquires a
+// stopping_since anchor, and a worker nobody ever asked to stop still has no
+// 下線 for an 上線 rule to be added to. Read it as 「never-stopped is 409」. The
+// 200 side lives in outsource_restart_after_stop_t65_test.go.
 func TestRefocusWorker_Rejects(t *testing.T) {
 	// (a) an ACTIVE worker with NO live SSE (offline) → 409 online-only, and it
 	// must NOT stamp / dispatch anything (the positive control is the test above).
@@ -265,8 +275,11 @@ func TestRefocusWorker_Rejects(t *testing.T) {
 		}
 	})
 
-	// (b) a stopped worker → 409 (restart first).
-	t.Run("stopped is 409", func(t *testing.T) {
+	// (b) a worker that is desired-offline but was NEVER asked to stop (no
+	// stopping_since anchor — see the ⚠️ on this function) → 409. The mutation
+	// this kills is dropping aStopWasEverAskedFor from queueWorkerRestartAfterStop,
+	// which would boot a worker that has never started.
+	t.Run("never-stopped offline is 409", func(t *testing.T) {
 		api := newTasksTestServer(t)
 		api.noOutsource = true
 		id := newActiveOnlineWorker(t, api)
