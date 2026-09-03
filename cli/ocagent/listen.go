@@ -338,9 +338,9 @@ func defaultJitter() float64 { return 0.5 + rand.Float64()*0.5 }
 // ---------------------------------------------------------------------------
 
 // cursorPath is the agent's SSE cursor file: <home>/<id-lower-or-anon>/sse-cursor.
-// Local state is pure optimisation/dedup (this cursor plus the two seen files
-// beside it — chat-seen and replycards-seen) — losing it costs a full refetch or
-// one silent re-baseline, never truth. Mirrors cursor_path.
+// Local state is pure optimisation/dedup (this cursor plus replycards-seen
+// beside it) — losing it costs a full refetch or one silent re-baseline, never
+// truth. Mirrors cursor_path.
 func cursorPath(cfg Config) string {
 	key := strings.ToLower(cfg.ID)
 	if key == "" {
@@ -990,147 +990,21 @@ func (g *ackGate) confirm(out io.Writer) bool {
 }
 
 // ---------------------------------------------------------------------------
-// per-agent chat unread cursor (persisted — cold-start backfill).
+// mark-read receipt failures — the one latch that outlived the local ledger.
 // ---------------------------------------------------------------------------
 
-// chatSeen is the id-keyed "already surfaced to this session" set for drainChat,
-// persisted BESIDE the SSE cursor (<home>/<id-lower-or-anon>/chat-seen) so it
-// survives process death. Single-goroutine by construction (every caller runs on
-// the listen loop), so no lock.
+// markReadWarner is the "say it once per process" latch for a read receipt that
+// did not land. It is ALL that remains of the old chatSeen store: that store was
+// a second, local answer to "have I already surfaced this?", and the server's
+// unread set is now the only one (T-48). The latch has nothing to do with that
+// question — it guards against repeating one warning line on every drain — so it
+// stays, on its own, owned by the listener.
 //
-// WHY PERSISTED: /api/events has no replay, so anything fanned while no listener
-// held a stream is lost, and a drain is the only path that can recover it. With
-// the set living only in memory, EVERY new process started from an empty set and
-// its first drain had to run SILENT — it marked the entire inbox read and printed
-// nothing, so a message that arrived while the agent was down was never seen by
-// anyone. Persisting the set splits that one case in two:
-//
-//   - UNPRIMED (no state file, or a corrupt one) — this machine has never
-//     surfaced chat for this member. There is no "last seen" to diff against, so
-//     the drain PRIMES silently, exactly as before: a brand-new session must not
-//     be washed out by however much history predates it.
-//   - PRIMED — a previous process already baselined. The drain PRINTS what
-//     arrived since — all of it, since fetchChat pages the unread set to
-//     exhaustion — which is the whole point.
-//
-// RECONNECTS are unaffected in both directions: every drain runs against this
-// same set, so the id a connect drain already printed is in it and the next one
-// prints nothing. Losing the file costs one silent re-baseline, never truth.
-type chatSeen struct {
-	path   string
-	m      map[string]bool // message id → already surfaced
-	primed bool            // a baseline exists (loaded from disk or persisted once)
-	warned bool            // a write failure was already announced this process
-	// markWarned: a mark-read report failure was already announced this process.
-	// Separate from `warned` so a broken receipt endpoint cannot mute the
-	// state-file warning (or the other way round) — they fail independently and
-	// mean different things.
-	markWarned bool
-}
-
-// chatSeenPath is the state file, sibling of cursorPath.
-func chatSeenPath(cfg Config) string {
-	key := strings.ToLower(cfg.ID)
-	if key == "" {
-		key = "anon"
-	}
-	return filepath.Join(cfg.Home, key, "chat-seen")
-}
-
-// loadChatSeen reads the persisted set; a missing or corrupt file yields an
-// UNPRIMED store (the first drain baselines silently). An empty-but-valid `[]`
-// IS a baseline — a member whose inbox was genuinely empty stays primed.
-func loadChatSeen(path string) *chatSeen {
-	s := &chatSeen{path: path, m: map[string]bool{}}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return s
-	}
-	var ids []string
-	if json.Unmarshal(raw, &ids) != nil || ids == nil {
-		return s
-	}
-	for _, id := range ids {
-		if id != "" {
-			s.m[id] = true
-		}
-	}
-	s.primed = true
-	return s
-}
-
-// persist writes the set as a sorted id array (sorted so the file is stable
-// across runs that saw the same inbox). A path-less store is the test/in-memory
-// shape: it primes without touching disk.
-//
-// WHY IT SPEAKS WHEN IT FAILS: a write that does not land leaves NO state file,
-// so the next process loads UNPRIMED and its first drain baselines silently —
-// which is precisely the bug this whole cursor exists to kill, resurrected in
-// full and shaped exactly like a healthy run. Nothing else in the system can
-// notice: the count is right, the drain returns normally, the agent is simply
-// never told. One line on the same stream the drain prints to is the only
-// signal there can be, so this is the one place it must not stay quiet.
-//
-// SCOPE: announce only. No retry, no fallback path, no permission repair — those
-// are separate decisions and this line does not pre-empt them.
-func (s *chatSeen) persist(out io.Writer) {
-	if s.path == "" {
-		s.primed = true
-		return
-	}
-	ids := make([]string, 0, len(s.m))
-	for id := range s.m {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	raw, err := json.Marshal(ids)
-	if err != nil {
-		s.warnWriteFailed(out, err)
-		return
-	}
-	if parent := filepath.Dir(s.path); parent != "" {
-		if err := os.MkdirAll(parent, 0o755); err != nil {
-			s.warnWriteFailed(out, err)
-			return
-		}
-	}
-	if err := os.WriteFile(s.path, raw, 0o644); err != nil {
-		s.warnWriteFailed(out, err)
-		return
-	}
-	s.primed = true
-}
-
-// warnWriteFailed emits the one line that turns a silent relapse into a visible
-// one. ONCE PER PROCESS: drainChat also runs on every inbound chat delta, so an
-// unwritable home would otherwise repeat this on every message and drown the
-// context the cap above exists to protect. The first failure is the one that
-// matters — this drain's ids are already not on disk.
-//
-// 🔴 WHAT IT MAY AND MAY NOT CLAIM: which way the next boot goes depends on
-// whether a state file was EVER written, and this call cannot tell:
-//
-//   - never written (an unusable parent) ⇒ the next boot loads UNPRIMED and
-//     baselines silently: this window is swallowed, exactly the bug the cursor
-//     exists to kill.
-//   - written before, unwritable now (a read-only file under a writable dir) ⇒
-//     the next boot loads the STALE baseline and PRINTS this window AGAIN —
-//     the opposite failure, and re-printed on every boot until it is fixed.
-//
-// Both are real and this line is one sentence, so it names the loss (these ids are
-// not recorded) and the two directions it can take, and stops there. An earlier
-// draft asserted the silent-swallow branch alone; a review probe falsified it on
-// the second branch. A warning that misdescribes the failure is worse than the
-// failure — it sends the reader looking the wrong way at the one moment they
-// are relying on it.
-func (s *chatSeen) warnWriteFailed(out io.Writer, err error) {
-	if out == nil || s.warned {
-		return
-	}
-	s.warned = true
-	fmt.Fprintf(out, "[ocagent] chat-seen 寫不進去（%s）：%v — 這個行程收到的訊息沒被記下來，"+
-		"下次開機的補印可能少印或重印。修好之前請用 get_chat 自己回頭撈。\n",
-		s.path, err)
+// A nil warner FAILS LOUD: the warning prints every time rather than not at all.
+// A latch that silently swallows the only signal a dark ✓ ever produces would be
+// the same class of bug the warning exists to expose.
+type markReadWarner struct {
+	warned bool
 }
 
 // drainChat refetches chat and prints the unread-for-me — ONE LINE per message so the
@@ -1161,35 +1035,44 @@ func (s *chatSeen) warnWriteFailed(out io.Writer, err error) {
 // enough to tell the woken agent a reply target EXISTS; get_chat is where the
 // text belongs, and it now comes back with the quote already attached.
 //
-// Advances the seen-id cursor and returns the unread count. `silent` (the first
-// baseline) advances the cursor WITHOUT printing so connecting does not re-print
-// history — but see chatSeen: the cursor is PERSISTED, so `silent` is true when
-// the store came up UNPRIMED, which is a first listen on this machine OR a state
-// file that could not be read; a primed one backfills EVERYTHING it missed. A
-// fetch fault prints nothing and leaves the persisted cursor untouched, so the
-// next drain retries the same window.
+// Returns the unread count, and PRINTS EVERY LINE IT COUNTS.
+//
+// 🔴 THERE IS NO LOCAL "already seen" LEDGER ANY MORE (owner, rc-224dee5770dd:
+// 「拔掉 —— 一件事只留一個說法（server 的未讀）」). fetchChat asks for
+// `unread=true`, so the server's unread set IS the question's only answer, and
+// the read receipt filed below is the only thing that advances it. There is
+// therefore no "first run on this machine" concept left and no `silent` mode:
+// unread is unread, and unread prints.
+//
+// WHAT THAT BUYS, structurally: a row can leave the unread set ONLY by way of a
+// receipt, and a receipt is filed ONLY for lines this drain actually printed
+// (plus the self-sent exception below, which is printed to nobody by design and
+// belongs to the reader anyway). So "marked read but never shown" is not a case
+// that can arise — not because a check forbids it, but because the only writer
+// of the watermark is the code path that just printed.
+//
+// A fetch fault prints nothing and files nothing, so the same window is still
+// unread on the server and the next drain retries it.
 // R7: reads ONLY the refetched authority, never a delta. Mirrors drain_chat.
 //
 // `gate` (nil on the claude path) makes "printed" stop meaning "delivered": with
-// a gate the receipt and the seen ids wait for the consumer's ack, so a batch the
-// codex sidecar could not get into the model's conversation is drained again next
-// time instead of being silently marked read. See ackGate.
-func drainChat(client httpClient, cfg Config, seen *chatSeen, out io.Writer, silent bool, gate *ackGate) int {
+// a gate the receipt waits for the consumer's ack, so a batch the codex sidecar
+// could not get into the model's conversation is never receipted — and, since
+// the receipt is the only thing that would have moved the server's watermark, it
+// comes back on the next drain by itself. See ackGate.
+func drainChat(client httpClient, cfg Config, out io.Writer, warn *markReadWarner, gate *ackGate) int {
 	sid := strings.ToLower(strings.TrimSpace(cfg.ID))
 	now := float64(time.Now().Unix())
 	msgs := fetchChat(client, cfg, cfg.ID)
 	// A walk that ended short says so BEFORE the lines it did manage to fetch,
-	// so the reader meets the caveat before the batch it applies to. Not on a
-	// silent baseline: nothing is being surfaced there, so there is nothing for
-	// the caveat to qualify.
-	if msgs.stop != "" && !silent {
+	// so the reader meets the caveat before the batch it applies to.
+	if msgs.stop != "" {
 		fmt.Fprint(out, msgs.stop)
 	}
 	if msgs.rows == nil {
-		return 0 // fetch fault: print nothing and leave the persisted set untouched
+		return 0 // fetch fault: print nothing, file nothing — it is still unread
 	}
-	// delivered stays true on the claude path and on a silent baseline: nothing
-	// was surfaced that anybody could fail to deliver.
+	// delivered stays true on the claude path: nothing there can fail to deliver.
 	delivered := true
 	unread := make([]map[string]any, 0, len(msgs.rows))
 	// selfSent collects the messages this member sent to ITSELF — see the block
@@ -1204,10 +1087,9 @@ func drainChat(client httpClient, cfg Config, seen *chatSeen, out io.Writer, sil
 		// isSelfEcho to a FRAME's trigger and drops the whole frame — which means a
 		// self-triggered chat delta never reaches this drain at all, so the message
 		// it announced is never marked seen. It then sits in the unread window until
-		// either a listener restart consumes it through the silent boot baseline,
-		// or — the damaging case — some OTHER actor's chat delta passes the gate and
-		// runs this drain, which flushes the whole self-sent backlog alongside the
-		// message that actually arrived. Frame-level suppression therefore only
+		// some OTHER actor's chat delta passes the gate and runs this drain, which
+		// flushes the whole self-sent backlog alongside the message that actually
+		// arrived. Frame-level suppression therefore only
 		// DELAYS a self echo; it does not remove it. Applying the same predicate to
 		// the refetched sender closes that half.
 		//
@@ -1221,12 +1103,6 @@ func drainChat(client httpClient, cfg Config, seen *chatSeen, out io.Writer, sil
 		// loop builds `unread`, which is BOTH what prints below and this function's
 		// return value. Filtering later would report unread lines that never print.
 		//
-		// BEFORE THE `seen` CHECK, deliberately: a self-sent row must reach
-		// selfSent on EVERY drain, including the drains after one already recorded
-		// it locally. Behind the seen check it would be dropped on the second pass
-		// and never receipted, and since the server keeps returning what nobody has
-		// marked read, the same rows would pile up in every future unread walk.
-		//
 		// Reusing isSelfEcho keeps the fail-open rule (spec/sse.md §2.3): a blank or
 		// missing sender is never an echo, so it stays visible. TrimSpace mirrors
 		// the `to` filter above, so both sides of the message are matched the same
@@ -1235,110 +1111,81 @@ func drainChat(client httpClient, cfg Config, seen *chatSeen, out io.Writer, sil
 			selfSent = append(selfSent, m)
 			continue
 		}
-		if mid := strOrEmpty(m["id"]); mid != "" && seen.m[mid] {
-			continue
-		}
 		unread = append(unread, m)
 	}
-	if !silent {
-		// EVERY UNREAD LINE PRINTS. There used to be a per-drain print cap here
-		// that kept the newest N and announced the rest as 略過 N 則 — and that
-		// notice was not merely a smaller backfill, it was a WRONG one: the
-		// receipt filed below is a per-sender WATERMARK, so a skipped older line
-		// of a sender who still had a surviving newer line was swept to read by
-		// that sender's own receipt. It was announced as fetchable and then
-		// marked as read, and nothing would ever offer it again.
-		//
-		// Nothing replaces the cap because nothing needs to: fetchChat now walks
-		// the caller's unread to exhaustion, so `unread` IS the whole backlog
-		// rather than a window of it, and a backlog is only as long as the time
-		// this member spent away. The cost this cap was protecting — the agent's
-		// context window — is real, but it is paid for by messages that were
-		// genuinely sent TO this member and never shown; dropping them is not a
-		// saving, it is a loss with a receipt filed against it.
-		for _, m := range unread {
-			printChatLine(out, m, now)
-		}
-		// AFTER the lines are out, never before: a read receipt claims a HUMAN-
-		// or agent-visible event, so it must trail the print it is claiming. A
-		// crash between the fetch and the loop above therefore leaves no receipt
-		// and the next drain re-prints — the safe direction.
-		//
-		// UNDER AN ACK GATE the print is not the delivery (see ackGate): the
-		// codex sidecar still has to get these lines into the model's
-		// conversation, and that can fail. So the receipt — and the seen ids
-		// below — wait for its verdict. An empty batch is not gated: there is
-		// nothing to confirm and nothing that could be lost, and blocking on a
-		// round trip for zero lines would only add a way to hang.
-		if len(unread) > 0 {
-			delivered = gate.confirm(out)
-		}
-		// 🔴 THE ONE EXCEPTION TO "printed, therefore read" (rc-dccab860be32,
-		// ruled by the owner). Everywhere else in this drain a receipt trails a
-		// line that actually reached the session; these rows are receipted having
-		// been printed NOWHERE.
-		//
-		// WHY: since the unread set stopped excluding `sender == caller`, a
-		// message this member sent to itself comes back on every unread walk. It
-		// is dropped above, so no receipt would ever be filed for it, so the
-		// server would keep returning it — forever, and one more of them with
-		// every self-addressed note, until the backfill is mostly the member's own
-		// voice. Marking them is what keeps the unread set finite.
-		//
-		// SCOPE — `sender == this member`, AND NOTHING ELSE, AND IT MUST NOT GROW.
-		// The exception is safe only because the reader and the writer are the
-		// same party: nobody is being told they were shown something they were
-		// not. Any other unprinted row belongs to someone who is entitled to a ✓
-		// that means what it says, so widening this to "skipped", "too long",
-		// "uninteresting" or "already in the transcript" would put this system
-		// straight back into the bug the whole ticket exists to remove.
-		//
-		// Its receipt is INDEPENDENT of `delivered`: the ack gate answers for what
-		// the sidecar had to deliver, and nothing here was ever delivered to
-		// anybody. The senders cannot collide either — a printed line's sender is
-		// never this member, so the two groups never share a watermark.
-		//
-		// `show` is therefore WHAT GETS A RECEIPT, which is no longer the same
-		// list as what was printed: the printed lines only when the consumer
-		// confirmed them, plus the self-sent rows unconditionally.
-		show := make([]map[string]any, 0, len(unread)+len(selfSent))
-		if delivered {
-			show = append(show, unread...)
-		}
-		show = append(show, selfSent...)
-		reportChatRead(client, cfg, show, seen, out)
-	}
-	// REBUILD from the refetched authority rather than only adding: an id absent
-	// from the list has aged out of the server's window and can never drain
-	// again, so dropping it keeps the file bounded (mirrors drainReplyCards).
-	next := make(map[string]bool, len(msgs.rows))
-	for _, m := range msgs.rows {
-		if strings.ToLower(strings.TrimSpace(strOrEmpty(m["to"]))) != sid {
-			continue
-		}
-		if mid := strOrEmpty(m["id"]); mid != "" {
-			next[mid] = true
-		}
-	}
-	// A BATCH NOBODY CONFIRMED LEAVES NO TRACE. The rebuild above is keyed on
-	// the refetched window alone, so it would quietly record every id this drain
-	// just failed to deliver — and because the rebuild REPLACES the set rather
-	// than adding to it, the loss would be permanent: the next drain would find
-	// them seen and never print them again. Dropping them here is what makes
-	// "the next drain prints it again" true rather than a wish.
+	// EVERY UNREAD LINE PRINTS. There used to be a per-drain print cap here
+	// that kept the newest N and announced the rest as 略過 N 則 — and that
+	// notice was not merely a smaller backfill, it was a WRONG one: the
+	// receipt filed below is a per-sender WATERMARK, so a skipped older line
+	// of a sender who still had a surviving newer line was swept to read by
+	// that sender's own receipt. It was announced as fetchable and then
+	// marked as read, and nothing would ever offer it again.
 	//
-	// EVERY unread id: one drain prints its whole backfill as a single batch and
-	// gates it once, so an unconfirmed batch means nothing about this window
-	// reached the agent.
-	if !delivered {
-		for _, m := range unread {
-			if mid := strOrEmpty(m["id"]); mid != "" {
-				delete(next, mid)
-			}
-		}
+	// Nothing replaces the cap because nothing needs to: fetchChat now walks
+	// the caller's unread to exhaustion, so `unread` IS the whole backlog
+	// rather than a window of it, and a backlog is only as long as the time
+	// this member spent away. The cost this cap was protecting — the agent's
+	// context window — is real, but it is paid for by messages that were
+	// genuinely sent TO this member and never shown; dropping them is not a
+	// saving, it is a loss with a receipt filed against it.
+	for _, m := range unread {
+		printChatLine(out, m, now)
 	}
-	seen.m = next
-	seen.persist(out)
+	// AFTER the lines are out, never before: a read receipt claims a HUMAN-
+	// or agent-visible event, so it must trail the print it is claiming. A
+	// crash between the fetch and the loop above therefore leaves no receipt
+	// and the next drain re-prints — the safe direction.
+	//
+	// UNDER AN ACK GATE the print is not the delivery (see ackGate): the
+	// codex sidecar still has to get these lines into the model's
+	// conversation, and that can fail. So the receipt waits for its verdict.
+	// An empty batch is not gated: there is nothing to confirm and nothing that
+	// could be lost, and blocking on a round trip for zero lines would only add
+	// a way to hang.
+	if len(unread) > 0 {
+		delivered = gate.confirm(out)
+	}
+	// 🔴 THE ONE EXCEPTION TO "printed, therefore read" (rc-dccab860be32,
+	// ruled by the owner). Everywhere else in this drain a receipt trails a
+	// line that actually reached the session; these rows are receipted having
+	// been printed NOWHERE.
+	//
+	// WHY: since the unread set stopped excluding `sender == caller`, a
+	// message this member sent to itself comes back on every unread walk. It
+	// is dropped above, so no receipt would ever be filed for it, so the
+	// server would keep returning it — forever, and one more of them with
+	// every self-addressed note, until the backfill is mostly the member's own
+	// voice. Marking them is what keeps the unread set finite.
+	//
+	// SCOPE — `sender == this member`, AND NOTHING ELSE, AND IT MUST NOT GROW.
+	// The exception is safe only because the reader and the writer are the
+	// same party: nobody is being told they were shown something they were
+	// not. Any other unprinted row belongs to someone who is entitled to a ✓
+	// that means what it says, so widening this to "skipped", "too long",
+	// "uninteresting" or "already in the transcript" would put this system
+	// straight back into the bug the whole ticket exists to remove.
+	//
+	// Its receipt is INDEPENDENT of `delivered`: the ack gate answers for what
+	// the sidecar had to deliver, and nothing here was ever delivered to
+	// anybody. The senders cannot collide either — a printed line's sender is
+	// never this member, so the two groups never share a watermark.
+	//
+	// `show` is therefore WHAT GETS A RECEIPT, which is no longer the same
+	// list as what was printed: the printed lines only when the consumer
+	// confirmed them, plus the self-sent rows unconditionally.
+	show := make([]map[string]any, 0, len(unread)+len(selfSent))
+	if delivered {
+		show = append(show, unread...)
+	}
+	show = append(show, selfSent...)
+	reportChatRead(client, cfg, show, warn, out)
+	// NOTHING IS RECORDED LOCALLY. What used to stand here was a rebuilt id set
+	// written to disk, plus a hand-rolled "drop the ids nobody confirmed" pass to
+	// simulate the redelivery the server would do anyway. Both are gone: the only
+	// state is the server's unread set, and the ONLY thing that moves it is the
+	// receipt filed above. An undelivered batch files no receipt, so those rows
+	// are still unread and the next drain fetches and prints them again — not by
+	// arrangement, but because nothing ever told the server otherwise.
 	return len(unread)
 }
 
@@ -1376,7 +1223,7 @@ func drainChat(client httpClient, cfg Config, seen *chatSeen, out io.Writer, sil
 // no-op 200).
 const markReadPath = "/api/chat/mark-read"
 
-func reportChatRead(client httpClient, cfg Config, printed []map[string]any, seen *chatSeen, out io.Writer) {
+func reportChatRead(client httpClient, cfg Config, printed []map[string]any, warn *markReadWarner, out io.Writer) {
 	high := map[string]float64{}
 	for _, m := range printed {
 		peer := strings.TrimSpace(strOrEmpty(m["from"]))
@@ -1402,7 +1249,7 @@ func reportChatRead(client httpClient, cfg Config, printed []map[string]any, see
 			"last_read_ts": high[peer],
 		})
 		if status != 200 {
-			warnMarkReadFailed(seen, out, peer, status)
+			warnMarkReadFailed(warn, out, peer, status)
 		}
 	}
 }
@@ -1412,11 +1259,16 @@ func reportChatRead(client httpClient, cfg Config, printed []map[string]any, see
 // delivered and printed; only the sender's ✓ stays dark — but it is not
 // nothing: a silently un-filed receipt is exactly the class of "no error, wrong
 // picture" bug this whole change exists to remove.
-func warnMarkReadFailed(seen *chatSeen, out io.Writer, peer string, status int) {
-	if out == nil || seen == nil || seen.markWarned {
+func warnMarkReadFailed(warn *markReadWarner, out io.Writer, peer string, status int) {
+	if out == nil {
 		return
 	}
-	seen.markWarned = true
+	if warn != nil {
+		if warn.warned {
+			return
+		}
+		warn.warned = true
+	}
 	fmt.Fprintf(out, "[ocagent] mark-read 沒送成功（peer=%s，HTTP %d）— 訊息已經印出來了，"+
 		"只是對方看到的已讀勾不會亮。這個行程不會再提醒第二次。\n", peer, status)
 }

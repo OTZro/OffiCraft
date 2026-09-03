@@ -62,7 +62,10 @@ type listener struct {
 	cursorPath string
 	winddown   *windDownHook
 	recycle    *recycleHook
-	seen       *chatSeen // persisted id-keyed unread cursor for drain_chat
+	// markWarn is the once-per-process latch for a mark-read receipt that did
+	// not land. It is NOT a chat ledger: what this listener has already surfaced
+	// is the server's unread set and nothing else (T-48, rc-224dee5770dd).
+	markWarn *markReadWarner
 	// ack is the delivery gate for chat batches: non-nil ONLY when the parent
 	// asked for acks (the codex sidecar). nil ⇒ a printed line counts as
 	// delivered, which is the claude path and must stay byte-for-byte as it was.
@@ -330,15 +333,12 @@ func (l *listener) dispatch(payload []byte) {
 		// R7 HARD CONSTRAINT: the chat delta payload is convenience — NEVER merged.
 		// The delta is a pure NUDGE ⇒ REFETCH /api/chat and print the unread-for-me.
 		//
-		// Same entrance as the connect drain, so the same rule: whether this
-		// prints is the CURSOR's call, not the caller's. A delta says "something
-		// arrived", which is not a licence to print whatever the refetch returns —
-		// on an unprimed store there is no baseline to diff against, and printing
-		// then washes a brand-new session out with history that predates it. The
-		// store is normally primed long before any delta lands (a delta can only
-		// arrive on a stream, and the connect drain runs before that stream is
-		// read), so this changes nothing in the ordinary case; it closes the one
-		// where the connect drain could not FETCH and left the store unprimed.
+		// Same entrance as the connect drain, and there is nothing left to
+		// decide at either: the drain prints the server's unread set, so a delta
+		// that arrives while the connect drain is still in flight can at worst
+		// print the same window twice — and it cannot even do that, because the
+		// first of them receipts what it printed and takes it out of the unread
+		// set.
 		l.drainChatNow()
 	case replyCardTopic:
 		// R7 again: the payload ({id, from, status}) only routes — the printed
@@ -568,13 +568,15 @@ func (l *listener) connectOnce(ctx context.Context) (opened, activity, selfExit 
 	// takes over, is what makes "reconnected" mean "caught up".
 	//
 	// 🔴 THIS IS THE ONLY SCHEDULED CHAT DRAIN — there is none at process start
-	// (owner, 2026-09-02). Including the FIRST one of the process: a cold boot's
-	// backfill, and a virgin machine's silent baseline, both happen right here.
-	// Tying it to the connect is what keeps an inbox from being printed into a
-	// session that is about to receive no events at all.
+	// (owner, 2026-09-02). Including the FIRST one of the process: a virgin
+	// machine's very first backfill happens right here, and it PRINTS (T-48 —
+	// the old silent baseline is gone with the local ledger). Tying it to the
+	// connect is what keeps an inbox from being printed into a session that is
+	// about to receive no events at all.
 	//
-	// This cannot re-print history: the seen cursor was advanced by whichever
-	// drain surfaced a line, so a re-drain of the same window prints nothing.
+	// This cannot re-print history: whichever drain surfaced a line receipted it,
+	// which took it out of the server's unread set, so a re-drain of the same
+	// window fetches nothing.
 	l.drainChatNow()
 
 	onAct := func() { activity = true }
@@ -601,29 +603,18 @@ func (l *listener) connectOnce(ctx context.Context) (opened, activity, selfExit 
 // and every inbound chat delta (dispatch). There is deliberately no third one at
 // process start — see run().
 //
-// 🔴 SILENCE IS DECIDED BY THE CURSOR, NOT BY WHICH PATH CALLED. An UNPRIMED
-// store means this machine has never surfaced chat for this member, and there is
-// no "last seen" to diff against — printing then would wash a brand-new session
-// out with however much history predates it. The caller is precisely what cannot
-// know whether a baseline exists, so no caller gets to pass its own answer.
-//
-// The case that separates a cursor-decided silence from a caller-decided one is
-// the same on both paths: on a virgin machine the FIRST connect drain is the
-// first thing ever to see this member's inbox, and if it could not FETCH the
-// store is still unprimed when the next connect drain or a chat delta arrives. A
-// hardcoded `false` on either would dump the entire history in exactly the case
-// the silent baseline exists to protect. Ordinarily only the first drain of a
-// machine's life is unprimed: it primes and marks what it saw, so every later
-// drain finds nothing unread and prints nothing — that silence comes from the
-// cursor, not from a flag.
-//
-// This centralisation IS the guardrail. The rule held on two of three paths for
-// a while precisely because each site spelled its own answer out by hand.
+// 🔴 NOBODY DECIDES SILENCE ANY MORE, BECAUSE THERE IS NOTHING TO DECIDE. The
+// old drain took a `silent` flag fed from a persisted local ledger, so that a
+// machine's first listen swallowed the whole inbox without printing it. That
+// ledger is gone (owner, rc-224dee5770dd): the server's unread set is the only
+// answer to "have I seen this", the drain prints everything in it, and the read
+// receipt is the only thing that takes a row out of it. A caller therefore has
+// no answer left to pass in and no way to get it wrong.
 func (l *listener) drainChatNow() int {
-	if l.seen == nil {
-		l.seen = loadChatSeen(chatSeenPath(l.cfg))
+	if l.markWarn == nil {
+		l.markWarn = &markReadWarner{}
 	}
-	return drainChat(l.api, l.cfg, l.seen, l.out, !l.seen.primed, l.ack)
+	return drainChat(l.api, l.cfg, l.out, l.markWarn, l.ack)
 }
 
 // run is the always-online listen loop. It blocks until ctx is cancelled or a self-exit
@@ -646,11 +637,9 @@ func (l *listener) run(ctx context.Context) int {
 	// only once the session can actually act on what follows.
 	//
 	// Everything the boot drain used to be responsible for now happens in
-	// connectOnce, unchanged in behaviour because silence was never the boot
-	// path's decision to make — see drainChatNow: an UNPRIMED cursor still
-	// primes silently, a primed one still backfills. The first-ever listener on
-	// a machine is therefore still built a baseline without printing a line; it
-	// just happens at the connect instead of a few milliseconds earlier.
+	// connectOnce: the connect drain fetches the server's unread set and prints
+	// all of it, so a listener that never got a stream also never reads — and
+	// never receipts — a single line.
 	backoff := l.backoffStart
 	for {
 		if ctx.Err() != nil {
@@ -776,7 +765,7 @@ func cmdListen(cfg Config, env func(string) string, once bool, out io.Writer) in
 		cursorPath:       cursorPath(cfg),
 		winddown:         newWindDownHook(api, cfg, out),
 		recycle:          newRecycleHook(api, cfg, out),
-		seen:             loadChatSeen(chatSeenPath(cfg)),
+		markWarn:         &markReadWarner{},
 		ack:              newAckGate(env, os.Stdin),
 		replySeen:        loadReplyCardSeen(replyCardSeenPath(cfg)),
 		taskSnaps:        map[string]taskSnap{},
