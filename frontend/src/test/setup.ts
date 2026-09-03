@@ -16,6 +16,7 @@
 import { afterEach } from "vitest";
 import { resetChatDrafts } from "../lib/chatDraftStore";
 import { resetAllSharedSnapshots } from "../lib/sharedSnapshot";
+import { resetReplyCardCache } from "../lib/replyCardCache";
 
 // T-8aaa: the chat composer draft store is module-level in-memory state (it must
 // outlive a component unmount/remount within the app). That same persistence
@@ -31,6 +32,15 @@ afterEach(() => resetChatDrafts());
 // purpose: this file runs BEFORE a test file's own `vi.mock("../api")` is
 // registered, so it must not pull the api layer into the registry first.
 afterEach(() => resetAllSharedSnapshots());
+
+// T-48: lib/replyCardCache is module-level by design — a card id names one card
+// for the life of the page, and `useChat` may not commit a thread carrying a
+// WAITING card until that card is in it. The same persistence answers the NEXT
+// test from the previous test's card whenever they share an id (which every
+// ChatReplyCard suite does — `rc-1`), so a seeded card would make "does this
+// card fetch on mount?" unanswerable. Same reasoning, and same lib/ import
+// discipline, as the two resets above.
+afterEach(() => resetReplyCardCache());
 
 class MemoryStorage implements Storage {
   #data = new Map<string, string>();

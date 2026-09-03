@@ -281,9 +281,44 @@ const REGISTRY = [
   {
     file: "hooks/useChat.ts",
     kind: "await",
-    count: 17,
+    count: 23,
     verdict:
-      "one hook instance per room (R13-3), so a commit from a room the owner has left lands in a discarded component; the generation clock is what orders the commits WITHIN a room",
+      "one hook instance per room (R13-3), so a commit from a room the owner has left lands in a discarded component; the generation clock is what orders the commits WITHIN a room. 🔴 17 → 23 (T-48): every one of the six thread-writing paths now goes through `lib/threadCommit`, which awaits the page's WAITING reply cards before the rows reach the view — resetToLatest / refetch / load() / loadNewer / loadAround each traded a bare setter for `await commit(seq, …)`, and loadOlder for `await mergeHistory(…)`. The re-signed verdict is the same one: the extra awaits widen the window a newer load can commit inside, and `commit` is where the ticket is re-asked AFTER its own await",
+  },
+  {
+    file: "lib/threadCommit.ts",
+    kind: "await",
+    count: 2,
+    verdict:
+      "commit() and mergeHistory() each await the page's waiting reply cards before writing. commit re-asks the generation ticket AFTER that await and drops a superseded page; mergeHistory takes no ticket because a history page is additive, and writes through an updater so a commit landing inside its await window survives in React's `prev`. Neither knows the caller's effect liveness — `alive` stays in load()'s own closure, asked on both sides",
+  },
+  {
+    file: "lib/replyCardCache.ts",
+    kind: "await",
+    count: 3,
+    verdict:
+      "prefillWaitingCards' own await on the settle/deadline race, the per-card GET inside it, and the LAZY `await import(\"../api\")` — static there would pull the api layer into the module registry from src/test/setup.ts, before any test file's own vi.mock, and silently un-mock the prefill (measured: the real mock backend answered 404). Keyed by globally-unique card id and it only ever WRITES a card into the shared table, so a fetch that lands after the screen has moved on can at worst warm the cache for a card nobody is showing — never overwrite one room's value with another's",
+  },
+  {
+    file: "lib/replyCardCache.ts",
+    kind: ".then/.catch/.finally",
+    count: 1,
+    verdict:
+      "the allSettled arm feeding the deadline race; it resolves a value nobody stores — the cards were written by the per-card task itself",
+  },
+  {
+    file: "lib/replyCardCache.ts",
+    kind: "setTimeout/setInterval",
+    count: 1,
+    verdict:
+      "🔴 THE LIVENESS DEADLINE, and it is the one landing point here that MUST fire late to be doing its job. Every commit point awaits this function, so a getReplyCard that never answers would hold the whole thread off the screen — an empty room. The timer aborts the WAIT (not the requests: getReplyCard takes no signal) after REPLY_CARD_PREFILL_DEADLINE_MS and is cleared in a finally either way; a fire after the screen moved on resolves a promise nobody is awaiting",
+  },
+  {
+    file: "lib/replyCardCache.ts",
+    kind: "addEventListener",
+    count: 1,
+    verdict:
+      "the AbortSignal listener that ends that wait, `{ once: true }` on a controller created and dropped inside one call; nothing outlives the call and no room's state is written from it",
   },
   {
     file: "hooks/useChat.ts",
@@ -609,6 +644,12 @@ const MODULE_STATE = [
       "repaint callbacks for that global cache; each unsubscribes on unmount",
   },
   {
+    file: "lib/replyCardCache.ts",
+    name: "cards",
+    verdict:
+      "keyed by the globally-unique reply-card id (`rc-…`), which names the same card in every room — the same property that makes useWorkerCodenames' cache safe. It holds one card's own server-rendered value and nothing derived from a conversation, so there is no room's value in it to cross over; `ChatReplyCard` writes back on both its read and its write paths so a remount cannot seed a pre-answer copy",
+  },
+  {
     file: "lib/chatDraftStore.ts",
     name: "drafts",
     verdict:
@@ -680,6 +721,65 @@ const MODULE_STATE = [
       "a closed allowlist built once from the generated MESSAGE_KEYS and only ever asked `.has(…)`; a lookup table, identical for every room",
   },
 ];
+
+/** THE ONE FILE THAT MAY HOLD THE THREAD (T-48).
+ *
+ * 🔴 WHY IT IS A LINT AND NOT A COMMENT. The chat thread's reply cards are
+ * fetched separately from and later than its messages, so a WAITING card above a
+ * scroll target grows after the fact and pushes the target down (measured +254px
+ * at 1280 wide; 0 at 390, where the browser's scroll anchoring absorbs it). The
+ * fix is that every commit must hold those cards BEFORE the rows reach the view
+ * — and the way that fix fails is N hand-written `await prefetch(...)` calls at
+ * N commit points, one of which the next reader forgets. That failure has a
+ * measured record on this very ticket: four silent regressions in one night,
+ * every one with a green suite.
+ *
+ * So the raw `useState<Thread>` setter lives in `lib/threadCommit.ts`'s closure
+ * and does not come out. This rule is what stops a second home for it growing —
+ * the same call `conversationLatches` made when it took the mutable fields out
+ * of the latch type, and enforced the same way: not by asking whether a call
+ * site is careful, but by making the careless form unwritable.
+ *
+ * It runs over the WALK, so a new hook the chat surface starts calling is
+ * covered without anybody adding it to a list. */
+const THREAD_STATE_OWNER = "lib/threadCommit.ts";
+
+/** Does this file declare React state over `Thread`, or a setter for one?
+ *
+ * By AST rather than by line, for the reason the module-state census moved:
+ * `useState<Thread>(` and `useState<\n  Thread\n>(` are the same declaration and
+ * a line pattern sees two different strings. Three shapes count:
+ *   1. `useState<Thread>(…)` / `useState<Thread | null>(…)` — the call itself;
+ *   2. a `useRef`/`useState` whose type argument mentions `Thread` in a SETTER
+ *      position (`Dispatch<SetStateAction<Thread>>`), i.e. somebody stashed the
+ *      setter to hand it around;
+ *   3. any binding annotated `Dispatch<SetStateAction<Thread…>>`.
+ *
+ * Over-approximating is the safe direction here — a false positive is one line
+ * of argument in review, a false negative is the defect back. */
+function declaresThreadState(file) {
+  const hits = [];
+  const mentionsThread = (t) =>
+    !!t && /\bThread\b/.test(t.getText(ast(file)));
+  eachNode(ast(file), (n) => {
+    if (
+      ts.isCallExpression(n) &&
+      ts.isIdentifier(unwrap(n.expression)) &&
+      /^use(State|Reducer|Ref)$/.test(unwrap(n.expression).text) &&
+      (n.typeArguments ?? []).some(mentionsThread)
+    ) {
+      hits.push(`${unwrap(n.expression).text}<…Thread…>`);
+    }
+    if (
+      (ts.isVariableDeclaration(n) || ts.isParameter(n) || ts.isPropertySignature(n)) &&
+      n.type &&
+      /SetStateAction\s*<[^>]*\bThread\b/.test(n.type.getText(ast(file)))
+    ) {
+      hits.push(`a Dispatch<SetStateAction<Thread>> binding`);
+    }
+  });
+  return [...new Set(hits)];
+}
 
 /** The ONE caller `useQuotedMessageOverlay` is allowed to have (T-48, R14-1.6).
  * The hook dropped its own visit stamp because `ChatArea` is keyed, so its
@@ -1251,6 +1351,23 @@ if (newState.length > 0) {
 if (goneState.length > 0) {
   problems.push(
     `registered module-level state that no longer exists:\n${goneState.map((r) => `    - ${r}`).join("\n")}`,
+  );
+}
+
+// 7. The thread's setter has exactly ONE home. Over the walk, so a hook the
+//    chat surface starts calling tomorrow is covered without an edit here.
+for (const file of files) {
+  const where = rel(file);
+  const hits = declaresThreadState(file);
+  if (hits.length > 0 && where !== THREAD_STATE_OWNER) {
+    problems.push(
+      `${where} declares the chat thread's own state (${hits.join(", ")}).\n  Only ${THREAD_STATE_OWNER} may hold it. Every write to the thread must go through its commit / mergeHistory / clear doors, because those are what await the page's WAITING reply cards before the rows reach the view — a second setter is a second way to paint messages whose cards are still in the air, and the scroll target then moves under the reader (measured +254px at 1280).`,
+    );
+  }
+}
+if (declaresThreadState(join(SRC, "lib", "threadCommit.ts")).length === 0) {
+  problems.push(
+    `${THREAD_STATE_OWNER} no longer declares the thread's state — the rule above would then be vacuously true of every file, which is how a census dies quietly. If the state moved, move this rule with it.`,
   );
 }
 

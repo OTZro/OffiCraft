@@ -43,6 +43,15 @@ import { OWNER_ID } from "../lib/ownerUnread";
 import { isWindowActive } from "./useWindowActive";
 import { openLatches } from "../lib/conversationLatches";
 import type { LatchRelease } from "../lib/conversationLatches";
+// 🔴 THE THREAD'S ONLY DOOR (T-48). The raw `useState<Thread>` setter lives in
+// that module's closure and does not come out; this file gets `commit` /
+// `mergeHistory` / `clear` and no fourth way in. That is what makes "commit
+// messages to the view without awaiting their reply cards" unwritable rather
+// than merely discouraged — the shape of the failure that shipped four times in
+// one night, every time with a green suite. `check-async-landing-points.mjs`
+// keeps the setter from growing a second home.
+import { useThreadCommit } from "../lib/threadCommit";
+import type { Thread } from "../lib/threadCommit";
 
 // 🔴 THE HOLE IN THE MIDDLE (T-b0bb). Everything from here down to
 // `mergeLatestPage` exists for ONE defect, and it is worth stating exactly,
@@ -257,67 +266,6 @@ const CHAT_TOPICS = new Set(["chat", "chat_read"]);
 
 // The loaded window for THE conversation this hook instance was mounted for.
 //
-// 🔴 IT USED TO CARRY A `peer` FIELD (T-48, R13-3). The hook was mounted once
-// and swapped between rooms, so there was a committed frame holding the new
-// room's identity beside the old room's messages, and every reader either
-// checked `messagesPeer` or was wrong. `ChatArea` is mounted under
-// `key={peerId}` now, so one instance of this hook belongs to one room for its
-// whole life: there is no second room for these messages to be confused with.
-interface Thread {
-  messages: ChatMessage[];
-  hasMore: boolean;
-  // 🔴 A seam this thread could NOT close (T-b0bb): a newest page did not join
-  // onto what we held, and the backfill walk hit MAX_BACKFILL_PAGES (or its own
-  // request failed) before reaching a row we already had. Messages are missing
-  // from the MIDDLE of `messages` and we do not know which or how many.
-  //
-  // This exists so that giving up is not silent. It is deliberately STICKY for
-  // the life of the conversation view: a later page that joins cleanly does not
-  // retroactively deliver the rows we lost, so it must not clear the warning.
-  // It resets on a peer switch / remount, and that reset is CORRECT rather than
-  // a loss: the effect's setup body clears `messages` first, so the rebuilt
-  // thread is a fresh newest window with the hole ABOVE it, not inside it —
-  // `loadOlder`'s cursor (messages[0]) then walks back THROUGH the range that
-  // was skipped and the rows come back. Scrolling up after a reload / peer
-  // switch recovers the messages; the notice going away is not a silent loss of
-  // them. (Do not restate the older claim that a reload makes the notice vanish
-  // "without the messages having been recovered" — that was measured wrong.)
-  //
-  // 🟠 NAMED DEBT — THE SERVER-SIDE READ WATERMARK IS NOT FIXED (T-b0bb).
-  // What a reload does NOT undo is the read state. While the hole existed the
-  // server had already advanced the owner's watermark past it (a no-cursor
-  // `listChat` marks up to the newest ts of the page it served), so those rows
-  // stay counted as READ: unread does not go back up, and the "以下是未讀"
-  // divider will not point at them even after they are scrolled back into view.
-  // Nothing on the client can repair that — it needs either a watermark that
-  // only advances over rows actually delivered, or a way to rewind it. See
-  // server/ocserverd/api_chat_gap_tb0bb_test.go
-  // `TestChatWatermarkAdvancesPastMessagesTheCallerNeverReceived`, which is
-  // labelled CHARACTERIZATION for exactly this reason: it pins the behaviour we
-  // are shipping WITH, not one we fixed.
-  //
-  // All THREE of backfillSeam's ways to stop short raise this flag: the budget
-  // ran out, a cursor request failed, or a cursor page came back EMPTY while we
-  // are demonstrably holding older rows (review S1 — see the comment on that
-  // branch for why an empty page there is a contradiction and never an ending).
-  // Nothing in this file gives up quietly.
-  gapSuspected: boolean;
-  // 🔴 THIS THREAD IS AN ANCHOR WINDOW, NOT THE LIVE TAIL (T-48 ③). Set when
-  // `loadAround` lands a window whose newer half came back FULL (so the stream
-  // continues below it), cleared the moment a forward page comes back short or
-  // `resetToLatest` replaces the thread.
-  //
-  // ⚠️ IT ALSO GATES `load()`. A newest-window page cannot be merged into a
-  // historical window: the range between the two is unloaded, `pageJoinsThread`
-  // correctly says so, and `backfillSeam` would then spend up to
-  // MAX_BACKFILL_PAGES round-trips failing to close a seam that is not a defect
-  // at all — and end by raising `gapSuspected`, i.e. telling the owner messages
-  // were LOST when in truth they were merely not fetched yet. So while this is
-  // true the periodic/SSE load is skipped, and the forward walk (`loadNewer`)
-  // or the arrow (`resetToLatest`) is what brings the thread back to the tail.
-  hasNewer: boolean;
-}
-
 /** Does a newest-window `latest` page JOIN onto what we already hold, or is
  * there an uncovered range between them?
  *
@@ -483,21 +431,17 @@ type ConversationSlot = {
 };
 
 export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
-  const [thread, setThread] = useState<Thread>(() => ({
-    messages: [],
-    hasMore: true,
-    gapSuspected: false,
-    hasNewer: false,
-  }));
+  // The thread, its mirror and its generation clock — all three behind
+  // `lib/threadCommit`, which is the only thing that can write them.
+  const view = useThreadCommit();
+  const thread = view.thread;
   const [peerLastReadTs, setPeerLastReadTs] = useState(0);
   // Live mirror of `thread` for the async loadOlder (a state read inside an
   // await would be a stale closure) + the in-flight lock: one older page at a
   // time, so a scroll handler firing repeatedly near the top can't stack
   // duplicate cursor requests.
-  const threadRef = useRef(thread);
-  threadRef.current = thread;
   // 🔴 LOAD GENERATIONS (T-b0bb, review B2). Before the backfill, a load was
-  // "fetch → setThread" with ZERO awaits in between, so two overlapping loads
+  // "fetch → commit" with ZERO awaits in between, so two overlapping loads
   // could only interleave if the network answered out of order. The backfill
   // put up to MAX_BACKFILL_PAGES round-trips between the fetch resolving and the
   // commit — and it opens that window exactly during a burst, i.e. exactly when
@@ -506,7 +450,7 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   // newer load B completes, then A commits on top — 75 rows, none missing, none
   // duplicated, and the newest 5 sitting at the TOP of the conversation, plus the
   // same seam backfilled twice because both loads compared against the same stale
-  // threadRef. `alive` does not cover this: it only says "the effect was torn
+  // mirror. `alive` does not cover this: it only says "the effect was torn
   // down", never "a newer load already landed".
   //
   // So every load takes a ticket when it STARTS and may only commit while no
@@ -515,10 +459,18 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   // down to the same held rows — its result is a superset of the one we drop.
   // `ChatArea.groupMessages` "only partitions, never reorders", so array order
   // IS screen order: a late commit is not a cosmetic race.
+  //
+  // 🔴 THE CLOCK ITSELF NOW LIVES IN `lib/threadCommit` (T-48), because the
+  // re-check has to happen AFTER the card prefill and there must be exactly one
+  // copy of that ordering. `view.takeTicket()` mints; `view.commit(seq, …)` is
+  // the only thing that can advance the committed watermark, and it does so
+  // after its await, never before — assigning first would mark a load as newest
+  // while it is still waiting on a card, and a load that started later and
+  // finished sooner would then be judged superseded by a page it precedes.
   // 🔴 THE FORWARD WALK'S ONLY STOP THAT IS NOT `hasNewer` (T-48). Holds the
   // anchor id whose forward page came back carrying nothing this thread did not
   // already have — the shape a DUPLICATE anchor request produces (measured: two
-  // `?start_id=` requests 8ms apart on the same id, back when `threadRef` only
+  // `?start_id=` requests 8ms apart on the same id, back when the mirror only
   // caught up on the next render). That CAUSE is gone: the forward loader now
   // advances the mirror the moment a page commits, and the duplicate went with
   // it (measured on the fix: 0 repeats in 1000 walks against 5 in 400 without
@@ -551,8 +503,6 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   // held down retries at most twice a second.
   const HUMAN_RETRY_MIN_MS = 400;
   const humanRetryAtRef = useRef(-Infinity);
-  const loadSeqRef = useRef(0);
-  const committedSeqRef = useRef(0);
   // The entry anchor, mirrored for the subscription effect below. Read in the
   // effect's SETUP body only — never a dependency, or a route that keeps the
   // msgId in the hash (it does) would re-subscribe the whole SSE sink.
@@ -607,11 +557,12 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   //  • `loadingOlder` / `loadingNewer` — same-direction mutexes, so a scroll
   //    handler firing repeatedly cannot stack duplicate cursor requests.
   //
-  // ⚠️ NOT in here, deliberately: `loadSeqRef` / `committedSeqRef`. Those are a
+  // ⚠️ NOT in here, deliberately: the generation clock (`view.takeTicket()` /
+  // the watermark inside `lib/threadCommit`). Those are a
   // MONOTONIC clock, not a latch — a ticket taken later must outrank one taken
   // earlier, and resetting them mid-conversation would let a stale in-flight
-  // load out-rank a fresh one. They are `useRef`s, so they start at zero with
-  // the hook, which since R13-5 means with the conversation.
+  // load out-rank a fresh one. They are `useRef`s in `useThreadCommit`, so they
+  // start at zero with the hook, which since R13-5 means with the conversation.
   //
   // 🔴 BUILT ONCE PER MOUNT, NOT PER RENDER OR PER EFFECT RUN (fourth-review
   // R4-2, R13-5). The rebuild used to live in the subscription effect's setup
@@ -739,72 +690,65 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     // by-name way to unlatch an anchor, because a second way is what R4-1 was.
     // The counter is left exactly as it was found.
     conv.latches.acquire("anchorFetch")?.();
-    const seq = ++loadSeqRef.current;
+    const seq = view.takeTicket();
     try {
       const next = await api.listChat(withId);
-      if (seq < committedSeqRef.current) return;
       // 🔴 A LATE RESET MUST NOT BURN A GENERATION TICKET (T-48, R5-1; bound to
-      // the VISIT in R6-1). This line used to run unconditionally: a
-      // `resetToLatest` belonging to a conversation the owner has LEFT
-      // (ChatArea fires one from the anchor fetch's miss branch when the thread
-      // is empty) would raise the global watermark and then drop its own page —
-      // and every load the NEW conversation had already started, ticketed
-      // lower, was silently judged superseded and thrown away. No spinner, no
-      // error; the room just sits there until the next SSE burst happens to
-      // heal it. `loadSeqRef` / `committedSeqRef` are deliberately global and
-      // never reset (see their note), which is exactly why writing to them has
-      // to be earned.
-      //
-      committedSeqRef.current = seq;
-      // A new window (or a merged newest page) changes what "forward" means —
-      // whatever anchor was marked exhausted no longer describes this thread.
-      forwardExhaustedRef.current = null;
-      setThread((prev) => ({
+      // the VISIT in R6-1). The watermark used to be raised HERE, on the line
+      // above the commit, unconditionally: a `resetToLatest` belonging to a
+      // conversation the owner has LEFT (ChatArea fires one from the anchor
+      // fetch's miss branch when the thread is empty) would raise the global
+      // watermark and then drop its own page — and every load the NEW
+      // conversation had already started, ticketed lower, was silently judged
+      // superseded and thrown away. No spinner, no error; the room just sits
+      // there until the next SSE burst happens to heal it. The clock is
+      // deliberately global and never reset (see its note), which is exactly why
+      // writing to it has to be earned — so `commit` is the only writer, and it
+      // writes AFTER its own await, having re-asked the same question.
+      const ok = await view.commit(seq, (prev) => ({
         messages: next,
         hasMore: next.length >= CHAT_PAGE_SIZE,
         gapSuspected: prev.gapSuspected,
         hasNewer: false,
       }));
+      // A new window (or a merged newest page) changes what "forward" means —
+      // whatever anchor was marked exhausted no longer describes this thread.
+      // 🔴 GATED ON THE COMMIT LANDING, and that is not a tidy-up: this line used
+      // to sit behind the pre-await `seq < committed` bail, which `commit` has
+      // absorbed. Clearing unconditionally would let a SUPERSEDED page erase the
+      // stop sign belonging to the thread that actually won, and the forward
+      // walk would ask again from a row it has already been answered about.
+      if (ok) forwardExhaustedRef.current = null;
     } catch (e) {
       console.warn("useChat: resetToLatest failed", e);
     }
-  }, [withId, conv]);
+  }, [withId, conv, view]);
 
   const refetch = useCallback(async () => {
     // Post-send refetch. MERGE the newest page (id-dedupe, history kept in
     // front) — never replace, or the loaded scrollback would vanish under the
-    // owner. Takes a generation ticket like load() does — see loadSeqRef.
+    // owner. Takes a generation ticket like load() does — see the generations note.
     //
     // SENDING RETURNS TO THE LIVE TAIL (T-48 ③). While the thread is an anchor
     // window the message we just sent is BEYOND it, so a merge would drop it on
     // the floor and the composer's own line would never appear. Nothing else
     // can honestly be done with a newest page here — see resetToLatest.
-    if (threadRef.current.hasNewer) {
+    if (view.current().hasNewer) {
       await resetToLatest();
       await refetchReads();
       return;
     }
-    const seq = ++loadSeqRef.current;
+    const seq = view.takeTicket();
     const next = await api.listChat(withId);
-    // T-b0bb: close the seam BEFORE merging (see backfillSeam). threadRef is
-    // the live mirror — reading `thread` here would be a stale closure.
-    const cur = threadRef.current;
+    // T-b0bb: close the seam BEFORE merging (see backfillSeam). `view.current()`
+    // is the live mirror — reading `thread` here would be a stale closure.
+    const cur = view.current();
     let fill: ChatMessage[] = [];
     let gap: boolean | undefined;
-    let superseded = seq < committedSeqRef.current;
-    if (!superseded && !pageJoinsThread(cur.messages, next)) {
+    if (!pageJoinsThread(cur.messages, next)) {
       const r = await backfillSeam(withId, cur.messages, next);
-      // A newer load committed while we were paging backwards ⇒ this page and
-      // its backfill are stale. Dropping them keeps the thread in order.
-      superseded = seq < committedSeqRef.current;
       fill = r.filled;
       if (!r.joined) gap = true;
-    }
-    // The peer's watermark is still worth pulling even when our own page is
-    // stale, so the drop is a skipped COMMIT, not an early return.
-    if (superseded) {
-      await refetchReads();
-      return;
     }
     // 🔴 THE ONLY THING THAT MAY STOP A COMMIT HERE IS A NEWER TICKET (T-48,
     // R8-1, simplified by R13-3). This used to also ask "is the visit that
@@ -814,11 +758,24 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     // anchor window with the previous visit's live tail. The hook is mounted per
     // room now, so a refresh started before the switch commits into a component
     // React has already discarded.
-    committedSeqRef.current = seq;
+    //
+    // This path already tolerated a long await window — backfillSeam puts up to
+    // MAX_BACKFILL_PAGES round trips right here — so the card prefill inside
+    // `commit` is one more of the same kind, asked in the one place that also
+    // re-checks the ticket after it.
+    const ok = await view.commit(seq, (prev) =>
+      mergeLatestPage(prev, next, fill, gap),
+    );
+    if (!ok) {
+      // A newer load committed while we were paging backwards ⇒ this page and
+      // its backfill are stale. The peer's watermark is still worth pulling, so
+      // the drop is a skipped COMMIT, not an early return.
+      await refetchReads();
+      return;
+    }
     // A new window (or a merged newest page) changes what "forward" means —
     // whatever anchor was marked exhausted no longer describes this thread.
     forwardExhaustedRef.current = null;
-    setThread((prev) => mergeLatestPage(prev, next, fill, gap));
     // ⚠️ THIS PULL NO LONGER HAS A CAUSE, AND SAYING SO IS THE POINT (T-48).
     // It used to read: "listChat itself marks the owner's read watermark
     // server-side; pull the peer's watermark alongside so the badges
@@ -835,7 +792,7 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     // rather than deleted because removing it is a behaviour change with no
     // guard of its own, not because a reason was found for it.
     await refetchReads();
-  }, [withId, conv, refetchReads, resetToLatest]);
+  }, [withId, conv, refetchReads, resetToLatest, view]);
 
   useEffect(() => {
     let alive = true;
@@ -865,7 +822,7 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     // LEFT TO BE REDISCOVERED (T-48, R14-3.3). `OfficePage`'s three `<ChatArea>`
     // branches all pass `key={x.id}` with the same `x` they pass as `member`,
     // so `key` IS `withId` and a room change is always a remount: nothing in
-    // the product reaches this path. What it costs is one extra `setThread` per
+    // the product reaches this path. What it costs is one extra `clear()` per
     // mount, into a thread that is already empty. It stays because the shape it
     // catches is a shape somebody can go back to — drop the key, or mount this
     // hook from a surface that has no key of its own, and the convergence is
@@ -876,12 +833,13 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     //
     // hasMore resets optimistic-true; the first landed page derives it honestly
     // (mergeLatestPage's empty-thread arm).
-    setThread({
-      messages: [],
-      hasMore: true,
-      gapSuspected: false,
-      hasNewer: false,
-    });
+    //
+    // 🔴 STILL SYNCHRONOUS, AND NO `await` MAY BE ADDED HERE (T-48). `clear()`
+    // takes no parameters precisely so it can stay this way: there are no
+    // messages in an empty thread, so there are no cards to wait for, and an
+    // await on this line would paint one extra frame of the conversation the
+    // owner has just left — the R11-1 frame, put back by hand.
+    view.clear();
     setPeerLastReadTs(0);
 
     // ONE load path (initial + SSE + refocus), and since T-48 ONE door: the
@@ -894,10 +852,10 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       // Thread.hasNewer: merging the live tail into a historical window creates
       // a seam the T-b0bb machinery would spend six round-trips failing to
       // close, and would then report as LOST messages. The peer guard matters —
-      // on a conversation switch `threadRef` is still the PREVIOUS peer's
+      // on a conversation switch the mirror is still the PREVIOUS peer's
       // thread for this tick, and that peer's anchor must not silence the new
       // conversation's first load.
-      if (threadRef.current.hasNewer) {
+      if (view.current().hasNewer) {
         return;
       }
       // 🔴 …AND NEITHER WHILE THE ANCHOR IS STILL COMING (T-48). `hasNewer`
@@ -919,8 +877,8 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       }
       // The generation ticket is taken at FIRE time, so a load that started
       // later always outranks one that started earlier, however long each of
-      // them spends in the backfill. See loadSeqRef.
-      const seq = ++loadSeqRef.current;
+      // them spends in the backfill. See the generations note above.
+      const seq = view.takeTicket();
       api
         .listChat(withId)
         .then(async (next) => {
@@ -930,37 +888,42 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
           // an orphan's no-op if the conversation has moved on since.
           conv.dropDebt?.();
           conv.dropDebt = null;
-          // A newer load already committed while this one was in flight.
-          if (seq < committedSeqRef.current) return;
           // 🔴 T-b0bb: this page is the newest WINDOW, not a continuation. If
           // its oldest row does not join onto our newest one, page backwards
           // into the seam before merging — otherwise the uncovered range is
           // lost permanently and silently, and the server has already counted
           // it as read. backfillSeam never rejects, so a failed backfill costs
           // a marked gap, not the page we just fetched.
-          const cur = threadRef.current;
+          const cur = view.current();
           let fill: ChatMessage[] = [];
           let gap: boolean | undefined;
           if (!pageJoinsThread(cur.messages, next)) {
             const r = await backfillSeam(withId, cur.messages, next);
             if (!alive) return;
-            // 🔴 THE ORDERING GUARD (review B2). The backfill above is up to 6
-            // round-trips long; a load that started AFTER this one can have
-            // fetched, backfilled and committed inside that window. Committing
-            // now would splice an older newest-page on top of a newer thread —
-            // nothing lost, nothing duplicated, and the newest messages moved
-            // to the top of the screen. Drop instead.
-            if (seq < committedSeqRef.current) return;
             fill = r.filled;
             if (!r.joined) gap = true;
           }
-          committedSeqRef.current = seq;
+          // 🔴 THE ORDERING GUARD (review B2) NOW LIVES INSIDE `commit`. The
+          // backfill above is up to 6 round-trips long and the card prefill adds
+          // one more await; a load that started AFTER this one can have fetched,
+          // backfilled and committed inside that window. Committing then would
+          // splice an older newest-page on top of a newer thread — nothing lost,
+          // nothing duplicated, and the newest messages moved to the top of the
+          // screen. `commit` re-asks after ITS await and drops instead.
+          //
+          // ⚠️ `alive` is asked on BOTH sides of the commit and stays out of
+          // `commit` itself: whether this effect is still mounted is the
+          // effect's knowledge, not the thread's, and a door that guessed at it
+          // would be guessing for every caller.
+          const ok = await view.commit(seq, (prev) =>
+            // MERGE the newest page into whatever is already loaded for this
+            // peer (see mergeLatestPage) — replacing would eat the scrollback.
+            mergeLatestPage(prev, next, fill, gap),
+          );
+          if (!alive || !ok) return;
           // A new window (or a merged newest page) changes what "forward" means —
           // whatever anchor was marked exhausted no longer describes this thread.
           forwardExhaustedRef.current = null;
-          // MERGE the newest page into whatever is already loaded for this
-          // peer (see mergeLatestPage) — replacing would eat the scrollback.
-          setThread((prev) => mergeLatestPage(prev, next, fill, gap));
         })
         .catch((e) => {
           // Same guard as the .then arm, and for a sharper reason: a load
@@ -1103,7 +1066,7 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   );
 
   const loadOlder = useCallback(async () => {
-    const cur = threadRef.current;
+    const cur = view.current();
     // Guards: the thread must really be THIS peer's (a switch is one commit
     // behind), non-empty (no cursor yet), still paged (hasMore), and no other
     // older-page fetch may be in flight (the concurrency lock).
@@ -1116,7 +1079,13 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
         beforeTs: oldest.ts,
         beforeId: oldest.id,
       });
-      setThread((prev) => {
+      // 🔴 A NEW AWAIT POINT, AND A CHEAP ONE. `mergeHistory` takes no ticket —
+      // a history page is additive and can neither supersede nor be superseded —
+      // but it goes through the same door, so a card riding a history page is
+      // in hand before the rows are painted. Expect ZERO fetches in practice:
+      // history pages are almost entirely answered/expired cards, and those are
+      // never prefetched (they mount collapsed — owner rule 已回覆卡預設不載).
+      await view.mergeHistory((prev) => {
         const have = new Set(prev.messages.map((m) => m.id));
         const older = page.filter((m) => !have.has(m.id));
         return {
@@ -1133,7 +1102,7 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     } finally {
       release();
     }
-  }, [withId, conv]);
+  }, [withId, conv, view]);
 
   // The MIRROR IMAGE of loadOlder, and the direction the old API could not
   // express at all: page FORWARDS from the newest loaded row with `?start_id=`.
@@ -1141,7 +1110,7 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   // plus the row we already hold; the duplicate is dropped on merge and the
   // page LENGTH (not the merged count) is what decides whether more remains.
   const loadNewer = useCallback(async (opts?: { human?: boolean }) => {
-    const cur = threadRef.current;
+    const cur = view.current();
     if (cur.messages.length === 0 || !cur.hasNewer)
       return;
     // 🔴 AN ANCHOR WINDOW IN THE AIR OUTRANKS THIS WALK (T-48). `loadAround`
@@ -1193,7 +1162,7 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     // anchor gate and pins `mayMarkRead` false, so that conversation stops
     // marking itself read for good, silently. Every other loader in this file
     // already takes a ticket; this one now does too.
-    const seq = ++loadSeqRef.current;
+    const seq = view.takeTicket();
     try {
       const newest = cur.messages[cur.messages.length - 1];
       const page = await api.listChatWindow(
@@ -1201,57 +1170,48 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
         { startId: newest.id },
         CHAT_PAGE_SIZE,
       );
-      // A later load committed while we were paging forwards ⇒ the thread this
-      // page continues no longer exists. Drop it whole.
-      if (seq < committedSeqRef.current) return;
-      committedSeqRef.current = seq;
       // ⚠️ ASKED HERE, NOT INSIDE THE UPDATER. React does not run an updater
-      // when `setThread` is called — it runs it during the next render, which
-      // is AFTER this function has finished. A first cut of this read its
+      // when the state setter is called — it runs it during the next render,
+      // which is AFTER this function has finished. A first cut of this read its
       // answer out of the updater and always got "nothing landed yet", so the
       // marker below was cleared instead of set and the walk asked from the
       // same anchor twice (measured, in the guard for exactly this). The live
       // thread mirror gives the same answer, now. The merge is then computed a
-      // SECOND time against React's own `prev`, on purpose — see the note there.
-      const held = new Set(threadRef.current.messages.map((m) => m.id));
+      // SECOND time against React's own `prev`, on purpose — see below.
+      const held = new Set(view.current().messages.map((m) => m.id));
       const addsNothing = page.every((m) => held.has(m.id));
-      const fresh = page.filter((m) => !held.has(m.id));
-      const merged = {
-        ...threadRef.current,
-        messages: [...threadRef.current.messages, ...fresh],
-        // A SHORT page means this window reached the live tail — the thread
-        // is the newest window again and the ordinary refresh may resume.
-        hasNewer: page.length >= CHAT_PAGE_SIZE,
-      };
       // 🔴 THE STATE WRITE STAYS AN UPDATER, AND THAT IS NOT A STYLE CHOICE.
-      // A first cut of this committed `setThread(merged)` — the same object
-      // written to the mirror — and that quietly threw away any OTHER load that
-      // had committed while this page was in the air. `loadOlder` takes no
+      // A first cut of this committed the merged OBJECT — the same one written
+      // to the mirror — and that quietly threw away any OTHER load that had
+      // committed while this page was in the air. `loadOlder` takes no
       // generation ticket and writes through an updater, so a history page
       // landing inside this function's await window is present in `prev` and
       // absent from `merged`: measured, 30 rows of loaded history vanished
       // (`len 90 head h0` became `len 60 hasH false`) with nothing to see it
       // happen. The mirror wants the value NOW; React wants the merge computed
-      // against whatever it actually holds. They are two different questions and
-      // this is what it costs to answer both.
+      // against whatever it actually holds.
+      //
       // 🔴 ADVANCE THE MIRROR NOW, NOT AT THE NEXT RENDER — this is the CAUSE
-      // the exhausted bound below was only ever a bandage for. The duplicate
-      // `?start_id=` pair measured 8ms apart is not a race between two threads:
-      // it is one walk asking twice from the SAME anchor because `threadRef`
-      // had not caught up yet, and the second page therefore came back carrying
-      // rows we already held. Every consumer in this file already reads this
-      // mirror as "the freshest thread", and the render below overwrites it
-      // with the same value, so making it true one tick earlier removes the
-      // duplicate instead of tolerating it.
-      threadRef.current = merged;
-      setThread((prev) => {
+      // the exhausted bound below was only ever a bandage for (the duplicate
+      // `?start_id=` pair measured 8ms apart is one walk asking twice from the
+      // SAME anchor because the mirror had not caught up). BOTH halves are now
+      // `commit`'s job, for every commit point rather than only this one: it
+      // runs the updater against the mirror, waits for the candidate's cards,
+      // writes the mirror, and hands React the updater.
+      //
+      // A later load committing while we were paging forwards ⇒ the thread this
+      // page continues no longer exists, and `commit` drops it whole.
+      const ok = await view.commit(seq, (prev) => {
         const havePrev = new Set(prev.messages.map((m) => m.id));
         return {
           ...prev,
           messages: [...prev.messages, ...page.filter((m) => !havePrev.has(m.id))],
+          // A SHORT page means this window reached the live tail — the thread
+          // is the newest window again and the ordinary refresh may resume.
           hasNewer: page.length >= CHAT_PAGE_SIZE,
         };
       });
+      if (!ok) return;
       // The walk's own stop sign, decided by the page that just landed: the
       // anchor we asked from is exhausted when its page held nothing new; a
       // page that did carry rows clears whatever was marked before.
@@ -1261,7 +1221,7 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     } finally {
       release();
     }
-  }, [withId, conv]);
+  }, [withId, conv, view]);
 
   // 🔴 THE JUMP THAT CANNOT MISS SILENTLY (T-48 ③). Two windows around one
   // message id — `end_id` for the context ABOVE it, `start_id` for the context
@@ -1324,7 +1284,7 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   const loadAround = useCallback(
     (msgId: string): Promise<JumpOutcome> =>
       withAnchorFetch(async () => {
-        const seq = ++loadSeqRef.current;
+        const seq = view.takeTicket();
         let older: ChatMessage[];
         let newer: ChatMessage[];
         try {
@@ -1353,10 +1313,6 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
           const status = e instanceof ApiError ? e.status : 0;
           return status === 404 || status === 422 ? "missing" : "unreachable";
         }
-        // Overtaken, NOT missing — and the difference is the whole of F3. The
-        // caller re-schedules; the latch is NOT what carries that decision
-        // across the gap (see the finally below).
-        if (seq < committedSeqRef.current) return "superseded";
         const byId = new Map<string, ChatMessage>();
         for (const m of [...older, ...newer]) byId.set(m.id, m);
         const window = [...byId.values()].sort(cmpStreamOrder);
@@ -1369,11 +1325,14 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
         // goes blank, the miss notice does not light, and nothing is logged.
         // Refusing turns it into the ordinary miss, which is what it is.
         if (!window.some((m) => m.id === msgId)) return "missing";
-        committedSeqRef.current = seq;
-        // A new window (or a merged newest page) changes what "forward" means —
-        // whatever anchor was marked exhausted no longer describes this thread.
-        forwardExhaustedRef.current = null;
-        setThread((prev) => ({
+        // 🔴 THE CARD PREFILL LANDS INSIDE THE `withAnchorFetch` LEASE, AND THAT
+        // IS DELIBERATE (T-48). This is the one commit point where the extra
+        // round trip is not merely tolerable but WANTED: while the lease is held
+        // `load()` and `loadNewer` both stand down, so the interval spent
+        // waiting for the jump target's cards is also an interval in which the
+        // live tail cannot flash onto the screen underneath the jump. The lease
+        // still releases in the same `finally` — do not move this out of it.
+        const ok = await view.commit(seq, (prev) => ({
           messages: window,
           // A full older page means history may continue above it; a full newer
           // page means the live tail is below it (see Thread.hasNewer). Both are
@@ -1383,9 +1342,16 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
           gapSuspected: prev.gapSuspected,
           hasNewer: newer.length >= CHAT_PAGE_SIZE,
         }));
+        // Overtaken, NOT missing — and the difference is the whole of F3. The
+        // caller re-schedules; the latch is NOT what carries that decision
+        // across the gap (see the finally below).
+        if (!ok) return "superseded";
+        // A new window (or a merged newest page) changes what "forward" means —
+        // whatever anchor was marked exhausted no longer describes this thread.
+        forwardExhaustedRef.current = null;
         return "found";
       }),
-    [withId, withAnchorFetch, conv],
+    [withId, withAnchorFetch, conv, view],
   );
 
   const markRead = useCallback(

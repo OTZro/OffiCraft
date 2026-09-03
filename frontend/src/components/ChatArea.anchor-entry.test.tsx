@@ -16,12 +16,12 @@
 // 而被上一條對話的錨點鎖住的是 useChat 的閂。
 
 import { StrictMode } from "react";
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, act, waitFor, fireEvent } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { ChatArea } from "./ChatArea";
 import type { Member } from "../types";
-import type { ChatMessage } from "../api/adapter";
+import type { ChatMessage, ReplyCard } from "../api/adapter";
 
 const OWNER = "owner";
 const A = "m-aaaaaaaaaaaa";
@@ -52,6 +52,48 @@ let holdPlain: null | (() => void) = null;
  * with which option — `block: "end"` is `scrollToLatest`'s signature and
  * nothing else in ChatArea uses it. */
 let scrolls: { on: string; block: unknown }[] = [];
+/** Every `getReplyCard`, with the one thing that matters: was the row carrying
+ * that card ALREADY PAINTED when the read went out? (See the afterEach.) */
+let cardReads: { id: string; rowPainted: number }[] = [];
+/** The waiting cards a test deliberately put in the thread — the afterEach's
+ * denominator. */
+let seededWaitingCards: string[] = [];
+
+const CARD: ReplyCard = {
+  id: "rc-1",
+  from: A,
+  kind: "decision",
+  summary: "要寄出嗎?",
+  body: "",
+  options: [
+    { text: "寄出", aiPick: true },
+    { text: "先不要", aiPick: false },
+  ],
+  selectMode: "single",
+  status: "waiting",
+  createdTs: 1,
+  attachments: [],
+  answeredTs: null,
+  expiredTs: null,
+  chatMessageId: "",
+  answer: null,
+  task: null,
+};
+
+/** One WAITING 請示卡 row, spliced into `peer`'s stream at `ts`. */
+function seedWaitingCard(peer: string, id: string, cardId: string, ts: number) {
+  log.push({
+    id,
+    from: peer,
+    to: OWNER,
+    body: "要寄出嗎?",
+    ts,
+    attachments: [],
+    replyCardId: cardId,
+    replyCardStatus: "waiting",
+  });
+  seededWaitingCards.push(cardId);
+}
 
 function threadOf(peer: string): ChatMessage[] {
   return log.filter((m) => m.from === peer || m.to === peer);
@@ -116,6 +158,31 @@ vi.mock("../api", () => ({
       return anchor.endId
         ? all.slice(Math.max(0, at - limit + 1), at + 1)
         : all.slice(at, at + limit);
+    },
+    // 🔴 THE WHOLE OF GUARD B (T-48). Every read of a card records whether that
+    // card's ROW WAS ALREADY IN THE DOM when the read went out. A row in the DOM
+    // means the thread carrying it has already been COMMITTED — so a read taken
+    // at that moment is one the reader is watching happen, and its answer arrives
+    // as a card that GROWS under everything below it. `useChat` may not commit a
+    // thread carrying a WAITING card until that card is in hand, so on every
+    // commit path this must be 0.
+    getReplyCard: async (id: string): Promise<ReplyCard> => {
+      cardReads.push({
+        id,
+        rowPainted: document.querySelectorAll(
+          `[data-reply-card-id="${id}"]`,
+        ).length,
+      });
+      // 🔴 THE RESPONSE LANDS ON A MACROTASK, AND WITHOUT THAT THIS GUARD
+      // MEASURES NOTHING. An `async` mock that returns immediately settles in the
+      // SAME microtask drain as the commit that started it, so React has not
+      // painted yet either way and `await prefill(…)` vs `void prefill(…)` are
+      // literally indistinguishable — measured: the `void` mutant passed all 12
+      // tests. No real response can arrive that fast (a fetch resolves from the
+      // task queue), so a zero-delay mock is not a simplification of the network,
+      // it is a different machine.
+      await new Promise((r) => setTimeout(r, 0));
+      return { ...CARD, id };
     },
     listChatReads: async () => [],
     markChatRead: async () => {},
@@ -202,6 +269,8 @@ beforeEach(() => {
   windowsFail = false;
   windowStale = false;
   scrolls = [];
+  cardReads = [];
+  seededWaitingCards = [];
   localStorage.clear();
   Element.prototype.scrollIntoView = vi.fn(function (
     this: Element,
@@ -215,6 +284,47 @@ beforeEach(() => {
     });
   });
   document.hasFocus = () => true;
+});
+
+/** 🔴 THE INVARIANT THIS WHOLE GROUP IS HELD TO (T-48, guard B).
+ *
+ * 請示卡 ride the chat stream as ordinary messages carrying only a card id; the
+ * card itself is a SEPARATE fetch. A WAITING card is the one that grows when it
+ * lands (options, chips, composer) — an answered/expired one mounts collapsed
+ * and never fetches at all. So a waiting card sitting ABOVE a scroll target
+ * pushes that target down AFTER the jump has landed on it: measured +254px at
+ * 1280 wide.
+ *
+ * The rule, therefore: if a render put a `replyCardStatus: "waiting"` row on
+ * screen, that row's `getReplyCard` must ALREADY HAVE HAPPENED — never after the
+ * commit that painted it. It is asserted here rather than inside one test
+ * because it is a property of every commit path this file drives, and the way
+ * this machinery has failed before is one path nobody remembered to check.
+ *
+ * ⚠️ It carries its own DENOMINATOR. An invariant over an empty set is green for
+ * the wrong reason, and most tests in this file seed no cards at all — so a test
+ * that DID seed a waiting card must be seen to have painted it, or the guard
+ * says so instead of passing. */
+afterEach(() => {
+  const late = cardReads.filter((r) => r.rowPainted > 0);
+  expect(
+    late,
+    "a WAITING card was fetched while its row was already on screen — the row will now grow under the reader, which is exactly the +254px shift. The thread must not be committed until lib/replyCardCache has the card.",
+  ).toEqual([]);
+  if (seededWaitingCards.length > 0) {
+    // The denominator: this test really did drive a waiting card onto the
+    // screen, so the emptiness above is a result and not an absence.
+    expect(
+      cardReads.map((r) => r.id).sort(),
+      "the seeded waiting card was never read at all — the invariant above would then be vacuous",
+    ).toEqual([...seededWaitingCards].sort());
+    for (const id of seededWaitingCards) {
+      expect(
+        document.querySelectorAll(`[data-reply-card-id="${id}"]`).length,
+        `the seeded waiting card ${id} never reached the screen`,
+      ).toBeGreaterThan(0);
+    }
+  }
 });
 
 describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
@@ -246,6 +356,39 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
     // 落點也對:只撈了那一則附近的一個視窗,不是整條線。
     expect(bubbles(container)).toContain(targetId);
     expect(bubbles(container)).not.toContain("a79");
+  });
+
+  it("跳轉目標上方的等待中請示卡,在那一則落地之前就已經握在手上", async () => {
+    // 🔴 GUARD B 的分母,也是整包東西的理由(T-48)。訊息串跟請示卡是**兩次**
+    // 抓取:卡片晚到,而「等待中」的卡片一到就長高(選項、chips、輸入框)。
+    // 只要它坐在跳轉目標的**上面**,目標就會在跳轉已經落地之後被往下推 ——
+    // 1280 寬實測 +254px。
+    //
+    // 這一條把那個形狀擺出來:錨點在 a40,卡片在 a35(目標上方),然後交給上面
+    // 那個共用的 afterEach 去問唯一重要的問題 —— 這張卡是在它那一列**被畫出來
+    // 之前**讀的,還是之後?jsdom 量不到 254px(它沒有版面),但它量得到順序,
+    // 而順序就是因;像素那一半由 chat-jump-card-shift.ct.spec.tsx 在真的
+    // Chromium、1280 寬上量。
+    seed(A, "a", 80, 100);
+    seedWaitingCard(A, "a35-card", "rc-1", 135.5);
+    log.sort((x, y) => x.ts - y.ts);
+
+    const { container } = render(view(alice, "a40"));
+    await waitFor(() =>
+      expect(container.querySelector('[data-msg-id="a40"]')).not.toBeNull(),
+    );
+    // 分母的另一半:那張卡真的在目標**上面**,不是隨便畫在哪裡。
+    const rows = Array.from(
+      container.querySelectorAll("[data-msg-id]"),
+    ).map((n) => n.getAttribute("data-msg-id"));
+    expect(rows.indexOf("a35-card")).toBeGreaterThanOrEqual(0);
+    expect(rows.indexOf("a35-card")).toBeLessThan(rows.indexOf("a40"));
+    // 而且它是**展開的**等待中卡片 —— 收合的已回覆卡不會長高,拿它當分母等於
+    // 沒有分母。
+    expect(
+      container.querySelector(".reply-card--collapsed"),
+      "等待中的卡片不該是收合的 stub",
+    ).toBeNull();
   });
 
   it("一次捲到底就一路走回最新那一則 —— 一頁落地之後不必再有第二個捲動事件", async () => {

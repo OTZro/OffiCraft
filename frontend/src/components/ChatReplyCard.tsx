@@ -20,6 +20,7 @@ import { useI18n } from "../i18n";
 import type { ReplyCard, ReplyCardAnswerInput } from "../api/adapter";
 import { api } from "../api";
 import { useHashRoute } from "../lib/hashRoute";
+import { getCachedReplyCard, putReplyCard } from "../lib/replyCardCache";
 import { Markdown } from "./Markdown";
 import {
   ReplyCardAnsweredBody,
@@ -52,7 +53,19 @@ export function ChatReplyCard({
 }) {
   const { t } = useI18n();
   const [, setRoute] = useHashRoute();
-  const [card, setCard] = useState<ReplyCard | null>(null);
+  // 🔴 SEEDED FROM THE PREFILL CACHE, AND THAT IS HALF OF THE ANTI-SHIFT FIX
+  // (T-48). Without a seed this card mounts empty, paints at its collapsed
+  // height, fetches, and then GROWS — pushing everything below it down after the
+  // scroll has already landed (measured +254px at 1280 wide). `useChat` cannot
+  // commit a thread carrying a WAITING card until that card is in this cache
+  // (lib/threadCommit → lib/replyCardCache), so on every commit path the seed is
+  // there and the row's first painted frame is already its final height.
+  //
+  // ⚠️ Read ONCE, at mount, on purpose: this is an initial value, not a
+  // subscription. Everything after mount comes from this component's own reads
+  // and writes, which are the newer truth (see `readGenRef`).
+  const seed = useState(() => getCachedReplyCard(replyCardId) ?? null)[0];
+  const [card, setCard] = useState<ReplyCard | null>(seed);
   const [loadError, setLoadError] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   // Lazy-load gate: a terminal-hinted card (answered/expired) starts COLLAPSED
@@ -91,6 +104,13 @@ export function ChatReplyCard({
   const commitCard = useCallback((fresh: ReplyCard) => {
     ++readGenRef.current;
     statusRef.current = fresh.status;
+    // 🔴 THE WRITE PATHS FEED THE CACHE TOO, NOT ONLY THE READS. A remount — a
+    // jump, a conversation revisit, any commit that rebuilds this row — seeds
+    // itself from the cache, so a cache holding the PRE-ANSWER copy would put
+    // the option chips back over a card this owner has already answered. That is
+    // the same defect `readGenRef` closes one layer down, and it needs closing
+    // on this layer as well.
+    putReplyCard(fresh);
     setCard(fresh);
     setLoadError(false);
   }, []);
@@ -102,14 +122,30 @@ export function ChatReplyCard({
     // adopted response) → drop this now-stale card rather than un-answer it.
     if (gen !== readGenRef.current) return;
     statusRef.current = fresh.status;
+    putReplyCard(fresh);
     setCard(fresh);
     setLoadError(false);
   }, [replyCardId]);
 
-  // Load the card once expanded — eager on mount for a waiting/unknown card,
-  // deferred to the expand click for an answered one.
+  // 🔴 A SEEDED CARD DOES NOT RE-FETCH ON MOUNT (T-48). The prefill has already
+  // paid for this exact GET one await earlier; firing it again would double
+  // every waiting card's cost and — worse — would put the row back in the
+  // "renders small, then grows" shape for the frames between mount and the
+  // second response, which is the whole defect. Exactly ONE run of the effect is
+  // skipped: everything after it (an expand, an SSE delta, a re-answer) still
+  // reads through `refetch`.
+  //
+  // ⚠️ NOT `expanded`-shaped. A terminal card's lazy rule is untouched
+  // (answered/expired mount collapsed and fetch nothing — owner 已回覆卡預設
+  // 不載, measured 0 requests), and those are never prefilled either, so they
+  // never carry a seed and never reach this line.
+  const skipEagerFetchRef = useRef(seed !== null);
   useEffect(() => {
     if (!expanded) return;
+    if (skipEagerFetchRef.current) {
+      skipEagerFetchRef.current = false;
+      return;
+    }
     let alive = true;
     refetch().catch((e) => {
       console.warn("ChatReplyCard: card load failed", e);
