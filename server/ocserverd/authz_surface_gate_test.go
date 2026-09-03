@@ -52,6 +52,27 @@ package main
 // one-word shrug, not a fluent one. Verified by the T-5336 review, which did
 // exactly that and got two green gates.
 //
+// 🔴 A NAMED DEBT — THE SCANNER MATCHES THE SELECTOR NAME, NOT THE TYPE.
+// `mentionsIdentity` treats any `.Kind` / `.RoleKey` selector as identity, and
+// it has no idea what it was selected FROM. That is deliberate reach (it is how
+// the "直接比對 kind" shape gets caught at all), and it is also a false-positive
+// generator: `art.Kind == ArtifactKindLink` — a task ARTIFACT's content kind,
+// file/image/link, nothing to do with any caller — trips it just as readily as
+// `m.Kind == KindWarden` does. THE MOMENT A SECOND NON-MEMBER TYPE GROWS A
+// `Kind` FIELD, THIS MIS-FIRES AGAIN; AND EVERY MIS-FIRE SO FAR HAS BEEN
+// SETTLED BY MAKING THE SCANNER UNABLE TO SEE IT (T-60 read the artifact's kind
+// into a local, mirroring what the add handler already did) — A DIRECTION THAT
+// MAKES THIS GATE PROGRESSIVELY BLINDER.
+//
+// The workaround is fine for one site and is NOT fine as a policy. If you are
+// here because a `.Kind` on a non-caller type just reddened this gate, the two
+// honest fixes are: teach the scan the TYPE (resolve the selector's receiver,
+// so a member row and an artifact row stop looking alike), or — never — pad
+// authzOutsideRouteTable with it. That map self-describes as the list of
+// CALLER-CLASSIFICATION decisions; putting a non-authz predicate in it makes
+// the list start lying about what it contains, and the next governance re-grade
+// reads it as decisions to audit.
+//
 // So the value of these lists is NOT that they cannot be padded — they can.
 // It is that PADDING MUST SHOW UP IN THE DIFF: adding a decision outside the
 // route table now requires editing this file, in the same commit, where a
@@ -608,7 +629,14 @@ func TestAuthzOutsideTheRouteTableIsEnumerated(t *testing.T) {
 			"  (b) if it genuinely cannot be a route floor (caller-vs-target rules, "+
 			"per-field privilege), add it to authzOutsideRouteTable with the reason and "+
 			"the ruling it came from.\n"+
-			"Do NOT delete it from the scan.", strings.Join(unlisted, "\n  "))
+			"Do NOT delete it from the scan.\n\n"+
+			"⚠️ If the predicate above is a `.Kind` that is NOT a caller's kind (an "+
+			"artifact's file/image/link, some other row's discriminator), this gate has "+
+			"MIS-FIRED: it matches the selector NAME and cannot see the type. Neither (a) "+
+			"nor (b) applies — read the NAMED DEBT paragraph in this file's header before "+
+			"you reach for the local-variable workaround it describes, and do NOT add a "+
+			"non-authz predicate to authzOutsideRouteTable.",
+			strings.Join(unlisted, "\n  "))
 	}
 
 	// A STALE entry is a finding too: without this, the list can be padded with

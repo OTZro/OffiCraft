@@ -3056,6 +3056,16 @@ func (s *apiServer) HandleReplaceTaskArtifactApiTasksTaskIdArtifactArtifactIdRep
 	}
 	// pinned is the artifact's CONTENT kind (file/image/link) — the same value
 	// add reads out of its request body, and nothing to do with a member kind.
+	//
+	// 🔴 IT IS READ INTO A LOCAL ON PURPOSE, and the comparisons below use
+	// `pinned` rather than `art.Kind`, exactly as add uses its own local. The
+	// authz surface scanner (authz_surface_gate_test.go) matches the SELECTOR
+	// NAME `.Kind` and cannot see the type it is selected from, so
+	// `art.Kind == ArtifactKindLink` — an artifact's content kind — is
+	// mis-read by it as a caller-identity test and demands an entry in an
+	// inventory of authorization decisions, which this is not. Cleaning this
+	// back to `art.Kind ==` inline produces a red with no apparent cause; read
+	// that scanner's file header for the debt this workaround leaves behind.
 	pinned := art.Kind
 	if kind := trimmedOrEmpty(body.Kind); kind != "" && kind != pinned {
 		writeError(w, http.StatusBadRequest, artifactKindRefusal(pinned, kind))
