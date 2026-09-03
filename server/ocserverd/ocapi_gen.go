@@ -4205,10 +4205,10 @@ type ServerInterface interface {
 	// 強制停止 an outsource worker: kill the session NOW and hold it down; says nothing to it. Third rung of 停止 -> 加速停止 -> 強制停止.
 	// (POST /api/outsource-workers/{id}/force-stop)
 	HandleForceStopOutsourceWorkerApiOutsourceWorkersIdForceStopPost(w http.ResponseWriter, r *http.Request, id string)
-	// Change (換 model) an outsource worker's model/effort (same floor as the staff model edit).
+	// Change (換 model) an outsource worker's model/effort (same floor as the staff model edit). On a worker whose stop is IN FLIGHT OR HAS LANDED it ALSO queues the restart (restart_after_stop), so the worker comes back up ON THE NEW MODEL once the stop converges — an edit is no longer only a save. A worker nobody ever asked to stop is still only persisted.
 	// (POST /api/outsource-workers/{id}/model)
 	HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost(w http.ResponseWriter, r *http.Request, id string)
-	// Refocus (換手) an outsource worker's context (owner/admin agent, online-only else 409).
+	// Refocus (換手) an outsource worker's context; on a STOPPED worker it queues the 起來 instead of refusing (owner/admin agent).
 	// (POST /api/outsource-workers/{id}/refocus)
 	HandleRefocusOutsourceWorkerApiOutsourceWorkersIdRefocusPost(w http.ResponseWriter, r *http.Request, id string)
 	// Relocate an outsource worker to a machine (admin-gated).

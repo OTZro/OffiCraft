@@ -1889,7 +1889,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleRefocusOutsourceWorkerApiOutsourceWorkersIdRefocusPost,
 			Auth:     authGated,
 			Requires: principalAdminAgent,
-			Summary:  "Refocus (換手) an outsource worker (owner/admin agent, online-only else 409).",
+			Summary:  "Refocus (換手) an outsource worker (owner/admin agent). Needs a live session, 409 otherwise — EXCEPT on a worker whose stop is in flight or has landed, where it answers 200 and QUEUES the restart (restart_after_stop); the stop itself is honoured as-is. A worker nobody ever asked to stop is still a 409.",
 			MCPTool:  "refocus_outsource_worker",
 		},
 		{
@@ -1939,7 +1939,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleSetOutsourceWorkerModelApiOutsourceWorkersIdModelPost,
 			Auth:     authGated,
 			Requires: principalMachine,
-			Summary:  "Change (換 model) an outsource worker's model/effort (same floor as the staff model edit).",
+			Summary:  "Change (換 model) an outsource worker's model/effort (same floor as the staff model edit). On a worker whose stop is IN FLIGHT OR HAS LANDED it ALSO queues the restart (restart_after_stop), so the worker comes back up ON THE NEW MODEL once the stop converges — an edit is no longer only a save. A worker nobody ever asked to stop is still only persisted.",
 			MCPTool:  "set_outsource_worker_model",
 		},
 		// ── Task manuals (M3) — agents create manuals + edit the CONTENT fields
