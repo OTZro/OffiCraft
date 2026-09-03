@@ -731,6 +731,16 @@ var identityGateLedger = map[string]string{
 		"topic for workers (pre-fold wire parity, owner-only visibility). The AMOUNT " +
 		"banked is identical; only the topic differs.",
 
+	"api_infra.go :: HandleResetCostApiMembersMemberIdCostResetPost :: m.Kind != KindOutsource": "" +
+		"T-53 成本歸零 is the INVERSE of the fold above and splits for the same reason " +
+		"and in the same place: the durable figure lives on member.banked_cost for " +
+		"staff and on the worker row for an outsource member, so the branch is about " +
+		"WHERE the number is kept, not about the two kinds deserving different " +
+		"treatment. Both arms clear both halves and answer the same receipt — the " +
+		"difference is the row written and the topic fanned, exactly as bankLiveCost " +
+		"already differs. Folding the two arms means folding the two storage " +
+		"locations, which is migration 00025's remaining half and not this ticket.",
+
 	// ── chat / roster projection ────────────────────────────────────────────
 	"api_chat.go :: resolveChatRecipient :: m.Kind != KindStaff": "" +
 		"a chat recipient must be a person — staff or worker, explicitly BOTH. Written " +

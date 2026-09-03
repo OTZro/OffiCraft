@@ -1534,6 +1534,11 @@ func (s *apiServer) HandleReportWakingApiSelfWakingPost(w http.ResponseWriter, r
 		internalError(w, err)
 		return
 	}
+	// A new generation counts its spend from zero (T-53). Forget the account
+	// accrual baseline here, before either arm, so the first cost this session
+	// reports is credited in full to whichever account it names instead of being
+	// read as an increase over the session that just ended.
+	s.startAccountSpendSession(m.ID)
 	if m.Kind == KindOutsource {
 		// Worker fold (T-ea82): clear the recycle markers under outsourceMu via
 		// the worker funnel — a member-path putMember here would race the tick's

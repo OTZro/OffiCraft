@@ -86,6 +86,8 @@ import type {
   ThemeWriteReceipt,
   ThemeDeleteResult,
   SseConnectionState,
+  AccountCostResetReceipt,
+  CostResetReceipt,
 } from "./adapter";
 import type {
   WireMember,
@@ -2478,6 +2480,55 @@ export const mockApi: Api = {
     const w = findWire(id);
     w.desired_state = "offline";
     w.presence = "offline";
+  },
+
+  async resetMemberCost(id: string): Promise<CostResetReceipt> {
+    // 成本歸零 (mirror handle_reset_cost): clear BOTH halves of the actor's spend
+    // and answer with what was destroyed. Cost lives on the monitoring session
+    // row here — MemberDTO carries none — which is also where the real backend's
+    // two halves surface, so the mutation lands where the cockpit reads it.
+    // An id with no session row clears nothing and honestly reports nulls.
+    const row = wireMonitoring.sessions.find((s) => s.id === id);
+    const clearedCost = row?.cost ?? null;
+    const clearedBankedCost = row?.banked_cost ?? null;
+    if (row) {
+      row.cost = null;
+      row.banked_cost = null;
+    }
+    // The figure is rendered from TWO stores here — the monitoring row and, for
+    // an outsource actor, its worker row — so clearing one and not the other
+    // leaves the panel showing the number the reset just destroyed (found by
+    // independent review, T-56). The real server has one figure per actor and
+    // fans a delta on both topics; the mock has to keep its two copies in step
+    // by hand or it stops being a rehearsal of that.
+    const worker = outsourceWorkers.find((w) => w.id === id);
+    if (worker) {
+      worker.cost = null;
+      worker.bankedCost = null;
+      emitTopic("outsource_worker");
+    }
+    // The production route fans a `monitoring` signal so the cockpit refetches.
+    // Without it here the mock reports success and nothing on screen moves.
+    emitTopic("monitoring");
+    return { memberId: id, clearedCost, clearedBankedCost };
+  },
+
+  async resetAccountCost(account: string): Promise<AccountCostResetReceipt> {
+    // 帳號歸零 (mirror handle_reset_account_cost): zero the ACCOUNT's own
+    // accumulated figure and touch NO member — the separation owner ruling
+    // rc-5c5d7c7c6dcd asked for. The account row is where the cockpit reads it,
+    // so the mutation lands there and the session rows are left alone.
+    // An account nobody reports under clears nothing and honestly answers null.
+    const row = wireMonitoring.accounts.find((a) => a.account === account);
+    const clearedCost = row?.cost ?? null;
+    if (row) {
+      row.cost = null;
+    }
+    // NO member or worker store is touched — that separation is the ruling this
+    // route exists for. Only the monitoring signal fans, the same one the
+    // production route publishes so the cockpit refetches the card.
+    emitTopic("monitoring");
+    return { account, clearedCost };
   },
 
   async forceStopMember(id: string): Promise<void> {

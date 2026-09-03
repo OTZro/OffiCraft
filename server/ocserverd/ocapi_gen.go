@@ -296,6 +296,25 @@ func (e WebhookEndpointDTOPlatform) Valid() bool {
 	}
 }
 
+// AccountCostResetDTO Receipt of an account cost reset (`POST /api/accounts/cost/reset`, owner-gated): the account's accumulated spend as it stood immediately BEFORE the write.
+//
+// 🔴 It carries the PRE-reset figure on purpose, for the same reason the per-actor receipt does: nothing else holds the discarded number, so this response is the LAST MOMENT it exists. It is a receipt, NOT an undo — nothing is retained and no route puts it back.
+//
+// Null in `cleared_cost` means there was nothing to clear (an account at zero, or one nobody has reported under) — NOT that zero was cleared, mirroring `CostResetDTO` and the read side so a client keeps one rule. Nothing about any MEMBER appears here because nothing about any member changed: this route touches the account's own accumulator alone.
+type AccountCostResetDTO struct {
+	// Account The account tag this receipt is for — echoed back so a caller that fired several resets can tell them apart.
+	Account string `json:"account"`
+
+	// ClearedCost The account's accumulated spend as it stood BEFORE the write, i.e. the figure this call destroyed. Null when there was nothing to clear.
+	ClearedCost *float64 `json:"cleared_cost,omitempty"`
+}
+
+// AccountCostResetRequestDTO Which account to zero (`POST /api/accounts/cost/reset`). The key is the STABLE account tag the monitoring surface groups on — the same string the account card is keyed by, `<identifier>/<org uuid>` or a bare identifier — carried in the body rather than the path because it is a compound free string containing `/` and `@`; see the route description.
+type AccountCostResetRequestDTO struct {
+	// Account The stable account tag to zero. Blank → 422. A tag nobody has reported under is not an error: 200 with `cleared_cost` null.
+	Account string `json:"account"`
+}
+
 // AgentContextDTO Echo of a stored gauge entry (“POST /api/agent/context“ response).
 type AgentContextDTO struct {
 	AgentId string `json:"agent_id"`
@@ -842,6 +861,24 @@ type ChatReplyQuoteDTO struct {
 // ChatUnreadCountDTO The office nav red-dot signal: the caller's TOTAL unread chat messages across every peer (sum of the per-member unread the roster serves). A dot shows when > 0; kept as its own cheap endpoint so the dot can refetch on “chat“ / “chat_read“ SSE deltas without pulling the roster.
 type ChatUnreadCountDTO struct {
 	Unread int `json:"unread"`
+}
+
+// CostResetDTO Receipt of a cost reset (`POST /api/members/{member_id}/cost/reset`, owner-gated): WHAT WAS DESTROYED, read from the actor immediately before the write.
+//
+// 🔴 It carries the PRE-reset figures on purpose, and the reason is the same reason the reset is dangerous. Spend lives in exactly TWO accumulators and there is no per-charge ledger anywhere in this system, so once they are cleared the discarded amount is not recoverable from any other record — this response is the LAST MOMENT that number exists. Answering with the post-reset state instead would make the receipt of an irreversible operation say nothing at all.
+//
+// This is a receipt, NOT an undo: nothing is retained server-side and there is no route that puts the figure back (owner ruling rc-7dea0deefa63, option 0 「最小、不可逆」). It only lets whoever pressed the button see what they destroyed.
+//
+// The two fields mirror `MonitoringSessionDTO` / `OutsourceWorkerDTO` field-for-field, including their null semantics, so a client reuses ONE summing rule instead of growing a second one: null means there was nothing to clear on that half — not that zero was cleared. Resetting an actor with nothing measured therefore answers 200 with both null, which honestly reads as 'nothing was destroyed'. A deliberate consequence of that mirroring is that the same rule the cockpit already applies to the read side (both null → `—`) also describes this receipt.
+type CostResetDTO struct {
+	// ClearedBankedCost The durable accumulator (`banked_cost`) as it stood BEFORE the write, i.e. the banked amount this call destroyed. Null when there was nothing banked — mirroring the read side, which does not put a banked figure of 0 on the wire.
+	ClearedBankedCost *float64 `json:"cleared_banked_cost,omitempty"`
+
+	// ClearedCost The live in-memory telemetry figure as it stood BEFORE the write, i.e. the live amount this call dropped. Null when the actor had no live figure being tracked.
+	ClearedCost *float64 `json:"cleared_cost,omitempty"`
+
+	// MemberId The actor whose spend was reset — a staff member or an outsource worker, released ones included, resolved the same way the banking fold resolves it.
+	MemberId string `json:"member_id"`
 }
 
 // DocDTO One product-guide doc in full (GET /api/docs/{slug}). markdown_md carries the embedded markdown with relative image paths rewritten to the served /api/docs/assets/ endpoint.
@@ -3511,6 +3548,9 @@ type HandleInstallScriptInstallShGetParams struct {
 	Code  *string `form:"code,omitempty" json:"code,omitempty"`
 }
 
+// HandleResetAccountCostApiAccountsCostResetPostJSONRequestBody defines body for HandleResetAccountCostApiAccountsCostResetPost for application/json ContentType.
+type HandleResetAccountCostApiAccountsCostResetPostJSONRequestBody = AccountCostResetRequestDTO
+
 // HandleUpdateAccountApiAccountsAccountIdPatchJSONRequestBody defines body for HandleUpdateAccountApiAccountsAccountIdPatch for application/json ContentType.
 type HandleUpdateAccountApiAccountsAccountIdPatchJSONRequestBody = AliasUpdateDTO
 
@@ -3773,6 +3813,9 @@ func (t *HandleListReplyCardsApiReplyCardsGet200JSONResponseBody) UnmarshalJSON(
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// Reset one account's own accumulated spend to zero (owner-only, irreversible). Touches no member or worker figure.
+	// (POST /api/accounts/cost/reset)
+	HandleResetAccountCostApiAccountsCostResetPost(w http.ResponseWriter, r *http.Request)
 	// Set an account's display name (id = stable tag). Blank name → 422.
 	// (PATCH /api/accounts/{account_id})
 	HandleUpdateAccountApiAccountsAccountIdPatch(w http.ResponseWriter, r *http.Request, accountId string)
@@ -3999,6 +4042,9 @@ type ServerInterface interface {
 	// Upload or replace a member's personal avatar (owner only).
 	// (PUT /api/members/{member_id}/avatar)
 	HandlePutMemberAvatarApiMembersMemberIdAvatarPut(w http.ResponseWriter, r *http.Request, memberId string, params HandlePutMemberAvatarApiMembersMemberIdAvatarPutParams)
+	// Reset one actor's estimated spend to zero (owner-only, irreversible): clears the durable banked figure AND the live telemetry figure.
+	// (POST /api/members/{member_id}/cost/reset)
+	HandleResetCostApiMembersMemberIdCostResetPost(w http.ResponseWriter, r *http.Request, memberId string)
 	// Deactivate: desired_state=offline + stamp stopping_since (retains row).
 	// (POST /api/members/{member_id}/deactivate)
 	HandleDeactivateMemberApiMembersMemberIdDeactivatePost(w http.ResponseWriter, r *http.Request, memberId string)
@@ -4306,6 +4352,20 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// HandleResetAccountCostApiAccountsCostResetPost operation middleware
+func (siw *ServerInterfaceWrapper) HandleResetAccountCostApiAccountsCostResetPost(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleResetAccountCostApiAccountsCostResetPost(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // HandleUpdateAccountApiAccountsAccountIdPatch operation middleware
 func (siw *ServerInterfaceWrapper) HandleUpdateAccountApiAccountsAccountIdPatch(w http.ResponseWriter, r *http.Request) {
@@ -6019,6 +6079,32 @@ func (siw *ServerInterfaceWrapper) HandlePutMemberAvatarApiMembersMemberIdAvatar
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.HandlePutMemberAvatarApiMembersMemberIdAvatarPut(w, r, memberId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleResetCostApiMembersMemberIdCostResetPost operation middleware
+func (siw *ServerInterfaceWrapper) HandleResetCostApiMembersMemberIdCostResetPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "member_id" -------------
+	var memberId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "member_id", r.PathValue("member_id"), &memberId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "member_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleResetCostApiMembersMemberIdCostResetPost(w, r, memberId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -8478,6 +8564,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 		ErrorHandlerFunc:   options.ErrorHandlerFunc,
 	}
 
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/accounts/cost/reset", wrapper.HandleResetAccountCostApiAccountsCostResetPost)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/accounts/{account_id}", wrapper.HandleUpdateAccountApiAccountsAccountIdPatch)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/agent/binary", wrapper.HandleAgentBinaryApiAgentBinaryGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/agent/context", wrapper.HandleIngestAgentContextApiAgentContextPost)
@@ -8548,6 +8635,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/members/{member_id}/activate", wrapper.HandleActivateMemberApiMembersMemberIdActivatePost)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/members/{member_id}/avatar", wrapper.HandleDeleteMemberAvatarApiMembersMemberIdAvatarDelete)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/members/{member_id}/avatar", wrapper.HandlePutMemberAvatarApiMembersMemberIdAvatarPut)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/members/{member_id}/cost/reset", wrapper.HandleResetCostApiMembersMemberIdCostResetPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/members/{member_id}/deactivate", wrapper.HandleDeactivateMemberApiMembersMemberIdDeactivatePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/members/{member_id}/force-stop", wrapper.HandleForceStopMemberApiMembersMemberIdForceStopPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/members/{member_id}/refocus", wrapper.HandleRefocusMemberApiMembersMemberIdRefocusPost)
