@@ -1832,7 +1832,7 @@ def test_matrix_requires_match_manifest(
     ``requires`` the manifest declares. Both sides are committed text, so this
     catches a manifest edit the matrix did not follow; what catches a
     ``requires`` change in routes.go is the live cells below, which fire real
-    requests. (T-61's Go gate compares route MEMBERSHIP only, not this column.)"""
+    requests."""
     declared = {
         f"{r['method']} {r['path']}": r["requires"] for r in routes_manifest
     }

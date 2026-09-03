@@ -18,10 +18,10 @@ fails the run when a manifest row is neither in ``HAPPY`` nor in the explicit
 ``SKIPPED_HAPPY`` table (reason required), and
 ``test_openapi_covers_manifest`` pins the manifest row set to the frozen
 ``spec/openapi.json`` operations. Both of those compare the manifest to another
-hand-written list, so neither notices a route the server serves that the
-manifest never learned about — that leg is
-``TestEveryServedRouteIsInThePermissionManifest`` (T-61, in Go, over the route
-table the mux is built from).
+hand-written list; what carries them back to the server is the Go test
+``TestRouteTableCoversSpecSurface``, which pins that same frozen spec against
+the route table the mux is built from — so a served route the manifest never
+learned about reddens there.
 
 Rows that serve non-JSON bytes (binaries, install.sh, chat attachment blob) or
 a non-OpenAPI protocol (MCP JSON-RPC) carry ``nonjson`` with a reason: status
@@ -3432,10 +3432,10 @@ def test_openapi_covers_manifest(routes_manifest: list[dict[str, str]]) -> None:
 
     Both sides of THIS comparison are hand-written, so it cannot tell you the
     server serves either set: two lists agreeing prove they were typed the same
-    day. The leg that reaches the server is
-    TestEveryServedRouteIsInThePermissionManifest (T-61,
-    server/ocserverd/routes_manifest_parity_t61_test.go), which compares
-    routes_manifest.json against the route table the mux is built from."""
+    day. The leg that reaches the server is TestRouteTableCoversSpecSurface
+    (server/ocserverd/server_test.go), which pins the same frozen spec against
+    the route table the mux is built from — chained with this test, the
+    manifest and the served routes are held equal."""
     manifest_ops = {f"{r['method']} {r['path']}" for r in routes_manifest}
     spec_ops = {
         f"{m.upper()} {p}"
