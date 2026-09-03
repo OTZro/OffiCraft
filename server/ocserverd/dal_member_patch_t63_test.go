@@ -364,6 +364,12 @@ func TestMemberColumnPropertiesAreDeclaredInOnePlace(t *testing.T) {
 		"last_op_reason": true, "last_op_at": true,
 		"avatar_attachment_id": true, "handover_noticed_ts": true,
 		"agent_iat_floor": true,
+		// The four wind-down anchors, moved out by T-55 batch C (#391) and
+		// carried through this refactor as flags rather than as an edit to a SET
+		// list — which is the whole point: a column joins or leaves the whole-row
+		// update by its own constructor and by nothing else.
+		"stopping_since": true, "stopped_since": true,
+		"refocus_since": true, "refocus_op": true,
 	}
 	// Columns that only ever move forward. agent_iat_floor is BOTH: it is
 	// insert-only today AND monotone, and declaring the monotonicity now is what
@@ -450,8 +456,15 @@ func TestMemberColumnPropertiesAreDeclaredInOnePlace(t *testing.T) {
 	if got, want := len(fields), len(wantCols); got != want {
 		t.Errorf("memberWholeRow projects %d columns, memberColumns has %d", got, want)
 	}
-	if got, want := len(updatableMemberFields(fields)), 21; got != want {
-		t.Errorf("a whole-row write now updates %d columns, want %d", got, want)
+	// 35 columns minus the 18 insert-only ones. The number moves whenever a
+	// column is migrated out (T-55 has been doing that in batches), and it is
+	// asserted rather than derived ON PURPOSE: a column silently joining or
+	// leaving the whole-row update is the failure this whole line of work exists
+	// to stop, so it has to be a deliberate edit here, in the same commit.
+	if got, want := len(updatableMemberFields(fields)), 17; got != want {
+		t.Errorf("a whole-row write now updates %d columns, want %d. If you "+
+			"migrated a column out, say so by bumping this number; if you did "+
+			"not, a column changed sides on its own.", got, want)
 	}
 }
 
