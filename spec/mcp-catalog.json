@@ -3294,7 +3294,7 @@
       "name": "get_outsource_worker_boot_context"
     },
     {
-      "description": "Refocus (\u63db\u624b) an outsource worker (owner/admin agent, online-only else 409).",
+      "description": "Refocus (\u63db\u624b) an outsource worker (owner/admin agent). Needs a live session, 409 otherwise \u2014 EXCEPT on a worker whose stop is in flight or has landed, where it answers 200 and QUEUES the restart (restart_after_stop); the stop itself is honoured as-is. A worker nobody ever asked to stop is still a 409.",
       "inputSchema": {
         "properties": {
           "id": {
@@ -3339,7 +3339,7 @@
       "name": "restart_outsource_worker"
     },
     {
-      "description": "Change (\u63db model) an outsource worker's model/effort (same floor as the staff model edit).",
+      "description": "Change (\u63db model) an outsource worker's model/effort (same floor as the staff model edit). On a worker whose stop is IN FLIGHT OR HAS LANDED it ALSO queues the restart (restart_after_stop), so the worker comes back up ON THE NEW MODEL once the stop converges \u2014 an edit is no longer only a save. A worker nobody ever asked to stop is still only persisted.",
       "inputSchema": {
         "properties": {
           "effort": {
