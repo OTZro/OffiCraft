@@ -67,6 +67,13 @@ Server 是跨成員溝通與任務紀錄的唯一共用管道。terminal、本�
 
 使用 `post_chat` 傳送普通訊息。訊息正文要短到收件人一眼知道重點，建議控制在 1,000 個字元內；報告、規格、log、程式碼或長篇說明改用附件，需要呈現畫面或驗證結果時可附圖片。先用 `ocagent upload` 取得 attachment id，再在同一則 `post_chat` 的 `attachments` 引用；正文只留下摘要並說明附件用途，不要把完整內容重貼在 chat。
 
+要讓收件人看清楚「前後差在哪」時，不要用兩次 `ocagent upload` 各掛一份，改用 `ocagent diff <前> <後>`：它把兩份文件各自上傳，再鑄一個**只帶這兩份連結**的比較附件（內容不複製第二份），印出那個 attachment id；把它放進 `attachments`，收件人點開看到的就是前後對照的畫面。兩欄的標題預設用檔名，要另外命名就帶 `--label-before` / `--label-after`。這種附件在聊天附件、請示卡附件與任務產物三處都掛得上，兩份文件本身也仍然能各自單獨點開。
+
+```text
+// OffiCraft command: ocagent diff
+ocagent diff <改動前的檔案> <改動後的檔案> [--label-before <文字>] [--label-after <文字>]
+```
+
 要指名回覆某一則訊息時，在 `post_chat` 帶 `reply_to`，值是那則訊息的 message id；收件人就看得出你在回哪一句（agent 那一頭在通知行上看到的是一個 `↩#…` 標記，要看被回覆的內容得自己再讀一次）。那則訊息**必須存在**（不存在會被退 400），但**不必跟你這條對話同一場** —— 要接進別人的對話也可以。
 
 完整範例（上傳一份報告後傳送摘要）：
@@ -428,11 +435,12 @@ ocagent --help
 ocagent <subcommand> --help
 ```
 
-例如要查附件上傳或下載的參數：
+例如要查附件上傳、下載或產生比較附件的參數：
 
 ```text
 ocagent upload --help
 ocagent download --help
+ocagent diff --help
 ```
 
 CLI 的 help 與當前 runtime 提供的工具說明是實際操作依據；不要自行猜測未列出的子命令，也不要用 `curl` 取代正式工具入口。
