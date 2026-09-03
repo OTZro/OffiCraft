@@ -58,6 +58,13 @@ package main
 //   - Two of the assertions in the replay (the station's version, and the Go
 //     migrations being present in it) cannot fail given the checks above them.
 //     They are canaries on goose, labelled as such at their site — not gates.
+//   - The byte-for-byte check on an already-shipped migration compares WHOLE
+//     FILES, both kinds. For a Go migration that means the whole source file, not
+//     just the up/down bodies: an AST-level comparison would be the sharper tool
+//     and this is not it. The consequence is one of scope, not of silence — a
+//     purely mechanical edit to a shipped Go migration (a rename reaching it, a
+//     gofmt change) turns this red and needs a human to say what to do, exactly as
+//     it already did for *.sql.
 
 import (
 	"bytes"
@@ -95,6 +102,23 @@ func treeMigrationVersions(t *testing.T) map[int64]migrationClaim {
 	return out
 }
 
+// releasedMigration is one migration AS ORIGIN/MAIN HAS IT: where it lives, which
+// kind of source declared it, and the bytes main ships.
+//
+// The bytes are read ONCE, here, because two consumers need them (the replay FS
+// and the byte-for-byte check) and reading them twice is 61 extra subprocesses on
+// a job whose time budget is already warning. The KIND is carried as a field for
+// a sharper reason: it used to be re-derived by string-matching the display
+// label, and one of those matches (`HasSuffix(where, ".go")`) could never be true,
+// because a Go registration's label ends in `:<line>`. A dead branch that reads
+// as a second supported format is worse than no branch.
+type releasedMigration struct {
+	path  string // repo-relative path on origin/main — the thing to `git show`
+	where string // for humans: the path, or "<file>.go:<line>" for a Go registration
+	isSQL bool
+	body  string // main's bytes for path
+}
+
 // releasedVersions answers "which migration versions has main already shipped",
 // computed FROM origin/main at the moment of the check.
 //
@@ -111,7 +135,7 @@ func treeMigrationVersions(t *testing.T) map[int64]migrationClaim {
 // origin/main. Where that is not available the check cannot run, and this test
 // SKIPS rather than passing — see the skip sites. A skip is not a green: read
 // the reason.
-func releasedVersions(t *testing.T) (versions map[int64]string, ref string) {
+func releasedVersions(t *testing.T) (versions map[int64]releasedMigration, ref string) {
 	t.Helper()
 	sha, err := gitOut("rev-parse", "origin/main")
 	if err != nil {
@@ -134,7 +158,7 @@ func releasedVersions(t *testing.T) (versions map[int64]string, ref string) {
 			"origin/main (%v). It is NOT a pass — the guard simply had no baseline. It is "+
 			"enforced in CI, where a missing baseline is a failure rather than this skip.", err)
 	}
-	versions = map[int64]string{}
+	versions = map[int64]releasedMigration{}
 	// Source ① — the SQL files as main has them.
 	files, err := gitOut("ls-tree", "--full-tree", "--name-only", "origin/main", "server/ocserverd/migrations/")
 	if err != nil {
@@ -149,7 +173,11 @@ func releasedVersions(t *testing.T) (versions map[int64]string, ref string) {
 		if err != nil {
 			t.Fatalf("%s on origin/main has no version prefix goose can read: %v", f, err)
 		}
-		versions[v] = f
+		body, err := gitOut("show", "origin/main:"+f)
+		if err != nil {
+			t.Fatalf("read released migration %d (%s) out of origin/main: %v", v, f, err)
+		}
+		versions[v] = releasedMigration{path: f, where: f, isSQL: true, body: body}
 	}
 	// Source ② — the Go migrations as main has them, read by parsing main's own
 	// copies of this package's files. A grep would match this file's prose; an
@@ -169,8 +197,8 @@ func releasedVersions(t *testing.T) (versions map[int64]string, ref string) {
 			t.Fatalf("read %s from origin/main: %v", f, err)
 		}
 		parsed++
-		for v, where := range registrationsIn(t, filepath.Base(f), src) {
-			versions[v] = where
+		for v, line := range registrationsIn(t, filepath.Base(f), src) {
+			versions[v] = releasedMigration{path: f, where: line, body: src}
 		}
 	}
 	// Anti-vacuity: a scan that read nothing finds nothing and is indistinguishable
@@ -258,21 +286,17 @@ func inCI() bool {
 // already upgraded, while looking applied on every fresh install. Reading the
 // blob out of origin/main is what makes the population the real one; the
 // machinery to do it is already here for the Go scan.
-func releasedOnlyFS(t *testing.T, released map[int64]string) fs.FS {
+func releasedOnlyFS(t *testing.T, released map[int64]releasedMigration) fs.FS {
 	t.Helper()
 	m := fstest.MapFS{}
 	kept := 0
-	for v, where := range released {
-		if !strings.HasSuffix(where, ".sql") {
+	for _, rm := range released {
+		if !rm.isSQL {
 			continue // a Go migration: it comes from goose's registry, not the FS
-		}
-		body, err := gitOut("show", "origin/main:"+where)
-		if err != nil {
-			t.Fatalf("read released migration %d (%s) out of origin/main: %v", v, where, err)
 		}
 		// goose reads this FS at "migrations/<name>"; origin/main paths are
 		// repo-relative.
-		m["migrations/"+path.Base(where)] = &fstest.MapFile{Data: []byte(body + "\n")}
+		m["migrations/"+path.Base(rm.path)] = &fstest.MapFile{Data: []byte(rm.body + "\n")}
 		kept++
 	}
 	if kept == 0 {
@@ -308,6 +332,16 @@ func TestAStationAtTheReleasedVersionCanUpgradeToThisTree(t *testing.T) {
 			treeMax = v
 		}
 	}
+	// The number to tell somebody to use. It has to clear BOTH sides: this tree's
+	// own highest and everything main has released. They differ exactly when the
+	// branch is behind — and since the numbering checks now run on a behind branch
+	// too (they do not need a rebase to be true), taking the tree's max alone would
+	// hand out a number main has ALREADY shipped, i.e. advise the collision this
+	// file exists to prevent.
+	nextFree := treeMax + 1
+	if releasedMax >= nextFree {
+		nextFree = releasedMax + 1
+	}
 
 	// The baseline is only as fresh as origin/main is: this reads a REF, it never
 	// fetches (network in a unit test is another thing that fails quietly). A stale
@@ -321,44 +355,54 @@ func TestAStationAtTheReleasedVersionCanUpgradeToThisTree(t *testing.T) {
 
 	// A released version this tree does not declare has TWO causes and they are not
 	// the same event, so they are not reported the same way.
+	//
+	// 🔴 WHY THE MERGE-BASE AND NOT "higher than my highest". The cheap test —
+	// v > treeMax means main moved ahead — gets one case exactly backwards, and it
+	// is the dangerous one: DELETE the highest released migration and treeMax falls
+	// below it, so removing a shipped migration reads as an out-of-date branch and
+	// skips locally. The merge-base answers the question actually being asked —
+	// "did this branch ever have this file?" — because anything main added after
+	// the fork is absent there, while everything the branch inherited is present.
+	// (`contract-guards` already leans on `git merge-base HEAD origin/main` in CI,
+	// so the ref depth this needs is one the workflow is known to provide.)
+	mergeBase, mbErr := gitOut("merge-base", "HEAD", ref)
 	var behind, deleted []int64
-	for v := range released {
+	heuristic := false
+	for v, rm := range released {
 		if _, ok := tree[v]; ok {
 			continue
 		}
-		if v > treeMax {
-			behind = append(behind, v) // main moved ahead; this branch has not caught up
+		inherited := false
+		if mbErr == nil {
+			_, err := gitOut("cat-file", "-e", mergeBase+":"+rm.path)
+			inherited = err == nil
 		} else {
+			// No merge-base to ask (a tarball, a grafted clone). Fall back to the
+			// old heuristic and SAY SO at the report site, because it is the one
+			// that misfiles a deleted highest migration.
+			heuristic = true
+			inherited = v <= treeMax
+		}
+		if inherited {
 			deleted = append(deleted, v) // a shipped migration is gone from the tree
+		} else {
+			behind = append(behind, v) // main moved ahead; this branch has not caught up
 		}
 	}
 	sort.Slice(deleted, func(i, j int) bool { return deleted[i] < deleted[j] })
 	sort.Slice(behind, func(i, j int) bool { return behind[i] < behind[j] })
 	if len(deleted) > 0 {
-		t.Fatalf("origin/main (%s) ships migration version(s) %v that this tree does not "+
-			"declare, and they sit BELOW this tree's own highest version %d — so this is not a "+
-			"branch that is merely behind, it is a shipped migration that has been removed. "+
-			"A released migration cannot be withdrawn: every station has already applied it, "+
-			"and goose will refuse the next boot.", ref, deleted, treeMax)
-	}
-	if len(behind) > 0 {
-		// Merely behind main. In CI this cannot happen — the pull_request checkout is
-		// the MERGE ref, which already carries main — so if it does, something about
-		// the baseline is wrong and silence would be the worse answer. Locally it is
-		// the ordinary state of a branch someone has not rebased yet, and failing
-		// there would teach people to ignore this test.
-		if inCI() {
-			t.Fatalf("origin/main (%s) ships migration version(s) %v that this tree lacks, "+
-				"while running in CI — where the checkout is the merge ref and therefore "+
-				"already contains main. The baseline and the tree are not the pair this test "+
-				"assumes; do not read the result below as a pass.", ref, behind)
+		how := fmt.Sprintf("this branch inherited them at its merge-base with main (%s)", mergeBase)
+		if heuristic {
+			how = fmt.Sprintf("no merge-base was available (%v), so this was decided by the "+
+				"weaker test 'below this tree's own highest version %d'", mbErr, treeMax)
 		}
-		t.Skipf("this branch is behind origin/main (%s), which ships version(s) %v it does "+
-			"not have. Rebase and re-run: until then the released set and this tree are not "+
-			"comparable, and this is a SKIP, not a pass. CI checks the merged result anyway.",
-			ref, behind)
+		t.Fatalf("origin/main (%s) ships migration version(s) %v that this tree does not "+
+			"declare — %s, so this is not a branch that is merely behind, it is a shipped "+
+			"migration that has been REMOVED. A released migration cannot be withdrawn: every "+
+			"station has already applied it, and goose will refuse the next boot.",
+			ref, deleted, how)
 	}
-
 	// ── Finding ⓪: an already-shipped migration must still be byte-for-byte what
 	// shipped. ───────────────────────────────────────────────────────────────────
 	// The SAME asymmetry as a low version number, reached from the other side: a
@@ -371,27 +415,42 @@ func TestAStationAtTheReleasedVersionCanUpgradeToThisTree(t *testing.T) {
 	// numbering. It is here because it is the same defect family and the bytes were
 	// already in hand for the replay — say so, and strip it if that is the wrong
 	// call.
-	for v, where := range released {
-		if !strings.HasSuffix(where, ".sql") {
-			continue
+	seen := map[string]bool{}
+	for v, rm := range released {
+		if _, ok := tree[v]; !ok {
+			continue // absent from this tree — already classified as deleted/behind above
 		}
-		shipped, err := gitOut("show", "origin/main:"+where)
+		if seen[rm.path] {
+			continue // one Go file can register several versions; compare it once
+		}
+		seen[rm.path] = true
+
+		var local []byte
+		var err error
+		if rm.isSQL {
+			local, err = fs.ReadFile(embeddedMigrations, "migrations/"+path.Base(rm.path))
+		} else {
+			// The Go migrations live beside this test; the package dir is the cwd.
+			local, err = os.ReadFile(filepath.Base(rm.path))
+		}
 		if err != nil {
-			t.Fatalf("read released migration %d (%s) from origin/main: %v", v, where, err)
+			t.Fatalf("read this tree's copy of released migration %d (%s): %v — main ships it "+
+				"and the version scan says this tree declares it, so failing to read it here "+
+				"means the two scans disagree about what exists", v, rm.where, err)
 		}
-		local, err := fs.ReadFile(embeddedMigrations, "migrations/"+path.Base(where))
-		if err != nil {
-			t.Fatalf("read %s from the embedded FS: %v", where, err)
-		}
-		if strings.TrimSpace(shipped) != strings.TrimSpace(string(local)) {
-			t.Errorf("migration %d (%s) has ALREADY SHIPPED and this tree changes its body. "+
-				"goose records one row per version and never revisits it, so this edit reaches "+
-				"nobody who has already upgraded past %d — it applies on fresh installs only, "+
-				"and the two populations end up with different schemas without a single error "+
-				"anywhere. Every test in this package installs from empty and will therefore "+
-				"agree with the edited version. FIX: leave the shipped file alone and put the "+
-				"change in a NEW migration numbered %d. (baseline origin/main %s)",
-				v, where, v, treeMax+1, ref)
+		if strings.TrimSpace(rm.body) != strings.TrimSpace(string(local)) {
+			kind := "migration file"
+			if !rm.isSQL {
+				kind = "Go migration's source file"
+			}
+			t.Errorf("%s for version %d (%s) has ALREADY SHIPPED and this tree changes its "+
+				"body. goose records one row per version and never revisits it, so this edit "+
+				"reaches nobody who has already upgraded past %d — it applies on fresh installs "+
+				"only, and the two populations end up with different schemas without a single "+
+				"error anywhere. Every test in this package installs from empty and will "+
+				"therefore agree with the edited version. FIX: leave the shipped file alone and "+
+				"put the change in a NEW migration numbered %d. (baseline origin/main %s)",
+				kind, v, rm.where, v, nextFree, ref)
 		}
 	}
 
@@ -412,7 +471,32 @@ func TestAStationAtTheReleasedVersionCanUpgradeToThisTree(t *testing.T) {
 			"skipped, before applying anything, and the server exits without listening. "+
 			"FIX: renumber it to %d (one above the highest version anyone has), and never reuse "+
 			"a skipped number — a hole is deliberate here, it is what makes the refusal loud.",
-			v, tree[v].where, releasedMax, ref, releasedMax, treeMax+1)
+			v, tree[v].where, releasedMax, ref, releasedMax, nextFree)
+	}
+
+	// Merely behind main. Reached only AFTER Findings ⓪ and ① have run: neither of
+	// them needs the tree to be up to date (an already-shipped file's bytes, and
+	// "is this number at or below main's highest", are both answerable from a stale
+	// branch), and skipping them here threw away a real offender's red — a branch
+	// that was behind AND carrying an illegal low number went green locally.
+	// Only the REPLAY below needs a comparable pair, so only the replay is skipped.
+	if len(behind) > 0 {
+		// In CI this cannot happen — the pull_request checkout is the MERGE ref,
+		// which already carries main — so if it does, something about the baseline
+		// is wrong and silence would be the worse answer. Locally it is the ordinary
+		// state of a branch someone has not rebased yet, and failing there would
+		// teach people to ignore this test.
+		if inCI() {
+			t.Fatalf("origin/main (%s) ships migration version(s) %v that this tree lacks, "+
+				"while running in CI — where the checkout is the merge ref and therefore "+
+				"already contains main. The baseline and the tree are not the pair this test "+
+				"assumes; do not read the result below as a pass.", ref, behind)
+		}
+		t.Skipf("the numbering and content checks above have RUN and are reflected in this "+
+			"result; only the end-to-end replay is skipped, because this branch is behind "+
+			"origin/main (%s), which ships version(s) %v it does not have — the released set "+
+			"and this tree are not yet a comparable pair. Rebase and re-run to get the replay "+
+			"too. CI checks the merged result anyway.", ref, behind)
 	}
 
 	// ── Finding ②: the population itself. ────────────────────────────────────────
@@ -476,18 +560,18 @@ func TestAStationAtTheReleasedVersionCanUpgradeToThisTree(t *testing.T) {
 			"This is the boot path: cmdServe calls runMigrations before it listens, so the "+
 			"station exits 1 and never comes up. FIX: renumber the offending migration(s) to "+
 			"%d or higher (baseline read from origin/main %s).",
-			releasedMax, err, treeMax+1, ref)
+			releasedMax, err, nextFree, ref)
 	}
 }
 
 // assertGoMigrationsAreInTheStation pins that the replayed population covers Go
 // migrations and not just migrations/*.sql. Without it the whole construction
 // could be blind to half the migration sources and still look correct.
-func assertGoMigrationsAreInTheStation(t *testing.T, db *sql.DB, released map[int64]string) {
+func assertGoMigrationsAreInTheStation(t *testing.T, db *sql.DB, released map[int64]releasedMigration) {
 	t.Helper()
 	var want []int64
-	for v, where := range released {
-		if strings.HasSuffix(where, ".go") || strings.Contains(where, ".go:") {
+	for v, rm := range released {
+		if !rm.isSQL {
 			want = append(want, v)
 		}
 	}
@@ -507,7 +591,7 @@ func assertGoMigrationsAreInTheStation(t *testing.T, db *sql.DB, released map[in
 		if n == 0 {
 			t.Fatalf("Go migration %d (%s) is NOT applied in the replayed station. The replay "+
 				"covers migrations/*.sql only, which is the incomplete denominator this repo "+
-				"has already been bitten by once", v, released[v])
+				"has already been bitten by once", v, released[v].where)
 		}
 	}
 	t.Logf("replayed station carries the Go migrations too: %v", want)
