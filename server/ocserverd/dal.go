@@ -314,18 +314,18 @@ func scanMember(row interface{ Scan(...any) error }) (Member, error) {
 //     genuinely wants staff only writes the kind test it means, next to the
 //     reason it means it. And a fold that filters NOTHING is a decision too —
 //     make it on purpose.
-//     Three of today's call sites are exactly that on purpose: the role-name
-//     uniqueness scan (api_roles.go) wants the union of ALL codenames, or a
-//     new staff member can be minted onto a contractor's name; the role-delete
-//     cascade (api_roles.go) is already narrowed by `RoleKey != role` and an
-//     outsource row's RoleKey is always "" (dal_tasks.go) — that last one is a
-//     NAMED DEBT, not a safety argument: it holds only while contractors have
-//     no role, and the day they get one this handler hard-deletes a live
-//     contractor together with its whole chat, unconfirmed. It is pinned so it
-//     fails loudly instead of silently
-//     (role_delete_contractor_t14i6_test.go); the chat unread
-//     badge (api_chat.go) is already narrowed by RosterStatus, which is the
-//     same predicate workerStatusFromMember calls "released".
+//
+//     🔴 THE AUDIT OF TODAY'S CALL SITES IS NOT IN THIS COMMENT. It is
+//     listMembersCallSiteLedger in roster_widening_ledger_t14i6_test.go: one
+//     row per call site, saying whether PR ② widened it and what that fold
+//     does with a contractor row. It lives there because an enumeration
+//     written HERE is one nothing can check —
+//     TestListMembersCallSitesAreEachOnTheRecord joins the ledger against an
+//     AST scan in BOTH directions, so a caller with no row fails by name and a
+//     row with no caller fails by name. This paragraph used to carry the list
+//     itself, and it had already gone stale: it named three sites and did not
+//     mention reconcile.go's dispatchIdentitySweepNow, which PR ② widened too.
+//     Add your row there; do not re-grow the list here.
 //
 // ⚠️ "In this list" still does NOT mean "a member verb resolves". resolveMember
 // (api_helpers.go) answers 404 for every ow- id under staffOnly scope, and that
