@@ -305,7 +305,14 @@ export function MarkdownPreviewOverlay({
     let alive = true;
     setDiffPair(null);
     setFailed(false);
-    const sideURL = (id: string) => authedAttachmentUrl("/api/chat/attachment/" + id);
+    // encodeURIComponent, not concatenation: the id is data the pair carries,
+    // and a blob stored before the server started checking the id's SHAPE can
+    // still hold "att-/../../api/version". Concatenated, the browser normalises
+    // that into a DIFFERENT endpoint and this screen draws that response as
+    // "before" — a confident wrong answer, with the reader's token appended to
+    // a route that never expected one. Escaped, a malformed id can only 404.
+    const sideURL = (id: string) =>
+      authedAttachmentUrl("/api/chat/attachment/" + encodeURIComponent(id));
     const text = async (u: string) => {
       const response = await fetch(u);
       if (!response.ok) throw new Error(`http ${response.status}`);

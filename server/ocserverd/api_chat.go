@@ -15,6 +15,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -394,6 +395,25 @@ type diffAttachmentEnvelope struct {
 // whose blob is gone already reads as honestly empty rather than as an error.
 // Checking existence here would buy one class of typo at the cost of a second
 // validation site that the inline-base64 path would have to grow too.
+// diffAttachmentSideID is the SHAPE a minted blob id actually has ("att-" +
+// newHexID(12), see the mint below) — anchored, so it matches the whole string
+// or nothing.
+//
+// A prefix test is not enough, and the gap is not cosmetic. T-59's independent
+// review fed the prefix version "att-" (empty id, the easiest possible typo:
+// copying an id and losing the tail) and "att-/../../api/version", and BOTH
+// were accepted with a 200. The second one is the one that bites: the FE builds
+// the side URL by concatenation, so the browser normalises that away to a
+// different endpoint entirely and the compare screen draws an unrelated JSON
+// response as "before" — a confident wrong answer, with the reader's token
+// pinned to a query on a route that never expected one. Same-origin GETs only,
+// but the screen lying is enough.
+//
+// This guard exists so "it was accepted" and "it will draw" cannot come apart;
+// a shape it cannot even name is outside that promise. The FE escapes the id as
+// well, because a blob stored before this guard existed still reaches it.
+var diffAttachmentSideID = regexp.MustCompile(`^att-[0-9a-f]{12}$`)
+
 func validateDiffAttachment(raw []byte) error {
 	var env diffAttachmentEnvelope
 	if err := json.Unmarshal(raw, &env); err != nil {
@@ -406,7 +426,7 @@ func validateDiffAttachment(raw []byte) error {
 		switch {
 		case strings.TrimSpace(side.id) == "":
 			return chatBadRequest{"a diff attachment must name its " + side.name + " attachment_id"}
-		case !strings.HasPrefix(side.id, "att-"):
+		case !diffAttachmentSideID.MatchString(side.id):
 			return chatBadRequest{"a diff attachment's " + side.name +
 				" attachment_id must be a stored blob id (att-…), got " + side.id}
 		}

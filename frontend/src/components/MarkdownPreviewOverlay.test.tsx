@@ -593,6 +593,18 @@ describe("MarkdownPreviewOverlay 複製分享連結 (T-d10b)", () => {
       expect(screen.getByText("BRAVO")).toBeTruthy();
       // The pointer pair's own text must never be what gets compared.
       expect(screen.queryByText(/attachment_id/)).toBeNull();
+
+      // WHICH SIDE IS WHICH. Presence alone survives the two sides being
+      // swapped, and a swap is the failure that lies loudest: the reader sees
+      // the new version struck out and the old one added, and concludes the
+      // change did the opposite of what it did. Assert the direction, not just
+      // that both texts arrived.
+      const diff = screen.getByTestId("md-preview-diff");
+      expect(diff.querySelector('[data-kind="removed"] .diff-view__text')?.textContent).toBe("bravo");
+      expect(diff.querySelector('[data-kind="added"] .diff-view__text')?.textContent).toBe("BRAVO");
+      // …and the labels travel with their own side.
+      expect(diff.querySelector(".diff-view__label--before")?.textContent).toContain("9/2 21:12");
+      expect(diff.querySelector(".diff-view__label--after")?.textContent).toContain("目前存檔內容");
     });
 
     // A pair whose second blob is gone must say so. Rendering the half it DID

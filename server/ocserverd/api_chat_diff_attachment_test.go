@@ -18,8 +18,8 @@ import (
 // side of the same card. So the malformed case is driven through the REAL
 // entry points, and through more than one of them.
 
-const wellFormedDiff = `{"before":{"attachment_id":"att-1111","label":"9/2 21:12"},` +
-	`"after":{"attachment_id":"att-2222","label":"目前存檔內容"}}`
+const wellFormedDiff = `{"before":{"attachment_id":"att-0123456789ab","label":"9/2 21:12"},` +
+	`"after":{"attachment_id":"att-fedcba987654","label":"目前存檔內容"}}`
 
 func uploadAttachment(t *testing.T, srvURL, tok, mime string, body []byte) (int, string) {
 	t.Helper()
@@ -41,20 +41,37 @@ func TestDiffAttachmentRefusedOnEveryFaceWhenItCouldNotBeDrawn(t *testing.T) {
 		},
 		{
 			"after side never named",
-			`{"before":{"attachment_id":"att-1111"}}`,
+			`{"before":{"attachment_id":"att-0123456789ab"}}`,
 			"a diff attachment must name its after attachment_id",
 		},
 		{
 			"before side blank",
-			`{"before":{"attachment_id":"  "},"after":{"attachment_id":"att-2222"}}`,
+			`{"before":{"attachment_id":"  "},"after":{"attachment_id":"att-fedcba987654"}}`,
 			"a diff attachment must name its before attachment_id",
 		},
 		{
 			// A path, a URL or an avatar id are all things a caller might reach
 			// for; none of them resolves to a blob this server can serve.
 			"side names something that is not a stored blob",
-			`{"before":{"attachment_id":"/Users/eva/before.txt"},"after":{"attachment_id":"att-2222"}}`,
+			`{"before":{"attachment_id":"/Users/eva/before.txt"},"after":{"attachment_id":"att-fedcba987654"}}`,
 			"a diff attachment's before attachment_id must be a stored blob id (att-…), got /Users/eva/before.txt",
+		},
+		{
+			// The prefix alone used to pass this, and it is the likeliest typo
+			// of all: copy an id, lose the tail. It would be accepted here and
+			// then 404 at read time — exactly the "accepted but will not draw"
+			// split this guard exists to prevent.
+			"side carries the prefix and nothing else",
+			`{"before":{"attachment_id":"att-"},"after":{"attachment_id":"att-fedcba987654"}}`,
+			"a diff attachment's before attachment_id must be a stored blob id (att-…), got att-",
+		},
+		{
+			// The prefix version accepted this too, and the FE builds the side
+			// URL by concatenation: the browser normalises it to a DIFFERENT
+			// endpoint and the compare screen draws that response as "before".
+			"side smuggles a path out of the blob route",
+			`{"before":{"attachment_id":"att-/../../api/version"},"after":{"attachment_id":"att-fedcba987654"}}`,
+			"a diff attachment's before attachment_id must be a stored blob id (att-…), got att-/../../api/version",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

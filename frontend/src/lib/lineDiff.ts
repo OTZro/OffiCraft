@@ -62,15 +62,25 @@ const DEFAULT_CONTEXT_RADIUS = 3;
 // side, where the old table wanted 1.34 GB).
 //
 // 20,000 is GitHub's own published per-file diff limit, and the measurements say
-// it is affordable here. Timed in this repo, both sides the given size:
-//   20k lines, ~1% of them changed (what a diff of two versions of one file
-//     actually looks like)                                        →    16 ms
-//   20k lines with NOTHING in common — the pathological input     → 3,743 ms
-//   10k lines with nothing in common                              → 1,325 ms
-// The worst case is a real 3.7 s stall, and it is accepted rather than solved:
-// it takes two unrelated 20,000-line documents to reach it, and the alternative
-// — refusing at a lower ceiling — is what put the wall in front of dal.go,
-// reconcile.go and wire.go, which is the whole reason this changed.
+// it is affordable for the input this actually sees: two versions of ONE file,
+// ~1% of the lines changed, which lands in tens of milliseconds at 20k lines a
+// side.
+//
+// The pathological input — two 20,000-line documents with NOTHING in common —
+// stalls for SECONDS, and that is accepted rather than solved. No absolute
+// figure is quoted here on purpose: two runs on this same machine measured
+// 3.7 s and 5.7 s for the same input, so a number written into this comment is
+// a measurement that rots (CLAUDE.md §4). Re-measure rather than cite.
+//
+// 🔴 AND THE DIFF IS ONLY HALF THE STALL. DiffView renders every row (no
+// virtualisation — the owner's "do not collapse" ruling) and runs wordDiff over
+// each paired change, so the pathological input also builds 40,000 rows
+// synchronously before first paint, with no loading state and no cancel. That
+// half has never been measured. Anyone raising this ceiling further owns that
+// question first.
+//
+// The alternative — refusing at a lower ceiling — is what put the wall in front
+// of dal.go, reconcile.go and wire.go, which is the whole reason this changed.
 const DEFAULT_MAX_LINES = 20000;
 
 /**
@@ -349,13 +359,24 @@ export function diffLines(
   const a = splitLines(before);
   const b = splitLines(after);
 
-  // The identical head and tail never need the quadratic core. A leading line
+  // The identical head and tail never need the search at all: a leading line
   // equal to its counterpart is taken by the `a[i] === b[j]` branch of
-  // buildRows before the table is ever consulted; a trailing common run shifts
-  // every table cell in the middle by the same amount, so the `>=` that breaks
-  // ties compares the same two numbers with or without it. Trimming therefore
-  // changes not one emitted row — the differential test against the untrimmed
-  // implementation is what proves it, not this paragraph.
+  // buildRows anyway, and a trailing common run does the same from the other
+  // end.
+  //
+  // WHAT TRIMMING PRESERVES, AND WHAT IT DOES NOT. The script stays exactly as
+  // short, and both sides still reconstruct — those are the contract, and
+  // lineDiff.test.ts asserts them. It does NOT preserve which row carries the
+  // marker: when several lines hold the SAME text, trimming can move a deletion
+  // onto a different one of them. An earlier version of this comment claimed
+  // "changes not one emitted row … the differential test proves it"; T-59's
+  // independent review ran that differential (3,000 markdown-shaped pairs,
+  // trimming disabled in a copy) and got 672 divergent — 22% — and no such test
+  // existed to contradict it. Both scripts are minimal and both reconstruct, so
+  // the divergence is a tie-break among equal answers, not a wrong one. Do not
+  // reintroduce a row-for-row claim, and do not treat row-for-row identity as
+  // something a refactor here is allowed to rely on.
+  //
   // Measured over 60 real commits here: the table shrinks ~100x at the median
   // (5 orders of magnitude on a one-line edit, 3x on a change spread over a
   // whole file), which is the difference between `maxLines` being a wall people
