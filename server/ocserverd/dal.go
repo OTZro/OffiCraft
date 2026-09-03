@@ -630,8 +630,20 @@ func (d *DAL) SetMemberWakingSince(id string, ts float64) error {
 // SetMemberWindDownAnchors writes the four wind-down anchor columns and NOTHING
 // else (T-55) — stopping_since / stopped_since / refocus_since / refocus_op, the
 // rung of the 下線 → 加速 → 強制 ladder a member is standing on plus the 換手
-// epoch opened on it. It is the sole writer of all four; PutMember carries them
-// on INSERT and none of them in its DO UPDATE SET.
+// epoch opened on it. It is the sole writer of all four; a whole-row write
+// carries them on INSERT and never onto an existing row (their constructors
+// declare them insertOnly).
+//
+// 🔑 IT DELIBERATELY DOES NOT ROUTE THROUGH PatchMember, and that is a decision
+// rather than an oversight (T-63). Converging a setter onto the patch door earns
+// something only when the setter RE-IMPLEMENTS a property already declared on
+// the column — SetMemberForcedStopAt and SetMemberAgentIatFloor each wrote their
+// own max() beside a forwardOnly declaration, which is one property with two
+// representations that drift apart without anything going red. These four
+// columns declare no such property: they are a plain assignment here and
+// insert-only there, and insert-only has no meaning for a caller that names the
+// column outright. So there is nothing here to keep in sync, and rewriting it
+// would be churn.
 //
 // 🔴 FOUR COLUMNS, ONE WRITER — the same shape as SetMemberOpReceipt and for the
 // same reason. armRefocusEpoch stamps all four at once, and the readers consume
@@ -642,9 +654,11 @@ func (d *DAL) SetMemberWakingSince(id string, ts float64) error {
 // describes a rung nobody ever stood on.
 //
 // ⚠️ forced_stop_at is NOT here and must not join: it is the durable record that
-// a session was cut off, and PutMember keeps it precisely because max() lets it
-// move forward only (see the SET list). A setter that assigned it would hand
-// every caller the ability to move it backwards.
+// a session was cut off, and a whole-row write is allowed to carry it precisely
+// because the column is declared forwardOnly, so every writer lands it as
+// max(). A setter that ASSIGNED it would hand every caller the ability to move
+// it backwards — which is exactly what SetMemberForcedStopAt used to do before
+// it was routed through that declaration.
 //
 // A missing row is a clean no-op (0 rows affected, no error).
 func (d *DAL) SetMemberWindDownAnchors(id string, stoppingSince, stoppedSince,
