@@ -275,7 +275,7 @@ func TestDeleteChatInvolvingStillCollectsUnreferencedBlobs(t *testing.T) {
 // and that ONLY this table still points at.
 //
 // Discrimination was verified by the inverse mutant (adding the table as a
-// fifth source in collectSurvivingBlobRefs): this test, and only this test,
+// sixth source in collectSurvivingBlobRefs): this test, and only this test,
 // goes red.
 func TestDeleteChatInvolvingIgnoresTheGalleryIndex(t *testing.T) {
 	d := newTestDAL(t)

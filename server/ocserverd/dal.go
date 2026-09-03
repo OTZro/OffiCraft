@@ -1263,8 +1263,16 @@ func refIDsFromJSON(blob string, into map[string]bool) {
 //	task_artifact.attachment_id          (T-62a8 — file/image kinds; '' on link)
 //	member.avatar_attachment_id           (T-c826 — dedicated personal image)
 //
-// ⚠️ Add another referencing column anywhere and it MUST be added here in the
-// same commit; a blob whose only referrer is unknown to this scan is deleted
+// ⚠️ ONE column holds blob ids and deliberately does NOT vote:
+// `chat_attachment_ref.attachment_id` (T-51, migration 00074). That table is a
+// DERIVED index over source #1 above — every row of it restates a
+// `chat_message.meta $.attachments[].id` that is already counted here — so
+// letting it vote would keep a blob alive on the strength of its own referrer
+// and re-open exactly the T-62a8 failure below.
+// `TestDeleteChatInvolvingIgnoresTheGalleryIndex` pins that it never votes.
+//
+// ⚠️ Add another NON-DERIVED referencing column anywhere and it MUST be added
+// here in the same commit; a blob whose only referrer is unknown to this scan is deleted
 // out from under that referrer with no error and no receipt. The failure mode
 // this closed was exactly that: a deliverable pinned on a task card went to a
 // dead link when the chat message it was uploaded in was removed — and a
