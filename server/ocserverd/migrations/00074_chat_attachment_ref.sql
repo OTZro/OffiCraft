@@ -30,11 +30,27 @@
 --    OBJECT it iterates happily and j.key comes back a STRING, which this
 --    column would accept (SQLite type affinity) and `ord` would stop meaning
 --    "which position". Every statement below therefore carries
---    `json_type(..., '$.attachments') = 'array'`, so SQL matches Go exactly
+--    the array check below, so SQL matches Go exactly
 --    and nothing that is invisible today becomes visible. Measured on live
 --    data 2026-09-04: 2,177 messages carry the key, 0 are not arrays, 0 have
 --    a non-object element — today, and post_chat's own meta docs admit a
 --    caller can store any shape under that key.
+--
+-- 🔴 AND THAT CHECK IS SPELLED AS A `CASE`, NOT AS A `WHERE`, FOR A REASON THAT
+--    COST A RED CI. json_type() does not return some other type for MALFORMED
+--    json — it RAISES: "SQL logic error: malformed JSON (1)". And SQLite's AND
+--    does NOT short-circuit, so `WHERE json_valid(x) AND json_type(x,...)`
+--    raises too. A raise inside an AFTER INSERT trigger FAILS THE INSERT, so a
+--    message Go would have stored (its reader is a type assertion — non-JSON
+--    meta is silently skipped) would instead be REFUSED. That is a behaviour
+--    change in the worst possible direction, and it is reachable: meta is
+--    free-form, and api_chat_reply_to_chat_t4e95_test.go:518 seeds exactly such
+--    a row on purpose ("{this is not json") to pin an unrelated invariant.
+--    CASE ... WHEN ... THEN ... ELSE DOES short-circuit (verified), so a
+--    malformed row falls through to '[]' and stores nothing — exactly like Go.
+--    Verified both ways on a throwaway DB: the WHERE form fails that INSERT
+--    with rc=1 (that is what turned go-checks red on 7fa36cb5); the CASE form
+--    stores the row with rc=0 and adds no index rows.
 --
 -- ord IS THE ATTACHMENT'S POSITION IN ITS MESSAGE, AND IT IS NOT DENSE.
 --    It is json_each's 0-based array index, so a filtered-out element (empty
@@ -125,9 +141,14 @@ BEGIN
            NEW.sender, NEW.recipient, NEW.ts,
            COALESCE(json_extract(j.value, '$.mime'), ''),
            COALESCE(json_extract(j.value, '$.filename'), '')
-    FROM json_each(json_extract(NEW.meta, '$.attachments')) j
-    WHERE json_type(NEW.meta, '$.attachments') = 'array'
-      AND COALESCE(json_extract(j.value, '$.id'), '') <> '';
+    FROM json_each(
+        CASE WHEN json_valid(NEW.meta)
+              AND json_type(NEW.meta, '$.attachments') = 'array'
+             THEN json_extract(NEW.meta, '$.attachments')
+             ELSE '[]'
+        END
+    ) j
+    WHERE COALESCE(json_extract(j.value, '$.id'), '') <> '';
 END;
 -- +goose StatementEnd
 
@@ -149,9 +170,14 @@ BEGIN
            NEW.sender, NEW.recipient, NEW.ts,
            COALESCE(json_extract(j.value, '$.mime'), ''),
            COALESCE(json_extract(j.value, '$.filename'), '')
-    FROM json_each(json_extract(NEW.meta, '$.attachments')) j
-    WHERE json_type(NEW.meta, '$.attachments') = 'array'
-      AND COALESCE(json_extract(j.value, '$.id'), '') <> '';
+    FROM json_each(
+        CASE WHEN json_valid(NEW.meta)
+              AND json_type(NEW.meta, '$.attachments') = 'array'
+             THEN json_extract(NEW.meta, '$.attachments')
+             ELSE '[]'
+        END
+    ) j
+    WHERE COALESCE(json_extract(j.value, '$.id'), '') <> '';
 END;
 -- +goose StatementEnd
 
@@ -177,16 +203,21 @@ END;
 --      SELECT (SELECT count(*) FROM chat_attachment_ref)
 --           = (SELECT count(*) FROM chat_message m,
 --                  json_each(json_extract(m.meta,'$.attachments')) j
---              WHERE json_type(m.meta,'$.attachments') = 'array'
---                AND COALESCE(json_extract(j.value,'$.id'),'') <> '');
+--              WHERE COALESCE(json_extract(j.value,'$.id'),'') <> '');
+--    (the FROM clause is the same CASE guard as the triggers use — see above)
 INSERT INTO chat_attachment_ref
     (message_id, ord, attachment_id, sender, recipient, ts, mime, filename)
 SELECT m.id, j.key, json_extract(j.value, '$.id'), m.sender, m.recipient, m.ts,
        COALESCE(json_extract(j.value, '$.mime'), ''),
        COALESCE(json_extract(j.value, '$.filename'), '')
-FROM chat_message m, json_each(json_extract(m.meta, '$.attachments')) j
-WHERE json_type(m.meta, '$.attachments') = 'array'
-  AND COALESCE(json_extract(j.value, '$.id'), '') <> '';
+FROM chat_message m, json_each(
+    CASE WHEN json_valid(m.meta)
+          AND json_type(m.meta, '$.attachments') = 'array'
+         THEN json_extract(m.meta, '$.attachments')
+         ELSE '[]'
+    END
+) j
+WHERE COALESCE(json_extract(j.value, '$.id'), '') <> '';
 
 -- +goose Down
 -- 🔴 DROP THE TRIGGERS FIRST. They live on chat_message, so DROP TABLE does
