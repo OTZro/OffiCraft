@@ -1129,10 +1129,18 @@ func (d *DAL) listChatLatest(f chatListFilter, limit int) ([]ChatMessage, error)
 // join: an INNER join would drop exactly the senders the reader has never
 // opened, which are the ones whose unread matters most.
 //
-// 🔴 sender <> reader EXCLUDES YOUR OWN MESSAGES OUTRIGHT (owner ruling),
-// including a message addressed to yourself — those are read by definition, and
-// the exclusion is a predicate rather than a watermark comparison so no
-// watermark state can ever make one resurface.
+// 🔴 YOUR OWN MESSAGES ARE NOT EXCLUDED HERE, AND THAT IS AN OWNER RULING, NOT
+// AN OVERSIGHT (rc-dccab860be32). This predicate used to carry `sender <> reader`.
+// The owner's objection was about WHERE the rule lives: this function answers one
+// mechanical question — is it newer than my watermark for whoever sent it — and
+// "I do not need to be shown my own note" is a decision about PRINTING, not about
+// reading. So a message you addressed to yourself comes back here as unread, and
+// the drain is what declines to print it (and files the receipt anyway, which is
+// the one place in T-48 where something is marked read without being shown; see
+// cli/ocagent's note).
+//
+// ⚠️ `recipient = ?` already keeps out everything you sent to SOMEBODY ELSE, so
+// the only messages this concerns are the ones you sent to yourself.
 //
 // 🔴 THIS FUNCTION WRITES NOTHING. Reading unread does not clear unread; that is
 // PutChatRead's job, reached only from POST /api/chat/mark-read.
@@ -1148,8 +1156,8 @@ func (d *DAL) listChatUnread(reader string, f chatListFilter, after *chatAnchor,
 	query := `
 		SELECT m.id, m.sender, m.recipient, m.body, m.ts, m.meta FROM chat_message m
 		LEFT JOIN chat_read r ON r.reader_id = ? AND r.peer_id = m.sender
-		WHERE m.recipient = ? AND m.sender <> ? AND m.ts > COALESCE(r.last_read_ts, 0)`
-	args := []any{reader, reader, reader}
+		WHERE m.recipient = ? AND m.ts > COALESCE(r.last_read_ts, 0)`
+	args := []any{reader, reader}
 	if after != nil {
 		query += ` AND (m.ts > ? OR (m.ts = ? AND m.id > ?))`
 		args = append(args, after.TS, after.TS, after.ID)

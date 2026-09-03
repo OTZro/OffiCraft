@@ -187,7 +187,7 @@ func TestChatCursorIsStableWhenNewMessagesLandMidWalk(t *testing.T) {
 func TestChatUnreadJudgesEachMessageAgainstItsOwnSendersWatermark(t *testing.T) {
 	s := unreadTestServer(t)
 	ids, _ := pageIDs(t, chatQueryRec(s, "owner", "unread=true"))
-	want := []string{"b-1", "b-2", "a-3"} // oldest→newest: 1.5, 2.5, 3
+	want := []string{"b-1", "b-2", "a-3", "self"} // oldest→newest: 1.5, 2.5, 3, 4
 	if !sameIDs(ids, want) {
 		t.Fatalf("unread = %v, want %v — a message is unread against ITS OWN "+
 			"sender's watermark, never against one global one", ids, want)
@@ -224,31 +224,41 @@ func TestChatUnreadNeverDropsAMessageFromAPeerYouHaveNeverOpened(t *testing.T) {
 		t.Fatalf("put chat_read: %v", err)
 	}
 	ids, _ = pageIDs(t, chatQueryRec(s, "owner", "unread=true"))
-	if !sameIDs(ids, []string{"a-3"}) {
-		t.Fatalf("after marking m-2 read to 2.5, unread = %v, want [a-3]", ids)
+	if !sameIDs(ids, []string{"a-3", "self"}) {
+		t.Fatalf("after marking m-2 read to 2.5, unread = %v, want [a-3 self]", ids)
 	}
 }
 
-// Owner ruling: your own messages are never unread, INCLUDING the ones you
-// addressed to yourself. MUTANT: drop `m.sender <> ?` from the query and `self`
-// appears in the page.
-func TestChatUnreadExcludesYourOwnMessagesIncludingToYourself(t *testing.T) {
+// 🔴 WHAT YOU SENT TO SOMEBODY ELSE IS NEVER YOUR UNREAD, AND WHAT YOU SENT TO
+// YOURSELF IS (owner ruling rc-dccab860be32). Those two look like one rule and
+// are not: `out` is kept out by `recipient = ?`, which is about who the message
+// is FOR; `self` is addressed to the caller and so it is genuinely a message
+// waiting in the caller's own inbox. Whether a member wants to be shown its own
+// handover note is a question about PRINTING, and it is answered in cli/ocagent
+// — this door only answers "newer than my watermark for whoever sent it".
+//
+// MUTANT: put `m.sender <> ?` back into the query and `self` disappears here.
+func TestChatUnreadKeepsWhatYouSentYourselfAndDropsWhatYouSentOthers(t *testing.T) {
 	s := unreadTestServer(t)
 	ids, _ := pageIDs(t, chatQueryRec(s, "owner", "unread=true"))
 	for _, id := range ids {
-		if id == "self" {
-			t.Fatalf("a message you sent yourself is read by definition; got %v", ids)
-		}
 		if id == "out" {
-			t.Fatalf("a message you SENT is never your unread; got %v", ids)
+			t.Fatalf("a message you SENT to someone else is never your unread; got %v", ids)
 		}
+	}
+	var found bool
+	for _, id := range ids {
+		if id == "self" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("a message you addressed to YOURSELF is in your own inbox and is "+
+			"unread until a receipt says otherwise; got %v — if this went red because "+
+			"the predicate came back, the printing rule belongs in cli/ocagent", ids)
 	}
 }
 
-// `limit` takes the OLDEST batch here — the opposite end from the default
-// listing — and the cursor walks TOWARDS THE NEWER. MUTANT: reuse the default
-// path's newest-first cut (`msgs[len(msgs)-limit:]` in trimChatPageNewer) and
-// the first page comes back [b-2 a-3] instead of [b-1 b-2].
 func TestChatUnreadServesTheOldestBatchFirstAndPagesForwards(t *testing.T) {
 	s := unreadTestServer(t)
 	ids, cursor := pageIDs(t, chatQueryRec(s, "owner", "unread=true&limit=2"))
@@ -259,8 +269,8 @@ func TestChatUnreadServesTheOldestBatchFirstAndPagesForwards(t *testing.T) {
 		t.Fatal("a-3 is still unread — the page must carry a cursor")
 	}
 	ids, next := pageIDs(t, chatQueryRec(s, "owner", "unread=true&limit=2&cursor="+cursor))
-	if !sameIDs(ids, []string{"a-3"}) {
-		t.Fatalf("second unread page = %v, want [a-3]", ids)
+	if !sameIDs(ids, []string{"a-3", "self"}) {
+		t.Fatalf("second unread page = %v, want [a-3 self]", ids)
 	}
 	if next != "" {
 		t.Fatalf("the backlog is exhausted; next_cursor must be absent, got %q", next)
@@ -298,7 +308,7 @@ func TestChatUnreadDrainLoopTerminatesAndTheCursorAlwaysAdvances(t *testing.T) {
 			t.Fatalf("drain did not terminate within %d rounds (seen %v)", maxRounds, seen)
 		}
 	}
-	if !sameIDs(seen, []string{"b-1", "b-2", "a-3"}) {
+	if !sameIDs(seen, []string{"b-1", "b-2", "a-3", "self"}) {
 		t.Fatalf("the drain must see every unread message exactly once: %v", seen)
 	}
 }
@@ -334,7 +344,7 @@ func TestChatUnreadPagingNeverAdvancesAWatermark(t *testing.T) {
 	// And the backlog is still there afterwards — the observable half of the
 	// same statement, stated in the caller's own terms.
 	ids, _ := pageIDs(t, chatQueryRec(s, "owner", "unread=true"))
-	if !sameIDs(ids, []string{"b-1", "b-2", "a-3"}) {
+	if !sameIDs(ids, []string{"b-1", "b-2", "a-3", "self"}) {
 		t.Fatalf("after a full drain the backlog must be unchanged, got %v", ids)
 	}
 }
