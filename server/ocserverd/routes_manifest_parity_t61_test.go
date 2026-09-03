@@ -27,8 +27,11 @@ package main
 //     table). Two hand-written lists agreeing proves they were typed the same
 //     day, not that either matches the code.
 //
-// So the hole is real but it is INFRA-SHAPED: add an MCPExclude route to
-// routes.go and no test in this repo notices. That is the class this file ends,
+// So the hole was real but INFRA-SHAPED: BEFORE this file, adding an MCPExclude
+// route to routes.go went unnoticed by every test in the repo, while an
+// MCP-visible one already reddened test_catalog_hash_algorithm. (Present tense
+// would be wrong the moment this file lands — it is the thing that notices
+// now.) That is the class this file ends,
 // and it does it for the whole table rather than for the half that was loose,
 // because a gate that covers "the rows nobody else covers" needs a second
 // hand-written list to know which those are — the exact disease.
@@ -44,9 +47,15 @@ package main
 // ── WHAT THIS GATE DOES NOT DO — read before trusting it ────────────────────
 //
 // It compares MEMBERSHIP (method+path), not the auth/requires/mcp_tool columns.
-// Those are graded by live requests in test_auth_matrix.py: a row whose floor in
-// routes.go disagrees with the manifest fails there against the real server, so
-// duplicating the comparison here would add a second opinion, not a second gate.
+// requires is graded by live requests in test_auth_matrix.py — a row whose floor
+// in routes.go disagrees with the manifest fails there against the real server —
+// and mcp_tool is held by test_mcp.py's test_catalog_hash_algorithm, not by the
+// matrix (that file never mentions the column). Duplicating either here would
+// add a second opinion, not a second gate.
+//
+// It does NOT prove buildHandler actually registers every row it is given: this
+// gate reads the table, and "the table is right" is one step short of "the mux
+// was built from it". Nothing in this repo currently pins that step.
 //
 // AND THE EXEMPTION LISTS ARE NOT COMPILER-PROOF. exemptRoute() is the intended
 // door and its four parameters make an unreasoned entry impossible to WRITE
@@ -64,6 +73,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"sort"
 	"strings"
@@ -138,8 +148,14 @@ func loadRoutesManifest(t *testing.T) []manifestRow {
 	return rows
 }
 
+// routeKey joins a row's method and path VERBATIM — no case folding. Both
+// sides write methods in upper case, so folding them changed nothing that is
+// true today while making a case difference between the two sources invisible;
+// the T-61 round-2 review turned a lower-cased method into a mutant nothing
+// caught. Verbatim, a disagreement about case is a disagreement, which is what
+// a parity gate is for.
 func routeKey(method, path string) string {
-	return strings.ToUpper(method) + " " + path
+	return method + " " + path
 }
 
 // ── the comparison ──────────────────────────────────────────────────────────
@@ -190,30 +206,40 @@ func TestEveryServedRouteIsInThePermissionManifest(t *testing.T) {
 			len(rows), manifestRowFloor)
 	}
 
+	servedKeys := make([]string, 0, len(specs))
 	served := map[string]bool{}
 	for _, s := range specs {
 		k := routeKey(s.Method, s.Path)
-		if served[k] {
-			t.Errorf("route table declares %s twice — the mux registration in "+
-				"server.go would panic on the second one", k)
-		}
+		servedKeys = append(servedKeys, k)
 		served[k] = true
 	}
+	for _, k := range duplicateKeys(servedKeys) {
+		t.Errorf("route table declares %s twice — the mux registration in "+
+			"server.go would panic on the second one", k)
+	}
+	listedKeys := make([]string, 0, len(rows))
 	listed := map[string]bool{}
 	for _, r := range rows {
 		k := routeKey(r.Method, r.Path)
-		if listed[k] {
-			t.Errorf("routes_manifest.json lists %s twice", k)
-		}
+		listedKeys = append(listedKeys, k)
 		listed[k] = true
+	}
+	for _, k := range duplicateKeys(listedKeys) {
+		t.Errorf("routes_manifest.json lists %s twice", k)
 	}
 
 	// (1) Exemptions are checked BEFORE they are honoured: a stale one is a
 	// silent hole, so it reddens rather than quietly excusing nothing.
-	unlisted := exemptionIndex(t, servedButUnlisted, served,
-		"served-but-unlisted", "the route table no longer serves it")
-	unserved := exemptionIndex(t, listedButUnserved, listed,
-		"listed-but-unserved", "the manifest no longer lists it")
+	unlisted, unlistedProblems := validateExemptions(servedButUnlisted, served,
+		"the route table no longer serves it")
+	for _, p := range unlistedProblems {
+		t.Errorf("served-but-unlisted %s", p)
+	}
+	unserved, unservedProblems := validateExemptions(listedButUnserved, listed,
+		"the manifest no longer lists it")
+	for _, p := range unservedProblems {
+		t.Errorf("listed-but-unserved %s", p)
+	}
 
 	// (2) The comparison itself — the same function the control below bites.
 	missing, stale := routeParityDiff(served, listed, unlisted, unserved)
@@ -244,43 +270,153 @@ func TestEveryServedRouteIsInThePermissionManifest(t *testing.T) {
 		len(served), len(listed), len(servedButUnlisted), len(listedButUnserved))
 }
 
-// exemptionIndex validates one exemption list and returns its keys. An entry
-// that names nothing in `corpus` is STALE and reddens: it is an excuse standing
-// over a hole that moved.
-func exemptionIndex(
-	t *testing.T,
-	list []routeExemption,
-	corpus map[string]bool,
-	label string,
-	goneMeans string,
-) map[string]bool {
-	t.Helper()
-	index := map[string]bool{}
+// validateExemptions is PURE on purpose: it returns the problems it finds
+// instead of calling t.Errorf, so the control below can feed it a synthetic
+// list and assert on the answer. The first version wrote straight into *testing.T
+// and, with both real lists empty, NEVER EXECUTED ONCE — the only guard on the
+// escape hatch had no positive control at all (T-61 round-2 review: gutting it
+// left every test green). A guard nobody has ever seen fire is a guard nobody
+// has tested.
+//
+// An entry naming nothing in `corpus` is STALE: an excuse standing over a hole
+// that moved.
+func validateExemptions(list []routeExemption, corpus map[string]bool, goneMeans string) (index map[string]bool, problems []string) {
+	index = map[string]bool{}
 	for _, e := range list {
 		k := routeKey(e.method, e.path)
 		if index[k] {
-			t.Errorf("%s exemption for %s is declared twice", label, k)
+			problems = append(problems, fmt.Sprintf("exemption for %s is declared twice", k))
 		}
 		index[k] = true
-		if len(strings.TrimSpace(e.reason)) < exemptionReasonFloor {
-			t.Errorf("%s exemption for %s carries a %d-character reason; this gate "+
-				"asks for at least %d. The length is not the point — a route "+
-				"outside the permission suite needs a sentence a reviewer can "+
-				"disagree with.",
-				label, k, len(strings.TrimSpace(e.reason)), exemptionReasonFloor)
+		if n := len(strings.TrimSpace(e.reason)); n < exemptionReasonFloor {
+			problems = append(problems, fmt.Sprintf(
+				"exemption for %s carries a %d-character reason; this gate asks for "+
+					"at least %d. The length is not the point — a route outside the "+
+					"permission suite needs a sentence a reviewer can disagree with.",
+				k, n, exemptionReasonFloor))
 		}
 		if strings.TrimSpace(e.ruling) == "" {
-			t.Errorf("%s exemption for %s names no ruling — put the ticket key or "+
-				"\"owner YYYY-MM-DD\" that decided it, so the next reader can go "+
-				"read the decision instead of re-deriving it", label, k)
+			problems = append(problems, fmt.Sprintf(
+				"exemption for %s names no ruling — put the ticket key or "+
+					"\"owner YYYY-MM-DD\" that decided it, so the next reader can go "+
+					"read the decision instead of re-deriving it", k))
 		}
 		if !corpus[k] {
-			t.Errorf("STALE %s exemption: %s — %s, so this entry now excuses "+
-				"nothing while still reading like a decision someone made. Delete "+
-				"it. (reason on file: %q)", label, k, goneMeans, e.reason)
+			problems = append(problems, fmt.Sprintf(
+				"STALE exemption: %s — %s, so this entry now excuses nothing while "+
+					"still reading like a decision someone made. Delete it. "+
+					"(reason on file: %q)", k, goneMeans, e.reason))
 		}
 	}
-	return index
+	return index, problems
+}
+
+// duplicateKeys reports every key that appears more than once, in order of
+// first repeat. Shared by the served and listed corpora so ONE implementation
+// carries both, and so the control below can bite it.
+func duplicateKeys(keys []string) []string {
+	seen := map[string]bool{}
+	var dups []string
+	for _, k := range keys {
+		if seen[k] {
+			dups = append(dups, k)
+		}
+		seen[k] = true
+	}
+	return dups
+}
+
+// TestExemptionValidationHasTeeth is the escape hatch's positive control. Both
+// real lists are empty today, so without this the checks in validateExemptions
+// would never run — and an unexercised guard is indistinguishable from a
+// deleted one.
+func TestExemptionValidationHasTeeth(t *testing.T) {
+	corpus := map[string]bool{"GET /api/real": true}
+	good := "a long enough sentence explaining why this route sits outside the suite"
+
+	// a well-formed entry: no problems, and it lands in the index.
+	index, problems := validateExemptions(
+		[]routeExemption{exemptRoute("GET", "/api/real", good, "T-61")}, corpus, "gone")
+	if len(problems) != 0 {
+		t.Errorf("a well-formed exemption was rejected: %v", problems)
+	}
+	if !index["GET /api/real"] {
+		t.Errorf("a well-formed exemption did not reach the index: %v", index)
+	}
+
+	// each defect on its own must produce a problem.
+	for _, tc := range []struct {
+		name string
+		e    routeExemption
+	}{
+		{"short reason", exemptRoute("GET", "/api/real", "legacy", "T-61")},
+		{"no ruling", exemptRoute("GET", "/api/real", good, "  ")},
+		{"stale", exemptRoute("GET", "/api/gone", good, "T-61")},
+	} {
+		if _, problems := validateExemptions([]routeExemption{tc.e}, corpus, "gone"); len(problems) == 0 {
+			t.Errorf("%s exemption produced no problem — the escape hatch is open", tc.name)
+		}
+	}
+
+	// and a duplicate entry must be reported.
+	e := exemptRoute("GET", "/api/real", good, "T-61")
+	if _, problems := validateExemptions([]routeExemption{e, e}, corpus, "gone"); len(problems) == 0 {
+		t.Error("a duplicated exemption produced no problem")
+	}
+
+	// 🔴 THE BYPASS ITSELF. exemptRoute is the intended door, but routeExemption
+	// is an ordinary struct in this package, so someone can skip the constructor
+	// entirely — which is exactly what the header now admits. This is the case
+	// that proves the runtime check is what actually holds: a struct literal
+	// carrying only method and path must be REFUSED, and refused by name.
+	literal := routeExemption{method: "GET", path: "/api/real"}
+	_, problems = validateExemptions([]routeExemption{literal}, corpus, "gone")
+	if len(problems) == 0 {
+		t.Fatal("a struct literal that skipped exemptRoute produced NO problem — " +
+			"the escape hatch has no guard at all, and the header's claim that " +
+			"the runtime check is what stops it would be false")
+	}
+	named := false
+	for _, p := range problems {
+		if strings.Contains(p, "GET /api/real") {
+			named = true
+		}
+	}
+	if !named {
+		t.Errorf("the struct-literal exemption was refused but not NAMED: %v", problems)
+	}
+}
+
+// TestDuplicateKeysAndFloorsHaveTeeth pins the two smaller guards the gate
+// leans on. The floors are compared against the REAL corpus rather than
+// against themselves: a floor of 0 (or any floor far under the table it is
+// supposed to be watching) fails here, which is what the round-2 mutant did.
+func TestDuplicateKeysAndFloorsHaveTeeth(t *testing.T) {
+	if got := duplicateKeys([]string{"a", "b", "a"}); len(got) != 1 || got[0] != "a" {
+		t.Errorf("duplicateKeys did not report a repeat: %v", got)
+	}
+	if got := duplicateKeys([]string{"a", "b"}); len(got) != 0 {
+		t.Errorf("duplicateKeys invented a repeat: %v", got)
+	}
+
+	specs := len(defaultRouteSpecs())
+	rows := len(loadRoutesManifest(t))
+	if servedRowFloor < specs/2 {
+		t.Errorf("servedRowFloor is %d against a table of %d rows — a floor that "+
+			"low stops catching a scanner that went half blind", servedRowFloor, specs)
+	}
+	if manifestRowFloor < rows/2 {
+		t.Errorf("manifestRowFloor is %d against a manifest of %d rows — same "+
+			"problem", manifestRowFloor, rows)
+	}
+
+	// routeKey must not fold case: a method that disagrees between the two
+	// sources is a real disagreement, and folding hid it (round-2 mutant M8).
+	if routeKey("GET", "/x") == routeKey("get", "/x") {
+		t.Error("routeKey folds case — a lower-cased method in one source would " +
+			"compare equal to an upper-cased one in the other, and the gate would " +
+			"report nothing")
+	}
 }
 
 // TestRouteParityDiffReportsBothDirections is the gate's control, and it bites
