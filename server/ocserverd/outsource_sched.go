@@ -465,6 +465,21 @@ func (s *apiServer) runOutsourceTick(now float64) {
 		// formality ran, so there is no second driver question to ask at this
 		// point.
 		//
+		// 🔴 ABOVE THE SWITCH, AND THAT POSITION IS THE WHOLE POINT (T-65 包②).
+		// The queued 起來 an owner presses during a wind-down is spent here, at the
+		// converged-offline edge. Its staff twin lives inside reconcileOne, so the
+		// symmetric home would be reconcileWorkerLiveness — and that home is
+		// UNREACHABLE for the only population this can ever fire on: the assigned
+		// branch below `continue`s on `DesiredState == offline`, and the active
+		// branch gates its FSM call on `fresh.DesiredState != offline`. A stopped
+		// worker never reaches the FSM at all. Putting the consume behind either
+		// filter would leave the owner pressing a button that answers 200 and does
+		// nothing forever — which is the SAME shape as the bug this feature
+		// removes, one layer down.
+		//
+		// It mutates `w` in place, so the switch below sees desired_state=online on
+		// this very pass and dispatches the start now rather than a tick later.
+		s.consumeWorkerRestartAfterStop(&w, now)
 		// A refused live-worker kill (owner 停止/relocate toward a warden that
 		// dropped offline) is parked, never lost — re-fire it FIRST, before any
 		// branch below can re-spawn onto the same machine (P5a rework).

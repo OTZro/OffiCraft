@@ -178,24 +178,14 @@ var knownDivergences = []knownDivergence{
 			"alongside RefocusSince; 正職 activate writes back what it read.",
 	},
 
-	// ── 重新聚焦 (refocus) ─────────────────────────────────────────────────
-	{
-		verb: "重新聚焦", field: "http_status",
-		why: "On a row the owner has already stopped (desired_state=offline) the two " +
-			"verbs answer differently BY OWNER RULING 2026-08-30 (「如果我已經到強硬下線的" +
-			"狀態下按下 refocus 我只需要在下線後把人帶起來」): 正職 takes the " +
-			"aStopWasEverAskedFor branch and answers 200 with a queued 起來, while 外包 " +
-			"answers 409 「refocus requires a live worker — this one is stopped (restart it " +
-			"first)」. The ruling landed on the STAFF side only; the worker handler still " +
-			"carries the pre-ruling refusal.",
-	},
-	{
-		verb: "重新聚焦", field: "restart_after_stop",
-		why: "restart_after_stop is a staff-only column in practice: stampRestartIntent " +
-			"is called from the member refocus / relocate / update-member handlers and " +
-			"from nowhere on the worker side, so 外包 has no way to record 「下線之後把人" +
-			"帶起來」 at all. Its 409 above is the same fact seen from the other end.",
-	},
+	// ── 重新聚焦 (refocus) — CONVERGED IN T-65 包②, no rows left ────────────
+	// Both rows that stood here are DELETED rather than widened: 「重新聚焦｜
+	// http_status」 (200 vs 409) and 「重新聚焦｜restart_after_stop」 (staff-only
+	// column). The worker face now takes the same aStopWasEverAskedFor branch the
+	// member face does — see queueWorkerRestartAfterStop (member_ownerop_winddown.go)
+	// and the 🔴 block in the worker refocus handler. Block ① is what proves it:
+	// the two literals for this verb are now identical, so a regression on either
+	// side reddens the matrix rather than being absorbed by a whitelist row.
 
 	// ── 強制停止 (force-stop) ──────────────────────────────────────────────
 	{
@@ -606,12 +596,17 @@ func parityCases() []verbCase {
 				Waking: anchorZero, RestartAfterStop: true,
 				DesiredMachineID: parityMachineA,
 			},
-			// 外包: `if worker.DesiredState == DesiredStateOffline` → 409, row untouched.
+			// 外包 (T-65 包②): the same branch, transcribed from the worker handler's
+			// own assignment — `queueWorkerRestartAfterStop(worker, refocusOpRefocus,
+			// …)` sets RestartAfterStop and touches nothing else, then answers 200.
+			// The eager outsourceTickNow that follows is a no-op here twice over:
+			// newParityServer sets noOutsource, and the seeded session is ONLINE so
+			// the consume's `!hub.IsOnline` gate would refuse it anyway.
 			wantOutsource: terminalState{
-				Status: http.StatusConflict, DesiredState: DesiredStateOffline,
+				Status: http.StatusOK, DesiredState: DesiredStateOffline,
 				Stopping: anchorPast, Stopped: anchorZero,
 				Refocus: anchorZero, RefocusOp: "",
-				Waking: anchorZero, RestartAfterStop: false,
+				Waking: anchorZero, RestartAfterStop: true,
 				DesiredMachineID: parityMachineA,
 			},
 		},
