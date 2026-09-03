@@ -2936,7 +2936,7 @@ func (s *apiServer) HandleAddTaskArtifactApiTasksTaskIdArtifactPost(w http.Respo
 // be removed from a closed card and never put back. Like add's, this guard sits
 // after the permission check, so admin/owner are not exempt either.
 func (s *apiServer) HandleRemoveTaskArtifactApiTasksTaskIdArtifactArtifactIdDelete(w http.ResponseWriter, r *http.Request, taskId, artifactId string) {
-	t, _, ok := s.artifactOnTask(w, r, taskId, artifactId, true)
+	t, _, ok := s.artifactOnTask(w, r, taskId, artifactId, artifactWrite)
 	if !ok {
 		return
 	}
@@ -2948,19 +2948,6 @@ func (s *apiServer) HandleRemoveTaskArtifactApiTasksTaskIdArtifactArtifactIdDele
 	s.writeTaskArtifactReceipt(w, *t, artifactId)
 }
 
-// artifactOnTask resolves the (task, artifact) pair the per-artifact routes
-// address and answers every guard they share, in the ONE order the wire
-// documents for all of them: 404 task → 403 not the executor (admin excepted,
-// §14) → 409 the task is closed → 404 artifact → 400 the artifact belongs to a
-// different task.
-//
-// frozenRefused is where the verbs differ and the only place they may: a WRITE
-// passes true and is refused on a closed task, a READ passes false because
-// reading a finished task's deliverables is exactly when a reader wants to. The
-// 409 sits AFTER the permission check on purpose — admin/owner are not exempt
-// from the freeze (owner ruling 2026-07-25) — and BEFORE the artifact lookup, so
-// a frozen task answers the same 409 whether or not the caller guessed a real
-// artifact id.
 // taskFrozenDeliverablesRefusal is the ONE sentence all three artifact verbs
 // refuse a closed task with. Written once because the freeze is one rule: three
 // copies could drift into telling a caller three different things about the
@@ -2970,19 +2957,55 @@ func taskFrozenDeliverablesRefusal(t Task) string {
 		") — its deliverables are frozen"
 }
 
+// artifactAccess says which of the two rule sets a per-artifact route is asking
+// artifactOnTask for. A named type rather than a bool because the answer is not
+// a knob but a category, and the ZERO VALUE IS THE STRICT SIDE ON PURPOSE: a
+// call site that has not declared what it is doing gets the write rules.
+type artifactAccess int
+
+const (
+	// artifactWrite — the executor guard AND the closed-task 409 both apply.
+	artifactWrite artifactAccess = iota
+	// artifactRead — neither applies.
+	artifactRead
+)
+
+// artifactOnTask resolves the (task, artifact) pair the per-artifact routes
+// address and answers every guard they share, in the ONE order the wire
+// documents for the WRITE verbs: 404 task → 403 not the executor (admin
+// excepted, §14) → 409 the task is closed → 404 artifact → 400 the artifact
+// belongs to a different task.
+//
+// 🔴 READ AND WRITE ARE DELIBERATELY ASYMMETRIC (owner ruling, T-60), and this
+// sentence is here so the next reader does not "finish the job" by making them
+// match. artifactRead runs NEITHER the executor guard NOR the freeze:
+//   - no executor guard, because CONSISTENCY IS NOT LOOSENING. The main task
+//     read (HandleGetTaskApiTasksTaskIdGet) makes no caller distinction at all
+//     and its response already carries the artifact set. Gating the version
+//     history on being the executor would mean the same deliverable is readable
+//     through one door and refused through the other — two doors disagreeing
+//     about one set of rows is the very defect this line of work is treating.
+//   - no 409, because reading a finished task's deliverables is exactly when a
+//     reader wants to.
+//
+// Writing stays the executor's responsibility, so artifactWrite keeps both. Its
+// 409 sits AFTER the permission check on purpose — admin/owner are not exempt
+// from the freeze (owner ruling 2026-07-25) — and BEFORE the artifact lookup, so
+// a frozen task answers the same 409 whether or not the caller guessed a real
+// artifact id.
 func (s *apiServer) artifactOnTask(
-	w http.ResponseWriter, r *http.Request, taskID, artifactID string, frozenRefused bool,
+	w http.ResponseWriter, r *http.Request, taskID, artifactID string, access artifactAccess,
 ) (*Task, *TaskArtifact, bool) {
 	t, err := s.resolveTask(taskID)
 	if err != nil {
 		writeResolveError(w, err, "task", taskID)
 		return nil, nil, false
 	}
-	if !s.callerMayEditTaskText(r, *t) {
+	if access == artifactWrite && !s.callerMayEditTaskText(r, *t) {
 		writeError(w, http.StatusForbidden, executorGuardRefusal)
 		return nil, nil, false
 	}
-	if frozenRefused && TaskIsTerminal(t.Status) {
+	if access == artifactWrite && TaskIsTerminal(t.Status) {
 		writeError(w, http.StatusConflict, taskFrozenDeliverablesRefusal(*t))
 		return nil, nil, false
 	}
@@ -3027,7 +3050,7 @@ func (s *apiServer) HandleReplaceTaskArtifactApiTasksTaskIdArtifactArtifactIdRep
 	if !decodeJSONBody(w, r, &body) {
 		return
 	}
-	t, art, ok := s.artifactOnTask(w, r, taskId, artifactId, true)
+	t, art, ok := s.artifactOnTask(w, r, taskId, artifactId, artifactWrite)
 	if !ok {
 		return
 	}
@@ -3130,13 +3153,14 @@ func artifactKindRefusal(pinned, asked string) string {
 // agent that replaced a deliverable already knows what it replaced, and this
 // list exists for the human reading the card.
 //
-// NO terminal-task guard: reading a closed task's history is exactly when a
-// reader wants it. There is deliberately no restore face — an older version
-// goes back by replacing FORWARD with it.
+// artifactRead, so NEITHER the executor guard NOR the terminal-task guard runs
+// here — see artifactOnTask for why the asymmetry with the write verbs is the
+// point rather than an omission. There is deliberately no restore face — an
+// older version goes back by replacing FORWARD with it.
 func (s *apiServer) HandleListTaskArtifactHistoryApiTasksTaskIdArtifactArtifactIdHistoryGet(
 	w http.ResponseWriter, r *http.Request, taskId, artifactId string,
 ) {
-	_, art, ok := s.artifactOnTask(w, r, taskId, artifactId, false)
+	_, art, ok := s.artifactOnTask(w, r, taskId, artifactId, artifactRead)
 	if !ok {
 		return
 	}

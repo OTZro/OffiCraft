@@ -325,8 +325,24 @@ func TestArtifactHistoryGuards(t *testing.T) {
 		t.Fatalf("replace: %d %s", rec.Code, rec.Body.String())
 	}
 
-	if rec := artifactHistory(t, api, task.ID, artID, "m-stranger", "agent"); rec.Code != http.StatusForbidden {
-		t.Fatalf("a non-executor must be 403, got %d %s", rec.Code, rec.Body.String())
+	// The READ carries no executor guard (owner ruling, T-60): the plain task
+	// read already serves this artifact set to any caller, so the history door
+	// must not answer differently about the same rows.
+	if rec := artifactHistory(t, api, task.ID, artID, "m-stranger", "agent"); rec.Code != http.StatusOK {
+		t.Fatalf("a non-executor reads the version list, got %d %s", rec.Code, rec.Body.String())
+	}
+	// The WRITE verbs keep it.
+	if rec := replaceArtifact(t, api, task.ID, artID,
+		map[string]any{"url": "https://x/pr/3"}, "m-stranger", "agent"); rec.Code != http.StatusForbidden {
+		t.Fatalf("a non-executor must not replace, got %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := removeArtifact(t, api, task.ID, artID, "m-stranger", "agent"); rec.Code != http.StatusForbidden {
+		t.Fatalf("a non-executor must not un-pin, got %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := addArtifact(t, api, task.ID,
+		map[string]any{"kind": "link", "url": "https://x/pr/4"},
+		"m-stranger", "agent"); rec.Code != http.StatusForbidden {
+		t.Fatalf("a non-executor must not pin, got %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := artifactHistory(t, api, task.ID, "ta-nope", "m-exec", "agent"); rec.Code != http.StatusNotFound {
 		t.Fatalf("an unknown artifact must be 404, got %d %s", rec.Code, rec.Body.String())
@@ -348,5 +364,19 @@ func TestArtifactHistoryGuards(t *testing.T) {
 	}
 	if len(decodeBody[[]taskArtifactVersionDTO](t, hrec)) != 1 {
 		t.Fatalf("the retained version must still be listed: %s", hrec.Body.String())
+	}
+	if rec := replaceArtifact(t, api, task.ID, artID,
+		map[string]any{"url": "https://x/pr/5"}, "m-exec", "agent"); rec.Code != http.StatusConflict {
+		t.Fatalf("a closed task still refuses replace with 409, got %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := removeArtifact(t, api, task.ID, artID, "m-exec", "agent"); rec.Code != http.StatusConflict {
+		t.Fatalf("a closed task still refuses un-pin with 409, got %d %s", rec.Code, rec.Body.String())
+	}
+	// A stranger reads a CLOSED task's history too — the two exemptions are
+	// independent, and a reader that arrives after the card is filed is the
+	// commonest one.
+	if rec := artifactHistory(t, api, task.ID, artID, "m-stranger", "agent"); rec.Code != http.StatusOK {
+		t.Fatalf("a non-executor reads a closed task's version list, got %d %s",
+			rec.Code, rec.Body.String())
 	}
 }
