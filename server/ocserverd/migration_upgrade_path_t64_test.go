@@ -38,8 +38,29 @@ package main
 // The error text is goose's, deliberately. A hand-written explanation of what
 // goose does is a sentence that goes stale the next time goose changes; the
 // tool's own refusal cannot.
+//
+// 🔴 WHAT THIS DOES NOT DO — the sibling scan file (t49e7) carries the same
+// section, and for the same reason: a guard read as covering more than it does is
+// worse than no guard.
+//
+//   - It does not FETCH. It reads the local origin/main ref, because network
+//     inside a unit test is one more thing that fails quietly. A stale ref means a
+//     stale baseline, which can only make this check TOO PERMISSIVE — never a
+//     false alarm. The SHA and its date are logged for exactly this reason.
+//   - It does not stop two branches picking the SAME free number. "Greater than
+//     main's maximum" is necessary, not sufficient; the collision only becomes
+//     visible once both branches meet, where the duplicate-version guard catches
+//     it. Scanning the remote branches before choosing is still the procedure.
+//   - It cannot make a green run STAY true. main's branch protection has
+//     required_status_checks.strict = false, so a run that went green before
+//     somebody else's migration landed is still mergeable afterwards, and this
+//     check is never asked again. Closing that is a repository setting, not code.
+//   - Two of the assertions in the replay (the station's version, and the Go
+//     migrations being present in it) cannot fail given the checks above them.
+//     They are canaries on goose, labelled as such at their site — not gates.
 
 import (
+	"bytes"
 	"database/sql"
 	"fmt"
 	"go/ast"
@@ -94,9 +115,24 @@ func releasedVersions(t *testing.T) (versions map[int64]string, ref string) {
 	t.Helper()
 	sha, err := gitOut("rev-parse", "origin/main")
 	if err != nil {
+		// 🔴 THE SKIP AND THE FAILURE ARE THE SAME EVENT, JUDGED DIFFERENTLY, and
+		// they are decided HERE, at the one site that can produce them, so a second
+		// skip path can never quietly un-coupled itself from the check that a skip
+		// did not happen. Locally a skip is legitimate — a tarball has no remote.
+		// In CI it is not: `go test` without -v prints `ok` for a package whose
+		// tests all skipped, so a shallow checkout would take this guard offline
+		// while the run stayed green, which is the exact silent-decay shape the
+		// guard exists to remove.
+		if inCI() {
+			t.Fatalf("running in CI but origin/main does not resolve (%v), so the "+
+				"upgrade-path check has no baseline and this run would have been green with "+
+				"the check switched off. FIX: give the go-checks job's actions/checkout "+
+				"`fetch-depth: 0` — a default (shallow) checkout carries only "+
+				"refs/remotes/pull/N/merge.", err)
+		}
 		t.Skipf("T-64 upgrade-path guard cannot run here: this checkout cannot resolve "+
-			"origin/main (%v). It is not a pass — the guard simply had no baseline to "+
-			"compare against. It runs in CI, which fetches main for this purpose.", err)
+			"origin/main (%v). It is NOT a pass — the guard simply had no baseline. It is "+
+			"enforced in CI, where a missing baseline is a failure rather than this skip.", err)
 	}
 	versions = map[int64]string{}
 	// Source ① — the SQL files as main has them.
@@ -188,42 +224,61 @@ func registrationsIn(t *testing.T, name, src string) map[int64]string {
 	return found
 }
 
+// gitOut keeps stderr. `.Output()` discards it, which turns every git failure
+// into the bare string "exit status 128" — and this file's skip message is the
+// one place a reader has to be told WHY the baseline could not be read.
 func gitOut(args ...string) (string, error) {
-	out, err := exec.Command("git", args...).Output()
+	var stderr bytes.Buffer
+	cmd := exec.Command("git", args...)
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	return strings.TrimSpace(string(out)), nil
 }
 
-// releasedOnlyFS is the embedded migrations directory with the files this branch
-// ADDS taken out of it — i.e. the migration directory as the released station saw
-// it. Handing goose a narrowed FS is how the replay is kept honest: the station
-// never had those files, so the replay must not either.
+// inCI reports whether this run is the one that gates a merge. GITHUB_ACTIONS is
+// checked first because it is what this repo's workflow actually sets and cannot
+// be set by accident; CI is honoured too but is a crowded name (GitLab, Circle,
+// Netlify, and plenty of dotfiles export it), which is why it is not alone.
+func inCI() bool {
+	return os.Getenv("GITHUB_ACTIONS") != "" || os.Getenv("CI") != ""
+}
+
+// releasedOnlyFS is the migrations directory AS THE RELEASED STATION HAD IT: only
+// the versions main ships, and — this is the part that is easy to get subtly
+// wrong — with MAIN'S BYTES, not the working tree's.
+//
+// 🔴 WHY THE BYTES MATTER. Taking the tree's copy of an already-released file
+// would make an in-place EDIT of a shipped migration invisible: the replay would
+// apply the edited body, the station would come out matching the tree, and the
+// upgrade would pass. But a station in the field ran the version that shipped,
+// and goose will never run that file again — the edit reaches exactly nobody who
+// already upgraded, while looking applied on every fresh install. Reading the
+// blob out of origin/main is what makes the population the real one; the
+// machinery to do it is already here for the Go scan.
 func releasedOnlyFS(t *testing.T, released map[int64]string) fs.FS {
 	t.Helper()
-	files, err := fs.Glob(embeddedMigrations, "migrations/*.sql")
-	if err != nil {
-		t.Fatalf("glob embedded migrations: %v", err)
-	}
 	m := fstest.MapFS{}
 	kept := 0
-	for _, f := range files {
-		v, err := goose.NumericComponent(f)
+	for v, where := range released {
+		if !strings.HasSuffix(where, ".sql") {
+			continue // a Go migration: it comes from goose's registry, not the FS
+		}
+		body, err := gitOut("show", "origin/main:"+where)
 		if err != nil {
-			t.Fatalf("%s has no version prefix: %v", f, err)
+			t.Fatalf("read released migration %d (%s) out of origin/main: %v", v, where, err)
 		}
-		if _, ok := released[v]; !ok {
-			continue // added by this branch: the station never had it
-		}
-		b, err := fs.ReadFile(embeddedMigrations, f)
-		if err != nil {
-			t.Fatalf("read %s: %v", f, err)
-		}
-		m[f] = &fstest.MapFile{Data: b}
+		// goose reads this FS at "migrations/<name>"; origin/main paths are
+		// repo-relative.
+		m["migrations/"+path.Base(where)] = &fstest.MapFile{Data: []byte(body + "\n")}
 		kept++
 	}
 	if kept == 0 {
+		// Unreachable while main ships any .sql migration at all; kept as the
+		// anti-vacuity net, because a replay over an empty FS proves nothing and
+		// would otherwise look exactly like a clean pass.
 		t.Fatal("the released-only FS came out empty — the replay would prove nothing")
 	}
 	return m
@@ -254,15 +309,89 @@ func TestAStationAtTheReleasedVersionCanUpgradeToThisTree(t *testing.T) {
 		}
 	}
 
-	// A released migration that has vanished from this tree means the baseline and
-	// the tree are not talking about the same thing, and every conclusion below
-	// would be drawn on sand.
+	// The baseline is only as fresh as origin/main is: this reads a REF, it never
+	// fetches (network in a unit test is another thing that fails quietly). A stale
+	// ref yields a stale baseline and therefore a silent false negative, so the SHA
+	// and its date are logged — they are what tells a reader of a failing run, or of
+	// a -v run, which world this verdict was reached in.
+	when, _ := gitOut("show", "-s", "--format=%ci", ref)
+	t.Logf("baseline: origin/main %s (%s). If that is older than main really is, "+
+		"`git fetch origin main` and re-run — a stale baseline can only make this check "+
+		"too permissive, never too strict.", ref, when)
+
+	// A released version this tree does not declare has TWO causes and they are not
+	// the same event, so they are not reported the same way.
+	var behind, deleted []int64
+	for v := range released {
+		if _, ok := tree[v]; ok {
+			continue
+		}
+		if v > treeMax {
+			behind = append(behind, v) // main moved ahead; this branch has not caught up
+		} else {
+			deleted = append(deleted, v) // a shipped migration is gone from the tree
+		}
+	}
+	sort.Slice(deleted, func(i, j int) bool { return deleted[i] < deleted[j] })
+	sort.Slice(behind, func(i, j int) bool { return behind[i] < behind[j] })
+	if len(deleted) > 0 {
+		t.Fatalf("origin/main (%s) ships migration version(s) %v that this tree does not "+
+			"declare, and they sit BELOW this tree's own highest version %d — so this is not a "+
+			"branch that is merely behind, it is a shipped migration that has been removed. "+
+			"A released migration cannot be withdrawn: every station has already applied it, "+
+			"and goose will refuse the next boot.", ref, deleted, treeMax)
+	}
+	if len(behind) > 0 {
+		// Merely behind main. In CI this cannot happen — the pull_request checkout is
+		// the MERGE ref, which already carries main — so if it does, something about
+		// the baseline is wrong and silence would be the worse answer. Locally it is
+		// the ordinary state of a branch someone has not rebased yet, and failing
+		// there would teach people to ignore this test.
+		if inCI() {
+			t.Fatalf("origin/main (%s) ships migration version(s) %v that this tree lacks, "+
+				"while running in CI — where the checkout is the merge ref and therefore "+
+				"already contains main. The baseline and the tree are not the pair this test "+
+				"assumes; do not read the result below as a pass.", ref, behind)
+		}
+		t.Skipf("this branch is behind origin/main (%s), which ships version(s) %v it does "+
+			"not have. Rebase and re-run: until then the released set and this tree are not "+
+			"comparable, and this is a SKIP, not a pass. CI checks the merged result anyway.",
+			ref, behind)
+	}
+
+	// ── Finding ⓪: an already-shipped migration must still be byte-for-byte what
+	// shipped. ───────────────────────────────────────────────────────────────────
+	// The SAME asymmetry as a low version number, reached from the other side: a
+	// station already past version V will never run V again, so an edit to it lands
+	// on fresh installs ONLY. Nothing errors; the two populations just quietly stop
+	// having the same schema, and every test in this package (all of which install
+	// from empty) sees the edited version and agrees with itself.
+	//
+	// This is BEYOND the ticket's acceptance criteria, which are about version
+	// numbering. It is here because it is the same defect family and the bytes were
+	// already in hand for the replay — say so, and strip it if that is the wrong
+	// call.
 	for v, where := range released {
-		if _, ok := tree[v]; !ok {
-			t.Fatalf("origin/main (%s) ships migration version %d (%s) and this tree does not "+
-				"declare it at all. A released migration cannot be withdrawn — every station "+
-				"has already applied it — so this is either a deleted file or a branch that "+
-				"needs rebasing onto main.", ref, v, where)
+		if !strings.HasSuffix(where, ".sql") {
+			continue
+		}
+		shipped, err := gitOut("show", "origin/main:"+where)
+		if err != nil {
+			t.Fatalf("read released migration %d (%s) from origin/main: %v", v, where, err)
+		}
+		local, err := fs.ReadFile(embeddedMigrations, "migrations/"+path.Base(where))
+		if err != nil {
+			t.Fatalf("read %s from the embedded FS: %v", where, err)
+		}
+		if strings.TrimSpace(shipped) != strings.TrimSpace(string(local)) {
+			t.Errorf("migration %d (%s) has ALREADY SHIPPED and this tree changes its body. "+
+				"goose records one row per version and never revisits it, so this edit reaches "+
+				"nobody who has already upgraded past %d — it applies on fresh installs only, "+
+				"and the two populations end up with different schemas without a single error "+
+				"anywhere. Every test in this package installs from empty and will therefore "+
+				"agree with the edited version. FIX: leave the shipped file alone and put the "+
+				"change in a NEW migration numbered %d. (baseline origin/main %s)",
+				v, where, v, treeMax+1, ref)
 		}
 	}
 
@@ -295,6 +424,11 @@ func TestAStationAtTheReleasedVersionCanUpgradeToThisTree(t *testing.T) {
 	}
 	defer db.Close()
 
+	// goose's base FS is a PACKAGE GLOBAL. runMigrations sets it back on the happy
+	// path, but every t.Fatalf between here and there would leave the narrowed FS
+	// in place for whatever test runs next. Nothing enforces that the other goose
+	// callers set it themselves, so this does not rely on them.
+	defer goose.SetBaseFS(embeddedMigrations)
 	goose.SetBaseFS(releasedOnlyFS(t, released))
 	if err := goose.SetDialect("sqlite3"); err != nil {
 		t.Fatalf("set dialect: %v", err)
@@ -319,6 +453,12 @@ func TestAStationAtTheReleasedVersionCanUpgradeToThisTree(t *testing.T) {
 		}
 	}
 
+	// The next two are RE-CONFIRMATIONS, not second gates, and they are labelled as
+	// such rather than left to look load-bearing: given the checks above (every
+	// released version is in the tree, and no offender is in the released set) they
+	// cannot fail today. They are kept as canaries on goose itself — if a future
+	// goose changes what UpTo applies, they are what says so instead of the replay
+	// silently becoming a different population.
 	if got := stationVersion(t, db); got != releasedMax {
 		t.Fatalf("the replayed station sits at version %d, want %d (origin/main %s) — "+
 			"the population is not what this test claims it is, so nothing below it counts",
@@ -371,32 +511,6 @@ func assertGoMigrationsAreInTheStation(t *testing.T, db *sql.DB, released map[in
 		}
 	}
 	t.Logf("replayed station carries the Go migrations too: %v", want)
-}
-
-// TestTheUpgradePathGuardActuallyRunsInCI closes the hole the skip above opens.
-//
-// 🔴 A SKIP IS INVISIBLE. `go test` without -v prints `ok` for a package whose
-// every test skipped, so a CI checkout that cannot resolve origin/main would
-// take the guard offline and look exactly like a green run — the same
-// silent-decay shape the guard itself exists to remove. Locally a skip is
-// legitimate (someone building from a tarball has no git remote at all), so the
-// rule is not "never skip", it is "never skip IN CI", and that is checkable:
-// GitHub Actions sets CI=true for every step.
-//
-// If this fails, the fix is in .github/workflows/ci.yml, not here: the go-checks
-// job needs `fetch-depth: 0` on its checkout. A default (shallow) checkout has
-// one ref, refs/remotes/pull/N/merge, and no origin/main.
-func TestTheUpgradePathGuardActuallyRunsInCI(t *testing.T) {
-	if os.Getenv("CI") == "" {
-		t.Skip("not CI: the local run is allowed to have no origin/main")
-	}
-	if _, err := gitOut("rev-parse", "origin/main"); err != nil {
-		t.Fatalf("running in CI but origin/main does not resolve (%v), so "+
-			"TestAStationAtTheReleasedVersionCanUpgradeToThisTree SKIPPED and this run is green "+
-			"with the upgrade-path check switched off. FIX: give the go-checks job's "+
-			"actions/checkout `fetch-depth: 0` — the default shallow checkout carries only "+
-			"refs/remotes/pull/N/merge.", err)
-	}
 }
 
 func stationVersion(t *testing.T, db *sql.DB) int64 {
