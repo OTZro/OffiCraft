@@ -1634,17 +1634,24 @@ type taskArtifactVersionDTO struct {
 	Kind         string  `json:"kind"`
 	URL          string  `json:"url"`
 	Label        string  `json:"label"`
+	Filename     string  `json:"filename"`
 	AttachmentID string  `json:"attachment_id"`
 	CreatedTS    float64 `json:"created_ts"`
 	CreatedBy    string  `json:"created_by"`
 }
 
-// newTaskArtifactVersionDTO projects one retained version onto the wire. Unlike
-// the live artifact's projection this one does NOT resolve the blob: a version
-// listing is a catalogue, and the blob metadata a reader wants is the one the
-// card is showing right now.
-func newTaskArtifactVersionDTO(h TaskArtifactHistory) taskArtifactVersionDTO {
-	return taskArtifactVersionDTO{
+// newTaskArtifactVersionDTO projects one retained version onto the wire. att is
+// the resolved chat_attachment for a file/image version (nil for a link, or
+// when the blob is gone) — only its filename rides along, honest-empty when
+// absent and never fabricated.
+//
+// 🔴 The filename is here because a reader deciding whether a version's bytes
+// are TEXT asks the name when the mime cannot say, and `application/octet-stream`
+// is what the agent upload path says about the .md reports this journal mostly
+// holds. Without it a version whose label is empty has no name at all, and that
+// deliverable class could never reach the diff.
+func newTaskArtifactVersionDTO(h TaskArtifactHistory, att *ChatAttachment) taskArtifactVersionDTO {
+	dto := taskArtifactVersionDTO{
 		ID:           h.ID,
 		Kind:         h.Kind,
 		URL:          h.URL,
@@ -1653,6 +1660,10 @@ func newTaskArtifactVersionDTO(h TaskArtifactHistory) taskArtifactVersionDTO {
 		CreatedTS:    h.CreatedTS,
 		CreatedBy:    h.CreatedBy,
 	}
+	if h.Kind != ArtifactKindLink && att != nil && att.Filename != nil {
+		dto.Filename = *att.Filename
+	}
+	return dto
 }
 
 type taskDTO struct {

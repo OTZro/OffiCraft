@@ -555,15 +555,19 @@ export interface TaskArtifactView {
  *
  * It carries the version WHOLE (a blob id or a url, plus a label); `id` is the
  * version's own row id and `kind` always equals the live artifact's, which
- * cannot change across versions. There is deliberately NO `mime`/`filename`:
- * the wire does not carry them, so what a past version's BYTES are is answered
- * by fetching them and reading the response's own content type — never by
- * borrowing the live artifact's mime, which is a different version's fact. */
+ * cannot change across versions. There is deliberately NO `mime`: what a past
+ * version's BYTES are is answered by fetching them and reading the response's
+ * own content type — never by borrowing the live artifact's mime, which is a
+ * different version's fact. `filename` is the retained blob's own name (empty
+ * for a link, and for a file whose blob is gone), and it is that version's own
+ * fact too — the name a reader falls back to when the mime cannot say whether
+ * the bytes are text. */
 export interface TaskArtifactVersionView {
   id: number;
   kind: "file" | "image" | "link";
   url: string;
   label: string;
+  filename: string;
   attachmentId: string;
   createdTs: number;
   createdBy: string;

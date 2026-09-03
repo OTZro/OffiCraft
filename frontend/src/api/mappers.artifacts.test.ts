@@ -45,6 +45,7 @@ function wireVersion(
     kind: "link",
     url: "",
     label: "",
+    filename: "",
     attachment_id: "",
     created_ts: 0,
     created_by: "",
@@ -183,7 +184,8 @@ describe("toTaskArtifactVersion", () => {
           kind: "file",
           url: "/api/chat/attachment/att-old",
           attachment_id: "att-old",
-          label: "v1.pdf",
+          label: "",
+          filename: "v1.pdf",
           created_ts: 1700,
           created_by: "mira",
         }),
@@ -193,10 +195,18 @@ describe("toTaskArtifactVersion", () => {
       kind: "file",
       url: "/api/chat/attachment/att-old",
       attachmentId: "att-old",
-      label: "v1.pdf",
+      label: "",
+      filename: "v1.pdf",
       createdTs: 1700,
       createdBy: "mira",
     });
+  });
+
+  it("reads a missing filename as empty rather than undefined", () => {
+    const { filename: _dropped, ...withoutTheField } = wireVersion({});
+    expect(
+      toTaskArtifactVersion(withoutTheField as WireTaskArtifactVersion).filename,
+    ).toBe("");
   });
 
   it("falls back an unknown kind to link (the no-blob shape)", () => {

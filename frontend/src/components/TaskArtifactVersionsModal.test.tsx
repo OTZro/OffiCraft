@@ -62,6 +62,7 @@ function mkVersion(over: Partial<TaskArtifactVersionView>): TaskArtifactVersionV
     kind: "file",
     url: "/api/chat/attachment/att-old",
     label: "spec.txt",
+    filename: "spec.txt",
     attachmentId: "att-old",
     createdTs: 1000,
     createdBy: "mira",
@@ -176,10 +177,39 @@ describe("TaskArtifactVersionsModal", () => {
   // every .md / log / spec to the 前/後 toggle, where it can never be diffed.
   it("diffs an octet-stream .md report the mime alone would call opaque", async () => {
     mockedApi.listTaskArtifactVersions.mockResolvedValue([
-      mkVersion({ label: "recon.md" }),
+      mkVersion({ label: "recon.md", filename: "" }),
     ]);
     mockedApi.getTask.mockResolvedValue(
       mkTask([mkArtifact({ label: "recon.md", filename: "recon.md", mime: "application/octet-stream" })]),
+    );
+    stubFetch({
+      "/api/chat/attachment/att-old": {
+        mime: "application/octet-stream",
+        text: "alpha\nbeta\n",
+      },
+      "/api/chat/attachment/att-live": {
+        mime: "application/octet-stream",
+        text: "alpha\ngamma\n",
+      },
+    });
+    openModal();
+
+    fireEvent.click(await screen.findByTestId("ta-versions-pane-diff"));
+    await waitFor(() => expect(screen.getByTestId("ta-versions-diff")).toBeTruthy());
+    expect(diffLinesOnScreen()).toEqual(["alpha", "beta", "gamma"]);
+  });
+
+  // 🔴 The same report, with the name the wire ACTUALLY carries for it: nothing
+  // makes an agent pass a label, so a retained version's label is usually empty
+  // and its only name is the filename resolved from its own retained blob. A
+  // reader that consults the label alone leaves this — the ticket's own
+  // motivating artifact — permanently on the 前/後 toggle.
+  it("diffs a label-less octet-stream version its filename names as .md", async () => {
+    mockedApi.listTaskArtifactVersions.mockResolvedValue([
+      mkVersion({ label: "", filename: "recon.md" }),
+    ]);
+    mockedApi.getTask.mockResolvedValue(
+      mkTask([mkArtifact({ label: "", filename: "recon.md", mime: "application/octet-stream" })]),
     );
     stubFetch({
       "/api/chat/attachment/att-old": {
@@ -202,7 +232,7 @@ describe("TaskArtifactVersionsModal", () => {
   // extensions, not "octet-stream means try reading it".
   it("still reads no bytes for an octet-stream .bin the name cannot vouch for", async () => {
     mockedApi.listTaskArtifactVersions.mockResolvedValue([
-      mkVersion({ label: "core.bin" }),
+      mkVersion({ label: "core.bin", filename: "" }),
     ]);
     mockedApi.getTask.mockResolvedValue(
       mkTask([mkArtifact({ label: "core.bin", filename: "core.bin", mime: "application/octet-stream" })]),
@@ -223,7 +253,7 @@ describe("TaskArtifactVersionsModal", () => {
 
   it("prints the old url and the new one for a link artifact", async () => {
     mockedApi.listTaskArtifactVersions.mockResolvedValue([
-      mkVersion({ kind: "link", url: "https://x/pr/1", attachmentId: "" }),
+      mkVersion({ kind: "link", url: "https://x/pr/1", filename: "", attachmentId: "" }),
     ]);
     mockedApi.getTask.mockResolvedValue(
       mkTask([
@@ -250,7 +280,7 @@ describe("TaskArtifactVersionsModal", () => {
 
   it("gives a non-text file a before/after toggle and never reads its bytes as text", async () => {
     mockedApi.listTaskArtifactVersions.mockResolvedValue([
-      mkVersion({ label: "report.pdf" }),
+      mkVersion({ label: "report.pdf", filename: "report.pdf" }),
     ]);
     mockedApi.getTask.mockResolvedValue(
       mkTask([mkArtifact({ label: "report.pdf", filename: "report.pdf" })]),
@@ -275,7 +305,7 @@ describe("TaskArtifactVersionsModal", () => {
 
   it("shows an image version as an image on both sides of the toggle", async () => {
     mockedApi.listTaskArtifactVersions.mockResolvedValue([
-      mkVersion({ kind: "image", url: "/api/chat/attachment/att-shot1" }),
+      mkVersion({ kind: "image", url: "/api/chat/attachment/att-shot1", filename: "shot1.png" }),
     ]);
     mockedApi.getTask.mockResolvedValue(
       mkTask([

@@ -55,6 +55,10 @@
 // authority `isInlineDisplayableMime` defers to. A response that is not text is
 // cancelled unread rather than downloaded to be thrown away.
 //
+// The version's `filename` is the same kind of per-version fact: the wire
+// resolves it from THAT version's retained blob, so the fallback below reads
+// each side under its own name rather than under the live row's.
+//
 // 🔴 WITH ONE FALLBACK, because a mime-only rule loses the common case: an
 // `application/octet-stream` file whose NAME ends in a text extension is read as
 // text (TEXTUAL_EXTENSIONS below). That mime is an upload path saying it does
@@ -109,9 +113,10 @@ const TEXTUAL_EXTENSIONS = new Set([
   "xml",
 ]);
 
-/** Whether a deliverable's NAME says its bytes are text. The name is the label
- * (or, for the live artifact, the blob's filename); an artifact with neither
- * simply falls through to the mime answer. */
+/** Whether a deliverable's NAME says its bytes are text. The name is the blob's
+ * filename, falling back to the label — on a retained version exactly as on the
+ * live artifact; a deliverable with neither simply falls through to the mime
+ * answer. */
 export function looksTextualByName(name: string): boolean {
   const dot = name.lastIndexOf(".");
   if (dot < 0) return false;
@@ -248,14 +253,22 @@ export function TaskArtifactVersionsModal({
       : null;
   const kind = live?.kind ?? selectedVersion?.kind;
 
-  // The NAME each side is read under — a version has only its label, the live
-  // artifact also has the blob's filename. It is a fallback for the mime, never
-  // a substitute: see loadArtifactPayload.
+  // The NAME each side is read under — the blob's own filename first, the label
+  // second, on BOTH sides. A retained version's filename is that version's own
+  // fact (the wire resolves it from its `attachment_id`), so neither side is
+  // named more generously than the other: a label-less .md report is still a
+  // .md on the older side. It is a fallback for the mime, never a substitute:
+  // see loadArtifactPayload.
+  const versionName = (v: TaskArtifactVersionView) => v.filename || v.label;
   const liveName = live ? live.filename || live.label : "";
   const selectedPayload = usePayload(
     selected === "live" ? live?.kind : selectedVersion?.kind,
     selected === "live" ? live?.url : selectedVersion?.url,
-    selected === "live" ? liveName : (selectedVersion?.label ?? ""),
+    selected === "live"
+      ? liveName
+      : selectedVersion
+        ? versionName(selectedVersion)
+        : "",
   );
   const livePayload = usePayload(live?.kind, live?.url, liveName);
 

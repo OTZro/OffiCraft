@@ -533,6 +533,7 @@ export function toTaskArtifactVersion(
     kind,
     url: w.url ?? "",
     label: w.label ?? "",
+    filename: w.filename ?? "",
     attachmentId: w.attachment_id ?? "",
     createdTs: w.created_ts ?? 0,
     createdBy: w.created_by ?? "",

@@ -3181,7 +3181,18 @@ func (s *apiServer) HandleListTaskArtifactHistoryApiTasksTaskIdArtifactArtifactI
 	}
 	out := make([]taskArtifactVersionDTO, 0, len(versions))
 	for _, v := range versions {
-		out = append(out, newTaskArtifactVersionDTO(v))
+		// The SAME blob resolution the live projection does (taskArtifactDTOs):
+		// link kinds have no attachment, a missing blob resolves to nil and the
+		// version's filename stays honest-empty.
+		var att *ChatAttachment
+		if v.Kind != ArtifactKindLink && v.AttachmentID != "" {
+			att, err = s.dal.GetChatAttachment(v.AttachmentID)
+			if err != nil {
+				internalError(w, err)
+				return
+			}
+		}
+		out = append(out, newTaskArtifactVersionDTO(v, att))
 	}
 	writeJSON(w, http.StatusOK, out)
 }

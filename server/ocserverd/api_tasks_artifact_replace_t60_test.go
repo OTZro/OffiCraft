@@ -380,3 +380,59 @@ func TestArtifactHistoryGuards(t *testing.T) {
 			rec.Code, rec.Body.String())
 	}
 }
+
+// TestArtifactHistoryCarriesEachVersionsOwnFilename — the version list is what
+// the cockpit's diff reads, and whether it can diff two versions at all turns on
+// whether it can tell that their bytes are TEXT. The mime cannot answer for the
+// deliverable this journal mostly holds: an agent-uploaded .md report arrives
+// under application/octet-stream, so the NAME is the only remaining witness.
+//
+// A version's label is optional and usually absent (nothing makes an agent pass
+// one), so a wire that carries only the label leaves exactly that class of
+// version nameless — and permanently un-diffable. The filename is resolved from
+// the version's OWN retained blob, the same read the live projection does, so
+// neither side of the comparison is named more generously than the other.
+func TestArtifactHistoryCarriesEachVersionsOwnFilename(t *testing.T) {
+	api := newTasksTestServer(t)
+	task := createAdHocTask(t, api, "m-exec")
+	for id, name := range map[string]string{"att-old": "report.md", "att-new": "report.md"} {
+		blobName := name
+		if err := api.dal.PutChatAttachment(ChatAttachment{
+			ID: id, Mime: "application/octet-stream", Data: []byte(id), Filename: &blobName,
+		}); err != nil {
+			t.Fatalf("seed blob %s: %v", id, err)
+		}
+	}
+	// No label anywhere — the case the label-only wire could not name.
+	artID := fileArtifactOn(t, api, task.ID, "att-old")
+	if rec := replaceArtifact(t, api, task.ID, artID,
+		map[string]any{"attachment_id": "att-new"}, "m-exec", "agent"); rec.Code != http.StatusOK {
+		t.Fatalf("replace: %d %s", rec.Code, rec.Body.String())
+	}
+
+	versions := decodeBody[[]taskArtifactVersionDTO](t,
+		artifactHistory(t, api, task.ID, artID, "m-exec", "agent"))
+	if len(versions) != 1 {
+		t.Fatalf("expected exactly the replaced version, got %+v", versions)
+	}
+	if versions[0].Label != "" {
+		t.Fatalf("this case is about a version with NO label, got %+v", versions[0])
+	}
+	if versions[0].Filename != "report.md" {
+		t.Fatalf("a retained version must carry its own blob's filename, got %+v", versions[0])
+	}
+
+	// A link version has no blob, so it has no filename to borrow either.
+	linkID := decodeBody[taskArtifactReceiptDTO](t, addArtifact(t, api, task.ID,
+		map[string]any{"kind": "link", "url": "https://x/pr/1"},
+		"m-exec", "agent")).ArtifactID
+	if rec := replaceArtifact(t, api, task.ID, linkID,
+		map[string]any{"url": "https://x/pr/2"}, "m-exec", "agent"); rec.Code != http.StatusOK {
+		t.Fatalf("replace link: %d %s", rec.Code, rec.Body.String())
+	}
+	linkVersions := decodeBody[[]taskArtifactVersionDTO](t,
+		artifactHistory(t, api, task.ID, linkID, "m-exec", "agent"))
+	if len(linkVersions) != 1 || linkVersions[0].Filename != "" {
+		t.Fatalf("a link version has no blob and so no filename, got %+v", linkVersions)
+	}
+}
