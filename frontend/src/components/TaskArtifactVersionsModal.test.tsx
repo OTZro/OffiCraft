@@ -170,6 +170,57 @@ describe("TaskArtifactVersionsModal", () => {
     expect(diffLinesOnScreen()).toEqual(["alpha", "beta", "gamma"]);
   });
 
+  // 🔴 The deliverable class this reader exists for: an agent-uploaded report
+  // comes back `application/octet-stream`, which is an upload path saying it
+  // does not know rather than a claim of binary. A mime-only rule would send
+  // every .md / log / spec to the 前/後 toggle, where it can never be diffed.
+  it("diffs an octet-stream .md report the mime alone would call opaque", async () => {
+    mockedApi.listTaskArtifactVersions.mockResolvedValue([
+      mkVersion({ label: "recon.md" }),
+    ]);
+    mockedApi.getTask.mockResolvedValue(
+      mkTask([mkArtifact({ label: "recon.md", filename: "recon.md", mime: "application/octet-stream" })]),
+    );
+    stubFetch({
+      "/api/chat/attachment/att-old": {
+        mime: "application/octet-stream",
+        text: "alpha\nbeta\n",
+      },
+      "/api/chat/attachment/att-live": {
+        mime: "application/octet-stream",
+        text: "alpha\ngamma\n",
+      },
+    });
+    openModal();
+
+    fireEvent.click(await screen.findByTestId("ta-versions-pane-diff"));
+    await waitFor(() => expect(screen.getByTestId("ta-versions-diff")).toBeTruthy());
+    expect(diffLinesOnScreen()).toEqual(["alpha", "beta", "gamma"]);
+  });
+
+  // The other side of the same rule: the fallback is a CLOSED list of textual
+  // extensions, not "octet-stream means try reading it".
+  it("still reads no bytes for an octet-stream .bin the name cannot vouch for", async () => {
+    mockedApi.listTaskArtifactVersions.mockResolvedValue([
+      mkVersion({ label: "core.bin" }),
+    ]);
+    mockedApi.getTask.mockResolvedValue(
+      mkTask([mkArtifact({ label: "core.bin", filename: "core.bin", mime: "application/octet-stream" })]),
+    );
+    const { cancel, readText } = stubFetch({
+      "/api/chat/attachment/att-old": { mime: "application/octet-stream" },
+      "/api/chat/attachment/att-live": { mime: "application/octet-stream" },
+    });
+    openModal();
+
+    fireEvent.click(await screen.findByTestId("ta-versions-pane-diff"));
+    await waitFor(() => expect(screen.getByTestId("ta-versions-diff-sides")).toBeTruthy());
+    expect(screen.getByTestId("ta-versions-before-opaque")).toBeTruthy();
+    expect(screen.queryByTestId("ta-versions-diff")).toBeNull();
+    expect(readText).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalled();
+  });
+
   it("prints the old url and the new one for a link artifact", async () => {
     mockedApi.listTaskArtifactVersions.mockResolvedValue([
       mkVersion({ kind: "link", url: "https://x/pr/1", attachmentId: "" }),
@@ -198,8 +249,12 @@ describe("TaskArtifactVersionsModal", () => {
   });
 
   it("gives a non-text file a before/after toggle and never reads its bytes as text", async () => {
-    mockedApi.listTaskArtifactVersions.mockResolvedValue([mkVersion({})]);
-    mockedApi.getTask.mockResolvedValue(mkTask([mkArtifact({})]));
+    mockedApi.listTaskArtifactVersions.mockResolvedValue([
+      mkVersion({ label: "report.pdf" }),
+    ]);
+    mockedApi.getTask.mockResolvedValue(
+      mkTask([mkArtifact({ label: "report.pdf", filename: "report.pdf" })]),
+    );
     const { cancel, readText } = stubFetch({
       "/api/chat/attachment/att-old": { mime: "application/pdf" },
       "/api/chat/attachment/att-live": { mime: "application/pdf" },

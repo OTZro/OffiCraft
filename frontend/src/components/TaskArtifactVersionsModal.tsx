@@ -54,6 +54,13 @@
 // fetched and the SERVER's own `Content-Type` decides, which is the same
 // authority `isInlineDisplayableMime` defers to. A response that is not text is
 // cancelled unread rather than downloaded to be thrown away.
+//
+// 🔴 WITH ONE FALLBACK, because a mime-only rule loses the common case: an
+// `application/octet-stream` file whose NAME ends in a text extension is read as
+// text (TEXTUAL_EXTENSIONS below). That mime is an upload path saying it does
+// not know, not a claim of binary — and the reports, logs and specs this cockpit
+// mostly holds arrive under it. Without this, the deliverable class that made
+// this reader exist would never reach the diff at all.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -86,13 +93,45 @@ export type ArtifactPayload =
   | { state: "gone" }
   | { state: "error" };
 
+/** Extensions this panel reads as text when the RESPONSE will not say so.
+ *
+ * 🔴 A mime test alone is not enough, and the ticket's own motivating artifact
+ * is the proof: a `.md` report uploaded through the agent tooling comes back
+ * `application/octet-stream`, which is what an upload path says when it does not
+ * know — not a claim that the bytes are binary. Reports, logs and specs are the
+ * deliverables this cockpit sees most, so a mime-only rule sends exactly the
+ * common case to the 前/後 toggle, where it can never be diffed. Wrong in the
+ * OTHER direction is cheap: this list is closed and holds only extensions whose
+ * bytes are text by definition, so the worst case is text rendered as text. */
+const TEXTUAL_EXTENSIONS = new Set([
+  "md", "txt", "log", "json", "csv", "yaml", "yml", "diff", "patch", "sql",
+  "go", "ts", "tsx", "js", "py", "sh", "toml", "ini", "env", "html", "css",
+  "xml",
+]);
+
+/** Whether a deliverable's NAME says its bytes are text. The name is the label
+ * (or, for the live artifact, the blob's filename); an artifact with neither
+ * simply falls through to the mime answer. */
+export function looksTextualByName(name: string): boolean {
+  const dot = name.lastIndexOf(".");
+  if (dot < 0) return false;
+  return TEXTUAL_EXTENSIONS.has(name.slice(dot + 1).toLowerCase());
+}
+
 /** Read ONE version's content. The kind decides how far this has to go: a link
  * needs no fetch at all, an image is displayed by the browser rather than read
  * here, and only a file is actually fetched — headers first, body only if the
- * server says the bytes are text. */
+ * bytes are text.
+ *
+ * `name` is the second opinion on that last question. The server's own
+ * `Content-Type` still has the FIRST word (both directions: `text/*` is text,
+ * `image/*` is an image and the name never overrules it), and the name is only
+ * consulted when the mime is neither — which is where `application/octet-stream`
+ * lands. */
 export async function loadArtifactPayload(
   kind: "file" | "image" | "link",
   url: string,
+  name = "",
 ): Promise<ArtifactPayload> {
   if (!url) return { state: "gone" };
   if (kind === "link") return { state: "link", url };
@@ -103,12 +142,15 @@ export async function loadArtifactPayload(
     .split(";")[0]!
     .trim()
     .toLowerCase();
-  if (mime.startsWith("text/")) return { state: "text", text: await res.text() };
+  const isImageMime = mime.startsWith("image/");
+  if (mime.startsWith("text/") || (!isImageMime && looksTextualByName(name))) {
+    return { state: "text", text: await res.text() };
+  }
   // Not text: drop the body instead of downloading a binary this panel cannot
   // show anyway. An image mime still displays — `kind` only tells us the server
   // did not flag it as one.
   await res.body?.cancel().catch(() => {});
-  if (mime.startsWith("image/")) {
+  if (isImageMime) {
     return { state: "image", src: authedAttachmentUrl(url) };
   }
   return { state: "opaque", mime };
@@ -120,6 +162,7 @@ export async function loadArtifactPayload(
 function usePayload(
   kind: "file" | "image" | "link" | undefined,
   url: string | undefined,
+  name = "",
 ): ArtifactPayload {
   const [payload, setPayload] = useState<ArtifactPayload>({ state: "loading" });
   useEffect(() => {
@@ -129,7 +172,7 @@ function usePayload(
     }
     let alive = true;
     setPayload({ state: "loading" });
-    loadArtifactPayload(kind, url)
+    loadArtifactPayload(kind, url, name)
       .then((p) => {
         if (alive) setPayload(p);
       })
@@ -140,7 +183,7 @@ function usePayload(
     return () => {
       alive = false;
     };
-  }, [kind, url]);
+  }, [kind, url, name]);
   return payload;
 }
 
@@ -205,11 +248,16 @@ export function TaskArtifactVersionsModal({
       : null;
   const kind = live?.kind ?? selectedVersion?.kind;
 
+  // The NAME each side is read under — a version has only its label, the live
+  // artifact also has the blob's filename. It is a fallback for the mime, never
+  // a substitute: see loadArtifactPayload.
+  const liveName = live ? live.filename || live.label : "";
   const selectedPayload = usePayload(
     selected === "live" ? live?.kind : selectedVersion?.kind,
     selected === "live" ? live?.url : selectedVersion?.url,
+    selected === "live" ? liveName : (selectedVersion?.label ?? ""),
   );
-  const livePayload = usePayload(live?.kind, live?.url);
+  const livePayload = usePayload(live?.kind, live?.url, liveName);
 
   const versionTitle = (v: TaskArtifactVersionView) =>
     v.label || (v.kind === "link" ? v.url : t.tasks.artifacts.versionsUnnamed);

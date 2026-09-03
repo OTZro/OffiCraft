@@ -66,4 +66,6 @@ TaskArtifactVersionsModal 是任務產物「被換過幾次、換掉的是什麼
 
 「這份 bytes 是不是文字」問的是回應本身的 Content-Type，不是產物列上的 mime——版本 wire 沒有 mime，而 live 產物的 mime 是另一個版本的事實。不是文字的回應不讀 body。
 
+🔴 但 mime 不是唯一判準：`text/*` 是文字、`image/*` 是圖片，兩者皆非時再看檔名副檔名（版本看 label，live 看 filename），命中一份封閉的文字副檔名清單就當文字讀。理由是 agent 上傳的報告回來是 `application/octet-stream`——那是上傳端「不知道」，不是「這是二進位」；只信 mime 會把報告、log、spec 這些最常見的產物全部推去前後切換，永遠 diff 不到。清單是封閉的，不在清單上的仍然不讀 body。
+
 沒有還原面，server 也沒有還原動詞；舊版要回來是往前 replace。
