@@ -194,37 +194,37 @@ test.describe('B9 · unread — badge, entry divider anchor, 進房 mark-read, f
       'nothing arrived, so there is nothing to preview',
     ).toBeHidden();
 
-    // 🔴 窄視窗,而且這不是「順便也測一下手機」。
+    // 🔴 窄視窗,而且這不是「順便也測一下手機」:這是位移最大的那個寬度。
     //
-    // 這一段量的是「上方的內容晚長高之後,最新那一列還在不在視窗裡」。在 1280x720
-    // 的預設視窗上這條路自己會癒合:內容長高時瀏覽器的 scroll anchoring 會補
-    // `scrollTop`,補了就發 scroll 事件,而 `onMessagesScroll` 是 `latestInView`
-    // 的七個寫入點之一 —— 箭頭因此碰巧回來了(實測 mutant 上 st 2314、arrowBack
-    // true)。窄視窗上瀏覽器選的錨點不同,`scrollTop` 一動也不動、零個 scroll 事件,
-    // `latestInView` 就停在落地當時那個過期的 true。設計者的實測也是在 390x844
-    // 量到的(st 1101 → 1101、sh 1546 → 1964、gap 418.31、箭頭不回來)。
-    // ⇒ 換寬度不是加測一個裝置,是這條護欄有沒有牙齒的差別。
+    // 這一段量的是「上方的內容晚長高之後,最新那一列還在不在視窗裡」,而同一份
+    // 燃料在窄視窗上推得更遠 —— 本輪 mutant 實測(請示卡晚填):390 寬 gap
+    // 216.28px、卡片 51→325px;1280 寬 gap 195.77px、卡片 49→303px。
+    //
+    // ⚠️ 更正一句本檔自己寫過的話。這裡原本說「1280 上瀏覽器的 scroll anchoring
+    // 會補 scrollTop、箭頭因此回來,390 上不會」。本輪在真瀏覽器上兩個寬度都量了,
+    // 兩個寬度的箭頭**都**回來了(arrowBack=true,st 1425→1471 / 2436→2482)。
+    // 那句話是這條護欄下面那組斷言曾經寫成選言的理由,而它是錯的 —— 見那裡。
     await page.setViewportSize({ width: 390, height: 844 });
 
-    // ── 🔴 G-1 護欄的燃料:三張還在載入的圖片,落在**最新那一列的上方**。
+    // ── 🔴 G-1 護欄的燃料:**兩種**晚長高的內容,都落在最新那一列的上方。
     //
-    // 這個 fixture 在 T-48 之前全是純文字,所以下面那一組斷言(最新那一列貼齊
-    // 底部、而且沒有箭頭)是**碰巧**綠的 —— 沒有任何東西會在落地之後改變版面,
-    // 所以它守不住任何事。兩個落點修正迴圈刪掉之後(owner rc-6c27f486ef9d),
-    // 「上方晚載入的內容把最新那一列推到摺線下」在那個當下變成一條真的會發生的
-    // 路,而唯一還在替讀者說實話的東西是那顆「回到最新」箭頭 —— 加三張圖就是把
-    // 那條路接進來。
+    // 這個 fixture 在 T-48 之前全是純文字,所以下面那組斷言(最新那一列貼齊底部)
+    // 是**碰巧**綠的 —— 沒有任何東西會在落地之後改變版面,所以它守不住任何事。
+    // 兩個落點修正迴圈刪掉之後(owner rc-6c27f486ef9d 「拿掉。圖片／卡片展開把
+    // 目標擠走我接受」),「上方晚載入的內容把最新那一列推到摺線下」變成一條真的
+    // 會發生的路。owner 點名的兩種內容,今天都已經**在源頭關掉**了:
     //
-    // bytes 擋到**落地之後**才放行,圖片放在最新那一列的上方 —— 視窗**下方**
-    // 長高對讀者是 0px 位移(實測),推不動任何東西。
+    //   ① 圖片 —— `.chat__msg-image` 有固定的 220px 框(commit aea7182),
+    //      那一列在 bytes 到之前就是最終高度。
+    //   ② 還在等待回覆的請示卡 —— `lib/threadCommit` 每個提交點都先 await
+    //      `lib/replyCardCache` 的 `prefillWaitingCards`,卡片在它那一列被畫出來的
+    //      **第一幀**就已經在手上。
     //
-    // ⚠️ 誠實紀錄:這三張圖今天已經**推不動版面**。同一張票後來給
-    // `.chat__msg-image` 一個固定的 220px 框(commit aea7182),那一列在 bytes
-    // 到之前就是最終高度,實測 imageHeights [220,220,220]、位移 0px。所以下面
-    // 那條斷言現在是從**另一半**成立的(gap <= 1),它守的是「回到最新之後版面
-    // 靜止下來還是實話」這件事本身;哪天固定框被拿掉,晚載入的內容會再度把最新
-    // 那一列推到摺線下,而它會照樣紅在「兩個都假」上。
+    // 兩種燃料都在這裡,而且都被**扣住到落地之後**才放行:圖片扣在
+    // `/api/chat/attachment/**`,請示卡扣在 `/api/reply-cards/rc-*`。
+    // 視窗**下方**長高對讀者是 0px 位移(實測),推不動任何東西,所以兩者都在上方。
     let releaseImages;
+
     const imagesHeld = new Promise((r) => {
       releaseImages = r;
     });
@@ -237,6 +237,48 @@ test.describe('B9 · unread — badge, entry divider anchor, 進房 mark-read, f
         { data_b64: PNG_400x300_B64, filename: `above-${i}.png`, mime: 'image/png' },
       ]);
     }
+
+    // 請示卡的 GET 被延遲 CARD_FETCH_DELAY_MS —— 這個延遲**就是**判別器。
+    //
+    //   · 修好的碼:每個提交點都 await 這次 GET,所以整串訊息(浮條也在內)要等
+    //     600ms 才上畫面;讀者按下「跳到最新」時卡片已經是最終高度,之後沒有東西
+    //     再長高。實測 strip 822ms、落地當下卡片 303px。
+    //   · 拿掉 prefill 的 mutant:訊息立刻上畫面、卡片先畫成 49px 的空殼,GET 在
+    //     600ms 後才回來 —— 也就是**跳轉之後**才長高。實測 strip 199ms、按下
+    //     221ms、卡片 49→303px、最新那一列被推走 195.77px。
+    //
+    // 600ms 兩邊都留了餘裕:它小於 `REPLY_CARD_PREFILL_DEADLINE_MS`(1500ms)
+    // 900ms,所以修好的碼是真的「等到了」而不是「等到放棄」;它又大於 mutant 上
+    // 從落地到按下的實測 221ms 約 380ms,所以晚填必定落在跳轉之後。
+    // 只攔 `rc-*`:`/api/reply-cards/count`(等我回覆徽章的輪詢)不在其中。
+    const CARD_FETCH_DELAY_MS = 600;
+    await page.route('**/api/reply-cards/rc-*', async (route) => {
+      await new Promise((r) => setTimeout(r, CARD_FETCH_DELAY_MS));
+      await route.continue();
+    });
+    // 一張 waiting 卡。已回覆／已過期的卡是**沒有用的燃料**:它們掛載時就是收合
+    // 的最終高度,而且一次 getReplyCard 都不發(ChatReplyCard 的 `initialStatus`
+    // /owner 規則 已回覆卡預設不載)—— 只有 waiting 卡會在內容落地時長高。
+    // 伺服器會自己把一則同串的伴生訊息貼進來,所以它就落在最新那一列的上方。
+    const cardRes = await request.post(`${BASE}/api/reply-cards`, {
+      headers: authHeaders(tokM),
+      data: {
+        linked_task: null,
+        kind: 'decision',
+        summary: '要不要把這批貨改走空運',
+        body: '海運艙位滿了,改空運的話成本會多兩成,但趕得上客戶的檔期。',
+        options: [
+          { text: '維持海運', ai_pick: false },
+          { text: '改走空運', ai_pick: true },
+          { text: '先問客戶', ai_pick: false },
+        ],
+      },
+    });
+    expect(cardRes.status(), 'seeding the waiting reply card must succeed').toBe(200);
+    expect(
+      (await cardRes.json()).status,
+      'only a WAITING card is fuel — an answered one mounts collapsed and never fetches',
+    ).toBe('waiting');
 
     const lateBody = `late-breaking message ${PAD}`;
     await postChatAs(request, tokM, 'owner', lateBody);
@@ -251,6 +293,19 @@ test.describe('B9 · unread — badge, entry divider anchor, 進房 mark-read, f
       'the arrow must give way to the strip',
     ).toBeHidden();
     await page.getByTestId('chat-new-msg-jump').click();
+    // 落地當下就取樣,不等下面那些輪詢 —— 這一格問的是「這一列被畫出來的時候,
+    // 卡片已經是最終高度了嗎」,晚一點問就會問到晚填之後的高度。
+    // (圖片這時還被扣著,一個 byte 都沒放行 —— 所以這一格的縮圖高度就是
+    // 「還不知道圖長什麼樣子」時的高度。)
+    const landed = await thread.evaluate((el) => {
+      const c = el.querySelector('[data-testid="chat-reply-card"]');
+      return {
+        cardHeight: c ? Math.round(c.getBoundingClientRect().height) : null,
+        imageHeights: [...el.querySelectorAll('img.chat__msg-image')].map((i) =>
+          Math.round(i.getBoundingClientRect().height),
+        ),
+      };
+    });
     // The jump lands on the latest message ⇒ the strip is consumed and the
     // arrow stays away (nothing is off screen any more).
     await expect(strip, 'reaching the latest message must dismiss the strip').toBeHidden({
@@ -264,41 +319,101 @@ test.describe('B9 · unread — badge, entry divider anchor, 進房 mark-read, f
     // 10–40ms 又長回來」的產品上,它有時候會綠 —— 實測 30 次跑紅 16 次。所以這裡
     // 讓版面完全靜止之後再問一次。
     //
-    // 但斷言的形狀變了,而且是**因為 owner 簽了字**才變的。他在 rc-6c27f486ef9d
-    // 圈了「拿掉。圖片／卡片展開把目標擠走我接受」—— 所以「最新那一列被推到摺線
-    // 下」本身不再是 bug,不可以再無條件斷言 `lastRowBottomGap <= 1`。
+    // 🔴 這裡曾經寫成一條選言 ——「gap <= 1 **或**箭頭在畫面上」—— 而本輪用兩個
+    // mutant 在真瀏覽器上證明那條選言**兩個 regression 都攔不到**:
     //
-    // 他**沒有**簽的是介面說謊。這個 app 的既有規則是「不在最新訊息時有個向下
-    // 箭頭」,所以真正的不變量是這兩件**永不同時為假**:
-    //     ① 最新那一列完整在視窗裡(gap <= 1),或
-    //     ② 「回到最新」箭頭在畫面上。
-    // 位移是代價,無聲的位移是 bug。刪掉迴圈之後量到的正是兩個都假
-    // (gap 418.31、arrowBack=false):讀者按了「回到最新」,人不在最新,而且畫面上
-    // 沒有任何東西告訴他 —— 那就是這張票存在的理由本身。
+    //   · 拿掉 `.chat__msg-image` 的 `height: 220px`,跑**當時那個只有圖片的
+    //     fixture**:圖片把最新那一列推走 178.17px,箭頭回來了 → 選言綠。
+    //   · 拿掉 `prefillWaitingCards`,跑**現在這個 fixture**:請示卡 51→325px
+    //     晚長高、把最新那一列推走 215.78px(1280 寬:49→303、195.77px),
+    //     箭頭同樣回來了 → 選言綠。
+    //
+    // 原因是機械性的:上方的內容長高時瀏覽器的 scroll anchoring 會補 `scrollTop`,
+    // 一補就發 scroll 事件,而 `onMessagesScroll` 是 `latestInView` 的寫入點之一。
+    // 所以第二個選言幾乎必然成立 —— 它是一個永遠開著的出口,而一條永遠有出口的
+    // 斷言不是護欄。(本檔上面原本寫「390 上箭頭不會回來」,那句話是選言當初的
+    // 理由,而它被這一輪的實測推翻了。)
+    //
+    // ⇒ 選言拿掉,改成直說**今天真正的合約**。owner 在 rc-6c27f486ef9d 簽的是
+    // 「拿掉那兩個落點修正迴圈,位移我接受」,而他點名的兩個位移來源後來都在
+    // **源頭**關掉了(固定 220px 框 + 請示卡先握在手上)—— 所以這兩種燃料的位移
+    // 今天是 0,而那正是可以被斷言、也會在修正被拿掉時變紅的東西。
+    //
+    // 「介面不可以無聲說謊」那一半沒有不見:它在本測試上面那條自己被測 ——
+    // 捲上去、什麼都還沒到,箭頭就必須在(`scrolling up alone must raise the
+    // arrow`)。選言把兩件事綁在一起,拆開之後兩件事各自都有牙齒。
     releaseImages();
     await page.waitForTimeout(3000);
     const settled = await thread.evaluate((el) => {
       const rows = el.querySelectorAll('[data-msg-id]');
       const r = rows[rows.length - 1].getBoundingClientRect();
       const imgs = [...el.querySelectorAll('img.chat__msg-image')];
+      const c = el.querySelector('[data-testid="chat-reply-card"]');
       return {
         distance: Math.round(el.scrollHeight - el.scrollTop - el.clientHeight),
         lastRowBottomGap: Number((r.bottom - el.getBoundingClientRect().bottom).toFixed(2)),
         imagesDecoded: imgs.filter((i) => i.naturalHeight > 0).length,
         imageHeights: imgs.map((i) => Math.round(i.getBoundingClientRect().height)),
+        cardHeight: c ? Math.round(c.getBoundingClientRect().height) : null,
+        cardIsWaiting: !!c?.querySelector('[data-testid="reply-option"]'),
       };
     });
-    // 前提誠實:圖片真的解碼了。沒有這一行,上面整段可能只是「圖沒載到,所以沒有
-    // 任何東西動過」的空綠。
+    // 前提誠實 ①:圖片真的解碼了。沒有這一行,下面整段可能只是「圖沒載到,所以
+    // 沒有任何東西動過」的空綠。
     expect(
       settled.imagesDecoded,
       `三張圖必須真的解碼完成,否則這條護欄什麼都沒測到(量到 ${JSON.stringify(settled)})`,
     ).toBe(3);
-    const arrowBack = await page.getByTestId('chat-jump-latest').isVisible();
+    // 護欄 ⓪:縮圖的高度不由圖片決定 —— bytes 放行前後一模一樣。
+    //
+    // 🔴 這條是**直接**問固定框在不在,而不是繞道去問位移,因為繞道那條路實測是
+    // 通不了的:把 `.chat__msg-image` 的 `height: 220px` 拿掉、其他不動,這個
+    // fixture 量到縮圖 [2,2,2]→[120,120,120] 卻 `lastRowBottomGap` −11.14、
+    // `distance` 0 —— 版面整個跟著黏在底部,位移是 0,下面護欄 ② 照樣綠(跑三次
+    // 都一樣)。圖片在這個落點上今天**不是燃料**;燃料是那張請示卡。所以固定框
+    // 這件事在這裡自己被問一次,問的是它本來的定義:那一列在 bytes 到之前就是
+    // 最終高度。
     expect(
-      settled.lastRowBottomGap <= 1 || arrowBack,
-      `版面靜止之後,最新那一列要嘛還在視窗裡、要嘛畫面上有「回到最新」箭頭 —— ` +
-        `兩個都不成立就是介面在說謊(量到 ${JSON.stringify({ ...settled, arrowBack })})`,
+      landed.imageHeights,
+      `縮圖在 bytes 放行之前就必須是最終高度(固定 220px 框,office.css ` +
+        `\`.chat__msg-image\`)—— 扣住時量到 ${JSON.stringify(landed.imageHeights)}、` +
+        `放行後 ${JSON.stringify(settled.imageHeights)},不一樣就表示高度又回去讓圖片決定了`,
+    ).toEqual(settled.imageHeights);
+    expect(
+      landed.imageHeights.length,
+      'the three held thumbnails must be on screen at landing',
+    ).toBe(3);
+    // 前提誠實 ②:那張卡真的展開成一張 waiting 卡了 —— 有選項、而且高度是三位數。
+    // 一張沒撈到內容的空殼只有 ~49px,它不是燃料,它是空綠。
+    expect(
+      settled.cardIsWaiting,
+      `請示卡必須真的長成一張 waiting 卡(要有選項),否則它不是燃料` +
+        `(量到 ${JSON.stringify(settled)})`,
     ).toBe(true);
+    expect(
+      settled.cardHeight,
+      `一張填好的 waiting 卡有三位數的高度,量到 ${settled.cardHeight}px —— ` +
+        `這條護欄的燃料等於不存在`,
+    ).toBeGreaterThanOrEqual(200);
+    // 護欄 ①:卡片在它那一列被畫出來的**第一幀**就是最終高度。這是
+    // `threadCommit` → `prefillWaitingCards` 的合約本身;拿掉 prefill 之後這裡
+    // 量到 51px 的空殼(而 3 秒後是 325px)。
+    expect(
+      landed.cardHeight,
+      `跳轉落地的那一刻,上方的 waiting 卡就必須已經是最終高度(量到 ` +
+        `${landed.cardHeight}px,靜止後 ${settled.cardHeight}px)—— 差在這裡就表示 ` +
+        `訊息在卡片到手之前就上了畫面,落點會被它推走`,
+    ).toBeGreaterThanOrEqual(200);
+    // 護欄 ②:所以落點待得住。無條件,沒有箭頭那個出口。
+    expect(
+      settled.lastRowBottomGap,
+      `版面靜止之後,最新那一列必須還完整在視窗裡 —— 上方的圖片與請示卡在源頭` +
+        `都已經是最終高度,推不動它(量到 ${JSON.stringify(settled)})`,
+    ).toBeLessThanOrEqual(1);
+    // 護欄 ③:人在最新訊息上,所以那顆「回到最新」箭頭在這一刻是**假話**,不可以在。
+    await expect(
+      page.getByTestId('chat-jump-latest'),
+      'the reader is on the latest message — the arrow would be a lie',
+    ).toBeHidden();
   });
 });
