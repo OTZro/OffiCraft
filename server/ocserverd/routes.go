@@ -58,19 +58,23 @@ type RouteSpec struct {
 // blob GET's is the path's attachment_id, GET /api/diff's is both addresses and
 // both column labels — the whole of what one answer depends on, so a recipient
 // cannot swap an address or relabel a column and still hold a minted signature.
-type shareSigVerifier func(secret []byte, r *http.Request, sig string) bool
+//
+// It takes the whole signing-key RING, not one key: a sig names no key, so
+// every verifier accepts one made under ANY key still in the ring and dies with
+// the key that made it (sharesig.go).
+type shareSigVerifier func(keys *keyring, r *http.Request, sig string) bool
 
 // verifyAttachmentShareSig is the attachment blob GET's subject: exactly the
 // one blob id in the path.
-func verifyAttachmentShareSig(secret []byte, r *http.Request, sig string) bool {
-	return verifyShareSig(secret, r.PathValue("attachment_id"), sig)
+func verifyAttachmentShareSig(keys *keyring, r *http.Request, sig string) bool {
+	return verifyShareSigAnyKey(keys, r.PathValue("attachment_id"), sig)
 }
 
 // verifyDiffShareSig is GET /api/diff's subject: both addresses and both
 // labels, read RAW (never trimmed — a padded address is a different address).
-func verifyDiffShareSig(secret []byte, r *http.Request, sig string) bool {
+func verifyDiffShareSig(keys *keyring, r *http.Request, sig string) bool {
 	q := r.URL.Query()
-	return verifyDiffSig(secret,
+	return verifyDiffSigAnyKey(keys,
 		q.Get(diffParamBefore), q.Get(diffParamAfter),
 		q.Get(diffParamLabelBefor), q.Get(diffParamLabelAfter), sig)
 }
@@ -246,6 +250,39 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Auth:       authGated,
 			Requires:   principalOwner,
 			Summary:    "Arm the second factor by proving a code from the pending secret.",
+			MCPExclude: true,
+		},
+		// ── Signing-key ring (T-62) ──────────────────────────────────────────
+		// principalOwner + MCPExclude for the same reason the password and
+		// second-factor rows above are: these routes govern the key that
+		// authenticates EVERY caller, the calling agent included. An
+		// admin_agent that could reach them could rotate the key that governs
+		// it, or remove the key its own credential is signed under.
+		{
+			Method:     "GET",
+			Path:       "/api/auth/signing-keys",
+			Handler:    w.HandleSigningKeysApiAuthSigningKeysGet,
+			Auth:       authGated,
+			Requires:   principalOwner,
+			Summary:    "List the signing keys: id, when it was made, which one signs.",
+			MCPExclude: true,
+		},
+		{
+			Method:     "POST",
+			Path:       "/api/auth/signing-keys/rotate",
+			Handler:    w.HandleSigningKeyRotateApiAuthSigningKeysRotatePost,
+			Auth:       authGated,
+			Requires:   principalOwner,
+			Summary:    "Mint a new signing key and hand signing over to it; the old one stays, verifying.",
+			MCPExclude: true,
+		},
+		{
+			Method:     "POST",
+			Path:       "/api/auth/signing-keys/{key_id}/remove",
+			Handler:    w.HandleSigningKeyRemoveApiAuthSigningKeysKeyIdRemovePost,
+			Auth:       authGated,
+			Requires:   principalOwner,
+			Summary:    "Remove a retired key, revoking everything it signed. Refuses the signing key.",
 			MCPExclude: true,
 		},
 		{
@@ -762,7 +799,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleGetChatAttachmentShareLinkApiChatAttachmentsAttachmentIdShareLinkGet,
 			Auth:     authGated,
 			Requires: principalMachine,
-			Summary:  "Mint a permanent single-file share link (?sig= HMAC; grants read of this one attachment only). Returns {url} as a SERVER-RELATIVE path — prefix it with the origin you reach this server on to get a link you can paste to someone. The sig carries NO identity and NO expiry: whoever holds the link reads that one blob without signing in, forever, and it cannot be revoked. Mint it for deliverables you meant to hand over; do not paste it anywhere the blob itself would not belong.",
+			Summary:  "Mint a single-file share link (?sig= HMAC; grants read of this one attachment only). Returns {url} as a SERVER-RELATIVE path — prefix it with the origin you reach this server on to get a link you can paste to someone. The sig carries NO identity and NO expiry: whoever holds the link reads that one blob without signing in, for as long as the key that signed it is still in the server's signing-key ring. No single link can be withdrawn; the only way to void one is to remove that key (POST /api/auth/signing-keys/{key_id}/remove), which voids every link it signed at once. Mint it for deliverables you meant to hand over; do not paste it anywhere the blob itself would not belong.",
 			// This row used to read `MCPExclude: true, // a UI convenience
 			// seam, not an agent tool`. That call is REVERSED here, on
 			// purpose: minting is an agent seam too. An agent that produces a
@@ -775,9 +812,12 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			// principal already reached this route over REST, so no caller
 			// gains a capability it lacked. What changes is discoverability —
 			// and that is not risk-neutral: minting will happen far more often
-			// now, and every minted link is permanent, unrevocable, and
-			// credential-less (sharesig.go). Read that file before widening
-			// this seam any further.
+			// now, and every minted link is credential-less and carries no
+			// expiry (sharesig.go). Since T-62 it is not unrevocable: a link
+			// dies when the key that signed it leaves the signing-key ring —
+			// which is a COARSE revocation (it takes every link that key
+			// signed with it) and not a per-link one. Read that file before
+			// widening this seam any further.
 			MCPTool: "get_chat_attachment_share_link",
 		},
 		{
@@ -874,7 +914,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleGetDiffShareLinkApiDiffShareLinkGet,
 			Auth:     authGated,
 			Requires: principalMachine,
-			Summary:  "Mint the permanent EXTERNAL link to one before/after comparison (?sig= HMAC over both addresses AND both column labels). Returns {url} as a SERVER-RELATIVE path — prefix it with the origin you reach this server on to get a link you can paste to someone. The sig carries NO identity and NO expiry: whoever holds the link sees that one comparison without signing in, forever, and it cannot be revoked. YOU USUALLY DO NOT NEED THIS: the INTERNAL link is the same /diff?before=…&after=… page with no sig, any signed-in reader opens it, and `ocagent diff` prints it without asking the server anything. Mint this one only for a reader who has no account. A side is a stored attachment id (att-…) or doc:<kind>/<key>/<at>/<field> — `ocagent diff --help` is the authority on the spelling.",
+			Summary:  "Mint the EXTERNAL link to one before/after comparison (?sig= HMAC over both addresses AND both column labels). Returns {url} as a SERVER-RELATIVE path — prefix it with the origin you reach this server on to get a link you can paste to someone. The sig carries NO identity and NO expiry: whoever holds the link sees that one comparison without signing in, for as long as the key that signed it is still in the server's signing-key ring. No single link can be withdrawn; the only way to void one is to remove that key (POST /api/auth/signing-keys/{key_id}/remove), which voids every comparison link and every file link it signed at once. YOU USUALLY DO NOT NEED THIS: the INTERNAL link is the same /diff?before=…&after=… page with no sig, any signed-in reader opens it, and `ocagent diff` prints it without asking the server anything. Mint this one only for a reader who has no account. A side is a stored attachment id (att-…) or doc:<kind>/<key>/<at>/<field> — `ocagent diff --help` is the authority on the spelling.",
 			// On the agent surface for the same reason the attachment share
 			// link is: an agent that produces a comparison can otherwise only
 			// hand it to someone who can already sign in. Minting is where the

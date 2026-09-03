@@ -1030,7 +1030,7 @@ func (s *apiServer) buildStartFrame(m Member) ([]byte, bool) {
 	if m.RosterStatus != RosterStatusActive {
 		return nil, false
 	}
-	if len(s.secret) == 0 {
+	if len(s.keys.signingSecret()) == 0 {
 		return nil, false
 	}
 	boot, err := s.buildBootContext("", &m)
@@ -1286,6 +1286,11 @@ func (s *apiServer) resolveEmptyRuntimeForPlacement(m *Member, warden string) {
 // decision whose state is NOT advanced, so the next tick retries — the
 // producer never records a command it did not deliver.
 func (s *apiServer) reconcileOne(m Member, st reconcileState, now float64) reconcileDecision {
+	// 下線 → 重啟, spent (T-14 項目 7). BEFORE the observation is built, because
+	// flipping desired_state back to online is what makes this tick take the
+	// decideUp arm and START the member — the same tick the stop converged on,
+	// not the one after it. A no-op for every member with nothing queued.
+	s.consumeRestartAfterStop(&m, now)
 	obs := memberObservation{
 		MemberID:       m.ID,
 		Desired:        parseDesired(m.DesiredState),
@@ -1592,8 +1597,8 @@ func stampOpReceipt(lastOp *string, lastOpOK **bool, lastOpLog, lastOpReason *st
 // of persisting. The receipt itself is stampOpReceipt's; this is the staff shell.
 //
 // ⚠️ IT NO LONGER MAKES THE EXPLANATION AND THE CHANGE ONE WRITE (T-55), which
-// is what this comment used to promise. The five receipt columns left
-// PutMember's DO UPDATE SET, so a caller's whole-row write carries the change
+// is what this comment used to promise. The five receipt columns became
+// insert-only, so a caller's whole-row write carries the change
 // and a separate dal.SetMemberOpReceipt carries the explanation. STAMPING ALONE
 // STORES NOTHING — a caller that forgets the second write leaves a receipt that
 // exists only in memory, and nothing goes red.
@@ -2782,6 +2787,17 @@ func (s *apiServer) runReconcileTick(now float64) {
 	}
 	var members []Member
 	for _, m := range all {
+		// WHICH HALF drives this row (lifecycle_roster.go), asked BEFORE the
+		// entry filter — "is this mine to decide" comes before "should it
+		// exist". A NO-OP TODAY, deliberately: ListMembers' `WHERE kind !=
+		// 'outsource'` already guarantees the answer here is driverReconcile for
+		// every row in `all`. It is the structural stand-in for that WHERE
+		// clause, put in place BEFORE the clause is merged away, so the split
+		// between the two halves survives the merge as something the parity test
+		// can falsify rather than as a property of a query in another file.
+		if lifecycleTickDriverFor(m) != driverReconcile {
+			continue
+		}
 		// THE entry filter (lifecycle_roster.go). It used to be written out here
 		// by hand, and again in reconcileMemberNow, and a third time — in its
 		// outsource dialect — in runOutsourceTick. One question, one answer.

@@ -45,7 +45,7 @@ func newGateTestAPI(t *testing.T) (*apiServer, *DAL) {
 		t.Fatalf("goose up: %v", err)
 	}
 	dal := NewDAL(db)
-	api := newAPIServer(dal, NewHub(), []byte(interopSecret), 3600, "../..")
+	api := newAPIServer(dal, NewHub(), singleKeyring([]byte(interopSecret)), 3600, "../..")
 	return api, dal
 }
 

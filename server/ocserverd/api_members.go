@@ -123,9 +123,9 @@ func (s *apiServer) persistWorkerWindDownAnchors(w OutsourceWorker) error {
 // wire half, split out so a SINGLE-COLUMN writer (AddMemberBankedCost and the
 // setters beside it) can keep the push a caller used to get for free from the
 // whole-row write, WITHOUT dragging a stale snapshot of every other column back
-// into the database with it. Migrating a column out of PutMember's SET list and
-// forgetting this call is a silent loss: nothing goes red, the cockpit simply
-// stops converging.
+// into the database with it. Marking a column insertOnly (so a whole-row write
+// stops carrying it) and forgetting this call is a silent loss: nothing goes red,
+// the cockpit simply stops converging.
 func (s *apiServer) publishMemberPatch(m Member, trigger string) {
 	op := "patch"
 	if m.RosterStatus == RosterStatusRemoved {
@@ -920,7 +920,15 @@ func (s *apiServer) HandleUpdateMemberApiMembersMemberIdPatch(w http.ResponseWri
 		heldDown = !s.armMemberOwnerOpHandover(m, memberOpModel) &&
 			m.DesiredState == DesiredStateOffline
 		if heldDown {
-			stampMemberOpReceipt(m, memberHeldDownReceipt(memberOpModel), nowSecs())
+			// 下線 → 重啟 (T-14 項目 7), the 換 model face of the same ruling —
+			// but only for a member that has ever been asked to stop
+			// (aStopWasEverAskedFor — a never-活化'd new hire is not one).
+			if aStopWasEverAskedFor(*m) {
+				stampRestartIntent(m)
+				stampMemberOpReceipt(m, memberRestartQueuedReceipt(memberOpModel), nowSecs())
+			} else {
+				stampMemberOpReceipt(m, memberHeldDownReceipt(memberOpModel), nowSecs())
+			}
 		}
 	}
 	if err := s.persistMemberWindDownAnchors(*m); err != nil {
@@ -1040,6 +1048,9 @@ func (s *apiServer) HandleActivateMemberApiMembersMemberIdActivatePost(w http.Re
 	m.StoppingSince = 0.0
 	m.WakingSince = 0.0
 	m.DesiredState = DesiredStateOnline
+	// 活化 is 「要不要起來」 answered directly, so the queued answer is spent
+	// rather than left behind to fire a second start after the next 下線.
+	clearRestartIntent(m)
 	if body.MachineId != nil {
 		m.DesiredMachineID = *body.MachineId
 		// desired_machine_id left PutMember's SET list in T-55: the pin moves
@@ -1121,10 +1132,17 @@ func (s *apiServer) HandleActivateMemberApiMembersMemberIdActivatePost(w http.Re
 // recycleGraceFor answers "no clock" and the recycle arm never times it out.
 // This line used to name that ceiling — a window an owner would wait out and
 // that never closes. It used to be an immediate robust STOP with no
-// warning at all (fbc5280). An offline member just re-pins so the next wake
-// lands there — no epoch, nothing to wind down. PLACEMENT ONLY — unlike activate it NEVER
-// touches desired_state (or the stopping/waking anchors): a relocate is not a
-// wake. 404 for an unknown / removed member; any non-"" machine_id that names no
+// warning at all (fbc5280). An offline member opens no epoch — there is nothing to
+// wind down — and since T-14 項目 7 it splits two ways: one that has been STOPPED
+// at some point queues the owner's 「起來」 (restart_after_stop) and comes back up
+// on the new pin, while one that has never been asked to stop (a new hire before
+// its first 活化) just re-pins and waits, held_down. 🔴 THE OLD SENTENCE HERE —
+// "PLACEMENT ONLY — unlike activate it NEVER touches desired_state" — is now true
+// only of THIS handler's own write: it still never sets desired_state itself, but
+// the queued intent it records makes the reconcile flip it at the converged-
+// offline edge, so the member does end up woken. The activate contrast that
+// remains is CANCELLATION vs QUEUEING: 活化 tears the stop down on the spot,
+// 改機器 gets in line behind it. 404 for an unknown / removed member; any non-"" machine_id that names no
 // real machine is a 404, so a stale/typo'd id never pins the member to a
 // placement that can never boot (the worker-relocate reasoning). machine_id is
 // REQUIRED since owner 2026-07-27 (relocateNeedsMachineMsg): an absent key is a
@@ -1195,7 +1213,18 @@ func (s *apiServer) HandleRelocateMemberApiMembersMemberIdRelocatePost(w http.Re
 	// model face — see memberHeldDownReceipt.
 	heldDown := !windDown && m.DesiredState == DesiredStateOffline
 	if heldDown {
-		stampMemberOpReceipt(m, memberHeldDownReceipt(memberOpRelocate), nowSecs())
+		// 下線 → 重啟 (T-14 項目 7). Owner 2026-08-30: 「change model / machine
+		// 只是帶起來的方式不一樣而已」 — 改機器 is a 重啟 intent, so the pin is
+		// no longer stored and forgotten; the member comes back up on it, whether
+		// the stop is still landing or landed a week ago. ⚠️ That second half is
+		// a REAL change to the placement-only contract this handler's header
+		// still describes for the stopped case; see aStopWasEverAskedFor.
+		if aStopWasEverAskedFor(*m) {
+			stampRestartIntent(m)
+			stampMemberOpReceipt(m, memberRestartQueuedReceipt(memberOpRelocate), nowSecs())
+		} else {
+			stampMemberOpReceipt(m, memberHeldDownReceipt(memberOpRelocate), nowSecs())
+		}
 	}
 	if err := s.persistMemberWindDownAnchors(*m); err != nil {
 		internalError(w, err)
@@ -1346,6 +1375,9 @@ func (s *apiServer) HandleDeactivateMemberApiMembersMemberIdDeactivatePost(w htt
 		MemberPresenceWaking
 	m.DesiredState = DesiredStateOffline
 	clearMemberHandoverMarker(m)
+	// 後蓋前 (T-14 項目 7): 下線 is the owner saying DOWN — the softest rung of
+	// the ladder, but the same statement about 「要不要起來」 as the hardest.
+	clearRestartIntent(m)
 	// …UNCONDITIONAL with ONE exception: a stop epoch that a FORCE-stop opened
 	// must not be re-stamped into a softer one. The SSE stop gate separates
 	// "close-out in flight" (admit the reconnect) from "cut off deliberately"
@@ -1420,6 +1452,10 @@ func (s *apiServer) HandleForceStopMemberApiMembersMemberIdForceStopPost(w http.
 	}
 	m.DesiredState = DesiredStateOffline
 	clearMemberHandoverMarker(m)
+	// 後蓋前 (T-14 項目 7): 強制停止 is the owner saying DOWN, so any 重啟 he
+	// queued earlier in this wind-down is cancelled. This is what keeps
+	// 重新聚焦 → 強制停止 different from 強制停止 → 重新聚焦.
+	clearRestartIntent(m)
 	if m.StoppingSince <= 0.0 {
 		m.StoppingSince = nowSecs()
 	}
@@ -1525,6 +1561,12 @@ func (s *apiServer) HandleAcceleratedStopMemberApiMembersMemberIdAcceleratedStop
 		return
 	}
 	m.RefocusOp = refocusOpAcceleratedStop
+	// 後蓋前 (T-14 項目 7). 加速停止 is a 下線 rung, so it cancels a queued 重啟
+	// like the other two. ⚠️ On the 換手 arm above it still leaves desired_state
+	// ONLINE — that arm is a handover being hurried along, not a stop — so this
+	// call changes nothing there. Deliberately NOT widened: converting that arm
+	// into a stop is a behaviour change outside the owner's [0] ruling.
+	clearRestartIntent(m)
 	if err := s.persistMemberWindDownAnchors(*m); err != nil {
 		internalError(w, err)
 		return
@@ -1553,6 +1595,38 @@ func (s *apiServer) HandleRefocusMemberApiMembersMemberIdRefocusPost(w http.Resp
 	m, err := s.resolveMember(memberId, staffOnly)
 	if err != nil {
 		writeResolveError(w, err, "member", memberId)
+		return
+	}
+	// 下線 → 重啟 (T-14 項目 7). The stamp genuinely would not reach the agent —
+	// aRefocusStampWouldReachTheAgent is right — but that was never a reason to
+	// refuse the OWNER'S intent, only a reason not to write it as a refocus
+	// epoch. Owner 2026-08-30: 「如果我已經到強硬下線的狀態下按下 refocus 我只
+	// 需要在下線後把人帶起來」. The stop in flight keeps its stage and its
+	// anchors; the only thing recorded here is 「起來」.
+	if !aRefocusStampWouldReachTheAgent(*m) && aStopWasEverAskedFor(*m) {
+		stampRestartIntent(m)
+		stampMemberOpReceipt(m, memberRestartQueuedReceipt(refocusOpRefocus), nowSecs())
+		if err := s.putMember(*m, requestTrigger(r)); err != nil {
+			internalError(w, err)
+			return
+		}
+		// The five last_op* columns left the whole-row writer in T-55 批次B, so the
+		// stamp is IN MEMORY ONLY until this lands — the same seam the 換 model and
+		// 改機器 faces above take. It MUST precede the tick below: that tick can
+		// spend the intent and stamp its own receipt, and a persist after it would
+		// push this handler's older snapshot back over the newer sentence.
+		if err := s.persistMemberOpReceipt(*m, requestTrigger(r)); err != nil {
+			internalError(w, err)
+			return
+		}
+		// The member may ALREADY be converged offline (a stop that landed before
+		// the owner pressed this), in which case the queued start is spendable on
+		// this very tick rather than up to a cadence later.
+		s.reconcileMemberNow(m.ID)
+		if fresh, err := s.dal.GetMember(m.ID); err == nil && fresh != nil {
+			m = fresh
+		}
+		s.writeMemberDTO(w, *m)
 		return
 	}
 	if !s.hub.IsOnline(m.ID) || !aRefocusStampWouldReachTheAgent(*m) {
@@ -1594,6 +1668,7 @@ func (s *apiServer) HandleDismissMemberApiMembersMemberIdDelete(w http.ResponseW
 	}
 	m.RosterStatus = RosterStatusRemoved
 	m.DesiredState = DesiredStateOffline
+	clearRestartIntent(m)
 	if err := s.putMember(*m, requestTrigger(r)); err != nil {
 		internalError(w, err)
 		return

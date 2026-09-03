@@ -1213,9 +1213,10 @@ func memberFromWorker(w OutsourceWorker) Member {
 		// the spawn dispatch stamps it exactly where the staff arm does
 		// (stampWakeObservability), and PresenceState is the ONE reader for both.
 		//
-		// PutMember's ON CONFLICT SET includes waking_since, so this line is what
-		// decides whether a mid-wake anchor survives the next worker write. Dropping
-		// it back to a constant re-opens the exact bug.
+		// waking_since is NOT insertOnly, so a whole-row write does land it on an
+		// existing row — which makes this line what decides whether a mid-wake
+		// anchor survives the next worker write. Dropping it back to a constant
+		// re-opens the exact bug.
 		WakingSince:        w.WakingSince,
 		BankedCost:         w.BankedCost,
 		LastOp:             w.LastOp,

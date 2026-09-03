@@ -2770,6 +2770,18 @@ type SettingsUpdateDTO struct {
 	UpdaterReceiveBeta *bool   `json:"updater_receive_beta,omitempty"`
 }
 
+// SigningKeyDTO ONE signing key, as the outside is allowed to see it: which key it is, when it was made, and whether it is the one signing. There is deliberately no field that could carry key material — not the key, not a fingerprint, not a hash prefix — so "did this leak the key" is answered by the shape of the type rather than by remembering to strip a field at each call site.
+type SigningKeyDTO struct {
+	CreatedTs float64 `json:"created_ts"`
+	IsSigning bool    `json:"is_signing"`
+	KeyId     string  `json:"key_id"`
+}
+
+// SigningKeysDTO The whole signing-key ring, oldest first. Every mutating call answers with the FULL ring rather than with just what changed, so the settings page never has to re-fetch to learn the truth after acting.
+type SigningKeysDTO struct {
+	Keys []SigningKeyDTO `json:"keys"`
+}
+
 // TaskArtifactDTO One pinned deliverable on a task's artifact set (T-3dc5). “kind“ is the closed set file|image|link. FILE/IMAGE artifacts reference the shared chat_attachment blob store: “attachment_id“ is the blob id, “url“ is its serve path (“/api/chat/attachment/{attachment_id}“), and “filename“/“mime“/“is_image“ echo the blob metadata (resolved read-time; empty when the blob is gone). LINK artifacts carry a bare external “url“ (a PR link) with “attachment_id“/“mime“/“filename“ empty and “is_image“ false. “label“ is the display name (a link's title, or a filename override); “created_by“ is the verified token sub of the registrar.
 type TaskArtifactDTO struct {
 	AttachmentId *string  `json:"attachment_id,omitempty"`
@@ -3898,6 +3910,15 @@ type ServerInterface interface {
 	// First-run: set the owner password (one-shot claim token gate).
 	// (POST /api/auth/set-password)
 	HandleSetPasswordApiAuthSetPasswordPost(w http.ResponseWriter, r *http.Request)
+	// List the signing keys: id, when it was made, which one signs.
+	// (GET /api/auth/signing-keys)
+	HandleSigningKeysApiAuthSigningKeysGet(w http.ResponseWriter, r *http.Request)
+	// Mint a new signing key and hand signing over to it; the old one stays, verifying.
+	// (POST /api/auth/signing-keys/rotate)
+	HandleSigningKeyRotateApiAuthSigningKeysRotatePost(w http.ResponseWriter, r *http.Request)
+	// Remove a retired key, revoking everything it signed. Refuses the signing key.
+	// (POST /api/auth/signing-keys/{key_id}/remove)
+	HandleSigningKeyRemoveApiAuthSigningKeysKeyIdRemovePost(w http.ResponseWriter, r *http.Request, keyId string)
 	// First-run probe: has the owner password been set?
 	// (GET /api/auth/status)
 	HandleAuthStatusApiAuthStatusGet(w http.ResponseWriter, r *http.Request)
@@ -3940,7 +3961,7 @@ type ServerInterface interface {
 	// Upload one attachment blob (raw octet-stream body; returns the light ref).
 	// (POST /api/chat/attachments)
 	HandleUploadChatAttachmentApiChatAttachmentsPost(w http.ResponseWriter, r *http.Request, params HandleUploadChatAttachmentApiChatAttachmentsPostParams)
-	// Mint a permanent single-file share link (?sig= HMAC; grants read of this one attachment only). Returns {url} as a SERVER-RELATIVE path — prefix it with the origin you reach this server on to get a link you can paste to someone. The sig carries NO identity and NO expiry: whoever holds the link reads that one blob without signing in, forever, and it cannot be revoked. Mint it for deliverables you meant to hand over; do not paste it anywhere the blob itself would not belong.
+	// Mint a single-file share link (?sig= HMAC; grants read of this one attachment only). Returns {url} as a SERVER-RELATIVE path — prefix it with the origin you reach this server on to get a link you can paste to someone. The sig carries NO identity and NO expiry: whoever holds the link reads that one blob without signing in, for as long as the key that signed it is still in the server's signing-key ring. No single link can be withdrawn; the only way to void one is to remove that key (POST /api/auth/signing-keys/{key_id}/remove), which voids every link it signed at once. Mint it for deliverables you meant to hand over; do not paste it anywhere the blob itself would not belong.
 	// (GET /api/chat/attachments/{attachment_id}/share-link)
 	HandleGetChatAttachmentShareLinkApiChatAttachmentsAttachmentIdShareLinkGet(w http.ResponseWriter, r *http.Request, attachmentId string)
 	// Mark a conversation read up to a watermark (reader = verified sub).
@@ -3955,7 +3976,7 @@ type ServerInterface interface {
 	// Resolve both sides of one comparison (?before=&after=; optional labels and ?sig=). Each side carries its text, its column heading, and an honest gone marker when the address resolves to nothing.
 	// (GET /api/diff)
 	HandleGetDiffApiDiffGet(w http.ResponseWriter, r *http.Request, params HandleGetDiffApiDiffGetParams)
-	// Mint the permanent EXTERNAL link to one before/after comparison (?sig= HMAC over both addresses AND both column labels). Returns {url} as a SERVER-RELATIVE path — prefix it with the origin you reach this server on to get a link you can paste to someone. The sig carries NO identity and NO expiry: whoever holds the link sees that one comparison without signing in, forever, and it cannot be revoked. YOU USUALLY DO NOT NEED THIS: the INTERNAL link is the same /diff?before=…&after=… page with no sig, any signed-in reader opens it, and `ocagent diff` prints it without asking the server anything. Mint this one only for a reader who has no account. A side is a stored attachment id (att-…) or doc:<kind>/<key>/<at>/<field> — `ocagent diff --help` is the authority on the spelling.
+	// Mint the EXTERNAL link to one before/after comparison (?sig= HMAC over both addresses AND both column labels). Returns {url} as a SERVER-RELATIVE path — prefix it with the origin you reach this server on to get a link you can paste to someone. The sig carries NO identity and NO expiry: whoever holds the link sees that one comparison without signing in, for as long as the key that signed it is still in the server's signing-key ring. No single link can be withdrawn; the only way to void one is to remove that key (POST /api/auth/signing-keys/{key_id}/remove), which voids every comparison link and every file link it signed at once. YOU USUALLY DO NOT NEED THIS: the INTERNAL link is the same /diff?before=…&after=… page with no sig, any signed-in reader opens it, and `ocagent diff` prints it without asking the server anything. Mint this one only for a reader who has no account. A side is a stored attachment id (att-…) or doc:<kind>/<key>/<at>/<field> — `ocagent diff --help` is the authority on the spelling.
 	// (GET /api/diff/share-link)
 	HandleGetDiffShareLinkApiDiffShareLinkGet(w http.ResponseWriter, r *http.Request, params HandleGetDiffShareLinkApiDiffShareLinkGetParams)
 	// Size-only overview of the capped documents on the station: each role's role definition / insight / lessons, and each task manual's SOP / learnings, as size_chars plus the cap_chars in force for THAT segment (the five segments have five separate caps — each is reported against its own). THE LISTING IS KEYED BY ROLE, AND THAT IS ITS LIMIT. T-2 removed the lessons task_type axis, so a role now has exactly ONE lessons document and it is the one reported here — the old 'default bucket only' gap is gone. What remains is narrower still and it is now INSIGHT-ONLY: nothing validates a role_key against the roster on the INSIGHT write face, so an admin or the owner can write insight under a role_key no role carries; such a document spends the insight cap and, having no role to hang off, never appears here. The LESSONS write face no longer has that gap — replace_lessons and patch_lessons refuse with 404 any role_key that nothing could read: neither a role that folds (which is what this listing walks, and what every boot loads) nor a member carrying that role_key (which cannot boot, but can be minted a token that reads the doc). A role_key on neither list now fails instead of silently producing an unreachable document. list_roles is the roster this listing is derived from — a document under a name that is not on it is not on this page either. Carries NO document text, so it costs a few hundred bytes. Use it to find which long-lived document is nearly full, then read only that one (get_role / get_insight / get_lessons / get_task_manual). It is the only way to see insight and lessons sizes in bulk — no listing reports those at any price; the manual sizes and caps are also on every list_task_manuals row, and a role definition's size and cap are already on every list_roles row.
@@ -4568,6 +4589,60 @@ func (siw *ServerInterfaceWrapper) HandleSetPasswordApiAuthSetPasswordPost(w htt
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.HandleSetPasswordApiAuthSetPasswordPost(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleSigningKeysApiAuthSigningKeysGet operation middleware
+func (siw *ServerInterfaceWrapper) HandleSigningKeysApiAuthSigningKeysGet(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleSigningKeysApiAuthSigningKeysGet(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleSigningKeyRotateApiAuthSigningKeysRotatePost operation middleware
+func (siw *ServerInterfaceWrapper) HandleSigningKeyRotateApiAuthSigningKeysRotatePost(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleSigningKeyRotateApiAuthSigningKeysRotatePost(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleSigningKeyRemoveApiAuthSigningKeysKeyIdRemovePost operation middleware
+func (siw *ServerInterfaceWrapper) HandleSigningKeyRemoveApiAuthSigningKeysKeyIdRemovePost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "key_id" -------------
+	var keyId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "key_id", r.PathValue("key_id"), &keyId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "key_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleSigningKeyRemoveApiAuthSigningKeysKeyIdRemovePost(w, r, keyId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -8777,6 +8852,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/auth/mfa/enroll", wrapper.HandleMfaEnrollApiAuthMfaEnrollPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/auth/mfa/offer", wrapper.HandleMfaOfferApiAuthMfaOfferPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/auth/set-password", wrapper.HandleSetPasswordApiAuthSetPasswordPost)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/auth/signing-keys", wrapper.HandleSigningKeysApiAuthSigningKeysGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/auth/signing-keys/rotate", wrapper.HandleSigningKeyRotateApiAuthSigningKeysRotatePost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/auth/signing-keys/{key_id}/remove", wrapper.HandleSigningKeyRemoveApiAuthSigningKeysKeyIdRemovePost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/auth/status", wrapper.HandleAuthStatusApiAuthStatusGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/backup-health", wrapper.HandleGetBackupHealthApiBackupHealthGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/boot-docs/{kind}/{key}", wrapper.HandleGetBootDocApiBootDocsKindKeyGet)

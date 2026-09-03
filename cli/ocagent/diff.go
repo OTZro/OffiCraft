@@ -296,8 +296,10 @@ gets the compare screen's own heading; do NOT label a doc: side, which the
 screen already names in the reader's own language.
 
 --external asks the server to mint a SIGNED link instead: it opens with no login
-at all, has no expiry and cannot be revoked, so mint it only for a reader who
-has no account on this station. Without it you get the plain link, which any
+at all and has no expiry, and no single link can be withdrawn — the only thing
+that ends one is removing the signing key it was minted under (Settings ›
+Signing keys), which kills every link that key signed at once. Mint it only for
+a reader who has no account on this station. Without it you get the plain link, which any
 signed-in reader opens and which costs no request at all.
 
 An address that no longer resolves is not an error here: the screen says that

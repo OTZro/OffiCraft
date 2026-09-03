@@ -242,7 +242,7 @@ func newTasksTestServer(t *testing.T) *apiServer {
 	if err := runMigrations(db); err != nil {
 		t.Fatalf("goose up: %v", err)
 	}
-	return newAPIServer(NewDAL(db), NewHub(), []byte("tasks-test-secret"), 3600,
+	return newAPIServer(NewDAL(db), NewHub(), singleKeyring([]byte("tasks-test-secret")), 3600,
 		assetRoot(t.TempDir()))
 }
 

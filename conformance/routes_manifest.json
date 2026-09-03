@@ -79,6 +79,27 @@
   {
     "auth": "gated",
     "mcp_tool": null,
+    "method": "GET",
+    "path": "/api/auth/signing-keys",
+    "requires": "owner"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": null,
+    "method": "POST",
+    "path": "/api/auth/signing-keys/rotate",
+    "requires": "owner"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": null,
+    "method": "POST",
+    "path": "/api/auth/signing-keys/{key_id}/remove",
+    "requires": "owner"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": null,
     "method": "POST",
     "path": "/api/auth/mfa/enroll",
     "requires": "owner"

@@ -20,9 +20,12 @@ package main
 // mirroring the attachment share link in shape, naming and posture — the server
 // mints a SERVER-RELATIVE path and the caller prefixes its own origin.
 //
-// No expiry and no revocation, on the owner's explicit ruling and matching the
-// attachment share link: whoever holds an external link sees that comparison
-// forever.
+// No expiry and no per-link revocation, on the owner's explicit ruling and
+// matching the attachment share link — including the one thing that DOES end
+// one: the sig is derived from whichever signing key minted it, so removing
+// that key from the ring (keyring.go) voids every comparison link it signed at
+// the same instant it voids that key's tokens and file links. Coarse, and a
+// person's decision, never a timer's.
 
 import (
 	"net/http"
@@ -76,9 +79,10 @@ func optString(p *string) string {
 	return *p
 }
 
-// GET /api/diff/share-link — mint the permanent EXTERNAL link for one
-// comparison. Twin of HandleGetChatAttachmentShareLink…: same gate, same
-// server-relative posture, a different (domain-separated) key.
+// GET /api/diff/share-link — mint the EXTERNAL link for one comparison. Twin of
+// HandleGetChatAttachmentShareLink…: same gate, same server-relative posture, a
+// different (domain-separated) label over the SAME ring key — so it signs under
+// whichever key signs now, and dies with that key.
 func (s *apiServer) HandleGetDiffShareLinkApiDiffShareLinkGet(
 	w http.ResponseWriter, r *http.Request, params HandleGetDiffShareLinkApiDiffShareLinkGetParams,
 ) {
@@ -86,7 +90,7 @@ func (s *apiServer) HandleGetDiffShareLinkApiDiffShareLinkGet(
 	if !diffSidesSayable(w, params.Before, params.After) {
 		return
 	}
-	sig := diffSigFor(s.secret, params.Before, params.After, labelBefore, labelAfter)
+	sig := diffSigForRing(s.keys, params.Before, params.After, labelBefore, labelAfter)
 	writeJSON(w, http.StatusOK, DiffShareLinkDTO{
 		Url: diffPagePath + "?" + diffPageQuery(params.Before, params.After, labelBefore, labelAfter, sig),
 	})
