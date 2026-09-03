@@ -1868,10 +1868,12 @@ type taskListItemDTO struct {
 	// now — the FIRST non-terminal step in timeline order (domain.CurrentStep,
 	// the same rule the wake snapshot's resumeTaskDTO uses). Both are "" when
 	// the plan is empty or every step has finished; that empty is honest and
-	// must not be read as "the first step". CurrentStepID is the key into the
-	// single-step read, so a list row no longer needs a get_task round trip
-	// just to say what is being worked on. The light list still carries no step
-	// ROWS (no dod text) — only these two display fields.
+	// must not be read as "the first step". The pair is an id and a name and
+	// nothing else about the step — where this belongs on the light list is
+	// still open (owner c-2823f0ff85b5:「我覺得這不屬於 list task 的範疇」;
+	// c-1648d14be429:「先不動這個 之後要調再說」), so nothing here or in the tool
+	// description recommends it as a route. The light list still carries no
+	// step ROWS (no dod text) — only these two display fields.
 	CurrentStepID   string `json:"current_step_id"`
 	CurrentStepName string `json:"current_step_name"`
 	// ArtifactCount is the number of pinned deliverables (T-3dc5) — the collapsed
