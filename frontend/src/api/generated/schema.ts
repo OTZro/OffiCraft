@@ -3661,8 +3661,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Read one task (steps, deps, progress, gate cards).
-         * @description Read one task in full: steps (timeline order, with any armed gate's reply_card_id), deps, and the leaf progress count. Unknown id → 404.
+         * Read one task — and read it knowing it is a SUMMARY, not the whole of it: the response says so itself (``detail_level`` = ``summary``, ``notes_included`` = false). WHAT IS COMPLETE HERE: the task's own fields, its deps, its progress counts, its gate cards, and EVERY ONE of its steps. The step list has no cap, no paging and no truncation of any kind — the rows you get back are all the rows there are, so a step that is not here does not exist on this task. WHAT IS OMITTED, AND EXACTLY HOW MUCH OF IT: each step's working-note TEXT (T-66). In its place every step carries ``note_size_chars`` — the EXACT number of characters of note sitting on the server for that step, where 0 means that step genuinely has no note — and ``note_cap_chars``, the ceiling. A positive ``note_size_chars`` is a precise promise that that many characters are waiting for you, and ``get_task_step(task_id, step_id)`` is the one call that returns them, one step at a time. Read the sizes first, then fetch only the notes you actually need. Unknown id → 404.
+         * @description Read one task — and read it knowing it is a SUMMARY, not the whole of it: the response says so itself (``detail_level`` = ``summary``, ``notes_included`` = false). WHAT IS COMPLETE HERE: the task's own fields, its deps, its progress counts, its gate cards, and EVERY ONE of its steps. The step list has no cap, no paging and no truncation of any kind — the rows you get back are all the rows there are, so a step that is not here does not exist on this task. WHAT IS OMITTED, AND EXACTLY HOW MUCH OF IT: each step's working-note TEXT (T-66). In its place every step carries ``note_size_chars`` — the EXACT number of characters of note sitting on the server for that step, where 0 means that step genuinely has no note — and ``note_cap_chars``, the ceiling. A positive ``note_size_chars`` is a precise promise that that many characters are waiting for you, and ``get_task_step(task_id, step_id)`` is the one call that returns them, one step at a time. Read the sizes first, then fetch only the notes you actually need. Unknown id → 404.
          */
         get: operations["handle_get_task_api_tasks__task_id__get"];
         put?: never;
@@ -3907,10 +3907,30 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Write this step's working note: where the work stands and what comes next — the field the handover SOP means by 「把還在進行中的工作寫回 task step note」. WHAT TO WRITE — three things, then stop: (1) STATE — one sentence on where this step actually got to; (2) NEXT — one sentence on what whoever takes over does next; (3) EVIDENCE POINTERS — version ids, file and log paths, what you verified YOURSELF versus what you are taking on someone's word, and the limits of what was NOT done. Long narrative does not live here: reasoning and scope belong in the task description, reports and diffs belong on the task as artifacts. The note is the current state — not a report, not an append-only log. Writable in ANY step status (pending, in_progress, waiting_owner, waiting_external, done, superseded), unlike `waiting_reason`, which is locked to waiting_external. Wholesale write: `note` replaces whatever was there and "" clears it, so rewrite it as the work moves rather than appending; over 4,000 characters (counted in runes) is refused. Same executor/admin gate as every other task-driving write (403 otherwise). ⚠️ A task auto-closes when its last step is reported done and a closed task 409s — so write the note BEFORE the report that finishes the last step, not after. The receipt carries `size_chars` / `cap_chars`, so the room left is on every write instead of only on the 400 that refuses one; `get_task` reports the same pair per step as `note_size_chars` / `note_cap_chars`.
+         * Write this step's working note: where the work stands and what comes next — the field the handover SOP means by 「把還在進行中的工作寫回 task step note」. WHAT TO WRITE — three things, then stop: (1) STATE — one sentence on where this step actually got to; (2) NEXT — one sentence on what whoever takes over does next; (3) EVIDENCE POINTERS — version ids, file and log paths, what you verified YOURSELF versus what you are taking on someone's word, and the limits of what was NOT done. Long narrative does not live here: reasoning and scope belong in the task description, reports and diffs belong on the task as artifacts. The note is the current state — not a report, not an append-only log. Writable in ANY step status (pending, in_progress, waiting_owner, waiting_external, done, superseded), unlike `waiting_reason`, which is locked to waiting_external. Wholesale write: `note` replaces whatever was there and "" clears it, so rewrite it as the work moves rather than appending; over 4,000 characters (counted in runes) is refused. Same executor/admin gate as every other task-driving write (403 otherwise). ⚠️ A task auto-closes when its last step is reported done and a closed task 409s — so write the note BEFORE the report that finishes the last step, not after. The receipt carries `size_chars` / `cap_chars`, so the room left is on every write instead of only on the 400 that refuses one; `get_task` reports the same pair per step as `note_size_chars` / `note_cap_chars`, but since T-66 it no longer carries the note TEXT — read a note back with `get_task_step(task_id, step_id)`, which answers that one step in full.
          * @description Write one step's working note (MCP ``update_step_note``, T-cc3e): what this step got to and what comes next. WHAT TO WRITE — three things, then stop: (1) STATE — one sentence on where this step actually got to; (2) NEXT — one sentence on what whoever takes over does next; (3) EVIDENCE POINTERS — version ids, file and log paths, what you verified YOURSELF versus what you are taking on someone's word, and the limits of what was NOT done. Long narrative does not live here: reasoning and scope belong in the task description, reports and diffs belong on the task as artifacts. The note is the current state — not a report, not an append-only log. Accepted in ANY STEP status — the note records where the work stands, which is orthogonal to the step state machine. Same executor/admin gate as every other task-driving write (403 otherwise), 404 for an unknown task, a step that does not belong to it, or a step a concurrent replan deleted; 400 when the note is over the 4,000-character limit (counted in runes); and 409 once the TASK is terminal — a task auto-closes when its last step is reported done, so a done step is writable while its task is still open and not after (a closed task's timeline is history, consistent with the frozen artifact set). The write also moves the task's updated_ts, which is what makes an already-open cockpit card re-read its steps. The write is wholesale: the body's ``note`` replaces whatever was there, and ``""`` clears it. Its own endpoint and its own MCP tool by charter §14 (intent-per-tool) — writing a note is a different intent from reporting a transition.
          */
         post: operations["handle_update_task_step_note_api_tasks__task_id__steps__step_id__note_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/{task_id}/steps/{step_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read ONE step of one task IN FULL — the companion read to ``get_task``, which answers a SUMMARY. This response declares ``detail_level`` = ``full`` and carries that single step's ENTIRE working note (``note``) alongside its ``note_size_chars`` / ``note_cap_chars``, its status, DoD, ``waiting_reason``, gate flags, ``parallel_group``, bound ``reply_card_id`` and that card's live ``reply_card_status``. It carries NOTHING about the task itself and NOTHING about any other step, and that is the point: ``get_task`` tells you WHICH steps have a note (``note_size_chars`` > 0) and exactly how big it is, and this tool fetches one of them without dragging the whole ticket along. Same read floor as ``get_task`` — any authenticated principal may read any task's step; there is no executor gate on a READ. 404 for an unknown task, and 404 for a step id that exists but belongs to a DIFFERENT task: a step is only ever readable through its own task, so a wrong task_id never leaks somebody else's step.
+         * @description Read ONE step of one task IN FULL — the companion read to ``get_task``, which answers a SUMMARY. This response declares ``detail_level`` = ``full`` and carries that single step's ENTIRE working note (``note``) alongside its ``note_size_chars`` / ``note_cap_chars``, its status, DoD, ``waiting_reason``, gate flags, ``parallel_group``, bound ``reply_card_id`` and that card's live ``reply_card_status``. It carries NOTHING about the task itself and NOTHING about any other step, and that is the point: ``get_task`` tells you WHICH steps have a note (``note_size_chars`` > 0) and exactly how big it is, and this tool fetches one of them without dragging the whole ticket along. Same read floor as ``get_task`` — any authenticated principal may read any task's step; there is no executor gate on a READ. 404 for an unknown task, and 404 for a step id that exists but belongs to a DIFFERENT task: a step is only ever readable through its own task, so a wrong task_id never leaks somebody else's step.
+         */
+        get: operations["handle_get_task_step_api_tasks__task_id__steps__step_id__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3927,7 +3947,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Patch this step's working note by unique anchors ({edits:[{old,new}]}) — send only the part that changed, instead of re-typing the whole note. USE THIS WHENEVER YOU ARE AMENDING A NOTE THAT ALREADY HAS CONTENT. update_step_note is a wholesale replace, so if anyone else wrote to the step between your read and your write, your copy is stale and the replace silently deletes their text — and because your stale copy is usually the LONGER one, no guard fires and nothing tells you. A patch cannot do that: a non-empty old must match the current note EXACTLY ONCE (0 or >1 hits reject the WHOLE batch with a 400 that names which edit failed and which tool to re-read with, zero writes), so a concurrent write turns into a refusal you can see. Edits apply in order; an empty old appends. Wiping the note, or shrinking it below a tenth, needs allow_shrink=true — for an honest rewrite from scratch use update_step_note. Same executor/admin gate, same any-step-status generality, same closed-task 409 as update_step_note. Re-read with get_task after a refusal.
+         * Patch this step's working note by unique anchors ({edits:[{old,new}]}) — send only the part that changed, instead of re-typing the whole note. USE THIS WHENEVER YOU ARE AMENDING A NOTE THAT ALREADY HAS CONTENT. update_step_note is a wholesale replace, so if anyone else wrote to the step between your read and your write, your copy is stale and the replace silently deletes their text — and because your stale copy is usually the LONGER one, no guard fires and nothing tells you. A patch cannot do that: a non-empty old must match the current note EXACTLY ONCE (0 or >1 hits reject the WHOLE batch with a 400 that names which edit failed and which tool to re-read with, zero writes), so a concurrent write turns into a refusal you can see. Edits apply in order; an empty old appends. Wiping the note, or shrinking it below a tenth, needs allow_shrink=true — for an honest rewrite from scratch use update_step_note. Same executor/admin gate, same any-step-status generality, same closed-task 409 as update_step_note. Re-read with get_task_step after a refusal — get_task reports each step's note SIZE (note_size_chars) but since T-66 no longer carries its text.
          * @description Anchor-addressed PATCH of one step's working note (MCP ``patch_step_note``). PRIMARY REASON: concurrent overwrite. ``update_step_note`` is a whole-doc replace, so two writers on the same step — the common handover shape, where one session is still writing while its successor starts — silently lose each other's text: the second write is built on a copy read before the first landed. Nothing catches it, because the stale copy is usually the LONGER one and no shrink guard fires. An anchor patch cannot express that write: each non-empty ``old`` must match the current note EXACTLY ONCE, so a moved or duplicated anchor turns the batch into a refusal instead of a silent deletion.
          *
          *     Semantics: ``edits`` apply IN ORDER against the step's current note; 0 hits or >1 hits → flat 400 naming the failing edit index and the tool to re-read with, WHOLE batch rejected, zero writes; an empty ``old`` appends ``new`` at the end. A patch that empties the note (or shrinks it below a tenth of its size) is refused unless ``allow_shrink=true``. The resulting note is held to the SAME character limit as the wholesale write (400 when over it) — a patch face that skipped it would be an uncapped door onto the same field.
@@ -8758,6 +8778,12 @@ export interface components {
              */
             description: string;
             /**
+             * Detail Level
+             * @description What this response IS, said by the response itself (T-66): always ``summary``. get_task answers a SUMMARY of the task — complete in every respect EXCEPT that each step's working-note TEXT is omitted and reported only as a size (``TaskStepDTO.note_size_chars``). The counterpart read is ``get_task_step``, whose response declares ``detail_level`` = ``full`` and carries one step's note in full. The STEP LIST here is not abridged: it has no cap and no paging, so this field is a statement about note text and nothing else.
+             * @default summary
+             */
+            detail_level: string;
+            /**
              * Duplicate Of
              * @default
              */
@@ -8822,6 +8848,12 @@ export interface components {
              * @default
              */
             lock: string;
+            /**
+             * Notes Included
+             * @description Always ``false`` (T-66): this response carries no step working-note TEXT. Each step reports ``note_size_chars`` instead — the exact number of characters waiting on the server — and ``get_task_step`` returns them one step at a time. Read together with ``detail_level``.
+             * @default false
+             */
+            notes_included: boolean;
             /** Priority */
             priority: string;
             /** Progress Done */
@@ -9509,14 +9541,8 @@ export interface components {
              */
             name: string;
             /**
-             * Note
-             * @description T-cc3e — the step's free-text working note: what this step got to and what comes next. The GENERAL-PURPOSE note the handover SOP has always told agents to write ("把還在進行中的工作寫回 task step note") and which, until this field existed, had nowhere to land. Writable in ANY step status via POST /api/tasks/{task_id}/steps/{step_id}/note (MCP ``update_step_note``) — unlike ``waiting_reason``, which is bound to waiting_external and cleared on leaving it, and unlike the handoff fields, which are read only on the report that closes the task. Division of labour with the task-level ``description``: the description says WHAT THIS TASK IS (scope, origin, acceptance — stable); the step note says WHERE THIS STEP IS RIGHT NOW (volatile, rewritten as work moves, read by the next session after a handover). Last write wins, wholesale — it is a current-state note, not an append-only log.
-             * @default
-             */
-            note: string;
-            /**
              * Note Size Chars
-             * @description The step note's current size in CHARACTERS. Additive-optional (T-6bd2).
+             * @description The step note's EXACT size in characters (Unicode runes) as it is STORED on the server — and therefore, since T-66 removed the ``note`` text from this DTO, the exact amount of text this response is NOT carrying for this step. 0 means the step genuinely has no note (not that the note was withheld); any positive number is a precise count of characters waiting on the server, and ``get_task_step(task_id, step_id)`` is the one call that returns them. Read this before deciding to fetch. Additive-optional (T-6bd2).
              * @default 0
              */
             note_size_chars: number;
@@ -9541,6 +9567,86 @@ export interface components {
             /**
              * Reply Card Status
              * @description Read-time join: the CURRENT status (``waiting`` | ``answered``) of the reply card bound to this step (``reply_card_id``); ``""`` when the step carries no card. Lets the task-embedded card (TaskReplyCard) decide AT MOUNT whether to load eagerly (waiting — the live ask / the H4 answered-awaiting-pickup transitional) or lazily (answered — collapsed one-line summary, fetch on expand) WITHOUT a per-card GET, and lets the board derive the H4 badge without the child round-trip. NOT stored — computed each read from the card's live status.
+             * @default
+             */
+            reply_card_status: string;
+            /**
+             * Started Ts
+             * @default 0
+             */
+            started_ts: number;
+            /** Status */
+            status: string;
+            /** Task Id */
+            task_id: string;
+            /**
+             * Waiting Reason
+             * @default
+             */
+            waiting_reason: string;
+        };
+        /**
+         * TaskStepDetailDTO
+         * @description ONE step of one task, IN FULL (T-66) — the counterpart to TaskStepDTO, which is the summary row ``get_task`` serves. Everything TaskStepDTO carries is here, plus the one thing it deliberately does not: ``note``, the step's whole working-note text. ``detail_level`` is ``full`` so a reader can tell the two responses apart without inspecting which fields happen to be present. It describes the STEP and nothing else — no task fields, no sibling steps — because the whole point of the split is that a caller who wants one note does not pay for the ticket.
+         */
+        TaskStepDetailDTO: {
+            /**
+             * Detail Level
+             * @description Always ``full``: this response carries the step's complete note text. The mirror of TaskDTO.detail_level = ``summary``.
+             */
+            detail_level: string;
+            /**
+             * Dod
+             * @default
+             */
+            dod: string;
+            /**
+             * Finished Ts
+             * @default 0
+             */
+            finished_ts: number;
+            /** Id */
+            id: string;
+            /**
+             * Is Gate
+             * @default false
+             */
+            is_gate: boolean;
+            /**
+             * Name
+             * @default
+             */
+            name: string;
+            /**
+             * Note
+             * @description The step's free-text working note IN FULL (T-cc3e) — what this step got to and what comes next; the field the handover SOP means by 「把還在進行中的工作寫回 task step note」. This is the ONLY read that serves the text: ``get_task`` reports its size and not its content. ``""`` when the step has no note, which is the same thing ``note_size_chars`` = 0 says.
+             */
+            note: string;
+            /**
+             * Note Size Chars
+             * @description The size in Unicode runes of the ``note`` this response is CARRYING — so here it is a check on what you were handed, not a promise about text you were not.
+             */
+            note_size_chars: number;
+            /**
+             * Note Cap Chars
+             * @description The ceiling the step-note write faces enforce, REPORTED here (never enforced here) so the room left can be computed from a read. Same number, same name, same meaning as TaskStepDTO.note_cap_chars.
+             */
+            note_cap_chars: number;
+            /** Order Idx */
+            order_idx: number;
+            /**
+             * Parallel Group
+             * @default
+             */
+            parallel_group: string;
+            /**
+             * Reply Card Id
+             * @default
+             */
+            reply_card_id: string;
+            /**
+             * Reply Card Status
+             * @description Read-time join: the CURRENT status (``waiting`` | ``answered``) of the reply card bound to this step; ``""`` when the step carries no card. Same computation as TaskStepDTO.reply_card_status.
              * @default
              */
             reply_card_status: string;
@@ -17771,6 +17877,56 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TaskStepNoteReceiptDTO"];
+                };
+            };
+            /** @description Validation error (unified error envelope). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Client error (unified error envelope). */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+            /** @description Server error (unified error envelope). */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelopeDTO"];
+                };
+            };
+        };
+    };
+    handle_get_task_step_api_tasks__task_id__steps__step_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+                step_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskStepDetailDTO"];
                 };
             };
             /** @description Validation error (unified error envelope). */

@@ -883,6 +883,13 @@
   },
   {
     "auth": "gated",
+    "mcp_tool": "get_task_step",
+    "method": "GET",
+    "path": "/api/tasks/{task_id}/steps/{step_id}",
+    "requires": "machine"
+  },
+  {
+    "auth": "gated",
     "mcp_tool": "set_task_deps",
     "method": "POST",
     "path": "/api/tasks/{task_id}/deps",

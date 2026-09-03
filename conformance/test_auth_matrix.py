@@ -1440,6 +1440,16 @@ MATRIX: dict[str, Route] = {
             *_matrix_task_step(ctx)),
         body={"edits": [{"old": "", "new": "conf matrix note patch"}]},
     ),
+    "GET /api/tasks/{task_id}/steps/{step_id}": Route(
+        # T-66. A READ, so it carries GET /api/tasks/{task_id}'s floor and NOT
+        # the agent write gate the three POSTs on this same path segment carry:
+        # there is no executor guard, so no `agent_other` override — a second
+        # agent reading somebody else's step is a 200, exactly as it already is
+        # through get_task. If that is ever wrong it is wrong for both reads.
+        requires="machine",
+        path=lambda ctx, _i: "/api/tasks/{}/steps/{}".format(
+            *_matrix_task_step(ctx)),
+    ),
     "POST /api/tasks/{task_id}/deps": Route(
         requires="agent",
         overrides={"agent_other": 403},

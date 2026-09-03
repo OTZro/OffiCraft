@@ -2827,11 +2827,14 @@ type TaskDTO struct {
 	DedupeKey        *string          `json:"dedupe_key,omitempty"`
 
 	// Deps The blocking task ids. Since T-74f8 a dep is a real hold, not only a display marker: an unassigned outsource task with a live blocker is NOT minted by the 發包 scheduler, and when its last blocker reaches a terminal status the server releases it — durable notice to its executor plus an immediate scheduler tick. It still never rewrites this task's status (status stays derived from its steps).
-	Deps         []string `json:"deps"`
-	Description  *string  `json:"description,omitempty"`
-	DuplicateOf  *string  `json:"duplicate_of,omitempty"`
-	ExecutorId   *string  `json:"executor_id,omitempty"`
-	ExecutorKind string   `json:"executor_kind"`
+	Deps        []string `json:"deps"`
+	Description *string  `json:"description,omitempty"`
+
+	// DetailLevel What this response IS, said by the response itself (T-66): always ``summary``. get_task answers a SUMMARY of the task — complete in every respect EXCEPT that each step's working-note TEXT is omitted and reported only as a size (``TaskStepDTO.note_size_chars``). The counterpart read is ``get_task_step``, whose response declares ``detail_level`` = ``full`` and carries one step's note in full. The STEP LIST here is not abridged: it has no cap and no paging, so this field is a statement about note text and nothing else.
+	DetailLevel  *string `json:"detail_level,omitempty"`
+	DuplicateOf  *string `json:"duplicate_of,omitempty"`
+	ExecutorId   *string `json:"executor_id,omitempty"`
+	ExecutorKind string  `json:"executor_kind"`
 
 	// FrozenBy WHO put this task into the ``frozen`` priority (T-6020): the verified token sub of that write — ``"owner"`` for the owner's own click, else the member / outsource-worker id. ``""`` whenever the task is not frozen (and on rows written before the column existed, which are honestly unattributed); the write that moves the task off ``frozen`` clears it. Served because ``frozen`` is no longer a single-actor knob — owner, admin agent and the task's own executor may all freeze and unfreeze — so the owner must be able to tell their own 喊停 from an agent's by READING the task.
 	FrozenBy *string `json:"frozen_by,omitempty"`
@@ -2856,9 +2859,12 @@ type TaskDTO struct {
 	Id             string                  `json:"id"`
 	Inputs         *map[string]interface{} `json:"inputs,omitempty"`
 	Lock           *string                 `json:"lock,omitempty"`
-	Priority       string                  `json:"priority"`
-	ProgressDone   int                     `json:"progress_done"`
-	ProgressTotal  int                     `json:"progress_total"`
+
+	// NotesIncluded Always ``false`` (T-66): this response carries no step working-note TEXT. Each step reports ``note_size_chars`` instead — the exact number of characters waiting on the server — and ``get_task_step`` returns them one step at a time. Read together with ``detail_level``.
+	NotesIncluded *bool  `json:"notes_included,omitempty"`
+	Priority      string `json:"priority"`
+	ProgressDone  int    `json:"progress_done"`
+	ProgressTotal int    `json:"progress_total"`
 
 	// ReassignedFrom The PREDECESSOR the task was last handed over from (T-ba04 轉派交接): the id (a member id or an outsource worker id) of the executor the task moved AWAY from on its most recent reassign, so the successor and the cockpit can name who to hand over WITH. "" on a task never reassigned (or rows created before the column existed). additive-optional.
 	ReassignedFrom *string `json:"reassigned_from,omitempty"`
@@ -3188,19 +3194,46 @@ type TaskStepDTO struct {
 	IsGate     *bool    `json:"is_gate,omitempty"`
 	Name       *string  `json:"name,omitempty"`
 
-	// Note T-cc3e — the step's free-text working note: what this step got to and what comes next. The GENERAL-PURPOSE note the handover SOP has always told agents to write ("把還在進行中的工作寫回 task step note") and which, until this field existed, had nowhere to land. Writable in ANY step status via POST /api/tasks/{task_id}/steps/{step_id}/note (MCP ``update_step_note``) — unlike ``waiting_reason``, which is bound to waiting_external and cleared on leaving it, and unlike the handoff fields, which are read only on the report that closes the task. Division of labour with the task-level ``description``: the description says WHAT THIS TASK IS (scope, origin, acceptance — stable); the step note says WHERE THIS STEP IS RIGHT NOW (volatile, rewritten as work moves, read by the next session after a handover). Last write wins, wholesale — it is a current-state note, not an append-only log.
-	Note *string `json:"note,omitempty"`
-
 	// NoteCapChars The ceiling the step-note write faces enforce, REPORTED here so the room left can be computed from a read. Until T-6bd2 the step note was the one capped document whose remaining room appeared on no read at all — neither this view nor the wholesale write receipt carried it — so an agent only ever learned the number from the 400 that refused its write, which is both the latest possible moment and the cell that is hit most often. T-6bd2 reports the ceiling and does not move it. Additive-optional.
 	NoteCapChars *int `json:"note_cap_chars,omitempty"`
 
-	// NoteSizeChars The step note's current size in CHARACTERS. Additive-optional (T-6bd2).
+	// NoteSizeChars The step note's EXACT size in characters (Unicode runes) as it is STORED on the server — and therefore, since T-66 removed the ``note`` text from this DTO, the exact amount of text this response is NOT carrying for this step. 0 means the step genuinely has no note (not that the note was withheld); any positive number is a precise count of characters waiting on the server, and ``get_task_step(task_id, step_id)`` is the one call that returns them. Read this before deciding to fetch. Additive-optional (T-6bd2).
 	NoteSizeChars *int    `json:"note_size_chars,omitempty"`
 	OrderIdx      int     `json:"order_idx"`
 	ParallelGroup *string `json:"parallel_group,omitempty"`
 	ReplyCardId   *string `json:"reply_card_id,omitempty"`
 
 	// ReplyCardStatus Read-time join: the CURRENT status (``waiting`` | ``answered``) of the reply card bound to this step (``reply_card_id``); ``""`` when the step carries no card. Lets the task-embedded card (TaskReplyCard) decide AT MOUNT whether to load eagerly (waiting — the live ask / the H4 answered-awaiting-pickup transitional) or lazily (answered — collapsed one-line summary, fetch on expand) WITHOUT a per-card GET, and lets the board derive the H4 badge without the child round-trip. NOT stored — computed each read from the card's live status.
+	ReplyCardStatus *string  `json:"reply_card_status,omitempty"`
+	StartedTs       *float64 `json:"started_ts,omitempty"`
+	Status          string   `json:"status"`
+	TaskId          string   `json:"task_id"`
+	WaitingReason   *string  `json:"waiting_reason,omitempty"`
+}
+
+// TaskStepDetailDTO ONE step of one task, IN FULL (T-66) — the counterpart to TaskStepDTO, which is the summary row “get_task“ serves. Everything TaskStepDTO carries is here, plus the one thing it deliberately does not: “note“, the step's whole working-note text. “detail_level“ is “full“ so a reader can tell the two responses apart without inspecting which fields happen to be present. It describes the STEP and nothing else — no task fields, no sibling steps — because the whole point of the split is that a caller who wants one note does not pay for the ticket.
+type TaskStepDetailDTO struct {
+	// DetailLevel Always ``full``: this response carries the step's complete note text. The mirror of TaskDTO.detail_level = ``summary``.
+	DetailLevel string   `json:"detail_level"`
+	Dod         *string  `json:"dod,omitempty"`
+	FinishedTs  *float64 `json:"finished_ts,omitempty"`
+	Id          string   `json:"id"`
+	IsGate      *bool    `json:"is_gate,omitempty"`
+	Name        *string  `json:"name,omitempty"`
+
+	// Note The step's free-text working note IN FULL (T-cc3e) — what this step got to and what comes next; the field the handover SOP means by 「把還在進行中的工作寫回 task step note」. This is the ONLY read that serves the text: ``get_task`` reports its size and not its content. ``""`` when the step has no note, which is the same thing ``note_size_chars`` = 0 says.
+	Note string `json:"note"`
+
+	// NoteCapChars The ceiling the step-note write faces enforce, REPORTED here (never enforced here) so the room left can be computed from a read. Same number, same name, same meaning as TaskStepDTO.note_cap_chars.
+	NoteCapChars int `json:"note_cap_chars"`
+
+	// NoteSizeChars The size in Unicode runes of the ``note`` this response is CARRYING — so here it is a check on what you were handed, not a promise about text you were not.
+	NoteSizeChars int     `json:"note_size_chars"`
+	OrderIdx      int     `json:"order_idx"`
+	ParallelGroup *string `json:"parallel_group,omitempty"`
+	ReplyCardId   *string `json:"reply_card_id,omitempty"`
+
+	// ReplyCardStatus Read-time join: the CURRENT status (``waiting`` | ``answered``) of the reply card bound to this step; ``""`` when the step carries no card. Same computation as TaskStepDTO.reply_card_status.
 	ReplyCardStatus *string  `json:"reply_card_status,omitempty"`
 	StartedTs       *float64 `json:"started_ts,omitempty"`
 	Status          string   `json:"status"`
@@ -4270,7 +4303,7 @@ type ServerInterface interface {
 	// Open task count (the tasks nav badge).
 	// (GET /api/tasks/count)
 	HandleTaskCountApiTasksCountGet(w http.ResponseWriter, r *http.Request)
-	// Read one task (steps, deps, progress, gate cards).
+	// Read one task — and read it knowing it is a SUMMARY, not the whole of it: the response says so itself (“detail_level“ = “summary“, “notes_included“ = false). WHAT IS COMPLETE HERE: the task's own fields, its deps, its progress counts, its gate cards, and EVERY ONE of its steps. The step list has no cap, no paging and no truncation of any kind — the rows you get back are all the rows there are, so a step that is not here does not exist on this task. WHAT IS OMITTED, AND EXACTLY HOW MUCH OF IT: each step's working-note TEXT (T-66). In its place every step carries “note_size_chars“ — the EXACT number of characters of note sitting on the server for that step, where 0 means that step genuinely has no note — and “note_cap_chars“, the ceiling. A positive “note_size_chars“ is a precise promise that that many characters are waiting for you, and “get_task_step(task_id, step_id)“ is the one call that returns them, one step at a time. Read the sizes first, then fetch only the notes you actually need. Unknown id → 404.
 	// (GET /api/tasks/{task_id})
 	HandleGetTaskApiTasksTaskIdGet(w http.ResponseWriter, r *http.Request, taskId string)
 	// Correct THIS task's own TEXT — its title, its description, or both in one write (T-646a). Replaces `update_task_title` and `update_task_description`, which documented the same rules twice and could not be applied together: changing both meant two calls, two transactions and two SSE deltas, with room for someone else's write to land in between. WHO: the task's own executor, or an admin/owner; anyone else is a flat 403. Creating a task grants NO standing to keep rewriting it — if you handed the task over, it is the new executor's text now. ⚠️ ONE STRUCTURAL EXCEPTION (T-52, owner 2026-09-02): while the task has NO executor AT ALL (`executor_id` empty — where a 發包票 sits between create_task and the moment the scheduler binds a worker to it), its CREATOR may correct the text here, because otherwise nobody who is awake could fix the brief the contractor reads on arrival and that window has no upper bound. It SHUTS the instant an executor is bound — from then on the creator is a flat 403 again, even though it opened the ticket. TEXT ONLY: the same window opens add_task_artifact, remove_task_artifact, update_step_note, patch_step_note and the task_title / task_description restores, and nothing else — never freeze, terminate, reassign, claim, plan, step status, deps or closeout. PARTIAL: only the fields you NAME are touched, so omitting a field is a legal no-op for it that versions nothing and fans nothing. ⚠️ THE TWO FIELDS TREAT AN EXPLICIT BLANK DIFFERENTLY, and that is an owner ruling rather than an inconsistency (card rc-796541192519, 2026-08-11, option ①): a blank `title` ("" or whitespace-only) is REFUSED with 400 and does NOT clear the field, because create_task refuses a blank title too and an edit door looser than the create door would let a caller reach a task-list row with nothing in it; a blank `description` IS accepted and DOES clear the text, because plenty of cards legitimately have no prose. VALIDATION IS WHOLE-BODY AND HAPPENS FIRST: a request carrying a blank title alongside a perfectly good description writes NEITHER — a 400 leaves the task exactly as it was, never half-applied. Both values are trimmed of surrounding whitespace before they are stored AND before they are compared with what is there, so re-sending the same text with a stray trailing space is correctly seen as no change rather than spending one of the retained revisions saying nothing moved. ⚠️ THAT HOLDS ONLY WHILE THE STORED TEXT IS ALREADY TRIMMED. Whenever the stored description carries untrimmed whitespace, the next edit here normalises it and therefore DOES spend a revision — even when you re-send exactly what you read back. TWO things can put untrimmed text in that column, so this is not a one-time settling: create_task, which never trims the description (it does trim the title), and a RESTORE of a revision that holds untrimmed text, which is written back verbatim. Before this ticket both doors stored it raw and agreed; this tool trims and create still does not, which is a divergence awaiting a ruling rather than a promise about the system. The write is wholesale within each field: send the full corrected text, not a fragment. ⚠️ Division of labour with update_step_note: the DESCRIPTION says what this task IS (stable); the step NOTE says where a step is RIGHT NOW (volatile, handover-facing) — do not put progress here. A CLOSED task (completed / terminated / duplicated) is STILL editable, on the same terms — unlike its artifact set, which freezes at close: artifacts record what the task PRODUCED and must stop moving, while a ticket worded wrongly is usually found to be wrong after it closed, and freezing the text would preserve a known falsehood in the permanent record. Every change that actually alters a field retains the previous value as a document version — kind `task_title` / `task_description`, key = the task id — so a correction is recoverable through list_document_history and the older wording is never simply gone.
@@ -4309,10 +4342,13 @@ type ServerInterface interface {
 	// Reassign a task to a member or a fresh outsource worker (executor-guarded: a plain agent may reassign only a task it executes; owner/admin drive any task). Caller authorization (正職授權矩陣, T-23cf): owner/admin may hand a task to any active member or 發包 it to a fresh outsource worker; a 一般正職 may only turn its own task into a 發包 (a member target is 403); an outsource worker may not reassign at all. An outsource target uses target.runtime claude/codex (absent = claude), lands the task unassigned for the scheduler to spawn under the global parallel cap, and enters the reassigning handover state.
 	// (POST /api/tasks/{task_id}/reassign)
 	HandleReassignTaskApiTasksTaskIdReassignPost(w http.ResponseWriter, r *http.Request, taskId string)
-	// Write this step's working note: where the work stands and what comes next — the field the handover SOP means by 「把還在進行中的工作寫回 task step note」. WHAT TO WRITE — three things, then stop: (1) STATE — one sentence on where this step actually got to; (2) NEXT — one sentence on what whoever takes over does next; (3) EVIDENCE POINTERS — version ids, file and log paths, what you verified YOURSELF versus what you are taking on someone's word, and the limits of what was NOT done. Long narrative does not live here: reasoning and scope belong in the task description, reports and diffs belong on the task as artifacts. The note is the current state — not a report, not an append-only log. Writable in ANY step status (pending, in_progress, waiting_owner, waiting_external, done, superseded), unlike `waiting_reason`, which is locked to waiting_external. Wholesale write: `note` replaces whatever was there and "" clears it, so rewrite it as the work moves rather than appending; over 4,000 characters (counted in runes) is refused. Same executor/admin gate as every other task-driving write (403 otherwise). ⚠️ A task auto-closes when its last step is reported done and a closed task 409s — so write the note BEFORE the report that finishes the last step, not after. The receipt carries `size_chars` / `cap_chars`, so the room left is on every write instead of only on the 400 that refuses one; `get_task` reports the same pair per step as `note_size_chars` / `note_cap_chars`.
+	// Read ONE step of one task IN FULL — the companion read to “get_task“, which answers a SUMMARY. This response declares “detail_level“ = “full“ and carries that single step's ENTIRE working note (“note“) alongside its “note_size_chars“ / “note_cap_chars“, its status, DoD, “waiting_reason“, gate flags, “parallel_group“, bound “reply_card_id“ and that card's live “reply_card_status“. It carries NOTHING about the task itself and NOTHING about any other step, and that is the point: “get_task“ tells you WHICH steps have a note (“note_size_chars“ > 0) and exactly how big it is, and this tool fetches one of them without dragging the whole ticket along. Same read floor as “get_task“ — any authenticated principal may read any task's step; there is no executor gate on a READ. 404 for an unknown task, and 404 for a step id that exists but belongs to a DIFFERENT task: a step is only ever readable through its own task, so a wrong task_id never leaks somebody else's step.
+	// (GET /api/tasks/{task_id}/steps/{step_id})
+	HandleGetTaskStepApiTasksTaskIdStepsStepIdGet(w http.ResponseWriter, r *http.Request, taskId string, stepId string)
+	// Write this step's working note: where the work stands and what comes next — the field the handover SOP means by 「把還在進行中的工作寫回 task step note」. WHAT TO WRITE — three things, then stop: (1) STATE — one sentence on where this step actually got to; (2) NEXT — one sentence on what whoever takes over does next; (3) EVIDENCE POINTERS — version ids, file and log paths, what you verified YOURSELF versus what you are taking on someone's word, and the limits of what was NOT done. Long narrative does not live here: reasoning and scope belong in the task description, reports and diffs belong on the task as artifacts. The note is the current state — not a report, not an append-only log. Writable in ANY step status (pending, in_progress, waiting_owner, waiting_external, done, superseded), unlike `waiting_reason`, which is locked to waiting_external. Wholesale write: `note` replaces whatever was there and "" clears it, so rewrite it as the work moves rather than appending; over 4,000 characters (counted in runes) is refused. Same executor/admin gate as every other task-driving write (403 otherwise). ⚠️ A task auto-closes when its last step is reported done and a closed task 409s — so write the note BEFORE the report that finishes the last step, not after. The receipt carries `size_chars` / `cap_chars`, so the room left is on every write instead of only on the 400 that refuses one; `get_task` reports the same pair per step as `note_size_chars` / `note_cap_chars`, but since T-66 it no longer carries the note TEXT — read a note back with `get_task_step(task_id, step_id)`, which answers that one step in full.
 	// (POST /api/tasks/{task_id}/steps/{step_id}/note)
 	HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePost(w http.ResponseWriter, r *http.Request, taskId string, stepId string)
-	// Patch this step's working note by unique anchors ({edits:[{old,new}]}) — send only the part that changed, instead of re-typing the whole note. USE THIS WHENEVER YOU ARE AMENDING A NOTE THAT ALREADY HAS CONTENT. update_step_note is a wholesale replace, so if anyone else wrote to the step between your read and your write, your copy is stale and the replace silently deletes their text — and because your stale copy is usually the LONGER one, no guard fires and nothing tells you. A patch cannot do that: a non-empty old must match the current note EXACTLY ONCE (0 or >1 hits reject the WHOLE batch with a 400 that names which edit failed and which tool to re-read with, zero writes), so a concurrent write turns into a refusal you can see. Edits apply in order; an empty old appends. Wiping the note, or shrinking it below a tenth, needs allow_shrink=true — for an honest rewrite from scratch use update_step_note. Same executor/admin gate, same any-step-status generality, same closed-task 409 as update_step_note. Re-read with get_task after a refusal.
+	// Patch this step's working note by unique anchors ({edits:[{old,new}]}) — send only the part that changed, instead of re-typing the whole note. USE THIS WHENEVER YOU ARE AMENDING A NOTE THAT ALREADY HAS CONTENT. update_step_note is a wholesale replace, so if anyone else wrote to the step between your read and your write, your copy is stale and the replace silently deletes their text — and because your stale copy is usually the LONGER one, no guard fires and nothing tells you. A patch cannot do that: a non-empty old must match the current note EXACTLY ONCE (0 or >1 hits reject the WHOLE batch with a 400 that names which edit failed and which tool to re-read with, zero writes), so a concurrent write turns into a refusal you can see. Edits apply in order; an empty old appends. Wiping the note, or shrinking it below a tenth, needs allow_shrink=true — for an honest rewrite from scratch use update_step_note. Same executor/admin gate, same any-step-status generality, same closed-task 409 as update_step_note. Re-read with get_task_step after a refusal — get_task reports each step's note SIZE (note_size_chars) but since T-66 no longer carries its text.
 	// (POST /api/tasks/{task_id}/steps/{step_id}/note/patch)
 	HandlePatchTaskStepNoteApiTasksTaskIdStepsStepIdNotePatchPost(w http.ResponseWriter, r *http.Request, taskId string, stepId string)
 	// Report a step status (pending/in_progress/waiting_external/done). Entering waiting_external requires a non-blank waiting_reason (422 otherwise); the task status is derived from its steps. T-74f8 交棒閘: if this report would CLOSE the task (every step done) AND the task's creator is not its executor, the call is REFUSED with 422 unless you say where the ball goes IN THIS SAME CALL — handoff='return_to_creator' (recorded on the task and nothing else — no task is opened and nobody is notified), handoff='follow_up' + handoff_task_id=<a successor task you already created> (the server hangs this task off it as a dependency, and closing this one releases it), or handoff='none' + handoff_note=<why nothing follows>. The gate stands aside by itself when a non-terminal task already depends on this one — you never see it if the handover is already real. It refuses BEFORE writing anything, so a refused report leaves the plan fully editable: create the successor task, then re-send this same report with the declaration. This is your LAST chance — once the task closes it can never be replanned (submit_plan becomes a permanent 409).
@@ -8091,6 +8127,41 @@ func (siw *ServerInterfaceWrapper) HandleReassignTaskApiTasksTaskIdReassignPost(
 	handler.ServeHTTP(w, r)
 }
 
+// HandleGetTaskStepApiTasksTaskIdStepsStepIdGet operation middleware
+func (siw *ServerInterfaceWrapper) HandleGetTaskStepApiTasksTaskIdStepsStepIdGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "task_id" -------------
+	var taskId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "task_id", r.PathValue("task_id"), &taskId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "task_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "step_id" -------------
+	var stepId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "step_id", r.PathValue("step_id"), &stepId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "step_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleGetTaskStepApiTasksTaskIdStepsStepIdGet(w, r, taskId, stepId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePost operation middleware
 func (siw *ServerInterfaceWrapper) HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePost(w http.ResponseWriter, r *http.Request) {
 
@@ -8780,6 +8851,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/plan", wrapper.HandleSubmitTaskPlanApiTasksTaskIdPlanPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/priority", wrapper.HandleSetTaskPriorityApiTasksTaskIdPriorityPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/reassign", wrapper.HandleReassignTaskApiTasksTaskIdReassignPost)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/tasks/{task_id}/steps/{step_id}", wrapper.HandleGetTaskStepApiTasksTaskIdStepsStepIdGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/steps/{step_id}/note", wrapper.HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/steps/{step_id}/note/patch", wrapper.HandlePatchTaskStepNoteApiTasksTaskIdStepsStepIdNotePatchPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/steps/{step_id}/status", wrapper.HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPost)

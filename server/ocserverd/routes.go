@@ -1539,7 +1539,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleGetTaskApiTasksTaskIdGet,
 			Auth:     authGated,
 			Requires: principalMachine,
-			Summary:  "Read one task (steps, deps, progress, gate cards).",
+			Summary:  "Read one task — and read it knowing it is a SUMMARY, not the whole of it: the response says so itself (``detail_level`` = ``summary``, ``notes_included`` = false). WHAT IS COMPLETE HERE: the task's own fields, its deps, its progress counts, its gate cards, and EVERY ONE of its steps. The step list has no cap, no paging and no truncation of any kind — the rows you get back are all the rows there are, so a step that is not here does not exist on this task. WHAT IS OMITTED, AND EXACTLY HOW MUCH OF IT: each step's working-note TEXT (T-66). In its place every step carries ``note_size_chars`` — the EXACT number of characters of note sitting on the server for that step, where 0 means that step genuinely has no note — and ``note_cap_chars``, the ceiling. A positive ``note_size_chars`` is a precise promise that that many characters are waiting for you, and ``get_task_step(task_id, step_id)`` is the one call that returns them, one step at a time. Read the sizes first, then fetch only the notes you actually need. Unknown id → 404.",
 			MCPTool:  "get_task",
 		},
 		{
@@ -1673,7 +1673,7 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Handler:  w.HandleUpdateTaskStepNoteApiTasksTaskIdStepsStepIdNotePost,
 			Auth:     authGated,
 			Requires: principalAgent,
-			Summary:  "Write this step's working note: where the work stands and what comes next — the field the handover SOP means by 「把還在進行中的工作寫回 task step note」. WHAT TO WRITE — three things, then stop: (1) STATE — one sentence on where this step actually got to; (2) NEXT — one sentence on what whoever takes over does next; (3) EVIDENCE POINTERS — version ids, file and log paths, what you verified YOURSELF versus what you are taking on someone's word, and the limits of what was NOT done. Long narrative does not live here: reasoning and scope belong in the task description, reports and diffs belong on the task as artifacts. The note is the current state — not a report, not an append-only log. Writable in ANY step status (pending, in_progress, waiting_owner, waiting_external, done, superseded), unlike `waiting_reason`, which is locked to waiting_external. Wholesale write: `note` replaces whatever was there and \"\" clears it, so rewrite it as the work moves rather than appending; over 4,000 characters (counted in runes) is refused. Same executor/admin gate as every other task-driving write (403 otherwise). ⚠️ A task auto-closes when its last step is reported done and a closed task 409s — so write the note BEFORE the report that finishes the last step, not after. The receipt carries `size_chars` / `cap_chars`, so the room left is on every write instead of only on the 400 that refuses one; `get_task` reports the same pair per step as `note_size_chars` / `note_cap_chars`.",
+			Summary:  "Write this step's working note: where the work stands and what comes next — the field the handover SOP means by 「把還在進行中的工作寫回 task step note」. WHAT TO WRITE — three things, then stop: (1) STATE — one sentence on where this step actually got to; (2) NEXT — one sentence on what whoever takes over does next; (3) EVIDENCE POINTERS — version ids, file and log paths, what you verified YOURSELF versus what you are taking on someone's word, and the limits of what was NOT done. Long narrative does not live here: reasoning and scope belong in the task description, reports and diffs belong on the task as artifacts. The note is the current state — not a report, not an append-only log. Writable in ANY step status (pending, in_progress, waiting_owner, waiting_external, done, superseded), unlike `waiting_reason`, which is locked to waiting_external. Wholesale write: `note` replaces whatever was there and \"\" clears it, so rewrite it as the work moves rather than appending; over 4,000 characters (counted in runes) is refused. Same executor/admin gate as every other task-driving write (403 otherwise). ⚠️ A task auto-closes when its last step is reported done and a closed task 409s — so write the note BEFORE the report that finishes the last step, not after. The receipt carries `size_chars` / `cap_chars`, so the room left is on every write instead of only on the 400 that refuses one; `get_task` reports the same pair per step as `note_size_chars` / `note_cap_chars`, but since T-66 it no longer carries the note TEXT — read a note back with `get_task_step(task_id, step_id)`, which answers that one step in full.",
 			MCPTool:  "update_step_note",
 		},
 		{
@@ -1685,8 +1685,28 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			// executor-or-admin gate — the handler shares it verbatim, so the two
 			// faces onto one field can never disagree about who may write.
 			Requires: principalAgent,
-			Summary:  "Patch this step's working note by unique anchors ({edits:[{old,new}]}) — send only the part that changed, instead of re-typing the whole note. USE THIS WHENEVER YOU ARE AMENDING A NOTE THAT ALREADY HAS CONTENT. update_step_note is a wholesale replace, so if anyone else wrote to the step between your read and your write, your copy is stale and the replace silently deletes their text — and because your stale copy is usually the LONGER one, no guard fires and nothing tells you. A patch cannot do that: a non-empty old must match the current note EXACTLY ONCE (0 or >1 hits reject the WHOLE batch with a 400 that names which edit failed and which tool to re-read with, zero writes), so a concurrent write turns into a refusal you can see. Edits apply in order; an empty old appends. Wiping the note, or shrinking it below a tenth, needs allow_shrink=true — for an honest rewrite from scratch use update_step_note. Same executor/admin gate, same any-step-status generality, same closed-task 409 as update_step_note. Re-read with get_task after a refusal.",
+			Summary:  "Patch this step's working note by unique anchors ({edits:[{old,new}]}) — send only the part that changed, instead of re-typing the whole note. USE THIS WHENEVER YOU ARE AMENDING A NOTE THAT ALREADY HAS CONTENT. update_step_note is a wholesale replace, so if anyone else wrote to the step between your read and your write, your copy is stale and the replace silently deletes their text — and because your stale copy is usually the LONGER one, no guard fires and nothing tells you. A patch cannot do that: a non-empty old must match the current note EXACTLY ONCE (0 or >1 hits reject the WHOLE batch with a 400 that names which edit failed and which tool to re-read with, zero writes), so a concurrent write turns into a refusal you can see. Edits apply in order; an empty old appends. Wiping the note, or shrinking it below a tenth, needs allow_shrink=true — for an honest rewrite from scratch use update_step_note. Same executor/admin gate, same any-step-status generality, same closed-task 409 as update_step_note. Re-read with get_task_step after a refusal — get_task reports each step's note SIZE (note_size_chars) but since T-66 no longer carries its text.",
 			MCPTool:  "patch_step_note",
+		},
+		// T-66: the READ half of the step-note split. Its POSITION here is a wire
+		// fact, not tidiness — the MCP catalogue's element-wise order mirrors
+		// this table (conformance asserts the two agree), so this row sits where
+		// x-mcp.order 79 puts the tool: after patch_step_note, before
+		// set_task_deps. Moving it moves get_task_step in tools/list.
+		//
+		// principalMachine, NOT principalAgent: this is a READ, and it carries
+		// the same floor GET /api/tasks/{task_id} carries. The note was already
+		// readable by any authenticated principal through the task view; a
+		// stricter floor here would close nothing and would only make the note
+		// unreachable through the tool that exists to serve it.
+		{
+			Method:   "GET",
+			Path:     "/api/tasks/{task_id}/steps/{step_id}",
+			Handler:  w.HandleGetTaskStepApiTasksTaskIdStepsStepIdGet,
+			Auth:     authGated,
+			Requires: principalMachine,
+			Summary:  "Read ONE step of one task IN FULL — the companion read to ``get_task``, which answers a SUMMARY. This response declares ``detail_level`` = ``full`` and carries that single step's ENTIRE working note (``note``) alongside its ``note_size_chars`` / ``note_cap_chars``, its status, DoD, ``waiting_reason``, gate flags, ``parallel_group``, bound ``reply_card_id`` and that card's live ``reply_card_status``. It carries NOTHING about the task itself and NOTHING about any other step, and that is the point: ``get_task`` tells you WHICH steps have a note (``note_size_chars`` > 0) and exactly how big it is, and this tool fetches one of them without dragging the whole ticket along. Same read floor as ``get_task`` — any authenticated principal may read any task's step; there is no executor gate on a READ. 404 for an unknown task, and 404 for a step id that exists but belongs to a DIFFERENT task: a step is only ever readable through its own task, so a wrong task_id never leaks somebody else's step.",
+			MCPTool:  "get_task_step",
 		},
 		{
 			Method:   "POST",
