@@ -22,6 +22,7 @@ function wireArtifact(over: Partial<WireTaskArtifact>): WireTaskArtifact {
     attachment_id: "",
     created_ts: 0,
     created_by: "",
+    version_count: 1,
     ...over,
   };
 }

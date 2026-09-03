@@ -320,6 +320,10 @@ func (s *apiServer) taskArtifactDTOs(taskID string) ([]taskArtifactDTO, error) {
 	if err != nil {
 		return nil, err
 	}
+	retained, err := s.dal.TaskArtifactHistoryCounts(taskID)
+	if err != nil {
+		return nil, err
+	}
 	out := []taskArtifactDTO{}
 	for _, a := range arts {
 		var att *ChatAttachment
@@ -329,7 +333,7 @@ func (s *apiServer) taskArtifactDTOs(taskID string) ([]taskArtifactDTO, error) {
 				return nil, err
 			}
 		}
-		out = append(out, newTaskArtifactDTO(a, att))
+		out = append(out, newTaskArtifactDTO(a, att, retained[a.ID]))
 	}
 	return out, nil
 }
@@ -2862,8 +2866,7 @@ func (s *apiServer) HandleAddTaskArtifactApiTasksTaskIdArtifactPost(w http.Respo
 		return
 	}
 	if TaskIsTerminal(t.Status) {
-		writeError(w, http.StatusConflict,
-			"task '"+taskId+"' is closed ("+t.Status+") — its deliverables are frozen")
+		writeError(w, http.StatusConflict, taskFrozenDeliverablesRefusal(*t))
 		return
 	}
 	art := TaskArtifact{
@@ -2933,32 +2936,8 @@ func (s *apiServer) HandleAddTaskArtifactApiTasksTaskIdArtifactPost(w http.Respo
 // be removed from a closed card and never put back. Like add's, this guard sits
 // after the permission check, so admin/owner are not exempt either.
 func (s *apiServer) HandleRemoveTaskArtifactApiTasksTaskIdArtifactArtifactIdDelete(w http.ResponseWriter, r *http.Request, taskId, artifactId string) {
-	t, err := s.resolveTask(taskId)
-	if err != nil {
-		writeResolveError(w, err, "task", taskId)
-		return
-	}
-	if !s.callerMayEditTaskText(r, *t) {
-		writeError(w, http.StatusForbidden, executorGuardRefusal)
-		return
-	}
-	if TaskIsTerminal(t.Status) {
-		writeError(w, http.StatusConflict,
-			"task '"+taskId+"' is closed ("+t.Status+") — its deliverables are frozen")
-		return
-	}
-	art, err := s.dal.GetTaskArtifact(artifactId)
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	if art == nil {
-		writeError(w, http.StatusNotFound, "artifact '"+artifactId+"' not found")
-		return
-	}
-	if art.TaskID != t.ID {
-		writeError(w, http.StatusBadRequest,
-			"artifact '"+artifactId+"' does not belong to task '"+taskId+"'")
+	t, _, ok := s.artifactOnTask(w, r, taskId, artifactId, true)
+	if !ok {
 		return
 	}
 	if _, err := s.dal.DeleteTaskArtifact(artifactId); err != nil {
@@ -2967,6 +2946,210 @@ func (s *apiServer) HandleRemoveTaskArtifactApiTasksTaskIdArtifactArtifactIdDele
 	}
 	s.publishTask(*t, requestTrigger(r))
 	s.writeTaskArtifactReceipt(w, *t, artifactId)
+}
+
+// artifactOnTask resolves the (task, artifact) pair the per-artifact routes
+// address and answers every guard they share, in the ONE order the wire
+// documents for all of them: 404 task → 403 not the executor (admin excepted,
+// §14) → 409 the task is closed → 404 artifact → 400 the artifact belongs to a
+// different task.
+//
+// frozenRefused is where the verbs differ and the only place they may: a WRITE
+// passes true and is refused on a closed task, a READ passes false because
+// reading a finished task's deliverables is exactly when a reader wants to. The
+// 409 sits AFTER the permission check on purpose — admin/owner are not exempt
+// from the freeze (owner ruling 2026-07-25) — and BEFORE the artifact lookup, so
+// a frozen task answers the same 409 whether or not the caller guessed a real
+// artifact id.
+// taskFrozenDeliverablesRefusal is the ONE sentence all three artifact verbs
+// refuse a closed task with. Written once because the freeze is one rule: three
+// copies could drift into telling a caller three different things about the
+// same wall (owner ruling 2026-07-25).
+func taskFrozenDeliverablesRefusal(t Task) string {
+	return "task '" + t.ID + "' is closed (" + t.Status +
+		") — its deliverables are frozen"
+}
+
+func (s *apiServer) artifactOnTask(
+	w http.ResponseWriter, r *http.Request, taskID, artifactID string, frozenRefused bool,
+) (*Task, *TaskArtifact, bool) {
+	t, err := s.resolveTask(taskID)
+	if err != nil {
+		writeResolveError(w, err, "task", taskID)
+		return nil, nil, false
+	}
+	if !s.callerMayEditTaskText(r, *t) {
+		writeError(w, http.StatusForbidden, executorGuardRefusal)
+		return nil, nil, false
+	}
+	if frozenRefused && TaskIsTerminal(t.Status) {
+		writeError(w, http.StatusConflict, taskFrozenDeliverablesRefusal(*t))
+		return nil, nil, false
+	}
+	art, err := s.dal.GetTaskArtifact(artifactID)
+	if err != nil {
+		internalError(w, err)
+		return nil, nil, false
+	}
+	if art == nil {
+		writeError(w, http.StatusNotFound, "artifact '"+artifactID+"' not found")
+		return nil, nil, false
+	}
+	if art.TaskID != t.ID {
+		writeError(w, http.StatusBadRequest,
+			"artifact '"+artifactID+"' does not belong to task '"+taskID+"'")
+		return nil, nil, false
+	}
+	return t, art, true
+}
+
+// POST /api/tasks/{task_id}/artifact/{artifact_id}/replace — swap ONE pinned
+// deliverable's content while its id stays put (MCP replace_task_artifact,
+// T-60). The reason the verb exists rather than remove+add: remove+add mints a
+// NEW artifact id, so every reader holding the old one is left pointing at
+// nothing — and on a task that has since closed the pair is refused outright.
+//
+// Guard order mirrors add's exactly: 404 task → 403 not the executor (admin
+// excepted, §14) → 409 terminal → 404 artifact → 400 wrong task → 400 the
+// content rules. THE 409 IS THE THIRD COPY of the same freeze (owner ruling
+// 2026-07-25): a closed task's deliverable set is frozen in EVERY direction, and
+// like add's and remove's it sits AFTER the permission check, so admin/owner are
+// not exempt. A replace verb without it would be the freeze's open back door —
+// the content of a frozen deliverable could be swapped for anything.
+//
+// KIND IS IMMUTABLE ACROSS VERSIONS. The artifact id is what does not move, and
+// a reader that resolved it as an image must not find a link there next time; a
+// caller that wants a different kind un-pins and registers a new one.
+func (s *apiServer) HandleReplaceTaskArtifactApiTasksTaskIdArtifactArtifactIdReplacePost(
+	w http.ResponseWriter, r *http.Request, taskId, artifactId string,
+) {
+	var body TaskArtifactReplaceInputDTO
+	if !decodeJSONBody(w, r, &body) {
+		return
+	}
+	t, art, ok := s.artifactOnTask(w, r, taskId, artifactId, true)
+	if !ok {
+		return
+	}
+	// pinned is the artifact's CONTENT kind (file/image/link) — the same value
+	// add reads out of its request body, and nothing to do with a member kind.
+	pinned := art.Kind
+	if kind := trimmedOrEmpty(body.Kind); kind != "" && kind != pinned {
+		writeError(w, http.StatusBadRequest, artifactKindRefusal(pinned, kind))
+		return
+	}
+	next := TaskArtifact{
+		ID:        art.ID,
+		TaskID:    art.TaskID,
+		Kind:      pinned,
+		Label:     trimmedOrEmpty(body.Label),
+		CreatedTS: nowSecs(),
+		CreatedBy: currentActor(r),
+	}
+	url, attID := trimmedOrEmpty(body.Url), trimmedOrEmpty(body.AttachmentId)
+	if pinned == ArtifactKindLink {
+		if attID != "" {
+			writeError(w, http.StatusBadRequest,
+				artifactKindRefusal(pinned, ArtifactKindFile))
+			return
+		}
+		if url == "" {
+			writeError(w, http.StatusBadRequest,
+				"url is required for a link artifact")
+			return
+		}
+		next.URL = url
+	} else {
+		if url != "" {
+			writeError(w, http.StatusBadRequest,
+				artifactKindRefusal(pinned, ArtifactKindLink))
+			return
+		}
+		if attID == "" {
+			writeError(w, http.StatusBadRequest,
+				"attachment_id is required for a "+pinned+" artifact")
+			return
+		}
+		if isMemberAvatarAttachmentID(attID) {
+			writeError(w, http.StatusBadRequest,
+				"attachment '"+attID+"' is reserved for a member avatar")
+			return
+		}
+		att, err := s.dal.GetChatAttachment(attID)
+		if err != nil {
+			internalError(w, err)
+			return
+		}
+		if att == nil {
+			writeError(w, http.StatusBadRequest,
+				"attachment '"+attID+"' not found (upload it first via POST /api/chat/attachments)")
+			return
+		}
+		next.AttachmentID = attID
+	}
+	replaced, err := s.dal.ReplaceTaskArtifact(next)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	if !replaced {
+		writeError(w, http.StatusNotFound, "artifact '"+artifactId+"' not found")
+		return
+	}
+	// Same fan-out as add/remove: the artifact set rides the EXISTING task
+	// topic, and the task row itself is unchanged.
+	s.publishTask(*t, requestTrigger(r))
+	versions, err := s.dal.ListTaskArtifactHistory(art.ID)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	arts, err := s.dal.ListTaskArtifacts(t.ID)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, taskArtifactReplaceReceiptDTO{
+		TaskID: t.ID, ArtifactID: art.ID, ArtifactCount: len(arts),
+		VersionCount: len(versions) + 1,
+	})
+}
+
+// artifactKindRefusal is the one sentence every cross-kind replacement is
+// refused with — written once so the three ways to ask for one (an explicit
+// kind, a url on a file, an attachment_id on a link) cannot answer differently
+// about the same rule.
+func artifactKindRefusal(pinned, asked string) string {
+	return "artifact kind cannot change across versions: this artifact is a " +
+		pinned + " and the replacement asks for a " + asked +
+		" — un-pin it and register a new artifact instead"
+}
+
+// GET /api/tasks/{task_id}/artifact/{artifact_id}/history — the retained
+// previous versions of one deliverable, newest first (T-60). MCPExclude: the
+// agent that replaced a deliverable already knows what it replaced, and this
+// list exists for the human reading the card.
+//
+// NO terminal-task guard: reading a closed task's history is exactly when a
+// reader wants it. There is deliberately no restore face — an older version
+// goes back by replacing FORWARD with it.
+func (s *apiServer) HandleListTaskArtifactHistoryApiTasksTaskIdArtifactArtifactIdHistoryGet(
+	w http.ResponseWriter, r *http.Request, taskId, artifactId string,
+) {
+	_, art, ok := s.artifactOnTask(w, r, taskId, artifactId, false)
+	if !ok {
+		return
+	}
+	versions, err := s.dal.ListTaskArtifactHistory(art.ID)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	out := make([]taskArtifactVersionDTO, 0, len(versions))
+	for _, v := range versions {
+		out = append(out, newTaskArtifactVersionDTO(v))
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // T-4595 — get_my_task (GET /api/self/task) is RETIRED, tool and route alike.

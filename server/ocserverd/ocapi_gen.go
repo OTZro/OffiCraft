@@ -2738,7 +2738,7 @@ type SigningKeysDTO struct {
 	Keys []SigningKeyDTO `json:"keys"`
 }
 
-// TaskArtifactDTO One pinned deliverable on a task's artifact set (T-3dc5). “kind“ is the closed set file|image|link. FILE/IMAGE artifacts reference the shared chat_attachment blob store: “attachment_id“ is the blob id, “url“ is its serve path (“/api/chat/attachment/{attachment_id}“), and “filename“/“mime“/“is_image“ echo the blob metadata (resolved read-time; empty when the blob is gone). LINK artifacts carry a bare external “url“ (a PR link) with “attachment_id“/“mime“/“filename“ empty and “is_image“ false. “label“ is the display name (a link's title, or a filename override); “created_by“ is the verified token sub of the registrar.
+// TaskArtifactDTO One pinned deliverable on a task's artifact set (T-3dc5). “kind“ is the closed set file|image|link. FILE/IMAGE artifacts reference the shared chat_attachment blob store: “attachment_id“ is the blob id, “url“ is its serve path (“/api/chat/attachment/{attachment_id}“), and “filename“/“mime“/“is_image“ echo the blob metadata (resolved read-time; empty when the blob is gone). LINK artifacts carry a bare external “url“ (a PR link) with “attachment_id“/“mime“/“filename“ empty and “is_image“ false. “label“ is the display name (a link's title, or a filename override); “created_by“ is the verified token sub of the registrar. “version_count“ (T-60) is how many versions of this deliverable exist, the live one INCLUDED — 1 for an artifact that has never been replaced, and bounded above because only the most recent few replaced versions are retained; list them with GET /api/tasks/{task_id}/artifact/{artifact_id}/history.
 type TaskArtifactDTO struct {
 	AttachmentId *string  `json:"attachment_id,omitempty"`
 	CreatedBy    *string  `json:"created_by,omitempty"`
@@ -2750,6 +2750,9 @@ type TaskArtifactDTO struct {
 	Label        *string  `json:"label,omitempty"`
 	Mime         *string  `json:"mime,omitempty"`
 	Url          *string  `json:"url,omitempty"`
+
+	// VersionCount How many versions of this deliverable exist, the LIVE one included — 1 for an artifact that has never been replaced. additive-optional (absent reads as 0 for older servers).
+	VersionCount *int `json:"version_count,omitempty"`
 }
 
 // TaskArtifactInputDTO Register one artifact onto a task (MCP “add_task_artifact“). “kind“ is required: file|image|link. For file/image, “attachment_id“ is required — the chat_attachment blob id from a prior “POST /api/chat/attachments“ upload (one blob mechanism, not two). For link, “url“ is required — a bare http(s) URL (a PR link). “label“ is an optional display name (a link's title such as "PR #123", or a filename override); absent = the blob's own filename (file/image) or the URL itself (link).
@@ -2765,6 +2768,33 @@ type TaskArtifactReceiptDTO struct {
 	ArtifactCount int    `json:"artifact_count"`
 	ArtifactId    string `json:"artifact_id"`
 	TaskId        string `json:"task_id"`
+}
+
+// TaskArtifactReplaceInputDTO Replace one pinned artifact's content in place (MCP “replace_task_artifact“). The id does not move; the content does. Send “attachment_id“ for a file/image artifact (the chat_attachment blob id from a prior “POST /api/chat/attachments“ upload) or “url“ for a link artifact — whichever the artifact's EXISTING kind calls for, since the kind cannot change across versions. “kind“ is optional and is an ASSERTION rather than an instruction: when present it must equal the pinned kind, so a caller that believes it is replacing a link is told it is wrong instead of being handed a 400 about some other field. “label“ is optional and is not merged with the previous version's — omitting it leaves the new version with no label at all.
+type TaskArtifactReplaceInputDTO struct {
+	AttachmentId *string `json:"attachment_id,omitempty"`
+	Kind         *string `json:"kind,omitempty"`
+	Label        *string `json:"label,omitempty"`
+	Url          *string `json:"url,omitempty"`
+}
+
+// TaskArtifactReplaceReceiptDTO Bounded receipt returned after REPLACING one deliverable (T-60). The same three fields as “TaskArtifactReceiptDTO“ — the artifact the write touched and the resulting size of the set — plus “version_count“, how many versions that artifact now has with the live one included. That last one is the part a replacing caller cannot predict: it stops climbing once the retained depth is reached, which is also the signal that an older version has just been discarded. Fetch GET /api/tasks/{task_id} when full task detail is needed.
+type TaskArtifactReplaceReceiptDTO struct {
+	ArtifactCount int    `json:"artifact_count"`
+	ArtifactId    string `json:"artifact_id"`
+	TaskId        string `json:"task_id"`
+	VersionCount  int    `json:"version_count"`
+}
+
+// TaskArtifactVersionDTO ONE retained PREVIOUS version of a pinned deliverable (T-60). Unlike a document revision this row carries the version WHOLE rather than a size summary: an artifact version is a pointer (a blob id or a url) plus a label, so there is no prose to hold back and the listing IS the content. “id“ is the version's own row id, ascending with the age of the write; “kind“ always equals the live artifact's kind, which cannot change across versions; “created_ts“/“created_by“ are when THAT version was written and by whom. A file/image version's “attachment_id“ still resolves — the blob is kept alive for as long as the version is retained, and collected when the version falls off the end.
+type TaskArtifactVersionDTO struct {
+	AttachmentId *string  `json:"attachment_id,omitempty"`
+	CreatedBy    *string  `json:"created_by,omitempty"`
+	CreatedTs    *float64 `json:"created_ts,omitempty"`
+	Id           int64    `json:"id"`
+	Kind         string   `json:"kind"`
+	Label        *string  `json:"label,omitempty"`
+	Url          *string  `json:"url,omitempty"`
 }
 
 // TaskCloseoutReceiptDTO Bounded receipt returned after report_task_closeout (T-bb70). BOTH exits used to answer with the whole task — the first (stamping) report AND the idempotent no-op repeat — measured at over 51,000 characters for a write whose entire news is one bit, so re-reporting a close-out was the most expensive way in the system to be told nothing new. “closeout_ts“ rides along because the write DERIVES it (stamped by the first report, unmoved by every repeat), so it is the part the caller cannot predict — the same reason “frozen_by“ rides the priority receipt. Fetch GET /api/tasks/{task_id} when full task detail is needed.
@@ -3713,6 +3743,9 @@ type HandleUpdateTaskApiTasksTaskIdPostJSONRequestBody = TaskFieldsDTO
 // HandleAddTaskArtifactApiTasksTaskIdArtifactPostJSONRequestBody defines body for HandleAddTaskArtifactApiTasksTaskIdArtifactPost for application/json ContentType.
 type HandleAddTaskArtifactApiTasksTaskIdArtifactPostJSONRequestBody = TaskArtifactInputDTO
 
+// HandleReplaceTaskArtifactApiTasksTaskIdArtifactArtifactIdReplacePostJSONRequestBody defines body for HandleReplaceTaskArtifactApiTasksTaskIdArtifactArtifactIdReplacePost for application/json ContentType.
+type HandleReplaceTaskArtifactApiTasksTaskIdArtifactArtifactIdReplacePostJSONRequestBody = TaskArtifactReplaceInputDTO
+
 // HandleSetTaskDepsApiTasksTaskIdDepsPostJSONRequestBody defines body for HandleSetTaskDepsApiTasksTaskIdDepsPost for application/json ContentType.
 type HandleSetTaskDepsApiTasksTaskIdDepsPostJSONRequestBody = TaskDepsDTO
 
@@ -4276,6 +4309,12 @@ type ServerInterface interface {
 	// Un-pin (remove) one artifact from a task's artifact set — the counterpart to add_task_artifact. You may remove artifacts from a task you are the executor of (the owner/assistant may remove on any task). Give the task id and the artifact id (the id returned when it was added, or from get_task's artifacts). The underlying file blob is left intact; only the pin on the card is removed. ONLY WHILE THE TASK IS STILL OPEN: once a task closes (done / terminated / duplicated) its deliverable set is frozen in both directions — remove is refused with the same 409 as add. So swap a deliverable BEFORE you close the task, not after; after the close it can neither be removed nor put back. Answers with a bounded receipt (task_id, artifact_id, artifact_count), not the whole task.
 	// (DELETE /api/tasks/{task_id}/artifact/{artifact_id})
 	HandleRemoveTaskArtifactApiTasksTaskIdArtifactArtifactIdDelete(w http.ResponseWriter, r *http.Request, taskId string, artifactId string)
+	// List the retained previous versions of one pinned deliverable, newest first — what it pointed at before each replace. Read-only, cockpit-only, and only the most recent few are kept.
+	// (GET /api/tasks/{task_id}/artifact/{artifact_id}/history)
+	HandleListTaskArtifactHistoryApiTasksTaskIdArtifactArtifactIdHistoryGet(w http.ResponseWriter, r *http.Request, taskId string, artifactId string)
+	// Replace the CONTENT of one already-pinned deliverable while its artifact id stays exactly the same — the card keeps pointing at the same artifact and what sits behind it changes. Use this instead of remove+add whenever you are shipping a corrected version of something you already pinned: remove+add mints a NEW id, so anyone holding the old one is left pointing at nothing. Give the task id, the artifact id and the replacement — attachment_id for a file/image artifact (upload the bytes first via the chat-attachments upload), url for a link artifact; label is optional and replaces the display name. THE KIND CANNOT CHANGE ACROSS VERSIONS: a file artifact stays a file artifact, so sending a url for one (or an attachment_id for a link, or an explicit kind that differs from what is pinned) is a 400 — un-pin it and register a new artifact if the kind is what you meant to change. The version you replaced is KEPT and readable, but only the most recent few are retained: the oldest falls off the end for good when a newer one arrives, and the file it pointed at is deleted with it, so a version that has scrolled off is not recoverable from anywhere. ONLY WHILE THE TASK IS STILL OPEN: once a task closes (done / terminated / duplicated) its deliverable set is frozen in every direction — replace is refused with the same 409 as add and remove, and admin/owner are not exempt. Answers with a bounded receipt (task_id, artifact_id, artifact_count, version_count), not the whole task.
+	// (POST /api/tasks/{task_id}/artifact/{artifact_id}/replace)
+	HandleReplaceTaskArtifactApiTasksTaskIdArtifactArtifactIdReplacePost(w http.ResponseWriter, r *http.Request, taskId string, artifactId string)
 	// Take over a reassigned task (the new executor claims it): clears the reassigning lock and fires the predecessor worker. The task status stays derived from its steps; only the lock is cleared. 409 if the task is not under the reassigning lock.
 	// (POST /api/tasks/{task_id}/claim)
 	HandleClaimTaskApiTasksTaskIdClaimPost(w http.ResponseWriter, r *http.Request, taskId string)
@@ -7851,6 +7890,76 @@ func (siw *ServerInterfaceWrapper) HandleRemoveTaskArtifactApiTasksTaskIdArtifac
 	handler.ServeHTTP(w, r)
 }
 
+// HandleListTaskArtifactHistoryApiTasksTaskIdArtifactArtifactIdHistoryGet operation middleware
+func (siw *ServerInterfaceWrapper) HandleListTaskArtifactHistoryApiTasksTaskIdArtifactArtifactIdHistoryGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "task_id" -------------
+	var taskId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "task_id", r.PathValue("task_id"), &taskId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "task_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "artifact_id" -------------
+	var artifactId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "artifact_id", r.PathValue("artifact_id"), &artifactId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "artifact_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleListTaskArtifactHistoryApiTasksTaskIdArtifactArtifactIdHistoryGet(w, r, taskId, artifactId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HandleReplaceTaskArtifactApiTasksTaskIdArtifactArtifactIdReplacePost operation middleware
+func (siw *ServerInterfaceWrapper) HandleReplaceTaskArtifactApiTasksTaskIdArtifactArtifactIdReplacePost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "task_id" -------------
+	var taskId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "task_id", r.PathValue("task_id"), &taskId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "task_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "artifact_id" -------------
+	var artifactId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "artifact_id", r.PathValue("artifact_id"), &artifactId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "artifact_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HandleReplaceTaskArtifactApiTasksTaskIdArtifactArtifactIdReplacePost(w, r, taskId, artifactId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // HandleClaimTaskApiTasksTaskIdClaimPost operation middleware
 func (siw *ServerInterfaceWrapper) HandleClaimTaskApiTasksTaskIdClaimPost(w http.ResponseWriter, r *http.Request) {
 
@@ -8765,6 +8874,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}", wrapper.HandleUpdateTaskApiTasksTaskIdPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/artifact", wrapper.HandleAddTaskArtifactApiTasksTaskIdArtifactPost)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/tasks/{task_id}/artifact/{artifact_id}", wrapper.HandleRemoveTaskArtifactApiTasksTaskIdArtifactArtifactIdDelete)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/tasks/{task_id}/artifact/{artifact_id}/history", wrapper.HandleListTaskArtifactHistoryApiTasksTaskIdArtifactArtifactIdHistoryGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/artifact/{artifact_id}/replace", wrapper.HandleReplaceTaskArtifactApiTasksTaskIdArtifactArtifactIdReplacePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/claim", wrapper.HandleClaimTaskApiTasksTaskIdClaimPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/closeout", wrapper.HandleReportTaskCloseoutApiTasksTaskIdCloseoutPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/tasks/{task_id}/deps", wrapper.HandleSetTaskDepsApiTasksTaskIdDepsPost)

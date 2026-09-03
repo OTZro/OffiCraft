@@ -741,6 +741,33 @@ def _happy_reassigning_task(ctx: HCtx) -> str:
     return task_id
 
 
+# The artifact id the replace row was aimed at, stashed by its path builder so
+# the row's check can assert the write ANSWERED with the same id — a replace
+# that minted a new one would otherwise pass on shape alone.
+_REPLACE_TARGET: dict[str, str] = {}
+
+
+def _happy_replaceable_artifact(ctx: HCtx) -> tuple[str, str]:
+    """A fresh task with one link artifact pinned; (task_id, artifact_id) — the
+    replace target."""
+    task_id, artifact_id = _happy_task_artifact(ctx)
+    _REPLACE_TARGET["id"] = artifact_id
+    return task_id, artifact_id
+
+
+def _happy_replaced_artifact(ctx: HCtx) -> tuple[str, str]:
+    """The same, already replaced once — so its version list has exactly one
+    retained entry to list."""
+    task_id, artifact_id = _happy_task_artifact(ctx)
+    r = ctx.client.post(
+        f"/api/tasks/{task_id}/artifact/{artifact_id}/replace",
+        json={"url": "https://example.com/pr/2"},
+        headers=_auth(ctx.agent.token),
+    )
+    assert r.status_code == 200, f"happy replace failed: {r.status_code} {r.text}"
+    return task_id, artifact_id
+
+
 def _happy_task_artifact(ctx: HCtx) -> tuple[str, str]:
     """A fresh task (the happy agent executes it) with one link artifact pinned;
     (task_id, artifact_id) — the un-pin (DELETE) target."""
@@ -2116,6 +2143,36 @@ HAPPY: dict[str, Happy] = {
         path=lambda ctx: "/api/tasks/{}/artifact/{}".format(
             *_happy_task_artifact(ctx)),
         check=lambda _c, r: _expect(r, lambda d: d["artifact_count"] == 0),
+    ),
+    "POST /api/tasks/{task_id}/artifact/{artifact_id}/replace": Happy(
+        # T-60: the executing agent swaps a pinned deliverable's content while
+        # its id stays put. The check reads the id back out of the receipt and
+        # compares it with the one the fixture pinned — a replace that minted a
+        # new artifact (remove+add under another name) would pass a status check
+        # and fail here, which is the whole reason the verb exists.
+        identity="agent",
+        path=lambda ctx: "/api/tasks/{}/artifact/{}/replace".format(
+            *_happy_replaceable_artifact(ctx)),
+        body={"url": "https://example.com/pr/2", "label": "conf PR v2"},
+        check=lambda _c, r: _expect(
+            r,
+            lambda d: d["artifact_id"] == _REPLACE_TARGET["id"]
+            and d["artifact_count"] == 1
+            and d["version_count"] == 2,
+        ),
+    ),
+    "GET /api/tasks/{task_id}/artifact/{artifact_id}/history": Happy(
+        # T-60: the version list of an artifact that has just been replaced —
+        # exactly one retained version, carrying what the live row held before.
+        identity="agent",
+        path=lambda ctx: "/api/tasks/{}/artifact/{}/history".format(
+            *_happy_replaced_artifact(ctx)),
+        check=lambda _c, r: _expect(
+            r,
+            lambda d: len(d) == 1
+            and d[0]["kind"] == "link"
+            and d[0]["url"] == "https://example.com/pr/1",
+        ),
     ),
     # ── outsource panel (M3) ─────────────────────────────────────────────────
     "GET /api/outsource-workers": Happy(

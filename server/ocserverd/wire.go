@@ -1472,6 +1472,18 @@ type taskArtifactReceiptDTO struct {
 	ArtifactCount int    `json:"artifact_count"`
 }
 
+// taskArtifactReplaceReceiptDTO is the replace verb's receipt: the add/remove
+// receipt's three fields plus how many versions the artifact now has. A
+// separate type rather than an optional field on the shared one, because
+// version_count is only ever meaningful for the write that MAKES a version —
+// remove's answer names an artifact that no longer has any.
+type taskArtifactReplaceReceiptDTO struct {
+	TaskID        string `json:"task_id"`
+	ArtifactID    string `json:"artifact_id"`
+	ArtifactCount int    `json:"artifact_count"`
+	VersionCount  int    `json:"version_count"`
+}
+
 // taskPlanReceiptDTO is the bounded confirmation returned after submit_plan.
 // The caller just SENT the plan, so echoing it back is the least useful payload
 // on the wire; what it cannot know is where the stored plan landed, which is
@@ -1607,6 +1619,40 @@ type taskArtifactDTO struct {
 	AttachmentID string  `json:"attachment_id"`
 	CreatedTS    float64 `json:"created_ts"`
 	CreatedBy    string  `json:"created_by"`
+	// VersionCount counts the versions of this deliverable WITH the live one
+	// (T-60), so a never-replaced artifact reads 1 rather than 0 — the reader
+	// asks "how many versions are there", and there is always this one.
+	VersionCount int `json:"version_count"`
+}
+
+// taskArtifactVersionDTO is one RETAINED previous version of an artifact. It
+// carries the version whole rather than a size summary the way
+// DocumentHistoryDTO does: an artifact version is a pointer plus a label, so
+// there is no prose a listing would have to hold back.
+type taskArtifactVersionDTO struct {
+	ID           int64   `json:"id"`
+	Kind         string  `json:"kind"`
+	URL          string  `json:"url"`
+	Label        string  `json:"label"`
+	AttachmentID string  `json:"attachment_id"`
+	CreatedTS    float64 `json:"created_ts"`
+	CreatedBy    string  `json:"created_by"`
+}
+
+// newTaskArtifactVersionDTO projects one retained version onto the wire. Unlike
+// the live artifact's projection this one does NOT resolve the blob: a version
+// listing is a catalogue, and the blob metadata a reader wants is the one the
+// card is showing right now.
+func newTaskArtifactVersionDTO(h TaskArtifactHistory) taskArtifactVersionDTO {
+	return taskArtifactVersionDTO{
+		ID:           h.ID,
+		Kind:         h.Kind,
+		URL:          h.URL,
+		Label:        h.Label,
+		AttachmentID: h.AttachmentID,
+		CreatedTS:    h.CreatedTS,
+		CreatedBy:    h.CreatedBy,
+	}
 }
 
 type taskDTO struct {
@@ -2132,8 +2178,12 @@ func newTaskDTO(t Task, steps []TaskStep, deps []string, cardStatus map[string]s
 // referenced blob is gone) — its mime/filename/is_image ride along honest-empty
 // when absent, never fabricated. A link's url is the row's own external url; a
 // file/image's url is the blob serve path (the chatAttachmentDTO convention).
-func newTaskArtifactDTO(a TaskArtifact, att *ChatAttachment) taskArtifactDTO {
+// versionCount is the retained-version count of THIS artifact plus the live
+// row (the caller counts the history rows; the +1 is here so no caller can
+// forget it).
+func newTaskArtifactDTO(a TaskArtifact, att *ChatAttachment, retained int) taskArtifactDTO {
 	dto := taskArtifactDTO{
+		VersionCount: retained + 1,
 		ID:           a.ID,
 		Kind:         a.Kind,
 		URL:          a.URL,

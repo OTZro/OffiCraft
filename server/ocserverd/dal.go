@@ -1249,19 +1249,21 @@ func refIDsFromJSON(blob string, into map[string]bool) {
 // uploaded in chat can be PINNED onto a task card as a deliverable — so the
 // cascade re-checks every survivor before dropping a blob.
 //
-// This is the only GC path for the GENERAL attachment graph
-// (`DeleteTaskArtifact` deliberately leaves the blob alone). The T-c826 avatar
-// lifecycle has its own single-owner delete paths; HardDeleteMember reuses this
-// same survivor scan so corrupt/legacy cross-references still fail safe. As of
-// T-c826
-// the blob-referencing columns in the schema are exactly these five, and
-// `collectSurvivingBlobRefs` reads all five:
+// This is the widest GC path for the GENERAL attachment graph
+// (`DeleteTaskArtifact` leaves the LIVE artifact's blob alone, and collects the
+// blobs of its retained versions; `ReplaceTaskArtifact` collects the blob of a
+// version it trims off the end). The T-c826 avatar lifecycle has its own
+// single-owner delete paths; HardDeleteMember reuses this same survivor scan so
+// corrupt/legacy cross-references still fail safe. As of T-60 the
+// blob-referencing columns in the schema are exactly these six, and
+// `collectSurvivingBlobRefs` reads all six:
 //
 //	chat_message.meta $.attachments[].id
 //	reply_card.answer_attachments[].id
 //	reply_card.attachments[].id          (T-5e8a question side)
 //	task_artifact.attachment_id          (T-62a8 — file/image kinds; '' on link)
 //	member.avatar_attachment_id           (T-c826 — dedicated personal image)
+//	task_artifact_history.attachment_id   (T-60 — a REPLACED artifact version)
 //
 // ⚠️ Add another referencing column anywhere and it MUST be added here in the
 // same commit; a blob whose only referrer is unknown to this scan is deleted
@@ -1274,13 +1276,17 @@ func refIDsFromJSON(blob string, into map[string]bool) {
 // ⚠️ Honest limit — this scan is NOT a general GC. It only ever considers the
 // blobs the just-deleted messages referenced (`candidates`); nothing re-visits
 // a blob later. So a blob spared here because a task_artifact held it becomes
-// permanently uncollectable if that artifact is subsequently un-pinned
-// (`DeleteTaskArtifact` leaves blobs alone by decree, and un-pinning is
+// permanently uncollectable if that LIVE artifact is subsequently un-pinned
+// (`DeleteTaskArtifact` leaves the live blob alone by decree, and un-pinning is
 // refused once the task is terminal, so the window is narrow). That is a
 // bounded disk leak accepted in exchange for not destroying a deliverable —
 // the two are not symmetric: the leak is recoverable by a future sweep, the
-// deletion is not recoverable at all. A real reachability sweep over the five
-// columns below is the proper fix and does not exist yet.
+// deletion is not recoverable at all. A real reachability sweep over the six
+// columns below is the proper fix and does not exist yet. T-60 deliberately did
+// NOT extend that leak to the versions a replace retires: those blobs are
+// collected at the moment they stop being nameable (a trim, or the un-pin that
+// deletes the whole series), which is the only moment anything still knows they
+// existed.
 //
 // Returns (deletedMessages, deletedAttachments).
 func (d *DAL) DeleteChatInvolving(memberID string) (int, int, error) {
@@ -1308,39 +1314,53 @@ func (d *DAL) DeleteChatInvolving(memberID string) (int, int, error) {
 		return 0, 0, err
 	}
 
-	surviving := map[string]bool{}
-	if len(candidates) > 0 {
-		if err := collectSurvivingBlobRefs(tx, surviving); err != nil {
-			return 0, 0, err
-		}
+	deletedAtts, err := collectOrphanBlobs(tx, candidates)
+	if err != nil {
+		return 0, 0, err
 	}
+	if err := tx.Commit(); err != nil {
+		return 0, 0, err
+	}
+	return int(deletedMsgs), deletedAtts, nil
+}
 
-	var deletedAtts int64
+// collectOrphanBlobs deletes, from a set of candidate blob ids, exactly those
+// that no still-stored record references — the single decision point every
+// blob collection goes through, so "is this blob still someone's?" is answered
+// by collectSurvivingBlobRefs and nowhere else. Call it AFTER the rows that
+// referenced the candidates are gone, from inside that same transaction.
+// Returns how many blobs were actually deleted.
+func collectOrphanBlobs(tx *sql.Tx, candidates map[string]bool) (int, error) {
+	if len(candidates) == 0 {
+		return 0, nil
+	}
+	surviving := map[string]bool{}
+	if err := collectSurvivingBlobRefs(tx, surviving); err != nil {
+		return 0, err
+	}
+	var deleted int64
 	for id := range candidates {
 		if surviving[id] {
 			continue
 		}
 		res, err := tx.Exec(`DELETE FROM chat_attachment WHERE id = ?`, id)
 		if err != nil {
-			return 0, 0, err
+			return 0, err
 		}
 		n, err := res.RowsAffected()
 		if err != nil {
-			return 0, 0, err
+			return 0, err
 		}
-		deletedAtts += n
+		deleted += n
 	}
-	if err := tx.Commit(); err != nil {
-		return 0, 0, err
-	}
-	return int(deletedMsgs), int(deletedAtts), nil
+	return int(deleted), nil
 }
 
 // collectSurvivingBlobRefs folds every chat_attachment id that a STILL-STORED
 // record references into `into` — the complete liveness verdict for the blob
-// store (the five columns enumerated on DeleteChatInvolving). Called after the
-// chat_message rows are deleted inside the same tx, so "still stored" is read
-// against the post-delete state.
+// store (the six columns enumerated on DeleteChatInvolving). Called after the
+// rows that referenced the candidates are deleted inside the same tx, so "still
+// stored" is read against the post-delete state.
 //
 // Deliberately one function rather than three inline blocks: the bug this
 // closed (T-62a8) was a MISSING source, and a missing source is far easier to
@@ -1419,15 +1439,44 @@ func collectSurvivingBlobRefs(tx *sql.Tx, into map[string]bool) error {
 	if err != nil {
 		return err
 	}
-	defer memberRows.Close()
 	for memberRows.Next() {
 		var id string
 		if err := memberRows.Scan(&id); err != nil {
+			memberRows.Close()
 			return err
 		}
 		into[id] = true
 	}
-	return memberRows.Err()
+	if err := memberRows.Err(); err != nil {
+		memberRows.Close()
+		return err
+	}
+	memberRows.Close()
+
+	// 6. RETAINED ARTIFACT VERSIONS (T-60) — a deliverable that was REPLACED
+	//    keeps its previous versions, and a retained version's blob is as real
+	//    a referrer as the live row's: replacing an artifact must not delete
+	//    the file the earlier version still points at, and neither must the
+	//    removal of an unrelated chat message.
+	//
+	//    COALESCE for the same reason source 4 spells out: the fail-safe
+	//    direction of this predicate is "vote", and a bare `<> ''` against a
+	//    NULL is NULL, which silently stops the row voting.
+	histRows, err := tx.Query(
+		`SELECT attachment_id FROM task_artifact_history
+		 WHERE COALESCE(attachment_id, '') <> ''`)
+	if err != nil {
+		return err
+	}
+	defer histRows.Close()
+	for histRows.Next() {
+		var id string
+		if err := histRows.Scan(&id); err != nil {
+			return err
+		}
+		into[id] = true
+	}
+	return histRows.Err()
 }
 
 // collectChatMetaRefs folds every attachment id referenced by the

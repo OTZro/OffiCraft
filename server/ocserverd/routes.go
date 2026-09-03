@@ -1760,6 +1760,36 @@ func routeSpecs(w *ServerInterfaceWrapper) []RouteSpec {
 			Summary:  "Un-pin (remove) one artifact from a task's artifact set — the counterpart to add_task_artifact. You may remove artifacts from a task you are the executor of (the owner/assistant may remove on any task). Give the task id and the artifact id (the id returned when it was added, or from get_task's artifacts). The underlying file blob is left intact; only the pin on the card is removed. ONLY WHILE THE TASK IS STILL OPEN: once a task closes (done / terminated / duplicated) its deliverable set is frozen in both directions — remove is refused with the same 409 as add. So swap a deliverable BEFORE you close the task, not after; after the close it can neither be removed nor put back. Answers with a bounded receipt (task_id, artifact_id, artifact_count), not the whole task.",
 			MCPTool:  "remove_task_artifact",
 		},
+		{
+			// T-60 replace — the THIRD verb on the same set, so it carries the
+			// same permission model as add and remove (requires=agent + the
+			// handler's executor guard, admin/owner excepted) and the same
+			// terminal-task freeze. A replace verb without that 409 would be the
+			// freeze's back door: the content behind a frozen deliverable could
+			// be swapped for anything while the card claimed nothing had moved.
+			Method:   "POST",
+			Path:     "/api/tasks/{task_id}/artifact/{artifact_id}/replace",
+			Handler:  w.HandleReplaceTaskArtifactApiTasksTaskIdArtifactArtifactIdReplacePost,
+			Auth:     authGated,
+			Requires: principalAgent,
+			Summary:  "Replace the CONTENT of one already-pinned deliverable while its artifact id stays exactly the same — the card keeps pointing at the same artifact and what sits behind it changes. Use this instead of remove+add whenever you are shipping a corrected version of something you already pinned: remove+add mints a NEW id, so anyone holding the old one is left pointing at nothing. Give the task id, the artifact id and the replacement — attachment_id for a file/image artifact (upload the bytes first via the chat-attachments upload), url for a link artifact; label is optional and replaces the display name. THE KIND CANNOT CHANGE ACROSS VERSIONS: a file artifact stays a file artifact, so sending a url for one (or an attachment_id for a link, or an explicit kind that differs from what is pinned) is a 400 — un-pin it and register a new artifact if the kind is what you meant to change. The version you replaced is KEPT and readable, but only the most recent few are retained: the oldest falls off the end for good when a newer one arrives, and the file it pointed at is deleted with it, so a version that has scrolled off is not recoverable from anywhere. ONLY WHILE THE TASK IS STILL OPEN: once a task closes (done / terminated / duplicated) its deliverable set is frozen in every direction — replace is refused with the same 409 as add and remove, and admin/owner are not exempt. Answers with a bounded receipt (task_id, artifact_id, artifact_count, version_count), not the whole task.",
+			MCPTool:  "replace_task_artifact",
+		},
+		{
+			// The version list behind the cockpit's artifact popover. MCPExclude
+			// by decision (T-60): the agent that replaced a deliverable already
+			// knows what it replaced, and the reader this list exists for is the
+			// human looking at the card. Same executor guard as the writes — a
+			// caller who may not touch this task's deliverables may not read what
+			// they used to be either.
+			Method:     "GET",
+			Path:       "/api/tasks/{task_id}/artifact/{artifact_id}/history",
+			Handler:    w.HandleListTaskArtifactHistoryApiTasksTaskIdArtifactArtifactIdHistoryGet,
+			Auth:       authGated,
+			Requires:   principalAgent,
+			Summary:    "List the retained previous versions of one pinned deliverable, newest first — what it pointed at before each replace. Read-only, cockpit-only, and only the most recent few are kept.",
+			MCPExclude: true,
+		},
 		// T-4595: GET /api/self/task (get_my_task) is RETIRED — see the note in
 		// api_tasks.go. A worker reads its task through get_task like everyone
 		// else, and reports its wake through report_waking like everyone else.

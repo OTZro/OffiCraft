@@ -6187,7 +6187,7 @@
         "type": "object"
       },
       "TaskArtifactDTO": {
-        "description": "One pinned deliverable on a task's artifact set (T-3dc5). ``kind`` is the closed set file|image|link. FILE/IMAGE artifacts reference the shared chat_attachment blob store: ``attachment_id`` is the blob id, ``url`` is its serve path (``/api/chat/attachment/{attachment_id}``), and ``filename``/``mime``/``is_image`` echo the blob metadata (resolved read-time; empty when the blob is gone). LINK artifacts carry a bare external ``url`` (a PR link) with ``attachment_id``/``mime``/``filename`` empty and ``is_image`` false. ``label`` is the display name (a link's title, or a filename override); ``created_by`` is the verified token sub of the registrar.",
+        "description": "One pinned deliverable on a task's artifact set (T-3dc5). ``kind`` is the closed set file|image|link. FILE/IMAGE artifacts reference the shared chat_attachment blob store: ``attachment_id`` is the blob id, ``url`` is its serve path (``/api/chat/attachment/{attachment_id}``), and ``filename``/``mime``/``is_image`` echo the blob metadata (resolved read-time; empty when the blob is gone). LINK artifacts carry a bare external ``url`` (a PR link) with ``attachment_id``/``mime``/``filename`` empty and ``is_image`` false. ``label`` is the display name (a link's title, or a filename override); ``created_by`` is the verified token sub of the registrar. ``version_count`` (T-60) is how many versions of this deliverable exist, the live one INCLUDED — 1 for an artifact that has never been replaced, and bounded above because only the most recent few replaced versions are retained; list them with GET /api/tasks/{task_id}/artifact/{artifact_id}/history.",
         "properties": {
           "attachment_id": {
             "default": "",
@@ -6236,6 +6236,12 @@
             "default": "",
             "title": "Url",
             "type": "string"
+          },
+          "version_count": {
+            "default": 0,
+            "description": "How many versions of this deliverable exist, the LIVE one included — 1 for an artifact that has never been replaced. additive-optional (absent reads as 0 for older servers).",
+            "title": "Version Count",
+            "type": "integer"
           }
         },
         "required": [
@@ -6344,6 +6350,138 @@
           "kind"
         ],
         "title": "TaskArtifactInputDTO",
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "TaskArtifactReplaceInputDTO": {
+        "description": "Replace one pinned artifact's content in place (MCP ``replace_task_artifact``). The id does not move; the content does. Send ``attachment_id`` for a file/image artifact (the chat_attachment blob id from a prior ``POST /api/chat/attachments`` upload) or ``url`` for a link artifact — whichever the artifact's EXISTING kind calls for, since the kind cannot change across versions. ``kind`` is optional and is an ASSERTION rather than an instruction: when present it must equal the pinned kind, so a caller that believes it is replacing a link is told it is wrong instead of being handed a 400 about some other field. ``label`` is optional and is not merged with the previous version's — omitting it leaves the new version with no label at all.",
+        "properties": {
+          "attachment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Attachment Id"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Kind"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Label"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Url"
+          }
+        },
+        "title": "TaskArtifactReplaceInputDTO",
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "TaskArtifactReplaceReceiptDTO": {
+        "description": "Bounded receipt returned after REPLACING one deliverable (T-60). The same three fields as ``TaskArtifactReceiptDTO`` — the artifact the write touched and the resulting size of the set — plus ``version_count``, how many versions that artifact now has with the live one included. That last one is the part a replacing caller cannot predict: it stops climbing once the retained depth is reached, which is also the signal that an older version has just been discarded. Fetch GET /api/tasks/{task_id} when full task detail is needed.",
+        "properties": {
+          "artifact_count": {
+            "title": "Artifact Count",
+            "type": "integer"
+          },
+          "artifact_id": {
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "version_count": {
+            "title": "Version Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "task_id",
+          "artifact_id",
+          "artifact_count",
+          "version_count"
+        ],
+        "title": "TaskArtifactReplaceReceiptDTO",
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "TaskArtifactVersionDTO": {
+        "description": "ONE retained PREVIOUS version of a pinned deliverable (T-60). Unlike a document revision this row carries the version WHOLE rather than a size summary: an artifact version is a pointer (a blob id or a url) plus a label, so there is no prose to hold back and the listing IS the content. ``id`` is the version's own row id, ascending with the age of the write; ``kind`` always equals the live artifact's kind, which cannot change across versions; ``created_ts``/``created_by`` are when THAT version was written and by whom. A file/image version's ``attachment_id`` still resolves — the blob is kept alive for as long as the version is retained, and collected when the version falls off the end.",
+        "properties": {
+          "attachment_id": {
+            "default": "",
+            "title": "Attachment Id",
+            "type": "string"
+          },
+          "created_by": {
+            "default": "",
+            "title": "Created By",
+            "type": "string"
+          },
+          "created_ts": {
+            "default": 0.0,
+            "title": "Created Ts",
+            "type": "number"
+          },
+          "id": {
+            "format": "int64",
+            "title": "Id",
+            "type": "integer"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "title": "Label",
+            "type": "string"
+          },
+          "url": {
+            "default": "",
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind"
+        ],
+        "title": "TaskArtifactVersionDTO",
         "additionalProperties": false,
         "type": "object"
       },
@@ -18339,6 +18477,170 @@
           "description": "Un-pin (remove) one artifact from a task's artifact set — the counterpart to add_task_artifact. You may remove artifacts from a task you are the executor of (the owner/assistant may remove on any task). Give the task id and the artifact id (the id returned when it was added, or from get_task's artifacts). The underlying file blob is left intact; only the pin on the card is removed. ONLY WHILE THE TASK IS STILL OPEN: once a task closes (done / terminated / duplicated) its deliverable set is frozen in both directions — remove is refused with the same 409 as add. So swap a deliverable BEFORE you close the task, not after; after the close it can neither be removed nor put back. Answers with a bounded receipt (task_id, artifact_id, artifact_count), not the whole task.",
           "legacy": {
             "descriptor": "{\n      \"description\": \"Un-pin (remove) one artifact from a task's artifact set \\u2014 the counterpart to add_task_artifact. You may remove artifacts from a task you are the executor of (the owner/assistant may remove on any task). Give the task id and the artifact id (the id returned when it was added, or from get_task's artifacts). The underlying file blob is left intact; only the pin on the card is removed. ONLY WHILE THE TASK IS STILL OPEN: once a task closes (done / terminated / duplicated) its deliverable set is frozen in both directions — remove is refused with the same 409 as add. So swap a deliverable BEFORE you close the task, not after; after the close it can neither be removed nor put back. Answers with a bounded receipt (task_id, artifact_id, artifact_count), not the whole task.\",\n      \"inputSchema\": {\n        \"properties\": {\n          \"task_id\": {\n            \"type\": \"string\"\n          },\n          \"artifact_id\": {\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"task_id\",\n          \"artifact_id\"\n        ],\n        \"additionalProperties\": false,\n        \"type\": \"object\"\n      },\n      \"name\": \"remove_task_artifact\"\n    }"
+          }
+        }
+      }
+    },
+    "/api/tasks/{task_id}/artifact/{artifact_id}/history": {
+      "get": {
+        "description": "READ the retained PREVIOUS versions of one pinned deliverable, newest first (T-60) — what the artifact pointed at before each ``replace``. Cockpit-only and deliberately NOT an MCP tool: the agent that just replaced a deliverable already knows what it replaced, and the reader this list exists for is the human looking at the card. Read-only; there is no restore face, by decision — an older version goes back by replacing FORWARD with it, not by rewinding. Only the most recent few versions are retained (HOW MANY is deliberately not stated here — it is read from the same constant the document series uses, and what comes back is the answer). An artifact that has never been replaced answers with an empty list, which is the honest 'nothing has been replaced here' rather than a gap. Same permission model as the writes: 404 unknown task → 403 not the executor (admin capability excepted) → 404 unknown artifact → 400 the artifact belongs to a different task.",
+        "operationId": "handle_list_task_artifact_history_api_tasks__task_id__artifact__artifact_id__history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TaskArtifactVersionDTO"
+                  },
+                  "title": "Response",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Validation error (unified error envelope)."
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Client error (unified error envelope)."
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Server error (unified error envelope)."
+          }
+        },
+        "summary": "List the retained previous versions of one pinned deliverable, newest first — what it pointed at before each replace. Read-only, cockpit-only, and only the most recent few are kept.",
+        "x-mcp": {
+          "include": false
+        }
+      }
+    },
+    "/api/tasks/{task_id}/artifact/{artifact_id}/replace": {
+      "post": {
+        "description": "Replace ONE pinned artifact's content in place, keeping its id (MCP ``replace_task_artifact``; requires the executing agent — caller must be the task's executor, admin capability excepted). The live row is overwritten and the version it replaced is retained in an append-only journal keyed by that same artifact id; only the most recent few versions are kept, and the blob of a version that falls off the end is collected with it. THE KIND IS IMMUTABLE ACROSS VERSIONS: a ``kind`` that disagrees with the pinned one, a ``url`` sent for a file/image artifact, or an ``attachment_id`` sent for a link artifact are each a 400. Returns a BOUNDED receipt (``TaskArtifactReplaceReceiptDTO``) — not the task; pull GET /api/tasks/{task_id} for the artifact list. Guards: 404 unknown task → 403 not the executor → 409 terminal task (a closed task's deliverables are frozen, admin/owner included) → 404 unknown artifact → 400 the artifact belongs to a different task → 400 a cross-kind replacement, a missing/blank replacement for the pinned kind, or an ``attachment_id`` that resolves to no stored blob.",
+        "operationId": "handle_replace_task_artifact_api_tasks__task_id__artifact__artifact_id__replace_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskArtifactReplaceInputDTO"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskArtifactReplaceReceiptDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Validation error (unified error envelope)."
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Client error (unified error envelope)."
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelopeDTO"
+                }
+              }
+            },
+            "description": "Server error (unified error envelope)."
+          }
+        },
+        "summary": "Replace the CONTENT of one already-pinned deliverable while its artifact id stays exactly the same — the card keeps pointing at the same artifact and what sits behind it changes. Use this instead of remove+add whenever you are shipping a corrected version of something you already pinned: remove+add mints a NEW id, so anyone holding the old one is left pointing at nothing. Give the task id, the artifact id and the replacement — attachment_id for a file/image artifact (upload the bytes first via the chat-attachments upload), url for a link artifact; label is optional and replaces the display name. THE KIND CANNOT CHANGE ACROSS VERSIONS: a file artifact stays a file artifact, so sending a url for one (or an attachment_id for a link, or an explicit kind that differs from what is pinned) is a 400 — un-pin it and register a new artifact if the kind is what you meant to change. The version you replaced is KEPT and readable, but only the most recent few are retained: the oldest falls off the end for good when a newer one arrives, and the file it pointed at is deleted with it, so a version that has scrolled off is not recoverable from anywhere. ONLY WHILE THE TASK IS STILL OPEN: once a task closes (done / terminated / duplicated) its deliverable set is frozen in every direction — replace is refused with the same 409 as add and remove, and admin/owner are not exempt. Answers with a bounded receipt (task_id, artifact_id, artifact_count, version_count), not the whole task.",
+        "x-mcp": {
+          "include": true,
+          "order": 123,
+          "name": "replace_task_artifact",
+          "description": "Replace the CONTENT of one already-pinned deliverable while its artifact id stays exactly the same — the card keeps pointing at the same artifact and what sits behind it changes. Use this instead of remove+add whenever you are shipping a corrected version of something you already pinned: remove+add mints a NEW id, so anyone holding the old one is left pointing at nothing. Give the task id, the artifact id and the replacement — attachment_id for a file/image artifact (upload the bytes first via the chat-attachments upload), url for a link artifact; label is optional and replaces the display name. THE KIND CANNOT CHANGE ACROSS VERSIONS: a file artifact stays a file artifact, so sending a url for one (or an attachment_id for a link, or an explicit kind that differs from what is pinned) is a 400 — un-pin it and register a new artifact if the kind is what you meant to change. The version you replaced is KEPT and readable, but only the most recent few are retained: the oldest falls off the end for good when a newer one arrives, and the file it pointed at is deleted with it, so a version that has scrolled off is not recoverable from anywhere. ONLY WHILE THE TASK IS STILL OPEN: once a task closes (done / terminated / duplicated) its deliverable set is frozen in every direction — replace is refused with the same 409 as add and remove, and admin/owner are not exempt. Answers with a bounded receipt (task_id, artifact_id, artifact_count, version_count), not the whole task.",
+          "legacy": {
+            "descriptor": "{\n      \"description\": \"Replace the CONTENT of one already-pinned deliverable while its artifact id stays exactly the same — the card keeps pointing at the same artifact and what sits behind it changes. Use this instead of remove+add whenever you are shipping a corrected version of something you already pinned: remove+add mints a NEW id, so anyone holding the old one is left pointing at nothing. Give the task id, the artifact id and the replacement — attachment_id for a file/image artifact (upload the bytes first via the chat-attachments upload), url for a link artifact; label is optional and replaces the display name. THE KIND CANNOT CHANGE ACROSS VERSIONS: a file artifact stays a file artifact, so sending a url for one (or an attachment_id for a link, or an explicit kind that differs from what is pinned) is a 400 — un-pin it and register a new artifact if the kind is what you meant to change. The version you replaced is KEPT and readable, but only the most recent few are retained: the oldest falls off the end for good when a newer one arrives, and the file it pointed at is deleted with it, so a version that has scrolled off is not recoverable from anywhere. ONLY WHILE THE TASK IS STILL OPEN: once a task closes (done / terminated / duplicated) its deliverable set is frozen in every direction — replace is refused with the same 409 as add and remove, and admin/owner are not exempt. Answers with a bounded receipt (task_id, artifact_id, artifact_count, version_count), not the whole task.\",\n      \"inputSchema\": {\n        \"properties\": {\n          \"task_id\": {\n            \"type\": \"string\"\n          },\n          \"artifact_id\": {\n            \"type\": \"string\"\n          },\n          \"kind\": {\n            \"anyOf\": [\n              {\n                \"type\": \"string\"\n              },\n              {\n                \"type\": \"null\"\n              }\n            ],\n            \"default\": null,\n            \"description\": \"OPTIONAL, and an ASSERTION rather than an instruction: the only value accepted is the kind the artifact already has. It exists so a caller that believes it is replacing a link can be told exactly that, instead of being handed a 400 about a missing attachment_id. Omit it and the pinned kind is simply used.\",\n            \"title\": \"Kind\"\n          },\n          \"attachment_id\": {\n            \"anyOf\": [\n              {\n                \"type\": \"string\"\n              },\n              {\n                \"type\": \"null\"\n              }\n            ],\n            \"default\": null,\n            \"description\": \"The replacement blob, read ONLY when the pinned artifact's kind is 'file' or 'image' - where it IS required, a blank one being a 400. Upload the bytes first (the chat-attachments upload) and send the id it returns; an id that resolves to no stored blob is a 400 and nothing is replaced. Sending it for a LINK artifact is refused rather than ignored, because such a request means the caller believes the kind can change.\",\n            \"title\": \"Attachment Id\"\n          },\n          \"url\": {\n            \"anyOf\": [\n              {\n                \"type\": \"string\"\n              },\n              {\n                \"type\": \"null\"\n              }\n            ],\n            \"default\": null,\n            \"description\": \"The replacement link target, read ONLY when the pinned artifact's kind is 'link' - where it IS required, a blank one being a 400. It is never parsed and never fetched: any non-empty string is accepted as sent, so a typo replaces a working deliverable with one that leads nowhere. Sending it for a file/image artifact is refused rather than ignored, because such a request means the caller believes the kind can change.\",\n            \"title\": \"Url\"\n          },\n          \"label\": {\n            \"anyOf\": [\n              {\n                \"type\": \"string\"\n              },\n              {\n                \"type\": \"null\"\n              }\n            ],\n            \"default\": null,\n            \"description\": \"Human-readable caption for the NEW version. It is stored exactly as sent and never validated, and it is NOT inherited from the version being replaced: omit it and the new version has no label at all, so re-send the caption whenever you mean to keep it.\",\n            \"title\": \"Label\"\n          }\n        },\n        \"required\": [\n          \"task_id\",\n          \"artifact_id\"\n        ],\n        \"additionalProperties\": false,\n        \"type\": \"object\"\n      },\n      \"name\": \"replace_task_artifact\"\n    }"
           }
         }
       }

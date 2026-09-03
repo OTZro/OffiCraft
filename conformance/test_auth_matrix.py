@@ -1505,6 +1505,27 @@ MATRIX: dict[str, Route] = {
         path=lambda ctx, _i: "/api/tasks/{}/artifact/{}".format(
             *_matrix_task_artifact(ctx)),
     ),
+    "POST /api/tasks/{task_id}/artifact/{artifact_id}/replace": Route(
+        # T-60: the third verb on the same set carries the same model as add and
+        # remove — the executing agent replaces its own task's deliverables
+        # (agent B on agent A's task → 403); admin capability drives any task.
+        # A link replacement needs no upload, so every at-floor face lands on a
+        # FRESH scratch artifact.
+        requires="agent",
+        overrides={"agent_other": 403},
+        path=lambda ctx, _i: "/api/tasks/{}/artifact/{}/replace".format(
+            *_matrix_task_artifact(ctx)),
+        body={"url": "https://example.com/pr/2", "label": "conf PR v2"},
+    ),
+    "GET /api/tasks/{task_id}/artifact/{artifact_id}/history": Route(
+        # T-60: the version list is cockpit-only (off MCP) but sits behind the
+        # SAME executor guard as the writes — a caller who may not touch this
+        # task's deliverables may not read what they used to be either.
+        requires="agent",
+        overrides={"agent_other": 403},
+        path=lambda ctx, _i: "/api/tasks/{}/artifact/{}/history".format(
+            *_matrix_task_artifact(ctx)),
+    ),
     # ── outsource panel (M3) ────────────────────────────────────────────────
     "GET /api/outsource-workers": Route(requires="machine"),
     "GET /api/outsource-workers/{id}": Route(
