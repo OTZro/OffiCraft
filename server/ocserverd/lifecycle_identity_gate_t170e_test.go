@@ -544,6 +544,26 @@ var identityGateLedger = map[string]string{
 		"deleting the guard makes this key stale and the gate fails by name, which is " +
 		"the property the PR text claimed and the parity test could not deliver (it " +
 		"guards the predicate, not its callers).",
+	"reconcile.go :: reconcileMemberNow :: lifecycleTickDriverFor(*m)": "" +
+		"the staff half asking the SAME driver question on its EVENT-DRIVEN door " +
+		"(activate / deactivate / relocate / refocus / accelerated-stop / uninstall) " +
+		"that runReconcileTick asks on the cadence door. Same predicate, same " +
+		"population, no differentiated TREATMENT: a row it keeps then runs the same " +
+		"shared entry filter and the same shared passes. It is on the record as a seam " +
+		"CALL, not a kind comparison, because the kind branch lives exactly once — in " +
+		"lifecycleTickDriverFor. 🔴 WHY IT IS NOT REDUNDANT WITH THE CADENCE ENTRY: " +
+		"this door reads GetMember, so it was never narrowed by ListMembers' " +
+		"`WHERE kind != 'outsource'` and T-14 項目 6 did not widen it. What it had " +
+		"instead was seven callers that each happen to hand it a staff row " +
+		"(api_members ×5 via resolveMember(…, staffOnly); api_machines via " +
+		"resolveMachine, which demands kind==warden; onboarding with the seed " +
+		"assistant's own id) — the guard lived in seven argument lists across two " +
+		"other files, and api_members.go:790 / api_machines.go:1280 already pass " +
+		"anyMember elsewhere, so the precedent for a future caller widening it exists. " +
+		"This entry turns 「呼叫者剛好都傳正職」 into a property of the function. On " +
+		"today's reachable paths it is a no-op, which is the point: it is a no-op that " +
+		"cannot be UNDONE from another file. Pinned by " +
+		"TestReconcileMemberNow_AContractorIsNotDrivenByTheMemberFSM.",
 	"api_monitoring.go :: HandleGetMonitoringApiMonitoringGet :: lifecycleTickDriverFor(m)": "" +
 		"NOT a lifecycle guard — a DE-DUPLICATION guard, and the only reason the " +
 		"cockpit's agent count is right. This handler folds `members ∪ workers`; since " +

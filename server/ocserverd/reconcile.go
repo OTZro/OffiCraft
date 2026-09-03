@@ -2854,6 +2854,26 @@ func (s *apiServer) reconcileMemberNow(memberID string) reconcileDecision {
 	if err != nil || m == nil {
 		return reconcileDecision{}
 	}
+	// WHICH HALF drives this row — the SAME question runReconcileTick asks at
+	// the head of its candidate loop, asked here too so that the answer is a
+	// property of THIS FUNCTION rather than a coincidence in its callers.
+	//
+	// This door reads GetMember, not ListMembers, so T-14 項目 6 did not widen
+	// it — but it never narrowed it either: every one of the seven non-test
+	// callers happens to hand it a staff row (api_members ×5 via
+	// resolveMember(…, staffOnly), api_machines via resolveMachine which demands
+	// kind==warden, onboarding with the seed assistant's own id), so the guard
+	// that keeps a contractor out of the member FSM on the EVENT-DRIVEN path
+	// lived in seven argument lists across two other files. That is not a
+	// no-op that can be deleted: it is a no-op that can be UNDONE by a future
+	// caller passing anyMember — and api_members.go:790 / api_machines.go:1280
+	// already do exactly that elsewhere, so the precedent for widening exists.
+	// With the clause gone, a contractor reaching here would take a `start`
+	// from the member FSM while the outsource half takes its own — the measured
+	// double-drive recorded on lifecycleTickDriverFor (lifecycle_roster.go).
+	if lifecycleTickDriverFor(*m) != driverReconcile {
+		return reconcileDecision{}
+	}
 	// THE entry filter, the same one the cadence asks (lifecycle_roster.go).
 	// This used to be a hand-copy of the cadence's two conditions.
 	if !lifecyclePolicyFor(*m).ShouldExist() {

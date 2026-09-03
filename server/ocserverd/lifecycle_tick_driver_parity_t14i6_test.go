@@ -215,3 +215,192 @@ func TestLifecycleTickDriver_IsTotalOverTheKindVocabulary(t *testing.T) {
 			"would read as a legitimate claim.", string(driverNone))
 	}
 }
+
+// ---------------------------------------------------------------------------
+// T-14 項目 6 — the EVENT-DRIVEN door asks the driver question too.
+//
+// runReconcileTick asks lifecycleTickDriverFor at the head of its candidate
+// loop; reconcileMemberNow — the activate / deactivate / relocate / refocus /
+// accelerated-stop / uninstall seam — did not. That door reads GetMember, not
+// ListMembers, so deleting the `WHERE kind != 'outsource'` clause did not widen
+// it. But nothing ever narrowed it either: the only reason a contractor never
+// reached the member FSM through it is that all seven non-test callers happen
+// to hand it a staff row (api_members ×5 through resolveMember(…, staffOnly);
+// api_machines through resolveMachine, which demands kind==warden; onboarding
+// with the seed assistant's own id). The guard lived in seven argument lists
+// across two other files — and api_members.go:790 / api_machines.go:1280
+// already pass anyMember elsewhere, so a future caller widening this one is a
+// precedent that already exists, not a hypothetical.
+//
+// This test asserts the property on the FUNCTION. It is deliberately a
+// direct call, bypassing the handlers, because the handlers are exactly the
+// layer whose guarantee is being moved inward.
+func TestReconcileMemberNow_AContractorIsNotDrivenByTheMemberFSM(t *testing.T) {
+	s := newReconcileTestServer(t)
+	putWarden(t, s, ServerSelfHost)
+	connectOnline(t, s, ServerSelfHost)
+
+	// ── the positive control, planted FIRST ──────────────────────────────────
+	// A staff row in the shape the contractor row below is about to copy. If
+	// this one does not get a START, the negative half proves nothing: a
+	// silent no-command would look identical whether the guard stopped it or
+	// the fixture never asked for anything.
+	staff := testAgent("m-staff-twin")
+	putTestMember(t, s, staff)
+	if dec := s.reconcileMemberNow("m-staff-twin"); dec.Command != reconcileCmdStart {
+		t.Fatalf("POSITIVE CONTROL FAILED: an ACTIVE desired-online STAFF row on a "+
+			"reachable warden must take a START from the member FSM, got %q (%s). "+
+			"Until this passes, the contractor assertion below is not evidence.",
+			dec.Command, dec.Reason)
+	}
+
+	// ── the row under test ───────────────────────────────────────────────────
+	// An ACTIVE, desired-online contractor: the exact shape whose double-drive
+	// was MEASURED when the clause was lifted (lifecycle_roster.go — one row
+	// taking a `start` from enqueueWardenFrame AND from notifyWorkerSpawn in
+	// the same tick). It is planted through PutOutsourceWorker, its only real
+	// writer, so the member row is the one production would have.
+	if err := s.dal.PutOutsourceWorker(OutsourceWorker{
+		ID: "ow-twin", Codename: "T-1", Runtime: RuntimeClaude, Model: "opus",
+		Effort: "medium", TaskID: "t-1", Status: WorkerStatusActive,
+		CreatedTS: 1.0, DesiredState: DesiredStateOnline,
+		DesiredMachineID: ServerSelfHost,
+	}); err != nil {
+		t.Fatalf("seed contractor: %v", err)
+	}
+	// The fixture is only worth anything if the row really did land as a
+	// kind='outsource' member the member-FSM door can see.
+	got, err := s.dal.GetMember("ow-twin")
+	if err != nil || got == nil {
+		t.Fatalf("the contractor must be readable through GetMember — that is the "+
+			"very read reconcileMemberNow performs: %v", err)
+	}
+	if got.Kind != KindOutsource || got.RosterStatus != RosterStatusActive ||
+		got.DesiredState != DesiredStateOnline {
+		t.Fatalf("fixture did not land the shape under test: kind=%q roster=%q "+
+			"desired=%q, want outsource/active/online", got.Kind, got.RosterStatus,
+			got.DesiredState)
+	}
+	// And the shape must be one the ENTRY FILTER would let through, or the
+	// driver guard is not what is doing the work here.
+	if !lifecyclePolicyFor(*got).ShouldExist() {
+		t.Fatalf("this contractor is rejected by the entry filter, so this test " +
+			"would pass with the driver guard deleted — pick a row the entry " +
+			"filter accepts")
+	}
+
+	// The zero decision — "" — is what this door returns for a member it does
+	// not act on (its doc comment: a gated-off / skipped / faulted member yields
+	// the zero decision, no command, not unlanded). reconcileCmdNone ("none") is
+	// a DIFFERENT answer: it means the FSM ran and converged. Asserting on ""
+	// therefore also pins that the row was declined BEFORE the FSM, not by it.
+	dec := s.reconcileMemberNow("ow-twin")
+	if dec.Command != "" {
+		t.Errorf("reconcileMemberNow drove a kind='outsource' row through the MEMBER "+
+			"FSM and decided %q (%s). The outsource half owns this row "+
+			"(lifecycleTickDriverFor → driverOutsource) and dispatches its own start "+
+			"through notifyWorkerSpawn; a second start from this door is the measured "+
+			"double-drive, and nothing logs it.", dec.Command, dec.Reason)
+	}
+	// A row this half declined must leave NO trace in the member half's store:
+	// a decision suppressed at the dispatch is not the same as a row never
+	// claimed, and only the latter is what the driver split promises.
+	if st, ok := s.reconcileStates[dec.MemberID]; ok && dec.MemberID != "" {
+		t.Errorf("the member FSM recorded state %+v for a contractor it does not "+
+			"drive — the guard must decline BEFORE reconcileTickMemberLocked, not "+
+			"inside it", st)
+	}
+	if _, ok := s.reconcileStates["ow-twin"]; ok {
+		t.Errorf("the member FSM left reconcile state on ow-twin — a row driven by " +
+			"the outsource half must never appear in reconcileStates, which is the " +
+			"other half of the measured double-drive (state in BOTH stores)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// T-14 項目 6 — the CADENCE door, behaviourally.
+//
+// The ledger (TestIdentityGatesAreEachOnTheRecord) already fails BY NAME when
+// runReconcileTick's driver guard is deleted, and that was the whole tooth: no
+// test in this package drove runReconcileTick over a roster containing a
+// contractor. A structural guard is a good tooth, but it says nothing about
+// what the owner would experience — it only says a line moved. This one asserts
+// the CONSEQUENCE: with the guard gone, a live contractor takes a `start` from
+// the member half, on top of the one the outsource half dispatches through
+// notifyWorkerSpawn. That is the measured double-drive lifecycle_roster.go
+// records, and until now nothing in this package would have gone red for it.
+func TestRunReconcileTick_AContractorTakesNoStartFromTheMemberHalf(t *testing.T) {
+	s := newReconcileTestServer(t)
+	putWarden(t, s, ServerSelfHost)
+	connectOnline(t, s, ServerSelfHost)
+
+	// A live contractor, and — deliberately — a staff row of the SAME shape
+	// sitting next to it in the SAME roster snapshot. One tick, two rows: the
+	// staff frame is what proves the tick ran and reached its dispatch at all,
+	// so a missing contractor frame cannot be explained away by "the fixture
+	// never produced any frames".
+	if err := s.dal.PutOutsourceWorker(OutsourceWorker{
+		ID: "ow-cadence", Codename: "C-1", Runtime: RuntimeClaude, Model: "opus",
+		Effort: "medium", TaskID: "t-1", Status: WorkerStatusActive,
+		CreatedTS: 1.0, DesiredState: DesiredStateOnline,
+		DesiredMachineID: ServerSelfHost,
+	}); err != nil {
+		t.Fatalf("seed contractor: %v", err)
+	}
+	putTestMember(t, s, testAgent("m-cadence-twin"))
+
+	// The roster read the tick performs must genuinely CONTAIN the contractor,
+	// or this test is asserting on a population the guard never had to filter.
+	// This is the assertion that fails first if `WHERE kind != 'outsource'`
+	// ever comes back — in which case the guard is untested again, silently.
+	roster, err := s.dal.ListMembers()
+	if err != nil {
+		t.Fatalf("roster read: %v", err)
+	}
+	sawContractor := false
+	for _, m := range roster {
+		if m.ID == "ow-cadence" {
+			sawContractor = true
+		}
+	}
+	if !sawContractor {
+		t.Fatalf("dal.ListMembers() did not return the contractor, so the driver " +
+			"guard in runReconcileTick is filtering an empty set and this test " +
+			"proves nothing. The merged roster read (T-14 項目 6) is the premise.")
+	}
+
+	s.runReconcileTick(nowSecs())
+
+	frames := drainFrames(t, s, ServerSelfHost)
+	var staffStarts, contractorStarts int
+	for _, f := range frames {
+		if f.RPC != "start" {
+			continue
+		}
+		switch f.Args["member_id"] {
+		case "m-cadence-twin":
+			staffStarts++
+		case "ow-cadence":
+			contractorStarts++
+		}
+	}
+	if staffStarts != 1 {
+		t.Fatalf("POSITIVE CONTROL FAILED: the staff row next to the contractor took "+
+			"%d starts from this tick, want exactly 1 (frames: %+v). Until this "+
+			"holds, a contractor start count of 0 is not evidence of anything.",
+			staffStarts, frames)
+	}
+	if contractorStarts != 0 {
+		t.Errorf("runReconcileTick dispatched %d `start` frame(s) for a kind='outsource' "+
+			"row. The outsource half already starts it through notifyWorkerSpawn, so "+
+			"this is the SECOND start on the same row in the same tick — the measured "+
+			"double-drive recorded on lifecycleTickDriverFor (lifecycle_roster.go). "+
+			"It is silent: two starts look like one retry.", contractorStarts)
+	}
+	if st, ok := s.reconcileStates["ow-cadence"]; ok {
+		t.Errorf("the member half left reconcile state %+v on a contractor. The "+
+			"outsource half keeps its own state in workerReconcileStates; a row in "+
+			"BOTH stores is the other half of the same measured defect, and it "+
+			"persists after the tick rather than only during it", st)
+	}
+}
