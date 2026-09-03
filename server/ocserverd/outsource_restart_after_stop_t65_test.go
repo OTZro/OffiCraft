@@ -87,7 +87,7 @@ func TestOutsourceProjectionCarriesRestartAfterStop(t *testing.T) {
 // ── the queued 起來 on the six owner verbs ───────────────────────────────────
 
 // seedStoppedAnchoredWorker builds the fixture the 重啟 verbs actually need, and
-// that TestRelocateStoppedWorker_SavesPinWithoutReviving deliberately does NOT
+// that TestRelocateNeverStoppedWorker_SavesPinWithoutReviving deliberately does NOT
 // have: a worker that WENT THROUGH the /stop handler, so stopping_since is a
 // real anchor on the row (aStopWasEverAskedFor is TRUE).
 //
@@ -256,7 +256,7 @@ func TestRefocusNeverStoppedWorkerDoesNotQueueAStart(t *testing.T) {
 
 // TestRelocateStoppedAnchoredWorkerQueuesTheStart is the 改機器 face — the test
 // the ticket asked for by name, with the anchored fixture the existing
-// TestRelocateStoppedWorker_SavesPinWithoutReviving does not have.
+// TestRelocateNeverStoppedWorker_SavesPinWithoutReviving does not have.
 func TestRelocateStoppedAnchoredWorkerQueuesTheStart(t *testing.T) {
 	api := newTasksTestServer(t)
 	id := seedStoppedAnchoredWorker(t, api, true)

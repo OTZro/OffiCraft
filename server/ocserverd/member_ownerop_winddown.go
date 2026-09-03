@@ -551,7 +551,7 @@ func (s *apiServer) armMemberOwnerOpHandover(m *Member, op string) bool {
 // respawnWorkerForOwnerOp's held-down arm (worker_spawn.go).
 //
 // 🔴 THE ONE CLAIM WORTH KEEPING FROM THE OLD TEXT, because it is a trap rather
-// than a fact about the past: TestRelocateStoppedWorker_SavesPinWithoutReviving
+// than a fact about the past: TestRelocateNeverStoppedWorker_SavesPinWithoutReviving
 // is BLIND to all of that. Its fixture reaches desired_state=offline by writing
 // the field directly, so it never acquires a stopping_since anchor, so this gate
 // is FALSE for it and it stays green both before and after the change. It is not
