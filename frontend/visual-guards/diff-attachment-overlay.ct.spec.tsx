@@ -23,7 +23,7 @@ const BEFORE = ["alpha", "bravo", "charlie", "delta ".repeat(40)].join("\n");
 const AFTER = ["alpha", "BRAVO", "charlie", "delta ".repeat(40)].join("\n");
 
 for (const width of [390, 1280]) {
-  test(`width ${width}: the comparison renders and nothing scrolls sideways`, async ({
+  test(`width ${width}: the comparison stays inside the panel and its overflow stays reachable`, async ({
     mount,
     page,
   }) => {
