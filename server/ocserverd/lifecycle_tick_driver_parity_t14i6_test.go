@@ -33,6 +33,26 @@ import (
 // it is checking, this test becomes a tautology that no mutant can redden, and
 // the only wall between the two FSMs goes back to being invisible.
 
+// 🔴 WHAT THIS FILE DOES **NOT** DEFEND — say it, because the first draft of
+// this PR's description said the opposite and the opposite was measured false.
+//
+// This test guards the PREDICATE. It has no way to see whether either half
+// still ASKS it. Independent review on 2026-09-03 deleted
+// reconcile.go's `if lifecycleTickDriverFor(m) != driverReconcile { continue }`
+// and, separately, outsource_sched.go's twin — and the WHOLE ocserverd suite
+// stayed green both times (1968/1968). Only making the predicate itself wrong
+// (always returning driverReconcile) reddened anything. So the sentence "任一半
+// 偷偷多擁有或少擁有一格都會當場紅" was NOT true of this file, and must not be
+// re-attached to it.
+//
+// The property does exist now, and it is somewhere else:
+// lifecycle_identity_gate_t170e_test.go registers lifecycleTickDriverFor in
+// identitySeamFuncs, so BOTH call sites are ledgered by
+// FILE :: FUNCTION :: EXPRESSION. Delete either guard and its ledger entry goes
+// stale — TestIdentityGatesAreEachOnTheRecord then fails and prints the exact
+// key that vanished (measured 2026-09-03, both directions). Read the two
+// lifecycleTickDriverFor entries in identityGateLedger before touching a guard.
+
 // lifecycleDriverCell is ONE point of the enumerated space. Every field is an
 // axis the two halves are known to read: Kind picks the population, RosterStatus
 // and Activated are what workerStatusFromMember folds into the worker
