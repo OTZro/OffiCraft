@@ -221,11 +221,17 @@ test("框的尺寸不歸主題管 —— 換一套 theme token,幾何逐位元�
       return `${r.width.toFixed(2)}x${r.height.toFixed(2)}`;
     });
   const base = await read();
+  // ⚠️ THE INJECTED `:root{…}` BLOCK IS THE WHOLE OF THE THEME SWAP HERE.
+  // There is no `[data-theme]` selector anywhere in this tree (grep: zero
+  // hits) — a theme in this repo is a set of custom-property VALUES, painted
+  // onto `:root` by lib/themePaint, and `<html data-theme>` only names which
+  // bundle the provider resolved. So stamping that attribute in this story
+  // would change nothing and would make the spec read as if it had covered a
+  // second theme; substituting the tokens is what actually exercises the claim.
   await page.evaluate(() => {
     const s = document.createElement("style");
     s.textContent = `:root{--color-overlay:#0ff;--color-text:#012;--color-bg:#fed;--color-accent:#f0f;--color-accent-cta-bg:#0f0;}`;
     document.head.appendChild(s);
-    document.documentElement.setAttribute("data-theme", "light");
   });
   expect(await read(), "換主題不准動到縮圖的幾何").toBe(base);
 });

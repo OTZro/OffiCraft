@@ -290,7 +290,7 @@ const REGISTRY = [
     kind: "await",
     count: 2,
     verdict:
-      "commit() and mergeHistory() each await the page's waiting reply cards before writing. commit re-asks the generation ticket AFTER that await and drops a superseded page; mergeHistory takes no ticket because a history page is additive, and writes through an updater so a commit landing inside its await window survives in React's `prev`. Neither knows the caller's effect liveness — `alive` stays in load()'s own closure, asked on both sides",
+      "commit() and mergeHistory() each await the page's waiting reply cards before writing. commit re-asks the generation ticket AFTER that await and drops a superseded page; mergeHistory takes no ticket and does NOT check that what it is handed is history — that is a property of its ONE caller, `useChat.loadOlder`, which prepends a page fetched strictly before `messages[0]` and keeps every other field from `prev`, so it can neither supersede nor be superseded; it writes through an updater so a commit landing inside its await window survives in React's `prev`. A second caller re-opens that question. Neither knows the caller's effect liveness — `alive` stays in load()'s own closure, asked on both sides",
   },
   {
     file: "lib/replyCardCache.ts",

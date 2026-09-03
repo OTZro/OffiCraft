@@ -130,7 +130,17 @@ describe("useChat load routing (active vs background)", () => {
   // pinned here is the SAFETY NET described at the reset in the subscription
   // effect: a caller that swaps `withId` on a live instance converges on the new
   // room instead of staying on the old one.
-  it("converges on the new peer when a live instance is handed a different withId", async () => {
+  //
+  // 🟠 IT COVERS ONE HALF OF THAT NET, AND ONLY ONE. The room being left here
+  // holds an ORDINARY newest-window thread. When the room being left holds an
+  // ANCHOR window (`hasNewer: true`) the switch does NOT converge: `clear()`
+  // deliberately leaves the mirror on the previous room for that tick, `load()`
+  // reads `hasNewer` from it and returns early, and the new room stays empty
+  // (measured: 0 requests, `messages: []`). That half is knowingly uncovered —
+  // the key is what makes it unreachable, not this hook — and closing it means
+  // changing `load()`'s decision, which is its own measurement. See the 🟠 note
+  // at that read in useChat.ts.
+  it("converges on the new peer when a live instance is handed a different withId (NON-anchor half only)", async () => {
     h.listChat.mockImplementation(async (withId: string) =>
       withId === "b"
         ? [mkMsg("c1", "b", "owner", 1000)]

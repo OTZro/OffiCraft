@@ -1,7 +1,7 @@
 // lib/threadCommit.ts — THE ONLY DOOR ONTO THE CHAT THREAD (T-48).
 //
-// 🔴 WHY THIS IS A MODULE AND NOT SEVEN CAREFUL CALL SITES. The reply cards a
-// thread carries are fetched SEPARATELY and LATER than the messages, so a
+// 🔴 WHY THIS IS A MODULE AND NOT ONE CAREFUL CALL SITE PER COMMIT POINT.
+// The reply cards a thread carries are fetched SEPARATELY and LATER than the messages, so a
 // waiting card above a scroll target grows after the fact and pushes the target
 // down (measured +254px at 1280 wide; 0 at 390, where the browser's own scroll
 // anchoring absorbs it). The fix is that every commit must have those cards in
@@ -135,12 +135,22 @@ export interface ThreadCommit {
    * outcomes and collapsing them is how a jump reports a message that is sitting
    * right there as 「跳轉被打斷」. */
   commit(seq: number, next: (prev: Thread) => Thread): Promise<boolean>;
-  /** `loadOlder`'s prepend: no ticket, because a history page is additive and
-   * cannot supersede or be superseded by a newest-window load — it is written
-   * through an updater precisely so a commit landing inside its await window is
-   * present in React's `prev` and survives. Same card guarantee as `commit`;
-   * expect it to fetch nothing in practice, since history pages are almost
-   * entirely answered/expired cards, which are never prefetched. */
+  /** `loadOlder`'s prepend: no ticket, and no check that what it is handed is
+   * actually history.
+   *
+   * ⚠️ SAY WHOSE PROPERTY THAT IS. Nothing here enforces history-ness — this
+   * door writes whatever updater it is given. What makes "no ticket" safe is
+   * the ONE caller: `useChat.loadOlder` prepends a page fetched strictly BEFORE
+   * `messages[0]`, keeps `prev.gapSuspected` / `prev.hasNewer`, and touches no
+   * other field — so it can neither supersede nor be superseded by a
+   * newest-window load. A second caller, or a `loadOlder` that starts writing
+   * the tail, invalidates that and is a decision to re-examine this door, not a
+   * formality. It is written through an updater precisely so a commit landing
+   * inside its await window is present in React's `prev` and survives.
+   *
+   * Same card guarantee as `commit`; expect it to fetch nothing in practice,
+   * since history pages are almost entirely answered/expired cards, which are
+   * never prefetched. */
   mergeHistory(next: (prev: Thread) => Thread): Promise<void>;
 }
 
@@ -205,11 +215,12 @@ export function useThreadCommit(): ThreadCommit {
   const mergeHistory = useCallback(
     async (next: (prev: Thread) => Thread): Promise<void> => {
       await prefillWaitingCards(next(mirror.current).messages);
-      // No ticket, and no mirror write: `loadOlder` never had either. A history
-      // page cannot supersede anything, and writing the mirror from a path with
-      // no generation of its own would let it clobber a newer commit that landed
-      // inside this await window — React's `prev` is what keeps this correct,
-      // and the next render squares the mirror with it.
+      // No ticket, and no mirror write: `loadOlder` never had either. A page
+      // that only prepends — which is what its one caller does, not something
+      // checked here — cannot supersede anything, and writing the mirror from a
+      // path with no generation of its own would let it clobber a newer commit
+      // that landed inside this await window — React's `prev` is what keeps this
+      // correct, and the next render squares the mirror with it.
       setThread(next);
     },
     [],

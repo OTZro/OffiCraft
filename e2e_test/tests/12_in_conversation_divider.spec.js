@@ -1,5 +1,12 @@
 // e2e_test/tests/12_in_conversation_divider.spec.js
-// B12 · in-conversation unread divider — chip/divider ONE anchor (owner bug).
+// B12 · in-conversation unread divider — the divider must anchor for arrivals
+// that land while the owner is ALREADY in the room.
+//
+// The report below is HISTORY and is quoted as written; the 「有新訊息」 chip it
+// names no longer exists (T-48 replaced it with the new-message preview strip,
+// `chat-new-msg-preview`, and the strip's click lands on the LATEST message
+// rather than on the divider's anchor). What survives unchanged is the defect
+// it describes: arrivals inside the room left no divider at all.
 //
 // Owner report (post-08fdd20): staying IN the conversation (window foreground,
 // thread open), two new messages land → the floating "有新訊息" chip appears →
@@ -31,8 +38,15 @@ const SEED_COUNT = 12; // enough read context to overflow one screen
 const PAD =
   '— padding line so the thread overflows one screen height and scrolled-up is a real scroll state';
 
-test.describe('B12 · in-conversation arrivals — chip and divider share ONE new-message anchor', () => {
-  test('foreground + already in the room: two new inbound → chip appears AND the divider anchors at the first new message', async ({
+// ⚠️ THE TITLE BELOW USED TO SAY 「chip and divider share ONE new-message
+// anchor」, and BOTH halves of that are false today (T-48): there is no chip —
+// it was replaced by the new-message preview strip (`chat-new-msg-preview`),
+// which is mutually exclusive with the back-to-latest arrow — and the two no
+// longer share an anchor. The divider still anchors at the FIRST unread; the
+// strip's click lands on the LATEST message. What this spec pins is that both
+// ends of the unread run are marked, not that they point at the same row.
+test.describe('B12 · in-conversation arrivals — the preview strip and the divider mark the same unread run from its two ends', () => {
+  test('foreground + already in the room: two new inbound → the new-message preview strip appears AND the divider anchors at the first new message', async ({
     page,
   }) => {
     const request = page.request;
@@ -83,7 +97,7 @@ test.describe('B12 · in-conversation arrivals — chip and divider share ONE ne
     // writer of that ref is its onScroll handler. A programmatic assignment
     // dispatches the scroll event on a later task, so code that assigns and walks
     // straight on leaves the component still holding the previous answer: the
-    // next arrival is auto-followed to the bottom and no chip is ever armed.
+    // next arrival is auto-followed to the bottom and no preview strip is ever armed.
     // Resolving on the element's own scroll event puts us after that dispatch —
     // scroll is one of React 18's non-delegated events, so `onScroll` is NOT a
     // root listener: react-dom attaches it straight to this element, in the
@@ -115,9 +129,9 @@ test.describe('B12 · in-conversation arrivals — chip and divider share ONE ne
     // ── THE SCROLL POSITION IS SAMPLED TWICE, ON PURPOSE ───────────────────
     //
     // These are NOT the same assertion written down twice. They sit on
-    // opposite sides of the chip wait and are read at different moments.
+    // opposite sides of the strip wait and are read at different moments.
     //
-    // ① below runs BEFORE anything that can abort, so a red chip still leaves a
+    // ① below runs BEFORE anything that can abort, so a red strip still leaves a
     // scroll position in the log. What that number can settle is narrow, and the
     // narrowness is the point: a big reading is what BOTH candidate mechanisms
     // produce — the scroll never landing, and the arrival pulling a scrolled-up

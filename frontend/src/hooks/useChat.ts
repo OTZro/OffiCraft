@@ -847,10 +847,21 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       // 🔴 AN ANCHOR WINDOW IS NOT REFRESHED BY A NEWEST PAGE (T-48 ③). See
       // Thread.hasNewer: merging the live tail into a historical window creates
       // a seam the T-b0bb machinery would spend six round-trips failing to
-      // close, and would then report as LOST messages. The peer guard matters —
-      // on a conversation switch the mirror is still the PREVIOUS peer's
-      // thread for this tick, and that peer's anchor must not silence the new
-      // conversation's first load.
+      // close, and would then report as LOST messages.
+      //
+      // 🟠 THERE IS NO PEER GUARD ON THIS READ ANY MORE, AND THAT IS A LATENT
+      // BUG, NOT A PROPERTY. `Thread` dropped its `peer` field and the latches
+      // dropped their peer stamp when `ChatArea` became `key={peerId}` (see
+      // lib/threadCommit's header and lib/conversationLatches'). So on a
+      // `withId` switch WITHOUT a remount, the effect calls `clear()` — which
+      // deliberately does not advance the mirror — and this line then reads the
+      // PREVIOUS room's thread. If that room was an anchor window, `hasNewer`
+      // is true and the new room's first load returns here and never fires:
+      // 0 requests, `messages: []`, forever. What makes that unreachable today
+      // is the key alone (one hook instance per room, enforced by
+      // scripts/check-chat-area-key.mjs) — nothing in this hook. Do NOT close
+      // it by making `clear()` advance the mirror as a drive-by: that changes
+      // this decision on every path and needs its own measurement.
       if (view.current().hasNewer) {
         return;
       }
@@ -859,12 +870,15 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       // say "the window is on its way", which is precisely the interval that
       // needs covering on an anchor-first entry. See the two latches.
       //
-      // The peer stamp is the whole of R3-1: an anchor still in the air for
-      // the conversation the owner has just LEFT used to silence this one's
-      // first load, permanently (measured: the new room stayed at 0 rows for
-      // 22s and never fetched again). The record is per conversation and its
-      // latches refuse a peer that is not theirs, so that gate is unreachable
-      // now.
+      // R3-1 was measured on this gate: an anchor still in the air for the
+      // conversation the owner had just LEFT silenced this one's first load,
+      // permanently (the new room stayed at 0 rows for 22s and never fetched
+      // again). The fix was NOT a peer stamp on the latches — that stamp was
+      // removed with `Thread.peer` (conversationLatches' header records why).
+      // What closes it is that a latch record is CREATED BY, and dies with, one
+      // conversation's hook, and `ChatArea`'s `key={peerId}` is what gives each
+      // conversation its own hook. Same caveat as the read above: the guarantee
+      // lives in the key, not here.
       if (
         conv.latches.isHeld("entryAnchor") ||
         conv.latches.isHeld("anchorFetch")

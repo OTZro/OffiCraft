@@ -1376,12 +1376,16 @@ export function ChatArea({
   // This is the guardrail that had to ship WITH the deletion of the two
   // correction loops, not after it.
   //
-  // `latestInView` is written at seven sites and EVERY ONE of them is 「有人主動
-  // 捲動」—— the scroll handler, entry positioning, the jump, the arrow, the
-  // preview strip. A reflow writes it nowhere. While the settle loop existed
-  // that did not show: the loop kept re-scrolling the newest row flush with the
-  // bottom for 2.6s, so the stale `true` happened to stay correct. The loop was
-  // taking the bullet for the staleness.
+  // EVERY OTHER `setLatestInView` IN THIS FILE IS 「有人主動捲動」—— the scroll
+  // handler, entry positioning, the jump, the arrow, the preview strip; grep the
+  // name to see the current set, and if a new write site is NOT one of those,
+  // this effect's reason has changed and needs re-reading rather than trusting.
+  // The point is the shape of that set, not its size: not one of them is a
+  // REFLOW, and a reflow is exactly what moves the newest row without anybody
+  // touching the scroller. While the settle loop existed that did not show: the
+  // loop kept re-scrolling the newest row flush with the bottom for 2.6s, so the
+  // stale `true` happened to stay correct. The loop was taking the bullet for
+  // the staleness.
   //
   // Measured on the deleted code, the plainest path there is — scroll up, press
   // 回到最新, three images above still decoding:
