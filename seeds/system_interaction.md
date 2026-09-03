@@ -77,7 +77,6 @@ ocagent diff <改動前的檔案> <改動後的檔案> [--label-before <文字>]
 **一側不一定要是檔案。** 要比的東西如果本來就是這個系統裡的一份文件（角色誌、Insight、Global Context、任務手冊、任務描述、開機文件……），不要先把它抓下來存成檔案再上傳 —— 那會多存一份，而且從此不會跟著原文件更新。直接用 `doc:<kind>/<key>/<at>/<field>` 當那一側：
 
 ```text
-// OffiCraft command: ocagent diff（一側指向文件）
 ocagent diff doc:lessons/<role_key>/<版本 id>/text doc:lessons/<role_key>/current/text
 ocagent diff <我改好的草稿檔> doc:global_context/global/current/text
 ```
