@@ -1592,8 +1592,8 @@ func stampOpReceipt(lastOp *string, lastOpOK **bool, lastOpLog, lastOpReason *st
 // of persisting. The receipt itself is stampOpReceipt's; this is the staff shell.
 //
 // ⚠️ IT NO LONGER MAKES THE EXPLANATION AND THE CHANGE ONE WRITE (T-55), which
-// is what this comment used to promise. The five receipt columns left
-// PutMember's DO UPDATE SET, so a caller's whole-row write carries the change
+// is what this comment used to promise. The five receipt columns became
+// insert-only, so a caller's whole-row write carries the change
 // and a separate dal.SetMemberOpReceipt carries the explanation. STAMPING ALONE
 // STORES NOTHING — a caller that forgets the second write leaves a receipt that
 // exists only in memory, and nothing goes red.

@@ -156,8 +156,9 @@ type Member struct {
 	//
 	// 🔴 NOT cleared on the next boot, unlike every other lifecycle anchor: it
 	// describes the session BEFORE this one, and that is precisely who needs to
-	// read it. Written through SetMemberForcedStopAt and PutMember's upsert. The
-	// upsert carries it forward-only with max(): forcedEpochLive has three
+	// read it. Written through SetMemberForcedStopAt and through a whole-row
+	// write; BOTH go through mfForcedStopAt, which declares the column
+	// forward-only, so every writer lands it as max(): forcedEpochLive has three
 	// readers — notice suppression, the SSE stop gate, and deactivate — that use
 	// it to distinguish a deliberate cut-off from a session working its close-out.
 	// The targeted update is best-effort, so a failed update must not leave a
@@ -194,9 +195,10 @@ type Member struct {
 	// consult it for them (authz.go agentIatFloorRefusal). A warden credential
 	// has no exp, so a floor above one could never expire out of the way.
 	//
-	// Written through SetMemberAgentIatFloor only; PutMember's upsert carries it
-	// on INSERT but never in its DO UPDATE SET, so no whole-row snapshot taken
-	// before a wake can put an older floor back over a newer one. Not on the wire.
+	// Written through SetMemberAgentIatFloor only; a whole-row write carries it
+	// on INSERT but never onto an EXISTING row (mfAgentIatFloor declares it
+	// insertOnly), so no whole-row snapshot taken before a wake can put an older
+	// floor back over a newer one. Not on the wire.
 	AgentIatFloor float64
 	BankedCost    float64
 	LastOp        string
@@ -361,12 +363,10 @@ func (d *DAL) GetMember(id string) (*Member, error) {
 // between "the owner picked claude" and "nobody has picked yet", which is what
 // resolveEmptyRuntimeForPlacement needs at placement time.
 //
-// PutMember upserts a member row (the repository.put_member twin; the SSE
-// delta is the service layer's job). On conflict it deliberately leaves
-// avatar_attachment_id untouched: ReplaceMemberAvatar/DeleteMemberAvatar are
-// the only update seams for that independently-owned pointer. This prevents a
-// stale lifecycle/model snapshot from erasing a newer avatar and orphaning its
-// blob. The INSERT still accepts the field for migrations/tests/new rows.
+// (The paragraph that used to sit here explained why PutMember's conflict clause
+// left avatar_attachment_id alone. That clause is gone; the column is now
+// declared insertOnly, and its reason lives on mfAvatarAttachmentID in
+// dal_member_patch.go with the rest of the property table.)
 // ── account spend (T-53, owner ruling rc-5c5d7c7c6dcd) ───────────────────────
 //
 // The ACCOUNT's own accumulated spend, the number the cockpit's account card
@@ -440,140 +440,47 @@ func (d *DAL) ZeroAccountSpend(account string) (float64, error) {
 	return had, nil
 }
 
+// PutMember writes one member row WHOLE — the shape 52 callers still use, kept
+// exactly as it behaved before T-63 and now expressed as a thin shell over
+// PatchMember.
+//
+// It is two statements in ONE transaction, and each answers a different half:
+//
+//   - INSERT … ON CONFLICT (id) DO NOTHING lands the whole row when there is no
+//     row yet. This is the ONLY half that carries the insert-only columns, so a
+//     member is born with the model, runtime, effort, machine and receipt it was
+//     created with, and nothing afterwards can put a stale copy of those back.
+//   - PatchMember(updatableMemberFields(...)) writes the rest onto a row that
+//     already exists — the columns a whole-row writer is allowed to carry. That
+//     set is not listed here: it is whatever is NOT flagged insertOnly in the
+//     property table, so a column joins or leaves it by editing its own line.
+//
+// The end state is identical to the single upsert this replaced, on both paths.
+// A brand-new row: the INSERT lands every column, then the patch rewrites the
+// updatable ones with the same values (forced_stop_at through max(v, v) = v).
+// An existing row: the INSERT does nothing, the patch writes exactly the columns
+// the old conflict clause wrote.
+//
+// It fans NO SSE delta — s.putMember is the service-layer door that pairs the
+// write with publishMemberPatch, and PutOutsourceWorker deliberately reaches
+// this one without a member delta at all.
 func (d *DAL) PutMember(m Member) error {
-	var lastOpOK any
-	if m.LastOpOK != nil {
-		lastOpOK = *m.LastOpOK
-	}
-	var linkedTaskID any
-	if m.LinkedTaskID != nil {
-		linkedTaskID = *m.LinkedTaskID
-	}
-	// "" stores NULL so the partial UNIQUE codename index never trips on the
-	// many codename-less staff rows (NULLs are mutually distinct in SQLite).
-	var codename any
-	if m.Codename != "" {
-		codename = m.Codename
-	}
-	_, err := d.wdb.Exec(`
-		INSERT INTO member (`+memberColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (id) DO UPDATE SET
-			name = excluded.name, kind = excluded.kind,
-			role_key = excluded.role_key,
-			actual_model = excluded.actual_model,
-			actual_runtime = excluded.actual_runtime,
-			actual_effort = excluded.actual_effort,
-			desired_state = excluded.desired_state,
-			last_machine_id = excluded.last_machine_id,
-			session_boot_ts = excluded.session_boot_ts,
-			waking_since = excluded.waking_since,
-			roster_status = excluded.roster_status,
-			linked_task_id = excluded.linked_task_id,
-			codename = excluded.codename,
-			created_ts = excluded.created_ts,
-			released_ts = excluded.released_ts,
-			activated_ts = excluded.activated_ts,
-			-- forced_stop_at only ever moves FORWARD. A caller holding the
-			-- current row carries the stamp it just set and it lands here; a
-			-- STALE snapshot carries an older value (or 0) and max() keeps
-			-- what is already stored, so the record that a session was cut off
-			-- survives every other writer — the property the avatar pointer
-			-- and the session anchor each needed their own seam for.
-			forced_stop_at = max(forced_stop_at, excluded.forced_stop_at)
-			-- banked_cost is DELIBERATELY ABSENT from this SET list (T-14
-			-- 項目 6). It is a running TOTAL, and a total is the one thing a
-			-- whole-row writer can never carry safely: every HTTP face that
-			-- writes a member row holds a snapshot read before the banking
-			-- edge, so landing its stale figure here silently REFUNDS spend
-			-- the owner already saw — and the worker half is worse, because
-			-- memberFromWorker rebuilds the row from an OutsourceWorker that
-			-- was read at the same stale moment. The INSERT still carries it
-			-- so a new row starts at whatever it was born with;
-			-- AddMemberBankedCost is the only writer that moves it, and it
-			-- accumulates in SQL so two concurrent banking edges cannot lose
-			-- each other's contribution.
-			--
-			-- handover_noticed_ts is DELIBERATELY ABSENT from this SET list
-			-- (T-6ebc). It is session-scoped state cleared at a session
-			-- boundary, and the boundary runs next to HTTP faces that write
-			-- member rows from snapshots taken before it; carrying the column
-			-- here would let one of those revive a claim that was just cleared
-			-- — silencing a genuinely new session's one notice. The INSERT
-			-- carries it so a brand-new row starts at its zero value;
-			-- SetMemberHandoverNoticedTS is the only writer that moves it.
-			-- Guarded by TestHandoverNotice_ClaimSurvivesAWholeRowUpsert:
-			-- adding this column to the SET list turns that test red.
-			--
-			-- agent_iat_floor is ABSENT for the same reason and one more
-			-- (T-14 4B). It is a REVOCATION floor, so the only safe direction
-			-- for a whole-row writer to move it is not at all: report_waking
-			-- raises it next to HTTP faces holding member snapshots taken
-			-- BEFORE that wake, and any one of them landing here would put the
-			-- superseded generation's credentials back in service. The INSERT
-			-- carries it so a new row starts at 0 (no floor, nothing refused);
-			-- SetMemberAgentIatFloor is the only writer that moves it, and it
-			-- moves it forward only.
-			--
-			-- desired_machine_id, model, runtime and effort are DELIBERATELY
-			-- ABSENT for the ordinary reason, not a special one (T-55): they are
-			-- OWNER INTENT, edited from faces that hold no common lock, and every
-			-- one of those faces reaches this statement carrying a whole snapshot
-			-- read before the others landed. An activate in flight put its own
-			-- older pin back over a relocate that had just moved the member; a
-			-- 成員設定 save that touched only effort restated the model beside
-			-- it. Nothing goes red either time — the row simply disagrees with
-			-- what the owner last pressed. The INSERT still carries all four so a
-			-- new row is born with the intent it was created with;
-			-- SetMemberDesiredMachineID / SetMemberModel / SetMemberRuntime /
-			-- SetMemberEffort are the only writers that move them.
-			--
-			-- stopping_since, stopped_since, refocus_since and refocus_op are
-			-- DELIBERATELY ABSENT (T-55) — the four WIND-DOWN ANCHORS, which
-			-- together date one rung of the 下線 → 加速 → 強制 ladder and the
-			-- 換手 epoch riding on it. Three families of writer move them and
-			-- none of them share a lock: the owner verbs (deactivate /
-			-- accelerated-stop / force-stop / refocus), the agent reporting on
-			-- ITSELF (report_stopping / report_stopped / report_waking), and the
-			-- reconcile tick's recycle passes. Each reaches this statement
-			-- holding a snapshot read before the others landed. While the four
-			-- rode this list, an owner face that touched something else entirely
-			-- put its pre-stop snapshot back over an anchor the agent had just
-			-- written — stopped_since to 0 — and the collect that keys on it
-			-- never fired, so the member sat in a wind-down that had in fact
-			-- already finished. Nothing goes red; the ladder simply disagrees
-			-- with what happened.
-			--
-			-- 🔴 ONE WRITER FOR FOUR COLUMNS, for SetMemberOpReceipt's reason:
-			-- armRefocusEpoch writes all four in one breath and the readers take
-			-- them together (StopIntent is stopping_since > 0; the ladder gate
-			-- compares the refocus epoch against the stop anchors), so any moment
-			-- with some landed and some not is a rung nobody stood on.
-			-- SetMemberWindDownAnchors is the only writer that moves them; the
-			-- INSERT still carries all four so a new row is born on the rung it
-			-- was created with.
-			-- Guarded by TestPutMemberNeverOverwritesSingleColumnOwnedFields:
-			-- putting any of these four back into this list turns it red NAMING
-			-- the column.`,
-		m.ID, m.Name, m.Kind, m.RoleKey, m.Runtime, m.Model, m.ActualModel, m.Effort,
-		m.ActualRuntime, m.ActualEffort,
-		m.DesiredState, m.DesiredMachineID, m.LastMachineID, m.SessionBootTS,
-		m.WakingSince, m.StoppingSince, m.StoppedSince, m.RefocusSince, m.RefocusOp,
-		m.BankedCost,
-		m.LastOp, lastOpOK, m.LastOpLog, m.LastOpReason, m.LastOpAt, m.RosterStatus,
-		linkedTaskID, codename, m.CreatedTS, m.ReleasedTS, m.ActivatedTS,
-		m.AvatarAttachmentID, m.ForcedStopAt, m.HandoverNoticedTS, m.AgentIatFloor,
-	)
-	return err
+	fields := memberWholeRow(m)
+	return d.inTx(func(tx *sql.Tx) error {
+		if err := insertMemberRowIfAbsent(tx, fields); err != nil {
+			return err
+		}
+		return patchMemberOn(tx, m.ID, updatableMemberFields(fields)...)
+	})
 }
 
 // AddMemberBankedCost adds delta to ONLY member.banked_cost (T-14 項目 6) — the
 // durable cumulative spend of a staff member OR an outsource worker, since P7d
 // made both a row of the same table (outsource_worker.banked_cost is this
-// column). PutMember's upsert carries the column on INSERT but never in its DO
-// UPDATE SET, so no whole-row write can move it — this function and
-// ZeroMemberBankedCost (T-53, just below) are its only writers, and they are the
-// only two by design: one accumulates, one resets.
+// column). A whole-row write carries the column on INSERT but never onto an
+// existing row (mfBankedCost declares it insertOnly), so no whole-row write can
+// move it. This function and ZeroMemberBankedCost (T-53, just below) are its
+// two writers, and they are two by design: one accumulates, one resets.
 //
 // ACCUMULATES IN SQL, not in Go, for the reason SetMemberAgentIatFloor uses
 // max() in SQL: a read-modify-write in Go loses to whichever caller writes
@@ -605,8 +512,8 @@ func (d *DAL) AddMemberBankedCost(id string, delta float64) error {
 //
 // 🔴 IT MUST BE A SINGLE-COLUMN WRITE, and that is not a style preference. The
 // obvious shape — read the row, set BankedCost to 0, hand the whole row to
-// PutMember — silently does NOTHING now: banked_cost is deliberately absent
-// from PutMember's DO UPDATE SET (T-14 項目 6), so the durable half of the reset
+// PutMember — silently does NOTHING now: banked_cost is deliberately insert-only
+// (T-14 項目 6), so the durable half of the reset
 // would never land while the API still answered 200 with a receipt naming money
 // it had not destroyed. The live half would go, the column would not, and the
 // cockpit would grow the number back on its next read.
@@ -638,8 +545,9 @@ func (d *DAL) ZeroMemberBankedCost(id string) (float64, error) {
 // SetMemberHandoverNoticedTS writes ONLY member.handover_noticed_ts (T-6ebc):
 // the session anchor whose one advance handover notice has been sent, or 0 to
 // release the claim at a session boundary. It is the SOLE writer that moves the
-// column — PutMember's upsert carries it on INSERT but never in its DO UPDATE
-// SET, so no whole-row snapshot can revive a cleared claim.
+// column — a whole-row write carries it on INSERT but never onto an existing
+// row (mfHandoverNoticedTS declares it insertOnly), so no whole-row snapshot can
+// revive a cleared claim.
 //
 // Single-column for the same two reasons SetMemberSessionBootTS is: the column
 // is not on the wire, so a member delta on the connect edge would be pure
@@ -654,20 +562,32 @@ func (d *DAL) SetMemberHandoverNoticedTS(id string, ts float64) error {
 }
 
 // SetMemberForcedStopAt stamps the force-stop record on ONE column. It is the
-// BACKSTOP now, not the only writer: PutMember's upsert carries the column
-// under max(), so the value lands in the same write that publishes the member
-// — and a stale lifecycle snapshot still cannot erase it, because max() keeps
-// whatever is already stored.
+// BACKSTOP now, not the only writer: a whole-row write carries the column too,
+// so the value lands in the same write that publishes the member — and a stale
+// lifecycle snapshot still cannot erase it, because the column is forward-only.
 //
-// 🔴 Why the upsert had to carry it (independent review): the SSE stop gate now
-// READS this column to tell "cut off deliberately" from "working its close-out".
-// While this seam was the only writer, and its failure is deliberately
-// non-fatal, a failed UPDATE left the column at 0 — and a force-stopped member
-// then reconnected as if it were closing out, on an arm that runs no clock to
-// collect it. A safety verdict must not hang on a best-effort write.
+// 🔴 Why the whole-row door had to carry it (independent review): the SSE stop
+// gate now READS this column to tell "cut off deliberately" from "working its
+// close-out". While this seam was the only writer, and its failure is
+// deliberately non-fatal, a failed UPDATE left the column at 0 — and a
+// force-stopped member then reconnected as if it were closing out, on an arm
+// that runs no clock to collect it. A safety verdict must not hang on a
+// best-effort write.
+//
+// 🔑 It goes through PatchMember rather than writing its own SQL (T-63). It used
+// to be a plain `forced_stop_at = ?`, which could walk the stamp BACKWARDS while
+// the whole-row door could not — two paths saying different things about one
+// column. Naming the field here makes the column's own forwardOnly declaration
+// apply to this path as well, so there is nothing left to keep in sync.
+//
+// ⚠️ WHAT THIS SEAM GAVE UP: it can no longer CLEAR the column. Passing 0, or
+// any value below the stored one, is now a silent no-op. Nothing relies on that
+// today — the sole non-test caller stamps nowSecs(), and the column is
+// deliberately never cleared (it describes the session BEFORE this one) — but an
+// "undo the force-stop record" would need its own seam rather than this one, and
+// would not find out by being refused.
 func (d *DAL) SetMemberForcedStopAt(id string, ts float64) error {
-	_, err := d.wdb.Exec(`UPDATE member SET forced_stop_at = ? WHERE id = ?`, ts, id)
-	return err
+	return d.PatchMember(id, mfForcedStopAt(ts))
 }
 
 // SetMemberSessionBootTS writes ONLY member.session_boot_ts (T-4235). It is a
@@ -711,8 +631,20 @@ func (d *DAL) SetMemberWakingSince(id string, ts float64) error {
 // SetMemberWindDownAnchors writes the four wind-down anchor columns and NOTHING
 // else (T-55) — stopping_since / stopped_since / refocus_since / refocus_op, the
 // rung of the 下線 → 加速 → 強制 ladder a member is standing on plus the 換手
-// epoch opened on it. It is the sole writer of all four; PutMember carries them
-// on INSERT and none of them in its DO UPDATE SET.
+// epoch opened on it. It is the sole writer of all four; a whole-row write
+// carries them on INSERT and never onto an existing row (their constructors
+// declare them insertOnly).
+//
+// 🔑 IT DELIBERATELY DOES NOT ROUTE THROUGH PatchMember, and that is a decision
+// rather than an oversight (T-63). Converging a setter onto the patch door earns
+// something only when the setter RE-IMPLEMENTS a property already declared on
+// the column — SetMemberForcedStopAt and SetMemberAgentIatFloor each wrote their
+// own max() beside a forwardOnly declaration, which is one property with two
+// representations that drift apart without anything going red. These four
+// columns declare no such property: they are a plain assignment here and
+// insert-only there, and insert-only has no meaning for a caller that names the
+// column outright. So there is nothing here to keep in sync, and rewriting it
+// would be churn.
 //
 // 🔴 FOUR COLUMNS, ONE WRITER — the same shape as SetMemberOpReceipt and for the
 // same reason. armRefocusEpoch stamps all four at once, and the readers consume
@@ -723,9 +655,11 @@ func (d *DAL) SetMemberWakingSince(id string, ts float64) error {
 // describes a rung nobody ever stood on.
 //
 // ⚠️ forced_stop_at is NOT here and must not join: it is the durable record that
-// a session was cut off, and PutMember keeps it precisely because max() lets it
-// move forward only (see the SET list). A setter that assigned it would hand
-// every caller the ability to move it backwards.
+// a session was cut off, and a whole-row write is allowed to carry it precisely
+// because the column is declared forwardOnly, so every writer lands it as
+// max(). A setter that ASSIGNED it would hand every caller the ability to move
+// it backwards — which is exactly what SetMemberForcedStopAt used to do before
+// it was routed through that declaration.
 //
 // A missing row is a clean no-op (0 rows affected, no error).
 func (d *DAL) SetMemberWindDownAnchors(id string, stoppingSince, stoppedSince,
@@ -739,8 +673,8 @@ func (d *DAL) SetMemberWindDownAnchors(id string, stoppingSince, stoppedSince,
 
 // SetMemberDesiredMachineID writes ONLY member.desired_machine_id (T-55) — the
 // owner's placement pin, "" when the member waits for a placement. It is the
-// SOLE writer that moves the column; PutMember carries it on INSERT and never
-// in its DO UPDATE SET.
+// SOLE writer that moves the column; a whole-row write carries it on INSERT and
+// never onto an existing row (mfDesiredMachineID declares it insertOnly).
 //
 // The pin is written by three faces that do not share a lock — the member
 // relocate, the member activate, and the worker relocate — and each of them
@@ -761,7 +695,8 @@ func (d *DAL) SetMemberDesiredMachineID(id, machineID string) error {
 // SetMemberModel / SetMemberRuntime / SetMemberEffort write ONLY their own
 // column (T-55) — the three LAUNCH INTENTS the owner edits in 成員設定 and in
 // the outsource worker's twin face. Each is the SOLE writer of its column;
-// PutMember carries all three on INSERT and none of them in its DO UPDATE SET.
+// a whole-row write carries all three on INSERT and none of them onto an
+// existing row (their constructors declare them insertOnly).
 //
 // They are three writers rather than one because the two editing faces write
 // them INDEPENDENTLY: every field arrives optional, and a save that carries
@@ -795,8 +730,9 @@ func (d *DAL) SetMemberEffort(id, effort string) error {
 
 // SetMemberOpReceipt writes the five last_op* columns and NOTHING else (T-55) —
 // the OP RECEIPT the cockpit renders as the ✓/✗ block under a member or worker.
-// It is the sole writer of all five; PutMember carries them on INSERT and none
-// of them in its DO UPDATE SET.
+// It is the sole writer of all five; a whole-row write carries them on INSERT
+// and none of them onto an existing row (their constructors declare them
+// insertOnly).
 //
 // 🔴 ONE WRITER FOR FIVE COLUMNS, not five writers — the opposite of the launch
 // intents next door, and for the opposite reason. receiptRendersAsFailure reads
@@ -3483,8 +3419,8 @@ func (d *DAL) displayNames(query string) (map[string]string, error) {
 
 // SetMemberAgentIatFloor raises this member's credential floor to ts (T-14 項目
 // 4B) — the `iat` of the token that just reported waking. It is the SOLE writer
-// that moves the column: PutMember's upsert carries it on INSERT but never in
-// its DO UPDATE SET.
+// that moves the column: a whole-row write carries it on INSERT but never onto
+// an existing row (mfAgentIatFloor declares it insertOnly).
 //
 // FORWARD-ONLY, in SQL rather than in Go. A read-modify-write in Go loses to
 // whichever caller writes last, and the loser here is a REVOCATION: two
@@ -3498,8 +3434,11 @@ func (d *DAL) displayNames(query string) (map[string]string, error) {
 // make the resolution finer.
 //
 // A missing row is a clean no-op (0 rows affected, no error).
+// 🔑 It goes through PatchMember rather than writing its own max() (T-63). The
+// column's monotonicity is declared on mfAgentIatFloor, and while this seam kept
+// a max() of its own the same property had TWO representations: both correct
+// today, both self-consistent, and wrong only when read together — which nobody
+// does. Nothing would have gone red on the day they diverged.
 func (d *DAL) SetMemberAgentIatFloor(id string, ts float64) error {
-	_, err := d.wdb.Exec(
-		`UPDATE member SET agent_iat_floor = max(agent_iat_floor, ?) WHERE id = ?`, ts, id)
-	return err
+	return d.PatchMember(id, mfAgentIatFloor(ts))
 }

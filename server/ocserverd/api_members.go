@@ -123,9 +123,9 @@ func (s *apiServer) persistWorkerWindDownAnchors(w OutsourceWorker) error {
 // wire half, split out so a SINGLE-COLUMN writer (AddMemberBankedCost and the
 // setters beside it) can keep the push a caller used to get for free from the
 // whole-row write, WITHOUT dragging a stale snapshot of every other column back
-// into the database with it. Migrating a column out of PutMember's SET list and
-// forgetting this call is a silent loss: nothing goes red, the cockpit simply
-// stops converging.
+// into the database with it. Marking a column insertOnly (so a whole-row write
+// stops carrying it) and forgetting this call is a silent loss: nothing goes red,
+// the cockpit simply stops converging.
 func (s *apiServer) publishMemberPatch(m Member, trigger string) {
 	op := "patch"
 	if m.RosterStatus == RosterStatusRemoved {
