@@ -46,6 +46,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
@@ -370,6 +371,32 @@ func assertGoMigrationsAreInTheStation(t *testing.T, db *sql.DB, released map[in
 		}
 	}
 	t.Logf("replayed station carries the Go migrations too: %v", want)
+}
+
+// TestTheUpgradePathGuardActuallyRunsInCI closes the hole the skip above opens.
+//
+// 🔴 A SKIP IS INVISIBLE. `go test` without -v prints `ok` for a package whose
+// every test skipped, so a CI checkout that cannot resolve origin/main would
+// take the guard offline and look exactly like a green run — the same
+// silent-decay shape the guard itself exists to remove. Locally a skip is
+// legitimate (someone building from a tarball has no git remote at all), so the
+// rule is not "never skip", it is "never skip IN CI", and that is checkable:
+// GitHub Actions sets CI=true for every step.
+//
+// If this fails, the fix is in .github/workflows/ci.yml, not here: the go-checks
+// job needs `fetch-depth: 0` on its checkout. A default (shallow) checkout has
+// one ref, refs/remotes/pull/N/merge, and no origin/main.
+func TestTheUpgradePathGuardActuallyRunsInCI(t *testing.T) {
+	if os.Getenv("CI") == "" {
+		t.Skip("not CI: the local run is allowed to have no origin/main")
+	}
+	if _, err := gitOut("rev-parse", "origin/main"); err != nil {
+		t.Fatalf("running in CI but origin/main does not resolve (%v), so "+
+			"TestAStationAtTheReleasedVersionCanUpgradeToThisTree SKIPPED and this run is green "+
+			"with the upgrade-path check switched off. FIX: give the go-checks job's "+
+			"actions/checkout `fetch-depth: 0` — the default shallow checkout carries only "+
+			"refs/remotes/pull/N/merge.", err)
+	}
 }
 
 func stationVersion(t *testing.T, db *sql.DB) int64 {
