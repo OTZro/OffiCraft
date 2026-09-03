@@ -173,6 +173,11 @@ BEGIN
     -- terms written the other way round raises, so AND's short-circuit here is
     -- an evaluation-order accident, not a guarantee. Do not flatten this back
     -- into an AND.
+    -- Scope of the line above: flattening this into the WRONG order is caught by
+    -- the parity case carrying a bare string element (the write fails outright).
+    -- Flattening it into the RIGHT order is NOT caught by anything — it behaves
+    -- identically today and only puts us back on evaluation-order luck. That
+    -- half is this sentence and nothing else.
     -- Requiring '$.id' to be TEXT also restores what the pre-index Go handler
     -- did: its type assertion dropped a non-string id, where a bare extract
     -- would store `123` and the panel would serve /api/chat/attachment/123.
@@ -219,6 +224,11 @@ BEGIN
     -- terms written the other way round raises, so AND's short-circuit here is
     -- an evaluation-order accident, not a guarantee. Do not flatten this back
     -- into an AND.
+    -- Scope of the line above: flattening this into the WRONG order is caught by
+    -- the parity case carrying a bare string element (the write fails outright).
+    -- Flattening it into the RIGHT order is NOT caught by anything — it behaves
+    -- identically today and only puts us back on evaluation-order luck. That
+    -- half is this sentence and nothing else.
     -- Requiring '$.id' to be TEXT also restores what the pre-index Go handler
     -- did: its type assertion dropped a non-string id, where a bare extract
     -- would store `123` and the panel would serve /api/chat/attachment/123.
