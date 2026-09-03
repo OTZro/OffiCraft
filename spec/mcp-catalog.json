@@ -3212,7 +3212,7 @@
       "name": "claim_task"
     },
     {
-      "description": "Register a deliverable (file, image, or link) onto the task's artifact set \u2014 the pinned deliverables shown on the task card. Append-only and repeatable: call it again to pin more. For a file or image, first upload the bytes via the chat-attachments upload to get an attachment id, then call this with kind=file|image and that attachment_id. For a link (e.g. a PR url) call it with kind=link and url \u2014 no upload needed. label is an optional display name (a link title such as \"PR #123\"). Answers with a bounded receipt (task_id, artifact_id, artifact_count), not the whole task.",
+      "description": "Register a deliverable (file, image, or link) onto the task's artifact set \u2014 the pinned deliverables shown on the task card. Append-only and repeatable: call it again to pin more. For a file or image, first upload the bytes via the chat-attachments upload to get an attachment id, then call this with kind=file|image and that attachment_id. For a link (e.g. a PR url) call it with kind=link and url \u2014 no upload needed. label is an optional display name (a link title such as \"PR #123\"), capped at 128 characters \u2014 Unicode runes, so 128 CJK characters fit; a longer label is refused with a 400, never truncated. Answers with a bounded receipt (task_id, artifact_id, artifact_count), not the whole task.",
       "inputSchema": {
         "properties": {
           "task_id": {
@@ -3257,7 +3257,7 @@
               }
             ],
             "default": null,
-            "description": "Human-readable caption for this deliverable. It is stored exactly as sent and never validated - blank, duplicated or wrong, nothing objects - and omitting it is not an error: the artifact is pinned with an empty label and answers 200. What the reader gets then is an untitled row whose only identity is its kind and the file or link behind it, which on a task carrying several artifacts is the difference between a list someone can act on and a list they have to open one by one.",
+            "description": "Human-readable caption for this deliverable. It is stored exactly as sent, and the ONLY thing checked is its LENGTH - at most 128 characters, counted in Unicode runes so 128 CJK characters fit, with a longer one refused (400) rather than truncated. Nothing else objects - blank, duplicated or wrong all pass - and omitting it is not an error: the artifact is pinned with an empty label and answers 200. What the reader gets then is an untitled row whose only identity is its kind and the file or link behind it, which on a task carrying several artifacts is the difference between a list someone can act on and a list they have to open one by one.",
             "title": "Label"
           }
         },

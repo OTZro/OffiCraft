@@ -2857,6 +2857,18 @@ func (s *apiServer) HandleAddTaskArtifactApiTasksTaskIdArtifactPost(w http.Respo
 			"kind must be one of file, image, link")
 		return
 	}
+	// The label is a one-line NAME, so it is capped at shortLabelMaxChars runes
+	// (128 CJK characters pass — the count is not in bytes). It sits with the
+	// other body-shape 400s, ahead of the task/permission guards, because it is
+	// a fault in the request itself and does not depend on which task it names.
+	// Over-length is REFUSED, never truncated. Existing rows are untouched.
+	label := trimmedOrEmpty(body.Label)
+	if n := utf8.RuneCountInString(label); n > shortLabelMaxChars {
+		writeError(w, http.StatusBadRequest, "artifact label is "+
+			strconv.Itoa(n)+" chars, over the "+
+			strconv.Itoa(shortLabelMaxChars)+"-char limit")
+		return
+	}
 	t, err := s.resolveTask(taskId)
 	if err != nil {
 		writeResolveError(w, err, "task", taskId)
@@ -2875,7 +2887,7 @@ func (s *apiServer) HandleAddTaskArtifactApiTasksTaskIdArtifactPost(w http.Respo
 		ID:        "ta-" + newHexID(12),
 		TaskID:    t.ID,
 		Kind:      kind,
-		Label:     trimmedOrEmpty(body.Label),
+		Label:     label,
 		CreatedTS: nowSecs(),
 		// §14 caller-identity: the registrar is the verified token sub.
 		CreatedBy: currentActor(r),

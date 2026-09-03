@@ -760,7 +760,7 @@ export interface paths {
         get: operations["handle_list_chat_attachments_api_chat_attachments_get"];
         put?: never;
         /**
-         * Upload one attachment blob (raw octet-stream body; returns the light ref).
+         * Upload one attachment blob (raw octet-stream body; returns the light ref). ?filename= is capped at 128 characters (Unicode runes, not bytes); a longer one is refused with a 400 rather than truncated.
          * @description Upload ONE attachment blob into the shared chat attachment store
          *     (``POST /api/chat/attachments`` — the SEND-side streaming seam; the receive
          *     side is ``GET /api/chat/attachment/{attachment_id}``). The raw request body
@@ -3687,7 +3687,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Register a deliverable (file, image, or link) onto the task's artifact set — the pinned deliverables shown on the task card. Append-only and repeatable: call it again to pin more. For a file or image, first upload the bytes via the chat-attachments upload to get an attachment id, then call this with kind=file|image and that attachment_id. For a link (e.g. a PR url) call it with kind=link and url — no upload needed. label is an optional display name (a link title such as "PR #123"). Answers with a bounded receipt (task_id, artifact_id, artifact_count), not the whole task.
+         * Register a deliverable (file, image, or link) onto the task's artifact set — the pinned deliverables shown on the task card. Append-only and repeatable: call it again to pin more. For a file or image, first upload the bytes via the chat-attachments upload to get an attachment id, then call this with kind=file|image and that attachment_id. For a link (e.g. a PR url) call it with kind=link and url — no upload needed. label is an optional display name (a link title such as "PR #123"), capped at 128 characters — Unicode runes, so 128 CJK characters fit; a longer label is refused with a 400, never truncated. Answers with a bounded receipt (task_id, artifact_id, artifact_count), not the whole task.
          * @description Register a deliverable onto the task's artifact set (MCP ``add_task_artifact``; requires the executing agent — caller must be the task's executor, admin capability excepted). Append-only and repeatable: each call pins one more artifact. FILE/IMAGE artifacts reference a chat_attachment blob already uploaded via ``POST /api/chat/attachments`` (``kind=file|image`` + ``attachment_id``); LINK artifacts carry a bare URL (``kind=link`` + ``url``), no upload needed. Returns a BOUNDED receipt (``TaskArtifactReceiptDTO``: the new artifact's id plus the resulting count) — not the task, which used to ride back whole on a one-line pin; pull GET /api/tasks/{task_id} for the artifact list. Guards: 404 unknown task; 409 terminal task (a closed task's deliverables are frozen); 400 an invalid kind, a missing/blank ``attachment_id`` for file/image, a missing/blank ``url`` for link, or an ``attachment_id`` that resolves to no stored blob.
          */
         post: operations["handle_add_task_artifact_api_tasks__task_id__artifact_post"];
@@ -5024,6 +5024,8 @@ export interface components {
          *     inline-only: it decodes ``data_b64`` and has never resolved ``id`` references,
          *     so an item carrying only an ``id`` there is a 400 (T-e2b2 — it used to be
          *     dropped silently).
+         *
+         *     ``filename`` is capped at 128 CHARACTERS (Unicode runes, so 128 CJK characters fit — it is not a byte count) on BOTH paths, inline and the streaming upload seam; a longer one is REFUSED with a 400 and never truncated. The cap binds NEW writes only.
          */
         ChatAttachmentInputDTO: {
             /**
@@ -8637,7 +8639,7 @@ export interface components {
         };
         /**
          * TaskArtifactInputDTO
-         * @description Register one artifact onto a task (MCP ``add_task_artifact``). ``kind`` is required: file|image|link. For file/image, ``attachment_id`` is required — the chat_attachment blob id from a prior ``POST /api/chat/attachments`` upload (one blob mechanism, not two). For link, ``url`` is required — a bare http(s) URL (a PR link). ``label`` is an optional display name (a link's title such as "PR #123", or a filename override); absent = the blob's own filename (file/image) or the URL itself (link).
+         * @description Register one artifact onto a task (MCP ``add_task_artifact``). ``kind`` is required: file|image|link. For file/image, ``attachment_id`` is required — the chat_attachment blob id from a prior ``POST /api/chat/attachments`` upload (one blob mechanism, not two). For link, ``url`` is required — a bare http(s) URL (a PR link). ``label`` is an optional display name (a link's title such as "PR #123", or a filename override); absent = the blob's own filename (file/image) or the URL itself (link). ``label`` is capped at 128 CHARACTERS (Unicode runes, so 128 CJK characters fit — it is not a byte count); a longer one is REFUSED with a 400 and is never silently truncated. The cap binds NEW writes only: labels stored before it existed are left as they are.
          */
         TaskArtifactInputDTO: {
             /**
