@@ -426,6 +426,19 @@ func (s *apiServer) writeTaskStepStatusReceipt(w http.ResponseWriter, t Task, st
 	})
 }
 
+// executorGuardRefusal is the sentence every executor guard writes when it turns
+// a non-executor away, named because the TESTS have to match on it. The error
+// envelope's `code` is derived from the HTTP status (errorCodeForStatus), so
+// there is no per-reason code on the wire: a test that accepts any 403 cannot
+// tell this guard from the second rule several of these handlers apply one step
+// later, and that is exactly how a widened guard passed for a shut door once.
+//
+// So this string is a CONTRACT between the guards and the range tests, not a
+// message anyone is free to reword in place. Rewording it is a deliberate act
+// that touches exactly one line here; forking a new literal at a call site, or
+// pinning the literal again in a test, silently takes a door back out of range.
+const executorGuardRefusal = "caller is not the task's executor"
+
 // callerMayDriveTask enforces the executor guard on the agent report routes
 // (plan / status / step status / gate / deps): the caller must BE the task's
 // executor — the caller-identity convention (root CLAUDE.md §14: a non-admin
@@ -436,6 +449,46 @@ func (s *apiServer) callerMayDriveTask(r *http.Request, t Task) bool {
 		return true
 	}
 	return currentActor(r) == t.ExecutorID
+}
+
+// callerMayEditTaskText is callerMayDriveTask widened by exactly one structural
+// fact: while a task has NO executor at all (executor_id == ""), its CREATOR
+// counts as the executor — but only at the text-only doors (T-52).
+//
+// 🔴 WHY. create_task opens a 發包票 with executor_id empty and leaves it empty
+// until the scheduler binds a worker to it. Every task-driving write is gated on
+// "be the executor, or be admin/owner", and the creator earns no standing from
+// having created the task — so for the whole of that window NOBODY who is
+// awake can correct the ticket, and the wording the contractor reads on arrival
+// is whatever was typed the first time. The window has no upper bound: the
+// assign loop runs without a transaction and only logs when PutTask fails, so a
+// task can sit unbound forever.
+//
+// 🔴 WHY IT CLOSES ON executor_id AND NOT ON ANYTHING ELSE. The moment a worker
+// is bound, the creator is back to a flat 403 — including when the creator is
+// the person who opened the ticket. Anything narrower that happens to be true
+// right now ("this is an outsource ticket", "no worker exists yet") would leave
+// the door open while somebody is already working to the text, which is the
+// failure this predicate exists to avoid: an unbound task has no work in flight
+// to be moved out from under.
+//
+// 🔴 WHY IT IS NOT callerMayDriveTask ITSELF. That predicate guards plan, step
+// status, deps, priority/freeze, reassign, claim, terminate, mark_duplicate,
+// closeout and reply-card linkage as well. Owner ruled (2026-09-02, card
+// rc-1bb6e01c4bf7) 「只開『改文字類』那幾道（改描述／標題／產物增刪／步驟筆記），
+// 不含凍結、撤票、改派」, so the widening is a SECOND predicate applied at the
+// named doors only. Calling this from any other handler reverses that ruling.
+//
+// A row with no CreatorID (pre-column rows) admits nobody: the empty string is
+// not an actor.
+func (s *apiServer) callerMayEditTaskText(r *http.Request, t Task) bool {
+	if s.callerMayDriveTask(r, t) {
+		return true
+	}
+	if t.ExecutorID != "" || t.CreatorID == "" {
+		return false
+	}
+	return currentActor(r) == t.CreatorID
 }
 
 // callerMayWriteHandover is callerMayDriveTask PLUS one narrow, time-boxed
@@ -1102,7 +1155,7 @@ func (s *apiServer) HandleGetTaskApiTasksTaskIdGet(w http.ResponseWriter, r *htt
 func (s *apiServer) callerMayTerminateTask(r *http.Request, t Task) (bool, string) {
 	c, err := s.taskCallerOf(r)
 	if err != nil {
-		return false, "caller is not the task's executor"
+		return false, executorGuardRefusal
 	}
 	// Owner and admin scope decide FIRST, because owner scope carries no roster
 	// row at all — the nil check below is about an agent, not about it.
@@ -1116,10 +1169,10 @@ func (s *apiServer) callerMayTerminateTask(r *http.Request, t Task) (bool, strin
 	// roster row was deleted terminates its own task. An independent review
 	// measured exactly that: 200 terminated. Kind unknown must deny.
 	if c.member == nil {
-		return false, "caller is not the task's executor"
+		return false, executorGuardRefusal
 	}
 	if c.actorID != t.ExecutorID {
-		return false, "caller is not the task's executor"
+		return false, executorGuardRefusal
 	}
 	if c.isOutsource() {
 		return false, "an outsource worker may not terminate its own task; ask the owner or an admin agent"
@@ -1191,7 +1244,7 @@ func (s *apiServer) HandleSetTaskPriorityApiTasksTaskIdPriorityPost(w http.Respo
 		return
 	}
 	if !s.callerMayDriveTask(r, *t) {
-		writeError(w, http.StatusForbidden, "caller is not the task's executor")
+		writeError(w, http.StatusForbidden, executorGuardRefusal)
 		return
 	}
 	if TaskIsTerminal(t.Status) {
@@ -1365,7 +1418,7 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 	// executor-guarded — an agent may only reassign a task it EXECUTES (owner /
 	// admin capability may drive any task, callerMayDriveTask §14).
 	if !s.callerMayDriveTask(r, *t) {
-		writeError(w, http.StatusForbidden, "caller is not the task's executor")
+		writeError(w, http.StatusForbidden, executorGuardRefusal)
 		return
 	}
 	// 正職授權矩陣 (T-23cf phase 2). Rule 8: an outsource worker may not reassign
@@ -1765,7 +1818,7 @@ func (s *apiServer) HandleClaimTaskApiTasksTaskIdClaimPost(w http.ResponseWriter
 		return
 	}
 	if !s.callerMayDriveTask(r, *t) {
-		writeError(w, http.StatusForbidden, "caller is not the task's executor")
+		writeError(w, http.StatusForbidden, executorGuardRefusal)
 		return
 	}
 	if t.Lock != TaskLockReassigning {
@@ -2205,7 +2258,7 @@ func (s *apiServer) HandleSubmitTaskPlanApiTasksTaskIdPlanPost(w http.ResponseWr
 		return
 	}
 	if !s.callerMayDriveTask(r, *t) {
-		writeError(w, http.StatusForbidden, "caller is not the task's executor")
+		writeError(w, http.StatusForbidden, executorGuardRefusal)
 		return
 	}
 	if TaskIsTerminal(t.Status) {
@@ -2432,7 +2485,7 @@ func (s *apiServer) HandleMarkTaskDuplicateApiTasksTaskIdDuplicatePost(w http.Re
 		return
 	}
 	if !s.callerMayDriveTask(r, *t) {
-		writeError(w, http.StatusForbidden, "caller is not the task's executor")
+		writeError(w, http.StatusForbidden, executorGuardRefusal)
 		return
 	}
 	if TaskIsTerminal(t.Status) {
@@ -2528,7 +2581,7 @@ func (s *apiServer) HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPos
 		return
 	}
 	if !s.callerMayDriveTask(r, *t) {
-		writeError(w, http.StatusForbidden, "caller is not the task's executor")
+		writeError(w, http.StatusForbidden, executorGuardRefusal)
 		return
 	}
 	if TaskIsTerminal(t.Status) {
@@ -2682,7 +2735,7 @@ func (s *apiServer) HandleSetTaskDepsApiTasksTaskIdDepsPost(w http.ResponseWrite
 		return
 	}
 	if !s.callerMayDriveTask(r, *t) {
-		writeError(w, http.StatusForbidden, "caller is not the task's executor")
+		writeError(w, http.StatusForbidden, executorGuardRefusal)
 		return
 	}
 	if TaskIsTerminal(t.Status) {
@@ -2749,7 +2802,7 @@ func (s *apiServer) HandleReportTaskCloseoutApiTasksTaskIdCloseoutPost(w http.Re
 		return
 	}
 	if !s.callerMayDriveTask(r, *t) {
-		writeError(w, http.StatusForbidden, "caller is not the task's executor")
+		writeError(w, http.StatusForbidden, executorGuardRefusal)
 		return
 	}
 	if !TaskIsTerminal(t.Status) {
@@ -2804,8 +2857,8 @@ func (s *apiServer) HandleAddTaskArtifactApiTasksTaskIdArtifactPost(w http.Respo
 		writeResolveError(w, err, "task", taskId)
 		return
 	}
-	if !s.callerMayDriveTask(r, *t) {
-		writeError(w, http.StatusForbidden, "caller is not the task's executor")
+	if !s.callerMayEditTaskText(r, *t) {
+		writeError(w, http.StatusForbidden, executorGuardRefusal)
 		return
 	}
 	if TaskIsTerminal(t.Status) {
@@ -2885,8 +2938,8 @@ func (s *apiServer) HandleRemoveTaskArtifactApiTasksTaskIdArtifactArtifactIdDele
 		writeResolveError(w, err, "task", taskId)
 		return
 	}
-	if !s.callerMayDriveTask(r, *t) {
-		writeError(w, http.StatusForbidden, "caller is not the task's executor")
+	if !s.callerMayEditTaskText(r, *t) {
+		writeError(w, http.StatusForbidden, executorGuardRefusal)
 		return
 	}
 	if TaskIsTerminal(t.Status) {

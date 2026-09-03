@@ -470,6 +470,23 @@ var authzOutsideRouteTable = map[string]string{
 		"caller-vs-resource comparison, not expressible as a route floor.",
 	"api_tasks.go :: callerMayDriveTask :: currentActor(r) == t.ExecutorID": "" +
 		"the self half of the same rule: the executor drives its own task.",
+	"api_tasks.go :: callerMayEditTaskText :: currentActor(r) == t.CreatorID": "" +
+		"T-52, owner 2026-09-02 card rc-1bb6e01c4bf7. While a task has NO executor at " +
+		"all (executor_id == ''), its CREATOR counts as the executor — at the " +
+		"text-only doors ONLY: update_task (title/description), the description and " +
+		"title routes, add/remove artifact, the two step-note write faces, and the " +
+		"task_description / task_title restores. A 發包票 is born unbound and stays " +
+		"unbound until the scheduler binds a worker, and for that whole window nobody " +
+		"awake can fix a typo in the brief the contractor will read on arrival. It " +
+		"cannot be a route floor: 'does this task have an executor yet' is a " +
+		"per-task, per-moment fact, not a principal class. 🔴 THE CONDITION IS " +
+		"executor_id == '' AND NOTHING ELSE, so the door SHUTS the instant a worker " +
+		"is bound — the creator is then a flat 403 again, exactly as before. Owner " +
+		"scoped this to 改文字類 and named the doors that stay shut (freeze/priority, " +
+		"terminate, reassign, claim, mark_duplicate, plan, step status, closeout, " +
+		"deps, linked reply cards); those keep callerMayDriveTask verbatim. Calling " +
+		"this predicate from another handler reverses that ruling rather than " +
+		"extending it.",
 	"api_tasks.go :: callerMayWriteHandover :: currentActor(r) == t.ReassignedFrom": "" +
 		"T-91, owner ruling: while a task sits under the `reassigning` lock, the " +
 		"stamped PREDECESSOR may still write the handover record (the step note the " +
