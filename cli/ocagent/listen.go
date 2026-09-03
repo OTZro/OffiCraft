@@ -1001,21 +1001,79 @@ func (g *ackGate) confirm(out io.Writer) bool {
 }
 
 // ---------------------------------------------------------------------------
-// mark-read receipt failures — the one latch that outlived the local ledger.
+// the drain's two latches — all that outlived the local ledger.
 // ---------------------------------------------------------------------------
 
-// markReadWarner is the "say it once per process" latch for a read receipt that
-// did not land. It is ALL that remains of the old chatSeen store: that store was
-// a second, local answer to "have I already surfaced this?", and the server's
-// unread set is now the only one (T-48). The latch has nothing to do with that
-// question — it guards against repeating one warning line on every drain — so it
-// stays, on its own, owned by the listener.
+// drainWarner holds the once-per-episode latches for the two lines a drain can
+// emit about ITSELF rather than about a message. It is ALL that remains of the
+// old chatSeen store: that store was a second, local answer to "have I already
+// surfaced this?", and the server's unread set is now the only one (T-48).
+// Neither latch touches that question — both only stop one diagnostic line from
+// repeating on every drain — so they stay, owned by the listener.
 //
-// A nil warner FAILS LOUD: the warning prints every time rather than not at all.
-// A latch that silently swallows the only signal a dark ✓ ever produces would be
-// the same class of bug the warning exists to expose.
-type markReadWarner struct {
-	warned bool
+// 🔴 WHY THESE LINES NEED LATCHES AT ALL AND THE CHAT LINES DO NOT. Neither of
+// them wears the "[ocagent] listen:" head, so cli/ocwarden's
+// actionableCodexListenerLine does not swallow them: on the codex path every
+// copy becomes a model turn. A drain runs on every reconnect, and a reconnect
+// loop is bounded only by listenBackoffCap — so an unlatched diagnostic emitted
+// by a drain is a turn every ≤15s, for as long as the fault lasts, without
+// limit. That is the noise the owner's disconnect-notice ruling (2026-08-30)
+// exists to remove, arriving through a door the ruling's own latch does not
+// cover.
+//
+// A nil warner FAILS LOUD: both lines print every time rather than not at all.
+// A latch that silently swallows the only signal a fault ever produces would be
+// the same class of bug the lines exist to expose.
+type drainWarner struct {
+	// markReadWarned: a receipt that did not land is announced once per PROCESS,
+	// not once per episode. See warnMarkReadFailed for why that one is different.
+	markReadWarned bool
+	// chatFaultOpen: a total fetch fault has been announced and has not yet been
+	// cleared by a fetch that reached the server. Modelled on listener.inOutage —
+	// one episode, one announcement, and a line when it ends.
+	chatFaultOpen bool
+}
+
+// noteChatFetchFault announces a TOTAL fetch fault once per episode. The line
+// itself is built by fetchChat (it is the only party that knows the status); the
+// only decision here is whether this drain is the one that says it.
+//
+// The fault repeats on every drain for as long as /api/chat is refusing, and the
+// drains keep coming as long as the SSE stream keeps reconnecting — a stream
+// that accepts and immediately closes reconnects at listenBackoffCap forever. So
+// without this latch the line is unbounded, and on the codex path each copy is a
+// model turn.
+func noteChatFetchFault(warn *drainWarner, out io.Writer, line string) {
+	if out == nil || line == "" {
+		return
+	}
+	if warn != nil {
+		if warn.chatFaultOpen {
+			return
+		}
+		warn.chatFaultOpen = true
+	}
+	fmt.Fprint(out, line)
+}
+
+// clearChatFetchFault closes the episode noteChatFetchFault opened, and SAYS SO.
+//
+// The silence after the fault line is ambiguous in exactly the way the fault
+// line was written to remove: "未讀原封不動，下一次補印會再試" leaves the reader
+// unable to tell a drain that is still failing quietly from one that recovered
+// and found nothing. Announcing the recovery is what makes an empty drain
+// readable again — the same reason connectOnce prints a reconnect notice rather
+// than just dropping the outage flag.
+//
+// A nil warner has no episode to close (it printed the fault every time, so
+// nothing was ever suppressed), and prints nothing here.
+func clearChatFetchFault(warn *drainWarner, out io.Writer) {
+	if warn == nil || out == nil || !warn.chatFaultOpen {
+		return
+	}
+	warn.chatFaultOpen = false
+	fmt.Fprint(out, "[ocagent] chat: 補印又問得到了 —— 上面那次「一頁都沒撈到」到此為止。"+
+		"接下來印出來的就是這次真的撈到的東西；沒有東西就是真的沒有新訊息。\n")
 }
 
 // drainChat refetches chat and prints the unread-for-me — ONE LINE per message so the
@@ -1071,19 +1129,29 @@ type markReadWarner struct {
 // could not get into the model's conversation is never receipted — and, since
 // the receipt is the only thing that would have moved the server's watermark, it
 // comes back on the next drain by itself. See ackGate.
-func drainChat(client httpClient, cfg Config, out io.Writer, warn *markReadWarner, gate *ackGate) int {
+func drainChat(client httpClient, cfg Config, out io.Writer, warn *drainWarner, gate *ackGate) int {
 	sid := strings.ToLower(strings.TrimSpace(cfg.ID))
 	now := float64(time.Now().Unix())
 	msgs := fetchChat(client, cfg, cfg.ID)
+	if msgs.rows == nil {
+		// TOTAL FAULT: nothing was fetched, so nothing prints and nothing is
+		// receipted — the window is still unread and the next drain retries it.
+		// It is announced (silence here reads as "no new chat"), but LATCHED: the
+		// next drain is at most listenBackoffCap away and would say the same
+		// thing, forever. See noteChatFetchFault.
+		noteChatFetchFault(warn, out, msgs.stop)
+		return 0
+	}
+	// The fetch reached the server, so whatever fault was open is over — said
+	// before anything else this drain prints, because it is the caveat on the
+	// PREVIOUS drains and not on this batch.
+	clearChatFetchFault(warn, out)
 	// A walk that ended short says so BEFORE the lines it did manage to fetch,
-	// so the reader meets the caveat before the batch it applies to.
+	// so the reader meets the caveat before the batch it applies to. This one is
+	// NOT latched: it is a statement about the batch printed underneath it, so a
+	// drain that omitted it would be mis-describing its own output.
 	if msgs.stop != "" {
 		fmt.Fprint(out, msgs.stop)
-	}
-	if msgs.rows == nil {
-		// Fetch fault: file nothing — it is still unread. The caveat above has
-		// already been printed, so this is not a silent return.
-		return 0
 	}
 	// delivered stays true on the claude path: nothing there can fail to deliver.
 	delivered := true
@@ -1236,7 +1304,7 @@ func drainChat(client httpClient, cfg Config, out io.Writer, warn *markReadWarne
 // no-op 200).
 const markReadPath = "/api/chat/mark-read"
 
-func reportChatRead(client httpClient, cfg Config, printed []map[string]any, warn *markReadWarner, out io.Writer) {
+func reportChatRead(client httpClient, cfg Config, printed []map[string]any, warn *drainWarner, out io.Writer) {
 	high := map[string]float64{}
 	for _, m := range printed {
 		peer := strings.TrimSpace(strOrEmpty(m["from"]))
@@ -1287,15 +1355,15 @@ func reportChatRead(client httpClient, cfg Config, printed []map[string]any, war
 // once and made to cover the whole episode instead: it states up front that the
 // batch WILL keep reprinting, which is the explanation every later reprint needs
 // and the reason none of them needs its own.
-func warnMarkReadFailed(warn *markReadWarner, out io.Writer, peer string, status int) {
+func warnMarkReadFailed(warn *drainWarner, out io.Writer, peer string, status int) {
 	if out == nil {
 		return
 	}
 	if warn != nil {
-		if warn.warned {
+		if warn.markReadWarned {
 			return
 		}
-		warn.warned = true
+		warn.markReadWarned = true
 	}
 	fmt.Fprintf(out, "[ocagent] mark-read 沒送成功（peer=%s，HTTP %d）— 訊息已經印出來了，"+
 		"但是回條沒送成功，server 那邊就還算未讀：這一批下一次補印會再印一次，"+

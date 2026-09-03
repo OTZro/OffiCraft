@@ -65,7 +65,7 @@ type listener struct {
 	// markWarn is the once-per-process latch for a mark-read receipt that did
 	// not land. It is NOT a chat ledger: what this listener has already surfaced
 	// is the server's unread set and nothing else (T-48, rc-224dee5770dd).
-	markWarn *markReadWarner
+	markWarn *drainWarner
 	// ack is the delivery gate for chat batches: non-nil ONLY when the parent
 	// asked for acks (the codex sidecar). nil ⇒ a printed line counts as
 	// delivered, which is the claude path and must stay byte-for-byte as it was.
@@ -612,7 +612,7 @@ func (l *listener) connectOnce(ctx context.Context) (opened, activity, selfExit 
 // no answer left to pass in and no way to get it wrong.
 func (l *listener) drainChatNow() int {
 	if l.markWarn == nil {
-		l.markWarn = &markReadWarner{}
+		l.markWarn = &drainWarner{}
 	}
 	return drainChat(l.api, l.cfg, l.out, l.markWarn, l.ack)
 }
@@ -765,7 +765,7 @@ func cmdListen(cfg Config, env func(string) string, once bool, out io.Writer) in
 		cursorPath:       cursorPath(cfg),
 		winddown:         newWindDownHook(api, cfg, out),
 		recycle:          newRecycleHook(api, cfg, out),
-		markWarn:         &markReadWarner{},
+		markWarn:         &drainWarner{},
 		ack:              newAckGate(env, os.Stdin),
 		replySeen:        loadReplyCardSeen(replyCardSeenPath(cfg)),
 		taskSnaps:        map[string]taskSnap{},

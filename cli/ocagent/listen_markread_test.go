@@ -178,7 +178,7 @@ func TestDrainChat_NothingPrinted_FilesNoReadReceipt(t *testing.T) {
 	srv := newMarkReadServer(t, "[]")
 	var out bytes.Buffer
 
-	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), &out, &markReadWarner{}, nil)
+	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), &out, &drainWarner{}, nil)
 
 	if out.Len() != 0 {
 		t.Fatalf("precondition: an empty inbox must print nothing, got %q", out.String())
@@ -200,7 +200,7 @@ func TestDrainChat_FetchFault_FilesNoReadReceipt(t *testing.T) {
 	}))
 	defer srv.Close()
 	var out bytes.Buffer
-	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), &out, &markReadWarner{}, nil)
+	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), &out, &drainWarner{}, nil)
 	if marks != 0 {
 		t.Fatalf("a failed chat refetch filed %d read receipt(s), want 0", marks)
 	}
@@ -219,7 +219,7 @@ func TestDrainChat_ReadReceiptIsFiledOnlyAfterTheLineIsPrinted(t *testing.T) {
 	srv.beforeMark = func() { printedWhenMarked = out.String() }
 	srv.mu.Unlock()
 
-	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), out, &markReadWarner{}, nil)
+	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), out, &drainWarner{}, nil)
 
 	if len(srv.snapshot()) != 1 {
 		t.Fatalf("precondition: want exactly one receipt, got %+v", srv.snapshot())
@@ -245,7 +245,7 @@ func TestDrainChat_MultipleSenders_EachMarkedToItsOwnWatermark(t *testing.T) {
 	srv := newMarkReadServer(t, list)
 	var out bytes.Buffer
 
-	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), &out, &markReadWarner{}, nil)
+	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), &out, &drainWarner{}, nil)
 
 	calls := srv.snapshot()
 	sort.Slice(calls, func(i, j int) bool { return calls[i].Peer < calls[j].Peer })
@@ -318,7 +318,7 @@ func TestDrainChat_EveryWatermarkEqualsWhatThatSenderActuallyPrinted(t *testing.
 	var out bytes.Buffer
 
 	mustReturn(t, "drainChat over a two-page backlog", func() {
-		drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), &out, &markReadWarner{}, nil)
+		drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), &out, &drainWarner{}, nil)
 	})
 
 	// What was PRINTED, read back off the stream — never off the fixture.
@@ -376,7 +376,7 @@ func TestDrainChat_EveryWatermarkEqualsWhatThatSenderActuallyPrinted(t *testing.
 func TestDrainChat_MessageWithoutTs_FilesNoReceipt(t *testing.T) {
 	srv := newMarkReadServer(t, `[{"id":"m1","from":"boss","to":"kyle","body":"hi"}]`)
 	var out bytes.Buffer
-	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), &out, &markReadWarner{}, nil)
+	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), &out, &drainWarner{}, nil)
 	if !strings.Contains(out.String(), "#m1") {
 		t.Fatalf("precondition: the line must still print, got %q", out.String())
 	}
@@ -503,7 +503,7 @@ func TestDrainChat_MarkReadRefused_TheSameBatchPrintsAgainNextDrain(t *testing.T
 	srv.refuseReceipts(500)
 
 	var out bytes.Buffer
-	warn := &markReadWarner{}
+	warn := &drainWarner{}
 	if n := drainChat(srv.Client(), cfg, &out, warn, nil); n != 2 {
 		t.Fatalf("precondition: the first drain must print both lines, n=%d out=%q",
 			n, out.String())
@@ -528,7 +528,7 @@ func TestDrainChat_MarkReadRefused_TheSameBatchPrintsAgainNextDrain(t *testing.T
 	// A NEW process (nothing is carried over — there is nothing that could be)
 	// finds the same two lines still owed, and prints them.
 	var out2 bytes.Buffer
-	if n := drainChat(srv.Client(), cfg, &out2, &markReadWarner{}, nil); n != 2 {
+	if n := drainChat(srv.Client(), cfg, &out2, &drainWarner{}, nil); n != 2 {
 		t.Fatalf("the next drain printed %d lines, want the same 2 — a batch whose "+
 			"receipt was refused must come back, or it is lost with nobody told; "+
 			"out = %q", n, out2.String())
@@ -564,7 +564,7 @@ func TestDrainChat_MarkReadRefused_TheSameBatchPrintsAgainNextDrain(t *testing.T
 	// never marks anything read.
 	srv.refuseReceipts(200)
 	var out3 bytes.Buffer
-	if n := drainChat(srv.Client(), cfg, &out3, &markReadWarner{}, nil); n != 2 {
+	if n := drainChat(srv.Client(), cfg, &out3, &drainWarner{}, nil); n != 2 {
 		t.Fatalf("the recovery drain printed %d, want 2; out = %q", n, out3.String())
 	}
 	if ids := srv.unreadIDs("kyle"); len(ids) != 0 {
@@ -584,7 +584,7 @@ func TestDrainChat_MarkReadRejected_WarnsOncePerProcess(t *testing.T) {
 	srv.status = 422
 	srv.mu.Unlock()
 	cfg := markCfg(srv.URL, t.TempDir())
-	warn := &markReadWarner{}
+	warn := &drainWarner{}
 	var out bytes.Buffer
 
 	drainChat(srv.Client(), cfg, &out, warn, nil)
@@ -650,7 +650,7 @@ func TestDrainChat_MarkReadBodyMatchesFrozenSchema(t *testing.T) {
 	}, ",")+"]")
 	var out bytes.Buffer
 
-	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), &out, &markReadWarner{}, nil)
+	drainChat(srv.Client(), markCfg(srv.URL, t.TempDir()), &out, &drainWarner{}, nil)
 
 	bodies := srv.rawBodies()
 	if len(bodies) != 2 {
@@ -756,7 +756,7 @@ func ackEnv(v string) func(string) string {
 func TestDrainChat_WithoutTheAckEnv_PrintsNoMarkerAndStillFilesTheReceipt(t *testing.T) {
 	now := float64(time.Now().Unix())
 	srv := newMarkReadServer(t, "["+tsMsg("m1", "boss", "kyle", now-30)+"]")
-	warn := &markReadWarner{}
+	warn := &drainWarner{}
 	var out bytes.Buffer
 
 	// stdin is deliberately a reader that would BLOCK FOREVER if anything read
@@ -799,7 +799,7 @@ func TestNewAckGate_OnlyOnTheParentsExplicitRequest(t *testing.T) {
 func TestDrainChat_AckedBatch_FilesTheReceiptAndRecordsTheIDs(t *testing.T) {
 	now := float64(time.Now().Unix())
 	srv := newMarkReadServer(t, "["+tsMsg("m1", "boss", "kyle", now-30)+"]")
-	warn := &markReadWarner{}
+	warn := &drainWarner{}
 	var out bytes.Buffer
 
 	gate := newAckGate(ackEnv("1"), strings.NewReader("ack 1\n"))
@@ -825,7 +825,7 @@ func TestDrainChat_AckThatNeverArrives_TimesOutSaysSoAndKeepsTheMessageUnread(t 
 	now := float64(time.Now().Unix())
 	srv := newMarkReadServer(t, "["+tsMsg("m1", "boss", "kyle", now-30)+"]")
 	cfg := markCfg(srv.URL, t.TempDir())
-	warn := &markReadWarner{}
+	warn := &drainWarner{}
 	var out bytes.Buffer
 
 	// A pipe nobody ever writes to: the consumer is alive (stdin is open) and
@@ -888,7 +888,7 @@ func TestDrainChat_UnackedBatch_LeavesTheMessageUnreadUnseenAndReprintable(t *te
 	})
 	home := t.TempDir()
 	cfg := markCfg(srv.URL, home)
-	warn := &markReadWarner{}
+	warn := &drainWarner{}
 	var out bytes.Buffer
 
 	// An answer for a DIFFERENT batch must not be mistaken for this one's.
@@ -924,7 +924,7 @@ func TestDrainChat_UnackedBatch_LeavesTheMessageUnreadUnseenAndReprintable(t *te
 	gate2 := newAckGate(ackEnv("1"), strings.NewReader("ack 1\n"))
 	var n int
 	mustReturn(t, "the redelivery drain", func() {
-		n = drainChat(srv.Client(), cfg, &out2, &markReadWarner{}, gate2)
+		n = drainChat(srv.Client(), cfg, &out2, &drainWarner{}, gate2)
 	})
 	if n != 3 {
 		t.Fatalf("the next drain reported %d unread, want 3", n)
@@ -1099,7 +1099,7 @@ func TestDrainChat_SelfSentMessage_IsNeverPrinted(t *testing.T) {
 		{"m1", "boss", "kyle", now - 200},
 	})
 	cfg := markCfg(srv.URL, t.TempDir())
-	warn := &markReadWarner{}
+	warn := &drainWarner{}
 	var out bytes.Buffer
 
 	n := drainChat(srv.Client(), cfg, &out, warn, nil)
@@ -1133,7 +1133,7 @@ func TestDrainChat_SelfSentMessage_IsStillMarkedReadSoItDoesNotComeBack(t *testi
 	cfg := markCfg(srv.URL, t.TempDir())
 	var out bytes.Buffer
 
-	drainChat(srv.Client(), cfg, &out, &markReadWarner{}, nil)
+	drainChat(srv.Client(), cfg, &out, &drainWarner{}, nil)
 
 	if got := srv.unreadIDs("kyle"); len(got) != 0 {
 		t.Fatalf("still unread after the drain: %v — a self-sent row nobody receipts "+
@@ -1141,7 +1141,7 @@ func TestDrainChat_SelfSentMessage_IsStillMarkedReadSoItDoesNotComeBack(t *testi
 	}
 
 	var out2 bytes.Buffer
-	if n := drainChat(srv.Client(), cfg, &out2, &markReadWarner{}, nil); n != 0 || out2.Len() != 0 {
+	if n := drainChat(srv.Client(), cfg, &out2, &drainWarner{}, nil); n != 0 || out2.Len() != 0 {
 		t.Fatalf("the second drain fetched the same backlog again: n=%d out=%q",
 			n, out2.String())
 	}
@@ -1157,7 +1157,7 @@ func TestDrainChat_SelfSentMessage_IsReceiptedEvenWhenTheBatchIsNacked(t *testin
 		{"m1", "boss", "kyle", now - 200},
 	})
 	cfg := markCfg(srv.URL, t.TempDir())
-	warn := &markReadWarner{}
+	warn := &drainWarner{}
 	var out bytes.Buffer
 
 	gate := newAckGate(ackEnv("1"), strings.NewReader("nack 1\n"))

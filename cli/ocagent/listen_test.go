@@ -1699,7 +1699,7 @@ func newTestListener(srv *httptest.Server, cfg Config, out io.Writer) *listener 
 		probeUnknownSpan: probeUnknownGrace,
 		refusalGraceSpan: sseRefusalGrace,
 		cursorPath:       filepath.Join(cfgTempDir, "cursor"),
-		markWarn:         &markReadWarner{},
+		markWarn:         &drainWarner{},
 		replySeen:        loadReplyCardSeen(filepath.Join(cfgTempDir, "replycards-seen")),
 	}
 }

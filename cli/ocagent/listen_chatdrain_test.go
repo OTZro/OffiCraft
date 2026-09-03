@@ -224,7 +224,7 @@ func TestDrainChat_AcrossTwoProcesses_PrintsEachLineExactlyOnce(t *testing.T) {
 	cfg := markCfg(srv.URL, t.TempDir())
 
 	var out1 bytes.Buffer
-	if n := drainChat(srv.Client(), cfg, &out1, &markReadWarner{}, nil); n != 1 {
+	if n := drainChat(srv.Client(), cfg, &out1, &drainWarner{}, nil); n != 1 {
 		t.Fatalf("process #1 count = %d want 1; out = %q", n, out1.String())
 	}
 
@@ -232,7 +232,7 @@ func TestDrainChat_AcrossTwoProcesses_PrintsEachLineExactlyOnce(t *testing.T) {
 	srv.add(unreadRow{"m2", "boss", "kyle", now - 200}, unreadRow{"m3", "alice", "kyle", now - 100})
 
 	var out2 bytes.Buffer
-	if n := drainChat(srv.Client(), cfg, &out2, &markReadWarner{}, nil); n != 2 {
+	if n := drainChat(srv.Client(), cfg, &out2, &drainWarner{}, nil); n != 2 {
 		t.Fatalf("process #2 backfill = %d want 2; out = %q", n, out2.String())
 	}
 	for _, id := range []string{"m2", "m3"} {
@@ -246,7 +246,7 @@ func TestDrainChat_AcrossTwoProcesses_PrintsEachLineExactlyOnce(t *testing.T) {
 
 	// …and a third process with nothing owed says nothing.
 	var out3 bytes.Buffer
-	if n := drainChat(srv.Client(), cfg, &out3, &markReadWarner{}, nil); n != 0 || out3.Len() != 0 {
+	if n := drainChat(srv.Client(), cfg, &out3, &drainWarner{}, nil); n != 0 || out3.Len() != 0 {
 		t.Fatalf("process #3: n=%d out=%q, want 0 and silence", n, out3.String())
 	}
 }
@@ -350,7 +350,7 @@ func TestDrainChat_LongBacklogAcrossPages_PrintsEveryLine(t *testing.T) {
 	var out bytes.Buffer
 	var n int
 	mustReturn(t, "drainChat over a three-page backlog", func() {
-		n = drainChat(srv.Client(), cfg, &out, &markReadWarner{}, nil)
+		n = drainChat(srv.Client(), cfg, &out, &drainWarner{}, nil)
 	})
 	if n != total {
 		t.Fatalf("returned count = %d want the full unread count %d", n, total)
@@ -389,7 +389,7 @@ func TestDrainChat_CursorThatNeverAdvances_StopsSaysSoAndKeepsWhatItGot(t *testi
 	var out bytes.Buffer
 
 	mustReturn(t, "drainChat against a server whose cursor never advances", func() {
-		drainChat(srv.Client(), cfg, &out, &markReadWarner{}, nil)
+		drainChat(srv.Client(), cfg, &out, &drainWarner{}, nil)
 	})
 
 	got := out.String()
@@ -421,7 +421,7 @@ func TestDrainChat_EndlessFreshCursors_StopsAtThePageCeilingAndSaysSo(t *testing
 	var out bytes.Buffer
 
 	mustReturn(t, "drainChat against a server that never stops issuing cursors", func() {
-		drainChat(srv.Client(), cfg, &out, &markReadWarner{}, nil)
+		drainChat(srv.Client(), cfg, &out, &drainWarner{}, nil)
 	})
 
 	got := out.String()
@@ -459,7 +459,7 @@ func TestDrainChat_FetchFault_LeavesTheWholeWindowUnread(t *testing.T) {
 	// reader concludes there is no new chat. The window really is untouched
 	// (asserted below) — but that has to be SAID, and it has to say it is not
 	// "no messages", because that is the wrong conclusion it exists to prevent.
-	if n := drainChat(srv.Client(), cfg, &out, &markReadWarner{}, nil); n != 0 {
+	if n := drainChat(srv.Client(), cfg, &out, &drainWarner{}, nil); n != 0 {
 		t.Fatalf("faulting drain returned n=%d, want 0; out = %q", n, out.String())
 	}
 	if !strings.Contains(out.String(), "一頁都沒撈到") ||
@@ -474,10 +474,71 @@ func TestDrainChat_FetchFault_LeavesTheWholeWindowUnread(t *testing.T) {
 
 	atomic.StoreInt32(&fail, 0)
 	out.Reset()
-	if n := drainChat(srv.Client(), cfg, &out, &markReadWarner{}, nil); n != 2 {
+	if n := drainChat(srv.Client(), cfg, &out, &drainWarner{}, nil); n != 2 {
 		t.Fatalf("the drain after the fault printed %d, want the whole window (2); out = %q",
 			n, out.String())
 	}
+}
+
+// A total fetch fault is announced ONCE per episode, and its end is announced
+// too.
+//
+// 🔴 WHY THIS IS A LATCH AND NOT A PRINT. The drain runs on every reconnect, and
+// a stream that accepts then immediately closes reconnects for ever at
+// listenBackoffCap (15s). Pair that with a refusing /api/chat and an unlatched
+// fault line is emitted every ≤15 seconds without limit — and because the line
+// does NOT wear the "[ocagent] listen:" head, cli/ocwarden's
+// actionableCodexListenerLine forwards it, so on the codex path each copy is a
+// model turn. The line is worth having; one per outage is what it is worth.
+//
+// EVERYTHING HERE IS COUNTED, NEVER MATCHED (owner, 2026-08-20 bars partial
+// keyword comparison). "Was it said again" is a question about how many lines a
+// drain wrote, and the message's wording is not this test's business.
+func TestDrainChat_TotalFetchFault_AnnouncedOncePerEpisode(t *testing.T) {
+	now := float64(time.Now().Unix())
+	rows := []unreadRow{{"m1", "boss", "kyle", now - 300}, {"m2", "boss", "kyle", now - 200}}
+	fail := int32(1)
+	srv := newUnreadChatServer(t, rows)
+	real := srv.Config.Handler
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.LoadInt32(&fail) == 1 && strings.HasPrefix(r.URL.Path, "/api/chat") &&
+			r.URL.Path != markReadPath {
+			w.WriteHeader(503)
+			return
+		}
+		real.ServeHTTP(w, r)
+	})
+	cfg := markCfg(srv.URL, t.TempDir())
+	// ONE warner for the whole test — a listener does not get a fresh one per
+	// reconnect, and the reconnect is the case this latch exists for.
+	warn := &drainWarner{}
+
+	drain := func(what string, wantN, wantLines int) {
+		t.Helper()
+		var out bytes.Buffer
+		if n := drainChat(srv.Client(), cfg, &out, warn, nil); n != wantN {
+			t.Fatalf("%s returned n=%d, want %d; out = %q", what, n, wantN, out.String())
+		}
+		if got := nonEmptyLines(out.String()); got != wantLines {
+			t.Fatalf("%s wrote %d lines, want %d; out = %q", what, got, wantLines, out.String())
+		}
+	}
+
+	drain("the first faulting drain", 0, 1)  // the announcement
+	drain("the second faulting drain", 0, 0) // …and silence, for the rest of the episode
+
+	// Recovered: the episode ends with a line of its own, because the silence
+	// above cannot otherwise be told apart from a drain that is still failing.
+	atomic.StoreInt32(&fail, 0)
+	drain("the recovery drain", 2, 3) // the recovery line + the 2 rows it owed
+
+	// A drain with no episode open closes nothing and says nothing.
+	drain("a healthy drain", 0, 0)
+
+	// A SECOND episode is announced again — a latch that never reopens would
+	// silence every fault after the first for the life of the process.
+	atomic.StoreInt32(&fail, 1)
+	drain("the next episode's first drain", 0, 1)
 }
 
 // ---------------------------------------------------------------------------
