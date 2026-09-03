@@ -329,6 +329,7 @@ export type WireInsight = components["schemas"]["InsightDTO"];
  * `code` names WHICH failure ("" while healthy). Both arrive as bare wire
  * strings; the mapper is where they are narrowed. */
 export type WireBackupHealth = components["schemas"]["BackupHealthDTO"];
+export type WireSigningKeys = components["schemas"]["SigningKeysDTO"];
 
 // ── Resume summary (RESUME SUMMARY panel section, T-8b0d) ─────────────────────
 

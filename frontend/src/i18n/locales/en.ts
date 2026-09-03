@@ -1472,6 +1472,30 @@ export const en: Dict = {
   // indicator and the monitor page's card. The PRIMARY sentence is always
   // derived from `code` (the reason* keys below); the server's `detail` is
   // shown only as secondary diagnostic text.
+  // Signing-key rotation (T-62)
+  signingKeys: {
+    title: "Signing keys",
+    intro:
+      "The server signs login credentials with a signing key. Several can exist at once: only one signs, the rest still verify — that is the transition window when a key is being replaced.",
+    loading: "Loading…",
+    signingBadge: "signing",
+    retiredBadge: "verify only",
+    createdLabel: "Created",
+    createdUnknown: "In use since before this was recorded",
+    countLabel: (n: number) => `${n} key${n === 1 ? "" : "s"} in the ring`,
+    rotateButton: "Create a new key",
+    rotateHint:
+      "Mints a new key and hands signing over to it. Nobody is logged out: the old key stays and keeps verifying, it just never signs again. Takes effect immediately — no restart.",
+    removeButton: "Remove",
+    removeConfirmTitle: "Remove this key?",
+    removeConfirmBody:
+      "Everything this key signed stops working the moment you confirm, with no grace period and no notice to anyone: credentials signed by it are refused, and file share links produced under it break too.",
+    removeConfirmWarden:
+      "⚠️ Machine (warden) credentials carry no expiry and never lapse on their own. What decides whether this is safe is whether every machine has reconnected — not how many days have passed.",
+    removeConfirmCancel: "Cancel",
+    removeConfirmOk: "Remove it",
+    emptyState: "The keys could not be read.",
+  },
   backupHealth: {
     title: "Backup health",
     // `unknown` is not a quieter `healthy` — it means "we cannot tell", and

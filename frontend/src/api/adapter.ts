@@ -17,6 +17,7 @@ import type {
   VersionView,
   ReleaseCheckView,
   BackupHealthView,
+  SigningKeyView,
   AuthStatusView,
   MfaEnrollView,
   MfaStateView,
@@ -2297,6 +2298,15 @@ export interface Api {
    * `healthy`.
    */
   getBackupHealth(): Promise<BackupHealthView>;
+  /** GET /api/auth/signing-keys — the ring, oldest first (T-62, owner-gated). */
+  getSigningKeys(): Promise<SigningKeyView[]>;
+  /** POST /api/auth/signing-keys/rotate — add a key and hand signing to it.
+   * Nothing is revoked; every existing key keeps verifying. Answers the ring
+   * AFTER the rotation, so no caller re-fetches to learn where it stands. */
+  rotateSigningKey(): Promise<SigningKeyView[]>;
+  /** POST /api/auth/signing-keys/{keyId}/remove — REVOKE everything that key
+   * signed. No undo, no grace period. Answers the ring after the removal. */
+  removeSigningKey(keyId: string): Promise<SigningKeyView[]>;
   /** The folded global-context doc (owner overlay ⊕ file seed). */
   getGlobalContext(): Promise<GlobalContextView>;
   /** Whole-doc replace of the global context → returns the folded doc

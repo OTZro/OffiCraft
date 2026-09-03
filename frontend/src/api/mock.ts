@@ -11,6 +11,7 @@ import type {
   VersionView,
   ReleaseCheckView,
   BackupHealthView,
+  SigningKeyView,
   AuthStatusView,
   MfaEnrollView,
   MfaStateView,
@@ -94,6 +95,7 @@ import type {
   WireMonSession,
   WireVersion,
   WireBackupHealth,
+  WireSigningKeys,
   WireGlobalContext,
   WireBootDoc,
   WireDocumentHistory,
@@ -114,6 +116,7 @@ import {
   toVersion,
   toReleaseCheck,
   toBackupHealth,
+  toSigningKeys,
   toGlobalContext,
   toBootDoc,
   toDocumentHistory,
@@ -2355,6 +2358,19 @@ let relocationPendingNext = false;
 // has no live agent to wind down, so this is staged rather than derived — same
 // shape as relocationPendingNext, and equally sticky.
 let relocationDeferredNext = false;
+
+/** The mock ring (T-62). `created_ts: 0` on the first key is the real
+ * convention, not a placeholder: it is how an install that has been running
+ * since before the ring existed reports a key whose creation time was never
+ * recorded, so the card's "unknown" branch is exercised by default. */
+let mockSigningKeys: WireSigningKeys["keys"] = [
+  // The id shape is PRODUCTION'S, not a short stand-in: the server mints
+  // "k-" + 16 hex (keyring.go newKeyID). A mock that models a narrower row than
+  // the real one is a mock that hides layout defects from every guard mounted
+  // on it — which is exactly what happened the first time this fixture was
+  // written with "k-mock0".
+  { key_id: "k-a1b2c3d4e5f60718", created_ts: 0, is_signing: true },
+];
 
 export const mockApi: Api = {
   async listMembers(_opts?: { light?: boolean }): Promise<Member[]> {
@@ -4695,6 +4711,37 @@ export const mockApi: Api = {
     wire.newest_backup_ts = now - (wire.newest_backup_age_secs ?? 0);
     wire.checked_ts = now;
     return toBackupHealth(wire);
+  },
+
+  async getSigningKeys(): Promise<SigningKeyView[]> {
+    return toSigningKeys({ keys: mockSigningKeys });
+  },
+
+  async rotateSigningKey(): Promise<SigningKeyView[]> {
+    // A real rotation: ADD a key, move the signing mark, drop nothing — so the
+    // mock cannot make the card look right while the server behaviour it
+    // stands in for would be wrong.
+    for (const k of mockSigningKeys) k.is_signing = false;
+    mockSigningKeys.push({
+      key_id: `k-${mockSigningKeys.length}${"0123456789abcdef".repeat(2).slice(0, 15)}`,
+      created_ts: Math.floor(Date.now() / 1000),
+      is_signing: true,
+    });
+    return toSigningKeys({ keys: mockSigningKeys });
+  },
+
+  async removeSigningKey(keyId: string): Promise<SigningKeyView[]> {
+    const target = mockSigningKeys.find((k) => k.key_id === keyId);
+    // The two refusals are modelled, not glossed: the card's copy for each is
+    // reachable in the mock, which is the only way to see it without a server.
+    if (!target) throw new Error(`no signing key '${keyId}'`);
+    if (target.is_signing) {
+      throw new Error(
+        `key '${keyId}' is the one currently signing and cannot be removed — rotate first, then remove it`,
+      );
+    }
+    mockSigningKeys = mockSigningKeys.filter((k) => k.key_id !== keyId);
+    return toSigningKeys({ keys: mockSigningKeys });
   },
 
   async getAuthStatus(): Promise<AuthStatusView> {

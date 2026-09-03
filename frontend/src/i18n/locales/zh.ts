@@ -1514,6 +1514,31 @@ export const zh = {
   // 兩個面共用這一組字:topbar 常駐指示燈與監控頁的備份卡。**主要句子一律由
   // `code` 推導**(下面的 reason*),伺服器的 `detail` 只當次要診斷字串顯示——
   // 它是英文、給工程師看的,不是使用者面的那句話。
+  // 簽章金鑰輪替 (T-62)
+  signingKeys: {
+    title: "簽章金鑰",
+    intro:
+      "伺服器用簽章金鑰簽發登入憑證。可以同時存在多把：只有一把在簽，其餘的仍然驗得過 —— 這是換金鑰的過渡期。",
+    loading: "讀取中…",
+    signingBadge: "正在簽",
+    retiredBadge: "只驗不簽",
+    createdLabel: "產生於",
+    createdUnknown: "此站啟用以來（時間未記錄）",
+    countLabel: (n: number) => `目前有 ${n} 把金鑰`,
+    rotateButton: "產生新金鑰",
+    rotateHint:
+      "產生一把新的並讓它接手簽章。既有的登入不會被踢掉：舊金鑰留著繼續驗，只是不再簽新的。立刻生效，不必重啟。",
+    removeButton: "移除",
+    // 🔴 這兩句是這張卡最重要的文字。移除沒有復原，而它的射程比人直覺的大。
+    removeConfirmTitle: "移除這把金鑰？",
+    removeConfirmBody:
+      "這把金鑰簽過的東西會當場全部失效，沒有緩衝期，也不會通知任何人：用它簽的登入憑證會被拒絕，用它產生的檔案分享連結也會一起壞掉。",
+    removeConfirmWarden:
+      "⚠️ 機器（warden）的憑證沒有到期時間，不會自己過期。要判斷現在能不能移除，看的是「所有機器都重新連過了嗎」，不是「等了幾天」。",
+    removeConfirmCancel: "取消",
+    removeConfirmOk: "確定移除",
+    emptyState: "讀不到金鑰。",
+  },
   backupHealth: {
     title: "備份健康",
     // 三個 status 的短標。unknown 不是比較安靜的 healthy:它是「判斷不出來」,
