@@ -145,10 +145,12 @@ func t6020AllOpenedRows() map[[2]string]string {
 // that makes the per-actor row owner-only holds here with a larger blast
 // radius, so it would have been strange for this one to sit lower.
 //
-// 簽章金鑰 (the three /api/auth/signing-keys* rows, T-62) join on the /api/auth/mfa*
-// reasoning — DERIVED from that ruling, not a new one of the owner's, and
-// labelled as derived on purpose so nobody later cites a card that does not
-// exist. It is the same argument one step further along: change-password and
+// 簽章金鑰 (the three /api/auth/signing-keys* rows, T-62) sit here under a ruling
+// of their own: rc-498f5793fb7f (2026-09-03), where the owner was shown the
+// choice between owner-only and letting an admin_agent at least READ the ring,
+// and chose owner-only for all three. The reasoning put to him, which he
+// accepted, is the /api/auth/mfa* argument one step further along:
+// change-password and
 // the MFA rows decide how the owner authenticates; these decide how EVERYONE
 // does, the calling agent included. An admin_agent that could reach them could
 // rotate the key that signs its own credential, or remove the key that
@@ -156,6 +158,13 @@ func t6020AllOpenedRows() map[[2]string]string {
 // same door. Off the MCP surface for the reason the password is: governing the
 // key that authenticates the office is never something the office does on the
 // owner's behalf.
+//
+// ⚠️ This note said "DERIVED, not a new ruling of the owner's" for exactly one
+// commit — the window between the governance gate refusing the unexplained rows
+// and the owner answering. It is recorded because the distinction is the whole
+// point of this table: a derivation and a ruling look identical once written
+// down, and the only defence is that whoever writes the row says which it is at
+// the time.
 var t6020Withheld = [][2]string{
 	{"POST", "/api/mint"},
 	{"POST", "/api/auth/change-password"},
