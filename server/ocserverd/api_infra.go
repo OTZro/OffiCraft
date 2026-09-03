@@ -985,8 +985,9 @@ func (s *apiServer) HandleResetCostApiMembersMemberIdCostResetPost(w http.Respon
 		// exactly as they were, and the owner simply presses again.
 		//
 		// 🔴 AND IT IS A SINGLE-COLUMN WRITE, mirroring bankLiveCost: handing
-		// the whole row to putMember would write NOTHING, because banked_cost
-		// is deliberately absent from PutMember's DO UPDATE SET (T-14 項目 6).
+		// the whole row to putMember would write NOTHING, because banked_cost is
+		// deliberately insert-only — a whole-row write never lands it on an
+		// existing row (T-14 項目 6).
 		// The receipt comes back from the same transaction that destroys the
 		// figure, so it names what was actually destroyed.
 		clearedBankedFig, err := s.dal.ZeroMemberBankedCost(memberId)

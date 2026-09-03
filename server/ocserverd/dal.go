@@ -156,8 +156,9 @@ type Member struct {
 	//
 	// 🔴 NOT cleared on the next boot, unlike every other lifecycle anchor: it
 	// describes the session BEFORE this one, and that is precisely who needs to
-	// read it. Written through SetMemberForcedStopAt and PutMember's upsert. The
-	// upsert carries it forward-only with max(): forcedEpochLive has three
+	// read it. Written through SetMemberForcedStopAt and through a whole-row
+	// write; BOTH go through mfForcedStopAt, which declares the column
+	// forward-only, so every writer lands it as max(): forcedEpochLive has three
 	// readers — notice suppression, the SSE stop gate, and deactivate — that use
 	// it to distinguish a deliberate cut-off from a session working its close-out.
 	// The targeted update is best-effort, so a failed update must not leave a
@@ -194,9 +195,10 @@ type Member struct {
 	// consult it for them (authz.go agentIatFloorRefusal). A warden credential
 	// has no exp, so a floor above one could never expire out of the way.
 	//
-	// Written through SetMemberAgentIatFloor only; PutMember's upsert carries it
-	// on INSERT but never in its DO UPDATE SET, so no whole-row snapshot taken
-	// before a wake can put an older floor back over a newer one. Not on the wire.
+	// Written through SetMemberAgentIatFloor only; a whole-row write carries it
+	// on INSERT but never onto an EXISTING row (mfAgentIatFloor declares it
+	// insertOnly), so no whole-row snapshot taken before a wake can put an older
+	// floor back over a newer one. Not on the wire.
 	AgentIatFloor float64
 	BankedCost    float64
 	LastOp        string
@@ -477,8 +479,9 @@ func (d *DAL) PutMember(m Member) error {
 // AddMemberBankedCost adds delta to ONLY member.banked_cost (T-14 項目 6) — the
 // durable cumulative spend of a staff member OR an outsource worker, since P7d
 // made both a row of the same table (outsource_worker.banked_cost is this
-// column). It is the SOLE writer that moves it: PutMember's upsert carries the
-// column on INSERT but never in its DO UPDATE SET.
+// column). It is the SOLE writer that moves it: a whole-row write carries the
+// column on INSERT but never onto an existing row (mfBankedCost declares it
+// insertOnly).
 //
 // ACCUMULATES IN SQL, not in Go, for the reason SetMemberAgentIatFloor uses
 // max() in SQL: a read-modify-write in Go loses to whichever caller writes
@@ -510,8 +513,8 @@ func (d *DAL) AddMemberBankedCost(id string, delta float64) error {
 //
 // 🔴 IT MUST BE A SINGLE-COLUMN WRITE, and that is not a style preference. The
 // obvious shape — read the row, set BankedCost to 0, hand the whole row to
-// PutMember — silently does NOTHING now: banked_cost is deliberately absent
-// from PutMember's DO UPDATE SET (T-14 項目 6), so the durable half of the reset
+// PutMember — silently does NOTHING now: banked_cost is deliberately insert-only
+// (T-14 項目 6), so the durable half of the reset
 // would never land while the API still answered 200 with a receipt naming money
 // it had not destroyed. The live half would go, the column would not, and the
 // cockpit would grow the number back on its next read.
@@ -543,8 +546,9 @@ func (d *DAL) ZeroMemberBankedCost(id string) (float64, error) {
 // SetMemberHandoverNoticedTS writes ONLY member.handover_noticed_ts (T-6ebc):
 // the session anchor whose one advance handover notice has been sent, or 0 to
 // release the claim at a session boundary. It is the SOLE writer that moves the
-// column — PutMember's upsert carries it on INSERT but never in its DO UPDATE
-// SET, so no whole-row snapshot can revive a cleared claim.
+// column — a whole-row write carries it on INSERT but never onto an existing
+// row (mfHandoverNoticedTS declares it insertOnly), so no whole-row snapshot can
+// revive a cleared claim.
 //
 // Single-column for the same two reasons SetMemberSessionBootTS is: the column
 // is not on the wire, so a member delta on the connect edge would be pure
@@ -649,8 +653,8 @@ func (d *DAL) SetMemberWindDownAnchors(id string, stoppingSince, stoppedSince,
 
 // SetMemberDesiredMachineID writes ONLY member.desired_machine_id (T-55) — the
 // owner's placement pin, "" when the member waits for a placement. It is the
-// SOLE writer that moves the column; PutMember carries it on INSERT and never
-// in its DO UPDATE SET.
+// SOLE writer that moves the column; a whole-row write carries it on INSERT and
+// never onto an existing row (mfDesiredMachineID declares it insertOnly).
 //
 // The pin is written by three faces that do not share a lock — the member
 // relocate, the member activate, and the worker relocate — and each of them
@@ -671,7 +675,8 @@ func (d *DAL) SetMemberDesiredMachineID(id, machineID string) error {
 // SetMemberModel / SetMemberRuntime / SetMemberEffort write ONLY their own
 // column (T-55) — the three LAUNCH INTENTS the owner edits in 成員設定 and in
 // the outsource worker's twin face. Each is the SOLE writer of its column;
-// PutMember carries all three on INSERT and none of them in its DO UPDATE SET.
+// a whole-row write carries all three on INSERT and none of them onto an
+// existing row (their constructors declare them insertOnly).
 //
 // They are three writers rather than one because the two editing faces write
 // them INDEPENDENTLY: every field arrives optional, and a save that carries
@@ -705,8 +710,9 @@ func (d *DAL) SetMemberEffort(id, effort string) error {
 
 // SetMemberOpReceipt writes the five last_op* columns and NOTHING else (T-55) —
 // the OP RECEIPT the cockpit renders as the ✓/✗ block under a member or worker.
-// It is the sole writer of all five; PutMember carries them on INSERT and none
-// of them in its DO UPDATE SET.
+// It is the sole writer of all five; a whole-row write carries them on INSERT
+// and none of them onto an existing row (their constructors declare them
+// insertOnly).
 //
 // 🔴 ONE WRITER FOR FIVE COLUMNS, not five writers — the opposite of the launch
 // intents next door, and for the opposite reason. receiptRendersAsFailure reads
@@ -3067,8 +3073,8 @@ func (d *DAL) displayNames(query string) (map[string]string, error) {
 
 // SetMemberAgentIatFloor raises this member's credential floor to ts (T-14 項目
 // 4B) — the `iat` of the token that just reported waking. It is the SOLE writer
-// that moves the column: PutMember's upsert carries it on INSERT but never in
-// its DO UPDATE SET.
+// that moves the column: a whole-row write carries it on INSERT but never onto
+// an existing row (mfAgentIatFloor declares it insertOnly).
 //
 // FORWARD-ONLY, in SQL rather than in Go. A read-modify-write in Go loses to
 // whichever caller writes last, and the loser here is a REVOCATION: two
