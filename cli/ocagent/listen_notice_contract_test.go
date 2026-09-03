@@ -137,3 +137,69 @@ func TestAckProtocolLiteralsMatchTheSidecarConsumer(t *testing.T) {
 			"marking undelivered messages read.", consumer, listenAckEnv)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// "Pinned by TestX" is an ENTRANCE, and an entrance that leads nowhere is worse
+// than none.
+// ---------------------------------------------------------------------------
+
+// A named test in a production comment is how the next reader confirms a
+// guardrail is still standing before they touch the invariant it guards. When
+// the test is renamed and the comment is not, the reader greps, finds nothing,
+// and is left to decide for themselves whether the guardrail was deleted or
+// merely moved — with the comment still asserting, confidently, that something
+// holds this.
+//
+// That is not hypothetical: a681eac2 renamed the test that pins the watermark
+// invariant and left reportChatRead pointing at the old name. Nothing reported
+// it, because a comment compiles no matter what it says.
+//
+// SCOPE — this package only, by construction. Cross-module references (server
+// comments naming an ocagent test) cannot be resolved from here, so they are
+// out; \b is what keeps `newTestListener` and `refuseInTestBinary` from being
+// read as references to tests. The six-character tail is the shortest name this
+// package actually uses, and it keeps a bare `Test` out of the set.
+func TestPinnedTestNamesInCommentsStillExist(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("cannot read the package directory: %v", err)
+	}
+	ref := regexp.MustCompile(`\bTest[A-Za-z0-9_]{6,}\b`)
+	def := regexp.MustCompile(`(?m)^func (Test[A-Za-z0-9_]+)\s*\(`)
+
+	defined := map[string]bool{}
+	type mention struct{ file, name string }
+	var mentions []mention
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") {
+			continue
+		}
+		source, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("cannot read %s: %v", name, err)
+		}
+		if strings.HasSuffix(name, "_test.go") {
+			for _, m := range def.FindAllStringSubmatch(string(source), -1) {
+				defined[m[1]] = true
+			}
+			continue
+		}
+		for _, m := range ref.FindAllString(string(source), -1) {
+			mentions = append(mentions, mention{name, m})
+		}
+	}
+	if len(mentions) == 0 {
+		t.Fatal("no test names are cited in this package's production files at all — " +
+			"either every citation was just deleted or this scan stopped matching; " +
+			"an assertion over an empty set proves nothing")
+	}
+	for _, m := range mentions {
+		if !defined[m.name] {
+			t.Errorf("%s cites %s, which no test in this package defines. Either the "+
+				"test was renamed and this comment was not (repoint it), or the "+
+				"guardrail it claims is gone (say so). A reader greps this name to "+
+				"check the invariant is still held.", m.file, m.name)
+		}
+	}
+}

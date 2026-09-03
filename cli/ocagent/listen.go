@@ -1226,7 +1226,7 @@ func drainChat(client httpClient, cfg Config, out io.Writer, warn *markReadWarne
 // fetchable, then marked read, and never offered again. The cap is gone and the
 // unread walk is exhaustive, so every line covered by a watermark is a line this
 // drain actually printed.
-// Pinned by TestDrainChat_LongBacklog_PrintsEveryLineItsWatermarkCovers.
+// Pinned by TestDrainChat_EveryWatermarkEqualsWhatThatSenderActuallyPrinted.
 //
 // A sender files NO receipt when none of their lines printed — an undelivered
 // batch, or a message the wire sent without a usable ts, which has no watermark
