@@ -28,6 +28,7 @@ import type { TaskArtifactView, ChatAttachmentView } from "../api/adapter";
 import { formatAbsolute } from "../lib/dateFormat";
 import { useEscapeLayer } from "../lib/useEscapeLayer";
 import { AttachmentStrip } from "./AttachmentStrip";
+import { TaskArtifactVersionsModal } from "./TaskArtifactVersionsModal";
 import {
   CloseIcon,
   ExternalLinkIcon,
@@ -113,6 +114,12 @@ export function TaskArtifactsBadge({
       const target = e.target as Node | null;
       if (anchorRef.current?.contains(target ?? null)) return;
       if (target instanceof Element && target.closest(".md-preview")) return;
+      // 🔴 The SAME ruling, for the SAME reason, one surface later (T-60): the
+      // version reader also portals to `document.body`, so `contains()` is
+      // false for every point of it — panel, scrim and close button alike. Drop
+      // this arm and one click anywhere in the version reader closes the
+      // artifacts panel out from under it.
+      if (target instanceof Element && target.closest(".ta-versions")) return;
       setOpen(false);
     }
     document.addEventListener("mousedown", onDown);
@@ -170,6 +177,10 @@ function ArtifactsPopover({
 }) {
   const { t } = useI18n();
   const [artifacts, setArtifacts] = useState<TaskArtifactView[]>(seed ?? []);
+  /** The artifact whose version reader is open, if any. The reader is opened by
+   * id rather than by row so it re-reads its own state from the server (it does
+   * NOT diff against these rows — see TaskArtifactVersionsModal's header). */
+  const [versionsFor, setVersionsFor] = useState<string | null>(null);
   // A pinned artifact's timestamp never ticks live — this only decides
   // whether formatAbsolute prefixes the year, so a plain render-time read is
   // fine (no state/interval needed, unlike RepliesPage's counters).
@@ -244,11 +255,17 @@ function ArtifactsPopover({
             </span>
           </span>
         )}
-        {onRemoveArtifact && (
-          <span className="task-artifacts__actions">
+        <span className="task-artifacts__actions">
+          {art && (
+            <VersionsButton
+              artifact={art}
+              onOpen={() => setVersionsFor(art.id)}
+            />
+          )}
+          {onRemoveArtifact && (
             <RemoveButton taskId={taskId} artifactId={att.id} onRemove={onRemoveArtifact} />
-          </span>
-        )}
+          )}
+        </span>
       </>
     );
   };
@@ -328,6 +345,10 @@ function ArtifactsPopover({
                       </span>
                     </a>
                     <span className="task-artifacts__actions">
+                      <VersionsButton
+                        artifact={a}
+                        onOpen={() => setVersionsFor(a.id)}
+                      />
                       {onRemoveArtifact && (
                         <RemoveButton taskId={taskId} artifactId={a.id} onRemove={onRemoveArtifact} />
                       )}
@@ -339,7 +360,41 @@ function ArtifactsPopover({
           </>
         )}
       </div>
+      {versionsFor && (
+        <TaskArtifactVersionsModal
+          taskId={taskId}
+          artifactId={versionsFor}
+          onClose={() => setVersionsFor(null)}
+        />
+      )}
     </div>
+  );
+}
+
+/** The row's 「N版」 entry — present ONLY when there is more than one version to
+ * look at (T-60). `versionCount` counts the LIVE version too, so 1 is "never
+ * replaced" and 0 is an older server that never said; both mean there is
+ * nothing to open, which is why the test is `> 1` and not `!== 1`. */
+function VersionsButton({
+  artifact,
+  onOpen,
+}: {
+  artifact: TaskArtifactView;
+  onOpen: () => void;
+}) {
+  const { t, msg } = useI18n();
+  if (artifact.versionCount <= 1) return null;
+  return (
+    <button
+      type="button"
+      className="task-artifacts__action task-artifacts__versions"
+      data-testid={`task-artifact-versions-${artifact.id}`}
+      aria-label={t.tasks.artifacts.versionsEntry}
+      title={t.tasks.artifacts.versionsEntry}
+      onClick={onOpen}
+    >
+      {msg.taskArtifactVersionCount(artifact.versionCount)}
+    </button>
   );
 }
 
