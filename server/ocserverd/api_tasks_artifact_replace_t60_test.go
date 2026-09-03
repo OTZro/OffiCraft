@@ -309,10 +309,10 @@ func TestRemoveArtifactCollectsEveryRetainedVersion(t *testing.T) {
 	}
 }
 
-// TestArtifactHistoryGuards — the read shares the writes' permission model (an
-// agent who may not touch this task's deliverables may not read what they used
-// to be) but NOT their freeze: a closed task's history is exactly when a reader
-// wants it.
+// TestArtifactHistoryGuards — the read shares NEITHER of the writes' gates: no
+// executor guard (anyone who can read the task can read what its deliverables
+// used to be) and no terminal-task freeze (a closed task's history is exactly
+// when a reader wants it). Only the WRITE verbs keep both.
 func TestArtifactHistoryGuards(t *testing.T) {
 	api := newTasksTestServer(t)
 	task := createAdHocTask(t, api, "m-exec")

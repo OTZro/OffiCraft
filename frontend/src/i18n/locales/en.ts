@@ -248,7 +248,8 @@ export const en: Dict = {
       empty: "No artifacts yet",
       close: "Close artifacts",
       remove: "Remove artifact",
-      removeConfirm: "Remove this artifact from the task card? (The file itself is kept.)",
+      removeConfirm:
+        "Remove this artifact from the task card? The file it points at NOW is kept, but if this artifact was ever replaced, every earlier version kept behind it is deleted for good — those files included.",
       downloadHint: "Download",
       openLinkHint: "Open link",
       versionsEntry: "View versions",

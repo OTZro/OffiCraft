@@ -4033,10 +4033,16 @@ export const mockApi: Api = {
     artifactId: string,
   ): Promise<TaskArtifactVersionView[]> {
     // Mirrors handle_list_task_artifact_history (T-60): the retained PREVIOUS
-    // versions, newest first. Guard ORDER matches the server — unknown task
-    // 404 → unknown artifact 404 → wrong-task 400 — and an artifact that has
-    // never been replaced answers [] (the honest "nothing has been replaced
-    // here"), never a 404. Read-only: there is no restore verb to pair with it.
+    // versions, newest first. An artifact that has never been replaced answers
+    // [] (the honest "nothing has been replaced here"), never a 404. Read-only:
+    // there is no restore verb to pair with it.
+    //
+    // KNOWN DIVERGENCE from the server's guard ladder: the server answers
+    // unknown task 404 → unknown artifact 404 → artifact-on-a-different-task
+    // 400, while this mock only ever looks inside the named task's own
+    // artifacts, so a real artifact id belonging to ANOTHER task comes back 404
+    // here and 400 there. No mock artifact verb models that 400, so do not
+    // build a test of the 400 branch on this stub.
     const t = findTask(taskId);
     const art = (t.artifacts ?? []).find((a) => a.id === artifactId);
     if (!art) {

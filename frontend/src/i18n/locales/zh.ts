@@ -284,7 +284,8 @@ export const zh = {
       empty: "還沒有產物",
       close: "關閉產物",
       remove: "移除產物",
-      removeConfirm: "從任務卡移除這個產物?(不會刪除檔案本身)",
+      removeConfirm:
+        "從任務卡移除這個產物?目前指向的檔案會保留,但這個產物若曾被取代,保留下來的每個舊版本都會連同檔案一起永久刪除。",
       downloadHint: "下載",
       openLinkHint: "開啟連結",
       // ── T-60: a pinned deliverable can be REPLACED, keeping its id. The row

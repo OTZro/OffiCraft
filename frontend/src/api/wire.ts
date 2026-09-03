@@ -197,8 +197,11 @@ export type WireTaskArtifact = components["schemas"]["TaskArtifactDTO"];
  * pinned deliverable, as `GET /api/tasks/{task_id}/artifact/{artifact_id}/history`
  * lists them (newest first). The version carries the pointer WHOLE — a blob id
  * or a url plus a label — so unlike a document revision there is no second read
- * to fetch its content. It carries NO `mime`/`filename`/`is_image`: what a past
- * version's bytes are is answered by fetching them, not by this row. */
+ * to fetch its content. It DOES carry `mime`/`filename`/`is_image` alongside the
+ * pointer (resolved read-time from the blob store, like the live artifact's own
+ * row): `filename` is load-bearing — `TaskArtifactVersionsModal` reads its
+ * extension to decide whether two versions can be diffed at all, so dropping the
+ * field would silently take text diffing away. */
 export type WireTaskArtifactVersion =
   components["schemas"]["TaskArtifactVersionDTO"];
 
