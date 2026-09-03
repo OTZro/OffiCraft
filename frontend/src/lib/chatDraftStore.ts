@@ -60,7 +60,20 @@ const drafts = new Map<string, ChatDraft>();
  * something somebody did in ONE room, and it has to survive until that room is
  * on screen to read it (R11-4 / R12-1). Kept out of `ChatDraft` because it is
  * not part of what the owner composed — an empty composer with a notice is
- * still an empty draft. */
+ * still an empty draft.
+ *
+ * 🔴 IT IS PER PEER, BUT IT IS NOT PER SESSION (T-48, R14-2.1). Being a
+ * module-level table means it outlives an unmount, and that is right for the
+ * one thing it was moved here for — a refusal raised by a read that finished
+ * while the owner was in another room has to be readable when they come back.
+ * It is NOT right across the whole app: before this table existed the notice
+ * was component state on the composer, so leaving the office page took it with
+ * it, and the fourteenth review measured the difference — refuse a 30 MB image,
+ * walk to 任務, come back ten minutes later, and the red sentence is still
+ * there describing something the owner did ten minutes ago. The draft survives
+ * that navigation on purpose; a transient rejection does not. `OfficePage`
+ * drops these on unmount (`clearChatAttachErrors`), which is what puts the
+ * notice back on the lifetime it had. */
 const attachErrors = new Map<string, string>();
 const listeners = new Map<string, Set<() => void>>();
 
@@ -177,6 +190,18 @@ export function setChatAttachError(
     attachErrors.set(peerId, message);
   }
   notify(peerId);
+}
+
+/** Drop EVERY room's staging rejection notice — the chat surface itself is
+ * going away. Called from `OfficePage`'s unmount, so the notice's lifetime is
+ * the page's, the way it was when it was component state (T-48, R14-2.1). The
+ * drafts and their staged files are deliberately untouched: those survive the
+ * navigation because that is what a draft is for. */
+export function clearChatAttachErrors(): void {
+  if (attachErrors.size === 0) return;
+  const touched = [...attachErrors.keys()];
+  attachErrors.clear();
+  for (const peerId of touched) notify(peerId);
 }
 
 /** Test-only reset so a module-level store never leaks state across tests. */

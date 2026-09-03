@@ -9,6 +9,7 @@ import { useOutsourceWorkers } from "../hooks/useOutsourceWorkers";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { joinSessionRuntime, findSessionFor } from "../lib/runtime";
 import { useHashRoute } from "../lib/hashRoute";
+import { clearChatAttachErrors } from "../lib/chatDraftStore";
 import { updateCachedWorkerAvatar } from "../hooks/useWorkerCodenames";
 import { MemberCard } from "./MemberCard";
 import { ChatArea } from "./ChatArea";
@@ -76,6 +77,17 @@ export function OfficePage() {
   // (releasedPeer) instead; a stale detailId/workerId still self-heals to the
   // roster below (there is no conversation to preserve there).
   const [route, setRoute] = useHashRoute();
+  // 🔴 THE STAGING REFUSAL IS THIS PAGE'S, THE DRAFT IS NOT (T-48, R14-2.1).
+  // 「圖片太大」/「最多 10 個檔案」 lives in the same module-level table as the
+  // draft so that a read finishing while the owner is in another room can still
+  // put its sentence where they will see it. That table outlives this page too,
+  // which is one lifetime too many: leave for 任務, come back ten minutes later
+  // and the red line is still describing a drop from ten minutes ago. It was
+  // component state before the table existed, so leaving took it with it. This
+  // is that lifetime, written down instead of inherited — and it clears the
+  // NOTICES only: the drafts and their staged files must survive the
+  // navigation, which is the whole reason they were moved out of the composer.
+  useEffect(() => clearChatAttachErrors, []);
   const selectedId = route.chatId ?? "";
   const detailId = route.detailId ?? null;
   const workerDetailId = route.workerId ?? null;
