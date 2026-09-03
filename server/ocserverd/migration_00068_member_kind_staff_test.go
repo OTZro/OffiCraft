@@ -62,6 +62,8 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -717,8 +719,43 @@ func TestMigration00068UpDownUpIsStable(t *testing.T) {
 // is exactly one such change in flight: #387 adds member.restart_after_stop.
 //
 // So this test is the one place the LIVE schema meets the list.
+// migration00068SchemaBeforeUp brings a temp database to the state just before
+// 00068 **by going UP and stopping there** — never by migrating past it and
+// coming back down.
+//
+// 🔴 THE DIRECTION IS THE WHOLE TEST. migration00068World (used by every other
+// test in this file, correctly) reaches the same version with runMigrations +
+// goose.DownTo, and DownTo RUNS 00068'S OWN DOWN — which rebuilds `member` from
+// migration00068Columns(). Read pragma_table_info after that and the "live
+// schema" is a table the thing under test just recreated from the very list it
+// is being compared against: it agrees with itself, always, no matter what an
+// earlier migration added. That is the identical closed loop this test exists to
+// break, and the first version of this test walked straight into it — it passed
+// with a real earlier migration adding member.restart_after_stop (independent
+// review #16 caught it; the author's own mutant had added the column to the
+// database AFTER the helper returned, which is not what a migration does).
+//
+// Going up and stopping leaves `member` exactly as the REAL earlier migrations
+// built it. Nothing 00068 wrote is in the picture.
+func migration00068SchemaBeforeUp(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := openSQLite(filepath.Join(t.TempDir(), "member-schema-before-68.db"))
+	if err != nil {
+		t.Fatalf("open temp sqlite: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	goose.SetBaseFS(embeddedMigrations)
+	if err := goose.SetDialect("sqlite3"); err != nil {
+		t.Fatalf("set dialect: %v", err)
+	}
+	if err := goose.UpTo(db, "migrations", migration00068PriorVersion); err != nil {
+		t.Fatalf("up to %d: %v", migration00068PriorVersion, err)
+	}
+	return db
+}
+
 func TestMigration00068ColumnListMatchesTheLiveSchema(t *testing.T) {
-	db := migration00068World(t)
+	db := migration00068SchemaBeforeUp(t)
 
 	rows, err := db.Query(`SELECT name FROM pragma_table_info('member')`)
 	if err != nil {
@@ -776,4 +813,232 @@ func TestMigration00068ColumnListMatchesTheLiveSchema(t *testing.T) {
 			"or the name is misspelled. The rebuild would fail on it.",
 			len(missingFromSchema), strings.Join(missingFromSchema, ", "))
 	}
+}
+
+// memberShape reads what `member` ACTUALLY is right now: its columns in order,
+// and every index standing on it. Both come from the live database, never from a
+// list in this file — that is the point of it.
+func memberShape(t *testing.T, db *sql.DB) (cols []string, idx []string) {
+	t.Helper()
+	read := func(q string) []string {
+		rows, err := db.Query(q)
+		if err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var v string
+			if err := rows.Scan(&v); err != nil {
+				t.Fatalf("scan: %v", err)
+			}
+			out = append(out, v)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("iterate: %v", err)
+		}
+		return out
+	}
+	cols = read(`SELECT name FROM pragma_table_info('member')`)
+	idx = read(`SELECT name || ' :: ' || COALESCE(sql, '<implicit>') FROM sqlite_master
+	            WHERE type = 'index' AND tbl_name = 'member' ORDER BY name`)
+	return cols, idx
+}
+
+// 🔴 THE LIST-FREE HALF, AND IT IS THE ONE THAT CANNOT GO STALE.
+//
+// TestMigration00068ColumnListMatchesTheLiveSchema keeps the hand list honest,
+// but it still has a hand list in it. This one has none: it photographs `member`
+// immediately BEFORE 00068 runs and again immediately AFTER, and demands the two
+// photographs match. Whatever the schema happens to be on the day, a rebuild is
+// only allowed to change VALUES (assistant -> staff), never the SHAPE.
+//
+// WHY THE INDEX HALF IS NOT DECORATION: 00068's own comment calls the index "THE
+// TRAP IN THIS ONE" — DROP TABLE takes idx_member_codename with it and RENAME
+// does not bring it back, and a missing unique index does not raise, does not
+// log, and makes codenames silently duplicable. Independent review #16 measured
+// that adding an index to an earlier migration passed every test in this file:
+// the rebuild ate it and nothing said a word. This is that missing assertion.
+func TestMigration00068PreservesTheShapeOfMemberWhateverItIs(t *testing.T) {
+	db := migration00068SchemaBeforeUp(t)
+
+	beforeCols, beforeIdx := memberShape(t, db)
+	if len(beforeCols) == 0 || len(beforeIdx) == 0 {
+		t.Fatalf("precondition: member must have columns (%d) and at least one index (%d) "+
+			"before 00068 — if this fires, the reader is broken, not the schema",
+			len(beforeCols), len(beforeIdx))
+	}
+
+	if err := goose.UpTo(db, "migrations", migration00068Version); err != nil {
+		t.Fatalf("up to %d: %v", migration00068Version, err)
+	}
+	afterCols, afterIdx := memberShape(t, db)
+
+	if !reflect.DeepEqual(beforeCols, afterCols) {
+		t.Errorf("00068 changed member's COLUMNS.\n before: %v\n  after: %v\n"+
+			"⇒ The rebuild's INSERT…SELECT names a fixed column list. Anything the "+
+			"schema has that the list does not is copied away, and every existing row "+
+			"loses that value silently. Add your column to BOTH directions of "+
+			"migrations/%05d and to migration00068Columns().",
+			beforeCols, afterCols, migration00068Version)
+	}
+	if !reflect.DeepEqual(beforeIdx, afterIdx) {
+		t.Errorf("00068 changed member's INDEXES.\n before: %v\n  after: %v\n"+
+			"⇒ DROP TABLE takes every index with it and RENAME does not bring them "+
+			"back. A lost UNIQUE index raises nothing and logs nothing — it just makes "+
+			"the column duplicable. Recreate it explicitly in BOTH directions of "+
+			"migrations/%05d.",
+			beforeIdx, afterIdx, migration00068Version)
+	}
+}
+
+// 🔴 THE SECOND RULER, AND IT DOES NOT GO THROUGH goose AT ALL.
+//
+// The two tests above both learn what `member` looks like by asking a database
+// that goose built. That is one ruler with two faces, and one ruler can go blind
+// on its own: the first version of the column test read the schema after
+// goose.DownTo had let 00068's own Down rebuild the table from the very list
+// under test, so it agreed with itself no matter what an earlier migration
+// added, and it passed the real #387 scenario in full green.
+//
+// So this one never runs a migration. It REPLAYS the .sql text of every
+// migration below 00068 and works out what columns `member` must have by the
+// time 00068 starts — CREATE TABLE, the member_rebuild/RENAME swap, and every
+// ADD/DROP COLUMN, Up sections only. Its answer comes from the files a reviewer
+// reads, not from an engine's behaviour.
+//
+// The point is not that this parser is better. It is that when the two rulers
+// disagree, ONE OF THEM IS WRONG AND YOU FIND OUT — which is exactly what did
+// not happen while there was only one.
+func TestMigration00068ColumnListAgreesWithTheMigrationTextItself(t *testing.T) {
+	entries, err := embeddedMigrations.ReadDir("migrations")
+	if err != nil {
+		t.Fatalf("read migrations dir: %v", err)
+	}
+	var names []string
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".sql") {
+			continue
+		}
+		var ver int
+		if _, err := fmt.Sscanf(e.Name(), "%05d_", &ver); err != nil {
+			t.Fatalf("migration name %q does not start with a version: %v", e.Name(), err)
+		}
+		if ver < migration00068Version {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Strings(names) // zero-padded, so lexical order IS version order
+	if len(names) == 0 {
+		t.Fatalf("replayed no migrations — the reader is broken, not the schema")
+	}
+
+	var cols []string
+	drop := func(name string) {
+		for i, c := range cols {
+			if c == name {
+				cols = append(cols[:i], cols[i+1:]...)
+				return
+			}
+		}
+		t.Errorf("%s drops member.%s, which the replay says is not there", name, name)
+	}
+
+	for _, n := range names {
+		raw, err := embeddedMigrations.ReadFile("migrations/" + n)
+		if err != nil {
+			t.Fatalf("read %s: %v", n, err)
+		}
+		up := migrationUpSection(string(raw))
+		if created, ok := createdTableColumns(up, "member"); ok {
+			cols = created
+		}
+		if created, ok := createdTableColumns(up, "member_rebuild"); ok &&
+			strings.Contains(up, "ALTER TABLE member_rebuild RENAME TO member") {
+			cols = created
+		}
+		for _, m := range addColumnRe.FindAllStringSubmatch(up, -1) {
+			cols = append(cols, m[1])
+		}
+		for _, m := range dropColumnRe.FindAllStringSubmatch(up, -1) {
+			drop(m[1])
+		}
+	}
+
+	want := migration00068Columns()
+	if !reflect.DeepEqual(cols, want) {
+		t.Errorf("the migration TEXT and migration00068Columns() disagree about member.\n"+
+			"  from replaying the .sql files: %v\n"+
+			"  from the hand-written list:    %v\n"+
+			"⇒ One of the two is stale. If you added a column, add it to the list (and to "+
+			"both directions of migrations/%05d). If you removed one, remove it from the list.",
+			cols, want, migration00068Version)
+	}
+}
+
+// migrationUpSection returns only what goose would run going UP. Everything from
+// the Down marker onward is the reverse of this migration and must not be
+// replayed forward — the files carry both, and the Down of an ADD COLUMN is a
+// DROP COLUMN of the same name.
+func migrationUpSection(sql string) string {
+	up := sql
+	if i := strings.Index(up, "-- +goose Up"); i >= 0 {
+		up = up[i:]
+	}
+	if i := strings.Index(up, "-- +goose Down"); i >= 0 {
+		up = up[:i]
+	}
+	return up
+}
+
+var (
+	addColumnRe  = regexp.MustCompile(`ALTER TABLE member ADD COLUMN ([a-z_]+)`)
+	dropColumnRe = regexp.MustCompile(`ALTER TABLE member DROP COLUMN ([a-z_]+)`)
+	// A column line starts with the name; a constraint line starts with a keyword.
+	tableConstraint = regexp.MustCompile(`^(CHECK|PRIMARY|UNIQUE|FOREIGN|CONSTRAINT)\b`)
+)
+
+// createdTableColumns pulls the column names, in order, out of a CREATE TABLE
+// body. Comment lines and table-level constraints are skipped; everything else
+// contributes its first token.
+func createdTableColumns(sql, table string) ([]string, bool) {
+	head := "CREATE TABLE " + table + " ("
+	i := strings.Index(sql, head)
+	if i < 0 {
+		return nil, false
+	}
+	body := sql[i+len(head):]
+	depth := 1
+	end := -1
+	for j, r := range body {
+		switch r {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				end = j
+			}
+		}
+		if end >= 0 {
+			break
+		}
+	}
+	if end < 0 {
+		return nil, false
+	}
+	var cols []string
+	depth = 0
+	for _, line := range strings.Split(body[:end], "\n") {
+		trimmed := strings.TrimSpace(line)
+		// Only split on commas at depth 0, so CHECK (x IN ('a','b')) stays whole.
+		if depth == 0 && trimmed != "" && !strings.HasPrefix(trimmed, "--") &&
+			!tableConstraint.MatchString(trimmed) {
+			if f := strings.Fields(trimmed); len(f) > 0 {
+				cols = append(cols, strings.TrimSuffix(f[0], ","))
+			}
+		}
+		depth += strings.Count(line, "(") - strings.Count(line, ")")
+	}
+	return cols, true
 }
