@@ -166,7 +166,7 @@ type Member struct {
 	// snapshot from erasing an existing record.
 	ForcedStopAt float64
 	// RestartAfterStop is the SECOND owner intent, split out of DesiredState
-	// (T-14 項目 7, migrations/00066). DesiredState answers 「下線用多強」; this
+	// (T-14 項目 7, migrations/00070). DesiredState answers 「下線用多強」; this
 	// answers 「下線之後要不要起來」, and the two are independent:
 	//
 	//	false  nothing is waiting to come back up.

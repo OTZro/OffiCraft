@@ -280,7 +280,7 @@ func mfAgentIatFloor(v float64) memberField {
 	return memberField{col: "agent_iat_floor", val: v, insertOnly: true, forwardOnly: true}
 }
 
-// mfRestartAfterStop — 「下線之後要不要起來」 (T-14 項目 7, migrations/00066),
+// mfRestartAfterStop — 「下線之後要不要起來」 (T-14 項目 7, migrations/00070),
 // and the ONE owner-intent column on this table that is deliberately NOT
 // insert-only: restart_after_stop IS carried by the whole-row upsert.
 //
