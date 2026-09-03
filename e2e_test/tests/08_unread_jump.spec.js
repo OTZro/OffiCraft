@@ -250,6 +250,14 @@ test.describe('B9 · unread — badge, entry divider anchor, 進房 mark-read, f
     // 600ms 兩邊都留了餘裕:它小於 `REPLY_CARD_PREFILL_DEADLINE_MS`(1500ms)
     // 900ms,所以修好的碼是真的「等到了」而不是「等到放棄」;它又大於 mutant 上
     // 從落地到按下的實測 221ms 約 380ms,所以晚填必定落在跳轉之後。
+    //
+    // ⚠️ 但那個 221ms 是**一次本機量測**(獨立審查 F-H)。CI 上一台慢的 runner 把
+    // 「落地 → 按下」拖過 600ms,`route` 的延遲就會在按下之前先回來 —— 卡片在跳轉
+    // **之前**就長高,mutant 於是**假綠**。要說清楚這削弱的是什麼:削弱的是
+    // **mutant 示範**,不是出貨的護欄。護欄 ①②③ 量的是修好的碼上「落地當下卡片
+    // 已是最終高度」,那件事不看這個延遲的死線。所以下次有人在 CI 上重跑這個
+    // mutant 而它綠了,先量「落地 → 按下」花了多久,再決定要不要加大這個常數 ——
+    // 不要當成 regression 沒了。
     // 只攔 `rc-*`:`/api/reply-cards/count`(等我回覆徽章的輪詢)不在其中。
     const CARD_FETCH_DELAY_MS = 600;
     await page.route('**/api/reply-cards/rc-*', async (route) => {
@@ -405,12 +413,26 @@ test.describe('B9 · unread — badge, entry divider anchor, 進房 mark-read, f
         `訊息在卡片到手之前就上了畫面,落點會被它推走`,
     ).toBeGreaterThanOrEqual(200);
     // 護欄 ②:所以落點待得住。無條件,沒有箭頭那個出口。
+    //
+    // ⚠️ 而它是**單邊的**,這件事要寫下來(獨立審查 F-H)。`lastRowBottomGap` 是
+    // 「最新那一列的下緣 − 視窗下緣」,所以它只擋一個方向:那一列被推到**摺線
+    // 底下**。被留在摺線**上方**任意遠 —— gap 是個很負的數 —— 照樣 <= 1,照樣綠。
+    // 補上另一邊的是護欄 ③(人不在最新訊息上時,箭頭就會在)。兩條各自有洞,
+    // 合起來才是完整的:②(下方)＋ ③(上方)。拆掉任何一條,另一條都補不上。
     expect(
       settled.lastRowBottomGap,
       `版面靜止之後,最新那一列必須還完整在視窗裡 —— 上方的圖片與請示卡在源頭` +
         `都已經是最終高度,推不動它(量到 ${JSON.stringify(settled)})`,
     ).toBeLessThanOrEqual(1);
     // 護欄 ③:人在最新訊息上,所以那顆「回到最新」箭頭在這一刻是**假話**,不可以在。
+    //
+    // ⚠️ 這是一條**輪詢**斷言,而本檔上面才剛警告過輪詢(「只要在某一格取樣到
+    // 『不在』就 PASS」,箭頭閃 10–40ms 的產品 30 次跑綠 14 次)。方向相反 —— 上面
+    // 怕的是「不在」被取樣到,這裡怕的是「在」被錯過 —— 但形狀一樣,所以理由必須
+    // 寫在旁邊而不是靠讀者自己推:上面那個 3 秒的靜止(`waitForTimeout` +
+    // `settled` 取樣)已經先跑完了,版面到這裡不再變動,所以這條輪詢問的是一個
+    // **靜止**的狀態,不是一個會閃的狀態。誰把那段靜止拿掉,這條就退化成上面警告
+    // 的那個形狀。
     await expect(
       page.getByTestId('chat-jump-latest'),
       'the reader is on the latest message — the arrow would be a lie',
