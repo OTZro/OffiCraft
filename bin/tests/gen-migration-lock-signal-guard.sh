@@ -34,6 +34,18 @@
 # migration_lock_t75_test.go's job. It also does not prove the real run wires
 # ENTRIES_LINE correctly beyond the pass-through checked here.
 set -euo pipefail
+# 🔴 WITHOUT THIS, THE FIXTURES CAN FAIL SILENTLY AND THE GUARD STILL SAYS ok.
+# Command substitution runs in a subshell that does NOT inherit errexit unless this
+# is set (bash 4.4+), and every fixture below is built inside one — `F1="$(make_fixture
+# ...)"`. An independent reviewer sabotaged `git commit` in make_fixture and measured
+# it: five failed commits, and F2/F3/F4/F5 all still reported ok, because the only
+# thing the substitution returns is the status of its LAST command, a printf that
+# always succeeds. Four of five assertions were being made against repos that were
+# never built. That is the same false-green this whole guard exists to prevent, one
+# level up — so the fix is belt AND braces: this shopt where it exists, and an
+# explicit post-condition inside make_fixture for the bash 3.2 that ships on macOS,
+# where this option does not exist at all.
+shopt -s inherit_errexit 2>/dev/null || true
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SELF_REL="bin/tests/gen-migration-lock-signal-guard.sh"
@@ -80,6 +92,14 @@ make_fixture() {
   if [[ "$dirty" == "dirty" ]]; then
     printf 'a migration this run appended\n' >>"$d/$LOCK_REL"
   fi
+  # POST-CONDITION, load-bearing on bash 3.2 where inherit_errexit does not exist:
+  # prove the repo we are about to assert against actually got built. A fixture whose
+  # `git init/add/commit` failed looks exactly like a good one from the caller's side,
+  # and every assertion made against it then passes vacuously.
+  git -C "$d" rev-parse --verify HEAD >/dev/null 2>&1 || {
+    printf 'make_fixture %s: the fixture repo has no commit — refusing to assert against it\n' "$name" >&2
+    return 1
+  }
   printf '%s' "$d"
 }
 
@@ -96,7 +116,7 @@ report() {
 says() { grep -qF -- "$2" <<<"$1"; }
 
 # ── F1: committed, clean ─────────────────────────────────────────────────────
-F1="$(make_fixture clean commit clean)"
+F1="$(make_fixture clean commit clean)" || exit 1
 OUT1="$(report "$F1")"
 if says "$OUT1" "$UNCHANGED_CLAIM"; then
   ok "F1 clean tree — reports the lock as UNCHANGED"
@@ -111,7 +131,7 @@ else
 fi
 
 # ── F2: committed, dirty — THE REGRESSION ────────────────────────────────────
-F2="$(make_fixture dirty commit dirty)"
+F2="$(make_fixture dirty commit dirty)" || exit 1
 OUT2="$(report "$F2")"
 if says "$OUT2" "$CHANGED_CLAIM"; then
   ok "F2 lock actually changed — reports it CHANGED and points at the diff"
@@ -129,7 +149,7 @@ else
 fi
 
 # ── F3: lock untracked — git has no baseline ─────────────────────────────────
-F3="$(make_fixture untracked nocommit clean)"
+F3="$(make_fixture untracked nocommit clean)" || exit 1
 OUT3="$(report "$F3")"
 if says "$OUT3" "$UNKNOWN_CLAIM" && ! says "$OUT3" "$UNCHANGED_CLAIM" && ! says "$OUT3" "$OLD_BUG_CLAIM"; then
   ok "F3 untracked lock — says it CANNOT DETERMINE instead of guessing"
@@ -150,7 +170,7 @@ done
 if PATH="$NOGIT" command -v git >/dev/null 2>&1; then
   bad "F4 setup — git is still reachable on the stripped PATH; this fixture proves nothing"
 else
-  F4="$(make_fixture nogit commit clean)"
+  F4="$(make_fixture nogit commit clean)" || exit 1
   OUT4="$(report "$F4" "$NOGIT")"
   if says "$OUT4" "$UNKNOWN_CLAIM" && ! says "$OUT4" "$UNCHANGED_CLAIM" && ! says "$OUT4" "$OLD_BUG_CLAIM"; then
     ok "F4 no git on PATH — says it CANNOT DETERMINE instead of guessing"
@@ -168,7 +188,7 @@ fi
 # sentence this script was written to delete, so the empty case must first
 # prove git can see the path. Found by the independent reviewer of PR #417,
 # who reproduced it against the pre-fix script.
-F5="$(make_fixture nolockfile nocommit clean)"
+F5="$(make_fixture nolockfile nocommit clean)" || exit 1
 rm -f "$F5/$LOCK_REL"
 if [[ -n "$(git -C "$F5" status --porcelain -- "$LOCK_REL")" ]]; then
   bad "F5 setup — porcelain is not empty for a path git never heard of; this fixture proves nothing"
