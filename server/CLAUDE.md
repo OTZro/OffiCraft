@@ -9,6 +9,9 @@
 - 乾淨 worktree 手跑 server Go tests 前，先執行 `bash bin/build-seedsdist && bash bin/build-docsdist`；`bin/ci.sh` 會自動 staging。`build-bindist` 是單檔 boot/install 的前置，不是 `go test` 的前置。
 - 有效 config 只有 `[server].port`、`[server].namespace`、`[storage].dsn`；部署用 `$OC_CONFIG`／`$OC_DATABASE_URL` 明確指定。預設 `oc.toml` 以 CWD 相對位置找，host 固定 loopback；不要把退役 key 或環境探測重新當成設定來源。
 - `bin/release`、release preflight 與「CI/main 不等於部署」遵守根檔；server 文件不另抄一份命令或 release 清單。
+- 🔴 **新增 migration 的號碼必須大於 `origin/main` 目前宣告的最大號**，兩個來源都算（`migrations/*.sql` 與 `goose.AddNamedMigration*` 註冊的 Go migration）。跳過的號碼永遠留著不補：低於已釋出最大號的新號會讓**已經在跑的站**下次開機在 `runMigrations` 停住、exit 1、不會 listen，而全新安裝完全看不出來（空白 DB 上「缺號」不存在）。**同樣不可逆的另一半：已經釋出的 migration 檔案內容不可以再改**——goose 一個版號只記一次、永不重跑，改動只會落在全新安裝上，兩種站從此 schema 不同而且沒有任何錯誤。要改就開新號。**這一半兩個來源都會紅**：`migrations/*.sql` 比對整個檔案，Go migration 比對它**整份原始碼檔**（不只 up/down 函式主體）——所以一個純機械的改動（改名波及、gofmt）也會叫，那時要由人決定怎麼辦，而不是由這道檢查默默放行。
+  ⚠️ **「大於 main 的最大號」是必要條件，不是充分條件**：兩條同時在飛的分支各自對著同一顆 main 取 max+1 會取到同一個號，那是撞號、由 `TestMigrationVersionNumbersAreClaimedByExactlyOneSource` 在兩邊會合之後才看得見。取號前仍要掃所有遠端分支已占用的號。
+  上面幾條由 `TestAStationAtTheReleasedVersionCanUpgradeToThisTree` 釘住：它照 `origin/main` 重播出一顆站台狀態的 DB 再跑 production 的 `runMigrations`。**它讀的是本機的 `origin/main` ref、不會自己 fetch**，所以本機跑之前先 `git fetch origin main`——ref 過期只會讓它變寬鬆、不會變嚴格。解析不到 `origin/main` 時本機 skip 並說明（skip 不是綠），在 CI 則是直接紅，因為 CI 沒有基線就等於這道檢查被關掉。
 
 ## 2. wire、route 與權限是同一個契約
 
@@ -40,7 +43,7 @@
 
 - chat、task message、create/answer reply card 的四個 attachment 寫入面，都要先驗證全部 attachment（至少 `id` 與 `data_b64`）再寫任何 row；使用帶 attachments 的原子 DAL seam，不把 blob、message、card 拆成可留下半筆的多次呼叫。
 - 一般 blob reference、avatar reference、artifact reference 不可混用。avatar 是 stable member id 綁 `member.avatar_attachment_id` 的單一 owner blob；replacement、remove、hard delete 與 rollback 同 transaction 維護 pointer/blob。SSE 只發 delta，不攜帶圖片 bytes。
-- `GET /api/chat/attachments/{attachment_id}/share-link` 的授權在 mint seam（`principalMachine`），回傳 server-relative 的 path；blob GET 仍是 streaming／MCPExclude。不要把 share link 當成登入後的短期 URL。sig **沒有到期時間、也不能單條撤銷**，但 T-62 之後**不再是不可撤銷**：它由當時在簽的那把金鑰派生，那把金鑰離開簽章金鑰環（設定 › 簽章金鑰的「移除」）時，它簽過的每一條連結同時失效 —— 粗粒度、由人決定時機。
+- `GET /api/chat/attachments/{attachment_id}/share-link` 的授權在 mint seam（`principalMachine`），回傳 server-relative 的 path；blob GET 仍是 streaming／MCPExclude。不要把 share link 當成登入後的短期 URL。sig **沒有到期時間、也不能單條撤銷**，但 T-62 之後**不再是不可撤銷**：它由當時在簽的那把金鑰派生，那把金鑰離開簽章金鑰環（設定 › 簽章金鑰的「移除」）時，它簽過的每一條連結同時失效 —— 粗粒度、由人決定時機。`?sig=` 有**兩種**，另一種是比較連結（`GET /api/diff`，T-59），兩者的 HMAC 標籤刻意分開、不能互相冒用，但**派生的是同一把環上金鑰**，所以生死完全一致；domain separation 是分「哪一種授權」，不是分壽命。哪一列吃哪一種，由 `RouteSpec.ShareSig` 帶的 verifier 決定，不在這裡列。
 - 文件 history list 只回 metadata；body 用指定 kind + key 的 `get_document_version` 逐筆取，seed 用 `get_document_seed`。role definition、task manual SOP、task manual learnings 的 restore 需要文件仍存在；lessons 才能在 deleted role 上以 overlay + seed 恢復。SOP 與 learnings 是兩條各自有 cap/history 的序列，purpose、display、assignee 不在 version body 裡。
 - context cap 的五個 key 是 duty、insight、learning、manual SOP、manual learnings，各自 accessor、預設值到上限 100000；`global_context` 與 `task.description` 不套這組 cap。長度單位是 Unicode rune，不是 byte。
 - 五個受 cap 的寫面都遵守同一條：新內容未超過下限可寫；超過下限時必須嚴格短於舊內容；等長或變長拒絕。比較 caller-visible 的 folded content（含 seed/overlay），`allow_shrink` 是另一個 wipe guard，不是 cap bypass。回應要同時報 size 與 cap；manual 的 SOP、learnings 分開報。
