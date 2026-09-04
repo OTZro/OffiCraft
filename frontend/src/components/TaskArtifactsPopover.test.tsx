@@ -20,6 +20,7 @@ import { I18nProvider } from "../i18n";
 import { api } from "../api";
 import { TaskArtifactsBadge } from "./TaskArtifactsPopover";
 import type { TaskArtifactView } from "../api/adapter";
+import { zh } from "../i18n/locales/zh";
 
 // The popover keeps itself live via api.subscribeEvents (the ChatGalleryPanel
 // pattern) — stub it to a no-op unsubscribe so the unit test never touches SSE.
@@ -36,6 +37,9 @@ vi.mock("../api", () => ({
     subscribeEvents: () => () => {},
     getChatAttachmentShareLink: vi.fn(),
     listTaskArtifacts,
+    // T-60: the version reader reads its own state from the server (never from
+    // these rows), so the popover's tests have to answer its version call too.
+    listTaskArtifactVersions: vi.fn(async () => []),
   },
 }));
 
@@ -54,6 +58,7 @@ function mkArtifact(over: Partial<TaskArtifactView>): TaskArtifactView {
     attachmentId: "",
     createdTs: 0,
     createdBy: "mira",
+    versionCount: 1,
     ...over,
   };
 }
@@ -517,3 +522,42 @@ describe("產物 popover — click-outside dismissal (T-49fb)", () => {
     await waitFor(() => expect(container.querySelector(".task-artifacts")).toBeNull());
   });
 });
+
+// T-60 — the row's 「N版」 entry. `versionCount` counts the LIVE version too, so
+// the entry exists only above 1; 0 is what an older server that never sends the
+// field reads as, and it must be as quiet as 1 rather than as loud as 2.
+describe("產物列的版本入口 (T-60)", () => {
+  it("offers the versions entry only for an artifact that HAS been replaced", async () => {
+    renderBadge([
+      mkArtifact({ id: "ta-replaced", versionCount: 3 }),
+      mkArtifact({ id: "ta-untouched", versionCount: 1 }),
+      mkArtifact({ id: "ta-oldserver", versionCount: 0 }),
+    ]);
+    fireEvent.click(screen.getByTestId("task-artifacts-badge"));
+    await waitFor(() =>
+      expect(screen.getByTestId("task-artifact-versions-ta-replaced")).toBeTruthy(),
+    );
+    expect(screen.queryByTestId("task-artifact-versions-ta-untouched")).toBeNull();
+    expect(screen.queryByTestId("task-artifact-versions-ta-oldserver")).toBeNull();
+  });
+
+  it("opens the version reader and keeps the panel open while it is up", async () => {
+    renderBadge([mkArtifact({ id: "ta-replaced", versionCount: 2 })]);
+    fireEvent.click(screen.getByTestId("task-artifacts-badge"));
+    fireEvent.click(await screen.findByTestId("task-artifact-versions-ta-replaced"));
+    const modal = await screen.findByTestId("ta-versions-modal");
+
+    // The reader portals to document.body, so the popover's click-outside
+    // handler no longer contains it — a mousedown anywhere in the reader would
+    // close the artifacts panel out from under it without the matching arm.
+    fireEvent.mouseDown(modal);
+    expect(screen.getByTestId("ta-versions-modal")).toBeTruthy();
+    expect(screen.getByText(t_panelTitle())).toBeTruthy();
+  });
+});
+
+/** The panel's own title, read from the dictionary rather than retyped — this
+ * file asserts the panel is still MOUNTED, not what it is called. */
+function t_panelTitle(): string {
+  return zh.tasks.artifacts.panelTitle;
+}

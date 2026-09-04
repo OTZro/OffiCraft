@@ -1526,6 +1526,30 @@ MATRIX: dict[str, Route] = {
         requires="machine",
         path=lambda ctx, _i: f"/api/tasks/{_matrix_task(ctx)}/artifacts",
     ),
+    "POST /api/tasks/{task_id}/artifact/{artifact_id}/replace": Route(
+        # T-60: the third verb on the same set carries the same model as add and
+        # remove — the executing agent replaces its own task's deliverables
+        # (agent B on agent A's task → 403); admin capability drives any task.
+        # A link replacement needs no upload, so every at-floor face lands on a
+        # FRESH scratch artifact.
+        requires="agent",
+        overrides={"agent_other": 403},
+        path=lambda ctx, _i: "/api/tasks/{}/artifact/{}/replace".format(
+            *_matrix_task_artifact(ctx)),
+        body={"url": "https://example.com/pr/2", "label": "conf PR v2"},
+    ),
+    "GET /api/tasks/{task_id}/artifact/{artifact_id}/history": Route(
+        # T-60: the version list is cockpit-only (off MCP) and, unlike the three
+        # write verbs on the same set, carries NO executor guard — agent B reads
+        # agent A's version list (200). Owner ruling: GET /api/tasks/{task_id}
+        # makes no caller distinction at all and its response already carries the
+        # artifact set, so gating the history would leave one door refusing what
+        # the other hands over. The route floor (agent) is unchanged, so the
+        # below-floor cells are still the derived 403.
+        requires="agent",
+        path=lambda ctx, _i: "/api/tasks/{}/artifact/{}/history".format(
+            *_matrix_task_artifact(ctx)),
+    ),
     # ── outsource panel (M3) ────────────────────────────────────────────────
     "GET /api/outsource-workers": Route(requires="machine"),
     "GET /api/outsource-workers/{id}": Route(

@@ -4,12 +4,19 @@
 // fabricating a file/image.
 
 import { describe, it, expect } from "vitest";
-import { toTask, toTaskListItem, toTaskArtifact, toTaskArtifactRef } from "./mappers";
+import {
+  toTask,
+  toTaskListItem,
+  toTaskArtifact,
+  toTaskArtifactRef,
+  toTaskArtifactVersion,
+} from "./mappers";
 import type {
   WireTask,
   WireTaskListItem,
   WireTaskArtifact,
   WireTaskArtifactRef,
+  WireTaskArtifactVersion,
 } from "./wire";
 
 // The generated wire types carry every field (server response DTO is handwritten
@@ -18,6 +25,25 @@ import type {
 function wireArtifact(over: Partial<WireTaskArtifact>): WireTaskArtifact {
   return {
     id: "ta-0",
+    kind: "link",
+    url: "",
+    label: "",
+    filename: "",
+    mime: "",
+    is_image: false,
+    attachment_id: "",
+    created_ts: 0,
+    created_by: "",
+    version_count: 1,
+    ...over,
+  };
+}
+
+function wireVersion(
+  over: Partial<WireTaskArtifactVersion>,
+): WireTaskArtifactVersion {
+  return {
+    id: 1,
     kind: "link",
     url: "",
     label: "",
@@ -152,6 +178,67 @@ describe("toTaskArtifact", () => {
 
   it("falls back an unknown kind to link (the no-blob shape)", () => {
     expect(toTaskArtifact(wireArtifact({ id: "ta-3", kind: "video" })).kind).toBe("link");
+  });
+
+  it("carries version_count so the row can offer a versions entry", () => {
+    expect(toTaskArtifact(wireArtifact({ version_count: 4 })).versionCount).toBe(4);
+  });
+
+  it("reads an absent version_count as 0, not as one version", () => {
+    const { version_count: _dropped, ...withoutTheField } = wireArtifact({});
+    expect(
+      toTaskArtifact(withoutTheField as WireTaskArtifact).versionCount,
+    ).toBe(0);
+  });
+});
+
+describe("toTaskArtifactVersion", () => {
+  it("passes a retained version through honestly", () => {
+    expect(
+      toTaskArtifactVersion(
+        wireVersion({
+          id: 7,
+          kind: "file",
+          url: "/api/chat/attachment/att-old",
+          attachment_id: "att-old",
+          label: "",
+          filename: "v1.pdf",
+          mime: "application/pdf",
+          is_image: false,
+          created_ts: 1700,
+          created_by: "mira",
+        }),
+      ),
+    ).toEqual({
+      id: 7,
+      kind: "file",
+      url: "/api/chat/attachment/att-old",
+      attachmentId: "att-old",
+      label: "",
+      filename: "v1.pdf",
+      mime: "application/pdf",
+      isImage: false,
+      createdTs: 1700,
+      createdBy: "mira",
+    });
+  });
+
+  it("reads a missing filename as empty rather than undefined", () => {
+    const { filename: _dropped, ...withoutTheField } = wireVersion({});
+    expect(
+      toTaskArtifactVersion(withoutTheField as WireTaskArtifactVersion).filename,
+    ).toBe("");
+  });
+
+  it("falls back an unknown kind to link (the no-blob shape)", () => {
+    expect(toTaskArtifactVersion(wireVersion({ kind: "video" })).kind).toBe("link");
+  });
+
+  it("reads an image version's is_image rather than deriving it", () => {
+    const v = toTaskArtifactVersion(
+      wireVersion({ kind: "image", mime: "image/png", is_image: true }),
+    );
+    expect([v.mime, v.isImage]).toEqual(["image/png", true]);
   });
 });
 

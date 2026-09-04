@@ -582,6 +582,38 @@ export interface TaskArtifactView {
   attachmentId: string;
   createdTs: number;
   createdBy: string;
+  /** How many versions this deliverable has, the LIVE one INCLUDED (T-60) — 1
+   * for one that has never been replaced, and bounded above because only the
+   * most recent few replaced versions are retained.
+   *
+   * 0 is NOT "no versions": it is what an older server that never sends the
+   * field reads as (the wire default). Both readings say the same thing to the
+   * screen — there is nothing to list — so the versions entry keys on `> 1`,
+   * never on `!== 1`. */
+  versionCount: number;
+}
+
+/** ONE retained PREVIOUS version of a pinned deliverable (T-60), in view-model
+ * form — what the artifact pointed at before a replace, newest first.
+ *
+ * It carries the version WHOLE (a blob id or a url, plus a label); `id` is the
+ * version's own row id and `kind` always equals the live artifact's, which
+ * cannot change across versions. `url`, `mime`, `filename` and `isImage` are
+ * that version's OWN facts, resolved by the server from the retained blob the
+ * same way the live artifact's are — a file/image version's `url` is the blob
+ * serve path (never empty while the blob is alive), and the mime is this
+ * version's, never the live row's. */
+export interface TaskArtifactVersionView {
+  id: number;
+  kind: "file" | "image" | "link";
+  url: string;
+  label: string;
+  filename: string;
+  mime: string;
+  isImage: boolean;
+  attachmentId: string;
+  createdTs: number;
+  createdBy: string;
 }
 
 /** One LIVE outsource worker (anonymous, task-bound). The tasks page resolves
@@ -2149,9 +2181,28 @@ export interface Api {
    * agent PINS via MCP but does not remove). The write answers with a bounded
    * receipt (T-a98d), so nothing is returned here — refetch, or take the SSE
    * delta. Unknown task/artifact → 404, wrong-task → 400 (both throw
-   * ApiError). The referenced blob is left intact.
+   * ApiError). The live blob is left intact, but every retained version of the
+   * artifact is deleted with it, along with the blobs only those versions used.
    */
   removeTaskArtifact(taskId: string, artifactId: string): Promise<void>;
+
+  /**
+   * List the retained PREVIOUS versions of one pinned deliverable, newest
+   * first (`GET /api/tasks/{taskId}/artifact/{artifactId}/history`, T-60) —
+   * cockpit-only, and deliberately not an MCP tool.
+   *
+   * READ-ONLY BY DESIGN: there is no restore face anywhere on this seam. An
+   * older version comes back by replacing FORWARD with it, which is the
+   * executing agent's write, not the cockpit's.
+   *
+   * An artifact that has never been replaced answers with an empty list — the
+   * honest "nothing has been replaced here". Unknown task/artifact → 404,
+   * wrong-task → 400 (both throw through the shared envelope).
+   */
+  listTaskArtifactVersions(
+    taskId: string,
+    artifactId: string,
+  ): Promise<TaskArtifactVersionView[]>;
   /**
    * The task-card message box (`POST /api/tasks/{id}/message`): the server
    * posts ONE ordinary chat message owner → the task's executor with the task

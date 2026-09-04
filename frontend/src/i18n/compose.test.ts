@@ -46,6 +46,17 @@ const EXPECTED: [Lang, string, (string | number | string[] | number[])[], string
     ["zh", "taskMarkDuplicateBody", ["T-1234"], "把「T-1234」標記為某張原票的重複?任務將移入已結束區、無法恢復。請選擇原票:"],
     ["zh", "taskDuplicateOf", ["T-9999"], "重複於 T-9999"],
     ["zh", "taskReassignTitle", ["T-1234"], "轉派 T-1234"],
+    // T-60 — the artifact version reader's four. The count is the `sp` case
+    // again (zh runs the characters together, en needs the space), and it is
+    // only ever printed for n > 1, so there is no singular rendering to pin.
+    ["zh", "taskArtifactVersionCount", [3], "3版"],
+    ["en", "taskArtifactVersionCount", [3], "3 versions"],
+    ["zh", "taskArtifactVersionLabel", ["7/13 09:05"], "版本 7/13 09:05"],
+    ["en", "taskArtifactVersionLabel", ["7/13 09:05"], "Version 7/13 09:05"],
+    ["zh", "taskArtifactVersionBy", ["mira"], "修改者 mira"],
+    ["en", "taskArtifactVersionBy", ["mira"], "by mira"],
+    ["zh", "taskArtifactOpaque", ["image/png"], "這不是文字檔(image/png),只能切換前後各看一次。"],
+    ["en", "taskArtifactOpaque", ["image/png"], "Not a text file (image/png) — look at the two versions one at a time instead."],
     ["zh", "replyWaited", ["3 小時"], "已等你 3 小時"],
     ["zh", "replyOpenedAt", ["7/13 09:05"], "開卡 7/13 09:05"],
     ["zh", "replyAnsweredAt", ["7/13 09:05"], "已回覆 7/13 09:05"],
