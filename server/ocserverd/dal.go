@@ -290,64 +290,47 @@ func scanMember(row interface{ Scan(...any) error }) (Member, error) {
 	return m, nil
 }
 
-// ListMembers returns the STAFF roster (ANY roster_status — soft-removed rows
-// included; callers filter, mirroring repository.list_members). kind='outsource'
-// rows are EXCLUDED by design (A案 P7d): the merged storage keeps outsource
-// members out of the member-surface folds that still run through THIS
-// function, so their behaviour matches the pre-merge two-table world. The
-// outsource projection reads them through ListOutsourceWorkers (dal_tasks.go).
+// ListMembers returns the WHOLE roster — every kind (staff, warden AND
+// kind='outsource'), at ANY roster_status (soft-removed rows included; callers
+// filter). One query, one member population.
 //
-// Callers are NOT limited to the obvious lifecycle folds (reconcile.go,
-// api_monitoring.go, the role/machine folds, worker_spawn's staff scans).
-// Two live in api_chat.go and are easy to miss:
-//   - the chat-gallery names table (HandleListChatAttachments…): outsource
-//     rows are absent, so every outsource sender's from_name goes out BLANK.
-//     That is the whole reason ChatGalleryPanel takes a `resolveSender` prop
-//     — it is NOT dead code, and deleting it re-prints raw ow- ids.
-//   - the unread-count total (HandleChatUnreadCount…), which unions this
-//     staff list with ListOutsourceWorkers to decide which senders still
-//     count.
+// 🔴 IT USED TO CARRY `WHERE kind != 'outsource'`, AND THAT CLAUSE IS GONE
+// (T-14 項目 6). Two things follow, and the second is the one that bites:
 //
-// Treat the list above as illustrative, not exhaustive: grep before assuming
-// a surface does or does not see contractors.
+//  1. There is no longer a second function. `ListMembersIncludingOutsource`
+//     existed solely because this one excluded contractors; with the clause
+//     lifted the two queries were literally the same SELECT, so the twin was
+//     deleted and its seven call sites now name this one. Nothing about those
+//     seven changed — they always saw outsource rows.
 //
-// ⚠️ NOT "every member surface" any more. The REST list
-// (HandleListMembersApiMembersGet) and the waking agent's floor roster
-// (resumeFloorParts, api_chat.go) both call ListMembersIncludingOutsource
-// instead, so ow- rows DO appear in the wire roster and in boot context.
-// Behavioural roster convergence is a later, owner-gated step.
+//  2. EVERY OTHER CALLER NOW SEES ROWS IT NEVER SAW BEFORE. If you are reading
+//     this because you are about to add a call site: this function does NOT
+//     hand you "the staff". Decide, at YOUR call site, whether a contractor
+//     row belongs in your fold, and if it does not, say so in code. A
+//     lifecycle fold asks `lifecycleTickDriverFor(m) != driverReconcile`
+//     (lifecycle_roster.go) — the named predicate that REPLACED this WHERE
+//     clause, so the split is falsifiable by a parity test instead of being a
+//     property of a SQL string in this file. A non-lifecycle fold that
+//     genuinely wants staff only writes the kind test it means, next to the
+//     reason it means it. And a fold that filters NOTHING is a decision too —
+//     make it on purpose.
+//
+//     🔴 THE AUDIT OF TODAY'S CALL SITES IS NOT IN THIS COMMENT. It is
+//     listMembersCallSiteLedger in roster_widening_ledger_t14i6_test.go: one
+//     row per call site, saying whether PR ② widened it and what that fold
+//     does with a contractor row. It lives there because an enumeration
+//     written HERE is one nothing can check —
+//     TestListMembersCallSitesAreEachOnTheRecord joins the ledger against an
+//     AST scan in BOTH directions, so a caller with no row fails by name and a
+//     row with no caller fails by name. This paragraph used to carry the list
+//     itself, and it had already gone stale: it named three sites and did not
+//     mention reconcile.go's dispatchIdentitySweepNow, which PR ② widened too.
+//     Add your row there; do not re-grow the list here.
+//
+// ⚠️ "In this list" still does NOT mean "a member verb resolves". resolveMember
+// (api_helpers.go) answers 404 for every ow- id under staffOnly scope, and that
+// is deliberate. The two halves are only consistent when read together.
 func (d *DAL) ListMembers() ([]Member, error) {
-	rows, err := d.rdb.Query(`SELECT ` + memberColumns +
-		` FROM member WHERE kind != 'outsource' ORDER BY name COLLATE NOCASE`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Member
-	for rows.Next() {
-		m, err := scanMember(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, m)
-	}
-	return out, rows.Err()
-}
-
-// ListMembersIncludingOutsource backs the two surfaces that deliberately SHOW
-// contractors: the GET /api/members wire list
-// (HandleListMembersApiMembersGet) and the waking agent's floor roster
-// (resumeFloorParts, api_chat.go) — so an agent already sees outsource rows in
-// the roster it boots with, not only in the REST response.
-// Reconcile and every other member-surface fold must continue using
-// ListMembers, whose outsource exclusion keeps workers out of the member FSM.
-//
-// ⚠️ Being in THIS list does not mean the member API works on the row: the
-// twin of this decision is resolveMember (api_helpers.go), which still answers
-// 404 for every ow- id. "In the roster list" ≠ "a member verb resolves" — the
-// invariant lives in the interaction of these two functions and nowhere else,
-// so neither may be changed without reading the other.
-func (d *DAL) ListMembersIncludingOutsource() ([]Member, error) {
 	rows, err := d.rdb.Query(`SELECT ` + memberColumns +
 		` FROM member ORDER BY name COLLATE NOCASE`)
 	if err != nil {
