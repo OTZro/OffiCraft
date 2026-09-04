@@ -298,15 +298,30 @@ type tokenKeyObservation struct {
 // answers — "is every machine off the outgoing key, i.e. is it safe to press
 // remove" — gates an IMMEDIATE, un-grace-periodded revocation, so an answer a
 // machine could assert would be an answer a stale or hostile machine could
-// assert. A machine that has not authenticated since the rotation simply keeps
-// its old value, which reads honestly as "nothing has proved this one moved".
+// assert. A machine that has not connected since the rotation simply keeps its
+// old value, which reads honestly as "nothing has proved this one moved".
 //
-// 🔴 ONLY A CHANGE REACHES THE DATABASE, AND THE MEMO IS THE ONLY THING THAT
-// MAKES THAT TRUE. This runs on EVERY authenticated request on every gated
-// route, and the write pool is ONE connection wide (server/CLAUDE.md §7) — a
-// write per request would serialise the whole server behind a bookkeeping
-// column. The memo is process-local and lossy on purpose: a restart costs one
-// redundant write per machine and nothing else.
+// 🔴 THERE IS EXACTLY ONE NON-TEST CALL SITE AND ITS LOCATION IS THE GUARANTEE.
+// This is called from api_infra.go's SSE handler, after hub.Connect, and NOWHERE
+// ELSE — deliberately not from requireAuth, where an earlier shape had it. A
+// machine cannot choose the value, but it CAN choose which credential it
+// presents: renew-credential is zero-argument self-service, so on a gated route
+// a warden could mint a fresh credential, present it once, and be recorded as
+// converged with nothing written to disk. Observing only the stream narrows
+// "presented it" to "is running on it". api_signing_key_observation_reach_t80_
+// _test.go asserts that call-site count; read its header before adding a second.
+//
+// 🔴 ONLY A CHANGE REACHES THE DATABASE, AND THE MEMO IS WHAT MAKES THAT TRUE —
+// BUT NOT FOR THE REASON IT ORIGINALLY DID. When this ran on every gated request
+// the memo stood between a bookkeeping column and a write pool ONE connection
+// wide (server/CLAUDE.md §7). On the SSE path the traffic is far lower, so that
+// is no longer what it is buying: what it now suppresses is the RECONNECT storm
+// — a machine that drops and redials, a fleet coming back after a station
+// restart — where the observed key is unchanged every time. Do not read the
+// lower call volume as "the memo is now pointless" and delete it:
+// TestRepeatedRequestsOnAnUnchangedKeyCostNoFurtherWrites dies without it, and
+// that is the guard, not this comment. It stays process-local and lossy on
+// purpose: a restart costs one redundant write per machine and nothing else.
 //
 // 🔑 THERE IS EXACTLY ONE SUPPRESSION, DELIBERATELY. An earlier shape had two —
 // this memo AND a `if m.TokenKeyID != keyID` re-check before the write — and the

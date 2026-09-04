@@ -10,14 +10,23 @@
 -- answer it: the JWT header is a constant with no `kid`, and the server kept no
 -- per-machine record of which key verified. This column is that record.
 --
--- 🔴 IT IS AN OBSERVATION, NOT A REPORT. The value is taken at the auth gate
--- from the key that actually produced a matching HMAC (verifyJWTAnyKey →
--- requireAuth). No machine can assert it. That is deliberate: an answer a
--- machine could assert is an answer a stale, misconfigured or hostile machine
--- could assert, and this value's only job is to make a DESTRUCTIVE, immediate
--- action safe to press. A machine that has not authenticated since the rotation
--- leaves its old value here, which reads correctly as "nothing has proved this
--- one moved".
+-- 🔴 IT IS AN OBSERVATION, NOT A REPORT. The value is taken from the key that
+-- actually produced a matching HMAC (verifyJWTAnyKey), at ONE call site: the
+-- SSE handler, after hub.Connect. No machine can assert the VALUE. That is
+-- deliberate: an answer a machine could assert is an answer a stale,
+-- misconfigured or hostile machine could assert, and this value's only job is to
+-- make a DESTRUCTIVE, immediate action safe to press.
+--
+-- 🔴 WHY THE STREAM AND NOT THE AUTH GATE (it was the auth gate, and that was
+-- wrong). A machine cannot choose the value, but it CAN choose which credential
+-- it presents: renew-credential is zero-argument self-service, so on any gated
+-- route a warden could mint a fresh credential, present it once, and be recorded
+-- as converged while still RUNNING on the outgoing one with nothing written to
+-- disk. The owner would then read SAFE and press remove, and that machine drops
+-- off — the exact failure this column exists to prevent. Observing only the
+-- stream narrows "presented it" to "is running on it". A machine that has not
+-- connected since the rotation leaves its old value here, which reads correctly
+-- as "nothing has proved this one moved".
 --
 -- 🔴 NUMBER: 00080, and it is deliberately NOT one of the gaps below it.
 -- Taken 2026-09-04 by the OffiCraft developer, who swept BOTH sources

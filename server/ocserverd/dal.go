@@ -225,18 +225,32 @@ type Member struct {
 	// credential of this member's with, "" when it has never verified one.
 	//
 	// 🔴 IT IS THE STATION'S OWN OBSERVATION, NEVER A SELF-REPORT (T-80). The
-	// value is taken from verifyJWTAnyKey at the auth gate — the key that actually
-	// produced a matching HMAC — and there is no wire field, no claim and no
-	// heartbeat block a machine could use to say which key it holds. That is
-	// load-bearing rather than incidental: this column's ONLY purpose is to answer
-	// "is it safe to press remove on the outgoing key", and an answer a machine
-	// could assert would be an answer an out-of-date, wrong or hostile machine
-	// could assert. A credential that has not been presented since the last
-	// rotation therefore leaves a STALE value here, which is the honest reading:
-	// nothing has proved that machine moved.
+	// value is taken from verifyJWTAnyKey — the key that actually produced a
+	// matching HMAC — and there is no wire field, no claim and no heartbeat block
+	// a machine could use to say which key it holds. That is load-bearing rather
+	// than incidental: this column's ONLY purpose is to answer "is it safe to
+	// press remove on the outgoing key", and an answer a machine could assert
+	// would be an answer an out-of-date, wrong or hostile machine could assert.
 	//
-	// The JWT header is a constant and carries no kid, so the auth gate is the one
-	// and only moment in the process where this fact exists.
+	// 🔴 BUT "CANNOT REPORT IT" IS THE LITERAL CLAIM, NOT THE WHOLE ONE, AND THE
+	// DIFFERENCE IS WHY THE OBSERVATION MOVED. A machine cannot choose the VALUE,
+	// but it can choose WHICH CREDENTIAL IT PRESENTS: /api/machines/renew-credential
+	// is zero-argument self-service, so a warden can mint a fresh credential and
+	// present it ONCE while continuing to run on the old one. Recorded at the auth
+	// gate that was enough to read as converged with nothing written to disk —
+	// which is the exact failure this ticket exists to abolish, rebuilt by the
+	// mechanism meant to abolish it. So the observation is taken at ONE place, in
+	// api_infra.go's SSE handler after hub.Connect: the credential the process is
+	// actually RUNNING ON, not one it merely showed us. The residual is honest and
+	// bounded — presenting a fresh credential on a stream you then keep open is
+	// running on it, and doing it repeatedly costs a whole connection each time.
+	//
+	// A credential that has not been presented on a stream since the last rotation
+	// therefore leaves a STALE value here, which is the honest reading: nothing has
+	// proved that machine moved.
+	//
+	// The JWT header is a constant and carries no kid, so credential verification
+	// is the one and only moment in the process where this fact exists at all.
 	//
 	// Written through SetMemberTokenKeyID only; a whole-row write carries it on
 	// INSERT but never onto an existing row (mfTokenKeyID declares it insertOnly),
