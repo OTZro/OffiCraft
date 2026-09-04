@@ -1059,6 +1059,23 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 	}
 	var members []Member
 	for _, m := range all {
+		// 🔴 WHOSE ROW IS THIS. Asked with the SAME named predicate the two
+		// lifecycle halves ask (lifecycle_roster.go), not with a hand-written
+		// `m.Kind != KindOutsource`: identical today, but a second hand-written
+		// copy re-splits the definition PR ① just unified, and asking by name is
+		// what puts this handler under the parity test's coverage.
+		//
+		// It is NOT redundant with the worker loop further down. `all` is now the
+		// WHOLE member table (T-14 項目 6 deleted ListMembers'
+		// `WHERE kind != 'outsource'`), and every live contractor ALSO arrives
+		// off ListOutsourceWorkers below. Without this `continue` each one enters
+		// `actors` and `sources` twice, on the same host key — the machine card
+		// reads one agent too many and the sessions list carries two rows under
+		// one id. Pinned by
+		// TestGetMonitoring_LiveContractorCountsAsOneAgentNotTwo.
+		if lifecycleTickDriverFor(m) != driverReconcile {
+			continue
+		}
 		if m.RosterStatus != RosterStatusRemoved {
 			members = append(members, m)
 		}
@@ -1103,8 +1120,9 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 
 	// actors = members ∪ LIVE outsource workers. The three VALUE folds below
 	// (machine attribution / rate-limit windows / cost) run over THIS list, not
-	// over `members` alone — `dal.ListMembers()` is `WHERE kind != 'outsource'`,
-	// so a member-only fold cannot see a single outsource session.
+	// over `members` alone — `members` is the DRIVER-FILTERED roster read (see
+	// the guard at the top of this handler), so a member-only fold cannot see a
+	// single outsource session.
 	//
 	// That was the owner-reported bug (T-fc2f): the accounts overview HAPPILY
 	// grew a row for an outsource-held key — the raw-key loop further down scans
@@ -1118,9 +1136,19 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 	// (T-69bc / 2eb6590 — an account must never be borrowed from an older
 	// runtime). This only fixes WHICH actors get asked.
 	//
-	// Members and workers are disjoint by construction (kind != 'outsource' vs
-	// kind = 'outsource'), so each actor — and each actor's banked_cost —
-	// contributes exactly once.
+	// 🔴 MEMBERS AND WORKERS ARE DISJOINT BECAUSE OF THE GUARD AT THE TOP OF THIS
+	// HANDLER, AND NOTHING ELSE. This used to be true "by construction": the
+	// roster read itself was `WHERE kind != 'outsource'`, so the two sets could
+	// not overlap however this fold was written. T-14 項目 6 deleted that clause,
+	// and `members` is now disjoint from `workers` only because the loop that
+	// builds it drops every row lifecycleTickDriverFor sends to the outsource
+	// half. Remove that `continue` and each LIVE contractor enters `actors`
+	// TWICE — once off its member row, once off its worker row, both resolving
+	// to the SAME host expression — which lands as `agents: N+1` on the machine
+	// card for a box that gained no agent, and as a duplicate `sessions` row
+	// under one id. (Neither doubles MONEY: acctCost comes from
+	// ListAccountSpend() below, not from a per-actor sum.) Pinned by
+	// TestGetMonitoring_LiveContractorCountsAsOneAgentNotTwo.
 	// ⚠️ KNOWN, DELIBERATELY NOT ADDRESSED HERE (registered as separate scope).
 	// `actors` grows MONOTONICALLY with every task this station has ever run.
 	// Two facts combine: ListOutsourceWorkers returns every kind='outsource'
@@ -1154,9 +1182,16 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 	// actually controls this growth is which workers enter `actors`, and that
 	// lever is deliberately set to "all of them" for the reasons above.
 	//
-	// What I checked: the arithmetic stays CORRECT — acctCost is a sum, and each
-	// row contributes its own live+banked exactly once, so no total drifts as
-	// the set grows. What I did NOT check: whether this handler's per-request
+	// What I checked, and WHEN: on the revision where acctCost really was a
+	// per-actor sum, each row contributed its own live+banked exactly once, so no
+	// total drifted as the set grew. ⚠️ THAT IS NO LONGER WHERE acctCost COMES
+	// FROM. Since T-53 it is read whole from ListAccountSpend() (a durable
+	// per-account accumulator, further down this function) and the actor loop
+	// does not add to it at all — so this paragraph is a note about a fold that
+	// no longer exists, kept only so nobody reads its "checked" as covering
+	// today's cost path. It does not, and it is not evidence that any other
+	// per-actor quantity (agents, sessions) is exactly-once; those have their own
+	// guard, named above. What I did NOT check: whether this handler's per-request
 	// cost (it is O(actors) on every GET /api/monitoring, with a DB read of the
 	// full worker table) stays acceptable after months of traffic, nor whether
 	// anything downstream assumes the actor set or the machines list is bounded.

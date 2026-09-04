@@ -2789,12 +2789,12 @@ func (s *apiServer) runReconcileTick(now float64) {
 	for _, m := range all {
 		// WHICH HALF drives this row (lifecycle_roster.go), asked BEFORE the
 		// entry filter — "is this mine to decide" comes before "should it
-		// exist". A NO-OP TODAY, deliberately: ListMembers' `WHERE kind !=
-		// 'outsource'` already guarantees the answer here is driverReconcile for
-		// every row in `all`. It is the structural stand-in for that WHERE
-		// clause, put in place BEFORE the clause is merged away, so the split
-		// between the two halves survives the merge as something the parity test
-		// can falsify rather than as a property of a query in another file.
+		// exist". 🔴 NOT a no-op any more: ListMembers' `WHERE kind !=
+		// 'outsource'` is GONE (T-14 項目 6), so `all` genuinely contains
+		// contractor rows and THIS LINE is the only thing keeping them out of the
+		// member FSM. Deleting it re-creates the measured double-drive recorded
+		// on lifecycleTickDriverFor: one row taking a `start` from both halves in
+		// the same tick.
 		if lifecycleTickDriverFor(m) != driverReconcile {
 			continue
 		}
@@ -2852,6 +2852,26 @@ func (s *apiServer) reconcileMemberNow(memberID string) reconcileDecision {
 	defer s.reconcileMu.Unlock()
 	m, err := s.dal.GetMember(memberID)
 	if err != nil || m == nil {
+		return reconcileDecision{}
+	}
+	// WHICH HALF drives this row — the SAME question runReconcileTick asks at
+	// the head of its candidate loop, asked here too so that the answer is a
+	// property of THIS FUNCTION rather than a coincidence in its callers.
+	//
+	// This door reads GetMember, not ListMembers, so T-14 項目 6 did not widen
+	// it — but it never narrowed it either: every one of the seven non-test
+	// callers happens to hand it a staff row (api_members ×5 via
+	// resolveMember(…, staffOnly), api_machines via resolveMachine which demands
+	// kind==warden, onboarding with the seed assistant's own id), so the guard
+	// that keeps a contractor out of the member FSM on the EVENT-DRIVEN path
+	// lived in seven argument lists across two other files. That is not a
+	// no-op that can be deleted: it is a no-op that can be UNDONE by a future
+	// caller passing anyMember — and api_members.go:790 / api_machines.go:1280
+	// already do exactly that elsewhere, so the precedent for widening exists.
+	// With the clause gone, a contractor reaching here would take a `start`
+	// from the member FSM while the outsource half takes its own — the measured
+	// double-drive recorded on lifecycleTickDriverFor (lifecycle_roster.go).
+	if lifecycleTickDriverFor(*m) != driverReconcile {
 		return reconcileDecision{}
 	}
 	// THE entry filter, the same one the cadence asks (lifecycle_roster.go).

@@ -695,6 +695,24 @@ def _happy_task_step(ctx: HCtx) -> tuple[str, str]:
     return task_id, step_id
 
 
+_HAPPY_STEP_NOTE = "conf happy single-step note — 做到哪、下一步接什麼"
+
+
+def _happy_step_with_note(ctx: HCtx) -> str:
+    """A fresh task+step whose note has been WRITTEN through the real write
+    face, so the single-step read has something non-empty to prove it serves
+    (T-66). Reading back a blank note would pass against a handler that never
+    looked at the column."""
+    task_id, step_id = _happy_task_step(ctx)
+    r = ctx.client.post(
+        f"/api/tasks/{task_id}/steps/{step_id}/note",
+        json={"note": _HAPPY_STEP_NOTE},
+        headers=_auth(ctx.agent.token),
+    )
+    assert r.status_code == 200, f"happy note seed failed: {r.status_code} {r.text}"
+    return f"/api/tasks/{task_id}/steps/{step_id}"
+
+
 def _happy_closed_task(ctx: HCtx) -> str:
     """A fresh DONE task the happy agent executed (close-out targets are
     terminal-only). Task status is DERIVED (T-9ca5): a one-step plan reported
@@ -739,6 +757,105 @@ def _happy_reassigning_task(ctx: HCtx) -> str:
     assert r.status_code == 200, f"happy reassign failed: {r.status_code} {r.text}"
     assert r.json()["lock"] == "reassigning", r.text
     return task_id
+
+
+# The artifact id the replace row was aimed at, stashed by its path builder so
+# the row's check can assert the write ANSWERED with the same id — a replace
+# that minted a new one would otherwise pass on shape alone.
+_REPLACE_TARGET: dict[str, str] = {}
+
+
+def _happy_replaceable_artifact(ctx: HCtx) -> tuple[str, str]:
+    """A fresh task with one link artifact pinned; (task_id, artifact_id) — the
+    replace target."""
+    task_id, artifact_id = _happy_task_artifact(ctx)
+    _REPLACE_TARGET["id"] = artifact_id
+    return task_id, artifact_id
+
+
+def _happy_replaced_artifact(ctx: HCtx) -> tuple[str, str]:
+    """The same, already replaced once — so its version list has exactly one
+    retained entry to list."""
+    task_id, artifact_id = _happy_task_artifact(ctx)
+    r = ctx.client.post(
+        f"/api/tasks/{task_id}/artifact/{artifact_id}/replace",
+        json={"url": "https://example.com/pr/2"},
+        headers=_auth(ctx.agent.token),
+    )
+    assert r.status_code == 200, f"happy replace failed: {r.status_code} {r.text}"
+    return task_id, artifact_id
+
+
+# The blob the FILE version row was replaced away from, stashed by its path
+# builder so the row's check can assert the version's url addresses THAT blob.
+_REPLACED_FILE: dict[str, str] = {}
+
+
+def _happy_replaced_file_artifact(ctx: HCtx) -> tuple[str, str]:
+    """A FILE deliverable, already replaced once — the shape the version list
+    actually holds (agent-written reports and logs), and the one whose wire the
+    row's own `url` column cannot serve: it is empty for file/image, so a version
+    projection that copied it left every retained report unreachable.
+
+    Uploaded as `application/octet-stream` under a .md name because that is what
+    the agent upload path produces for a report."""
+    blobs = []
+    for n in (1, 2):
+        r = ctx.client.post(
+            "/api/chat",
+            json={
+                "to": ctx.agent.member_id,
+                "body": f"conf artifact report {n}",
+                "attachments": [
+                    {
+                        "data_b64": base64.b64encode(
+                            f"# conf report {n}\n".encode()
+                        ).decode(),
+                        "filename": "report.md",
+                        "mime": "application/octet-stream",
+                    }
+                ],
+            },
+            headers=_auth(ctx.owner_token),
+        )
+        assert r.status_code == 200, f"happy report seed failed: {r.text}"
+        blobs.append(r.json()["attachments"][0]["id"])
+
+    task_id = _happy_task(ctx)
+    r = ctx.client.post(
+        f"/api/tasks/{task_id}/artifact",
+        json={"kind": "file", "attachment_id": blobs[0]},
+        headers=_auth(ctx.agent.token),
+    )
+    assert r.status_code == 200, f"happy file artifact failed: {r.text}"
+    artifact_id = r.json()["artifact_id"]
+    r = ctx.client.post(
+        f"/api/tasks/{task_id}/artifact/{artifact_id}/replace",
+        json={"attachment_id": blobs[1]},
+        headers=_auth(ctx.agent.token),
+    )
+    assert r.status_code == 200, f"happy file replace failed: {r.text}"
+    _REPLACED_FILE["attachment_id"] = blobs[0]
+
+    # The link shape stays covered on the real wire even though the row now
+    # checks a file: a link version's url IS the row's own external url, which
+    # is the control that stops the blob rewrite from applying to every kind.
+    link_task, link_art = _happy_replaced_artifact(ctx)
+    r = ctx.client.get(
+        f"/api/tasks/{link_task}/artifact/{link_art}/history",
+        headers=_auth(ctx.agent.token),
+    )
+    assert r.status_code == 200, f"link history failed: {r.text}"
+    link_versions = r.json()
+    assert (
+        len(link_versions) == 1
+        and link_versions[0]["kind"] == "link"
+        and link_versions[0]["url"] == "https://example.com/pr/1"
+        and link_versions[0]["mime"] == ""
+        and link_versions[0]["is_image"] is False
+    ), f"a link version keeps its external url and describes no blob: {link_versions}"
+
+    return task_id, artifact_id
 
 
 def _happy_task_artifact(ctx: HCtx) -> tuple[str, str]:
@@ -2073,6 +2190,23 @@ HAPPY: dict[str, Happy] = {
             and d["note"] == "conf happy note patch",
         ),
     ),
+    "GET /api/tasks/{task_id}/steps/{step_id}": Happy(
+        # T-66: the single-step read. The check is on the VALUE that came back,
+        # not on the shape: a note is written through the real write face first
+        # and this row asserts the same text comes out, plus the self-declared
+        # detail_level="full" that tells a caller this response is the whole
+        # step. A handler that answered the summary projection (no note) or
+        # forgot the marker cannot pass.
+        identity="agent",
+        path=_happy_step_with_note,
+        check=lambda _c, r: _expect(
+            r,
+            lambda d: d["detail_level"] == "full"
+            and d["note"] == _HAPPY_STEP_NOTE
+            and d["note_size_chars"] == len(_HAPPY_STEP_NOTE)
+            and d["note_cap_chars"] > 0,
+        ),
+    ),
     "POST /api/tasks/{task_id}/deps": Happy(
         identity="agent",
         path=lambda ctx: f"/api/tasks/{_happy_task(ctx)}/deps",
@@ -2116,6 +2250,69 @@ HAPPY: dict[str, Happy] = {
         path=lambda ctx: "/api/tasks/{}/artifact/{}".format(
             *_happy_task_artifact(ctx)),
         check=lambda _c, r: _expect(r, lambda d: d["artifact_count"] == 0),
+    ),
+    "GET /api/tasks/{task_id}/artifacts": Happy(
+        # T-66: the full-artifact read. The check is on the VALUES that came
+        # back, not on the shape — the artifact is pinned through the real write
+        # face first and this row asserts the same url/label/kind come out,
+        # plus the self-declared artifacts_detail_level="full" that tells a
+        # caller this response is the whole row. A handler that answered the
+        # id+label INDEX the task view carries (no url, no kind) cannot pass,
+        # and neither can one that forgot the marker.
+        identity="agent",
+        path=lambda ctx: "/api/tasks/{}/artifacts".format(
+            *_happy_task_artifact(ctx)),
+        check=lambda _c, r: _expect(
+            r,
+            lambda d: d["artifacts_detail_level"] == "full"
+            and len(d["artifacts"]) == 1
+            and d["artifacts"][0]["kind"] == "link"
+            and d["artifacts"][0]["url"] == "https://example.com/pr/1"
+            and d["artifacts"][0]["label"] == "conf PR"
+            and d["artifacts"][0]["created_ts"] > 0,
+        ),
+    ),
+    "POST /api/tasks/{task_id}/artifact/{artifact_id}/replace": Happy(
+        # T-60: the executing agent swaps a pinned deliverable's content while
+        # its id stays put. The check reads the id back out of the receipt and
+        # compares it with the one the fixture pinned — a replace that minted a
+        # new artifact (remove+add under another name) would pass a status check
+        # and fail here, which is the whole reason the verb exists.
+        identity="agent",
+        path=lambda ctx: "/api/tasks/{}/artifact/{}/replace".format(
+            *_happy_replaceable_artifact(ctx)),
+        body={"url": "https://example.com/pr/2", "label": "conf PR v2"},
+        check=lambda _c, r: _expect(
+            r,
+            lambda d: d["artifact_id"] == _REPLACE_TARGET["id"]
+            and d["artifact_count"] == 1
+            and d["version_count"] == 2,
+        ),
+    ),
+    "GET /api/tasks/{task_id}/artifact/{artifact_id}/history": Happy(
+        # T-60: the version list of an artifact that has just been replaced —
+        # exactly one retained version, carrying what the live row held before.
+        #
+        # The seed is a FILE deliverable on purpose. A link version's url is the
+        # row's own column and passes on a projection that copies the row; a
+        # file's is NOT — the column is empty for file/image, and the reachable
+        # address is the retained blob's serve path. Running this row against a
+        # link therefore proved nothing about the class this journal mostly
+        # holds, and every retained report read as gone on the real wire.
+        identity="agent",
+        path=lambda ctx: "/api/tasks/{}/artifact/{}/history".format(
+            *_happy_replaced_file_artifact(ctx)),
+        check=lambda _c, r: _expect(
+            r,
+            lambda d: len(d) == 1
+            and d[0]["kind"] == "file"
+            and d[0]["url"]
+            == f"/api/chat/attachment/{_REPLACED_FILE['attachment_id']}"
+            and d[0]["attachment_id"] == _REPLACED_FILE["attachment_id"]
+            and d[0]["mime"] == "application/octet-stream"
+            and d[0]["is_image"] is False
+            and d[0]["filename"] == "report.md",
+        ),
     ),
     # ── outsource panel (M3) ─────────────────────────────────────────────────
     "GET /api/outsource-workers": Happy(

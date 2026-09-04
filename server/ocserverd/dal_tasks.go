@@ -646,6 +646,52 @@ func (d *DAL) AllTaskStepProgress() (map[string]TaskStepProgress, error) {
 	return out, rows.Err()
 }
 
+// TaskCurrentStep is the (id, name) of a task's CURRENT step — the light task
+// list's pointer at the working node. Deliberately just the two display fields:
+// the list projection must never load the steps' fat dod text (that is what
+// get_task is for), so this carries no more of the row than the card prints.
+type TaskCurrentStep struct {
+	ID   string
+	Name string
+}
+
+// AllTaskCurrentStep returns every task's CURRENT step in ONE grouped query —
+// the light-list twin of domain.CurrentStep (keep them agreeing), and the same
+// shape as AllTaskStepProgress: one statement for the whole population, so a
+// list request stays a CONSTANT number of queries no matter how many tasks come
+// back. A per-task ListTaskSteps here would be an N+1 on an UNCAPPED endpoint.
+//
+// "Current" = the first non-TERMINAL step in timeline order (order_idx, id);
+// the `status != done AND status != superseded` filter is StepIsTerminal in
+// SQL. Tasks whose plan is empty — or whose steps have all reached a terminal
+// state — are simply ABSENT from the map, which the caller reads as the zero
+// value ("", ""), matching domain.CurrentStep on []. Only id and name are
+// selected: the dod text never enters the light list.
+func (d *DAL) AllTaskCurrentStep() (map[string]TaskCurrentStep, error) {
+	rows, err := d.rdb.Query(`
+		SELECT task_id, id, name FROM (
+		  SELECT task_id, id, name,
+		         ROW_NUMBER() OVER (
+		           PARTITION BY task_id ORDER BY order_idx, id) AS rn
+		    FROM task_step
+		   WHERE status != ? AND status != ?
+		) WHERE rn = 1`, StepStatusDone, StepStatusSuperseded)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]TaskCurrentStep{}
+	for rows.Next() {
+		var taskID string
+		var cur TaskCurrentStep
+		if err := rows.Scan(&taskID, &cur.ID, &cur.Name); err != nil {
+			return nil, err
+		}
+		out[taskID] = cur
+	}
+	return out, rows.Err()
+}
+
 // GetTaskStep returns one step by id, or nil if absent.
 func (d *DAL) GetTaskStep(id string) (*TaskStep, error) {
 	row := d.rdb.QueryRow(

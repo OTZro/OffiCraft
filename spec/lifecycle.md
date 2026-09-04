@@ -877,9 +877,10 @@ ONE-SHOT, never a standing order):
   row, NOT the detail panel's Spawn, which for a `stopping` member opens the
   settings dialog and never sends activate.
 - 🔴 **These passes reach an OUTSOURCE WORKER through a projection, not through the
-  reconcile roster (T-170e).** The reconcile tick's roster read is `ListMembers`,
-  which is `kind != 'outsource'` by construction, so a worker is never offered to
-  any of them; `runOutsourceTick` calls `runWorkerLifecyclePasses`
+  reconcile roster (T-170e).** No worker row reaches the reconcile tick's decide
+  pass — until T-14 項目 6 because `ListMembers` was `kind != 'outsource'`, and since
+  then because `runReconcileTick` drops every row `lifecycleTickDriverFor` sends to
+  the other half — so a worker is never offered to any of them; `runOutsourceTick` calls `runWorkerLifecyclePasses`
   (`lifecycle_roster.go`), which projects its ACTIVE, not-held-down workers with
   `memberFromWorker` and folds the four wind-down fields back onto the worker rows.
   Until T-170e only the context pass was projected, so a worker had no token-expiry

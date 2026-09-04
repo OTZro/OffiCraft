@@ -266,7 +266,10 @@ func (s *apiServer) taskDTOOf(t Task) (taskDTO, error) {
 		return taskDTO{}, err
 	}
 	dto := newTaskDTO(t, steps, deps, s.replyCardStatusesForSteps(steps))
-	artifacts, err := s.taskArtifactDTOs(t.ID)
+	// INDEX rows only (T-66, owner c-cd063427fb2f). The full set — url,
+	// filename, mime, kind, is_image, attachment_id, created_by, created_ts —
+	// is served by taskArtifactDTOs through GET /api/tasks/{task_id}/artifacts.
+	artifacts, err := s.taskArtifactRefDTOs(t.ID)
 	if err != nil {
 		return taskDTO{}, err
 	}
@@ -310,6 +313,26 @@ func (s *apiServer) blockingTasksOf(taskID string) ([]taskDepRefDTO, error) {
 	return out, nil
 }
 
+// taskArtifactRefDTOs lists one task's artifacts as INDEX rows (id + label) —
+// what the shared task projection serves since T-66. Never nil.
+//
+// 🔴 IT DOES NOT TOUCH chat_attachment AT ALL. taskArtifactDTOs below runs one
+// GetChatAttachment per file/image row; this runs exactly one query no matter
+// how many artifacts a task has pinned, because the index carries no blob
+// metadata to resolve. That is why the slimming is a latency change on the task
+// read and not only a payload one.
+func (s *apiServer) taskArtifactRefDTOs(taskID string) ([]taskArtifactRefDTO, error) {
+	arts, err := s.dal.ListTaskArtifacts(taskID)
+	if err != nil {
+		return nil, err
+	}
+	out := []taskArtifactRefDTO{}
+	for _, a := range arts {
+		out = append(out, newTaskArtifactRefDTO(a))
+	}
+	return out, nil
+}
+
 // taskArtifactDTOs lists one task's artifacts and projects them onto the wire,
 // resolving the referenced chat_attachment blob metadata for file/image kinds
 // (link kinds carry a bare url, no blob). A missing blob resolves to nil →
@@ -317,6 +340,10 @@ func (s *apiServer) blockingTasksOf(taskID string) ([]taskDepRefDTO, error) {
 // artifact row is still shown (its label/url survive a GC'd blob).
 func (s *apiServer) taskArtifactDTOs(taskID string) ([]taskArtifactDTO, error) {
 	arts, err := s.dal.ListTaskArtifacts(taskID)
+	if err != nil {
+		return nil, err
+	}
+	retained, err := s.dal.TaskArtifactHistoryCounts(taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -329,7 +356,7 @@ func (s *apiServer) taskArtifactDTOs(taskID string) ([]taskArtifactDTO, error) {
 				return nil, err
 			}
 		}
-		out = append(out, newTaskArtifactDTO(a, att))
+		out = append(out, newTaskArtifactDTO(a, att, retained[a.ID]))
 	}
 	return out, nil
 }
@@ -871,7 +898,8 @@ func (s *apiServer) resumeTasksFor(actor string, cards map[string]ReplyCard) ([]
 		if err != nil {
 			return nil, 0, err
 		}
-		currentID, currentName := "", ""
+		// current step: the shared rule (domain.CurrentStep), not a local copy.
+		currentID, currentName := CurrentStep(steps)
 		detailChars := 0
 		answered := []resumeAnsweredCardStepDTO{}
 		for _, st := range steps {
@@ -889,11 +917,6 @@ func (s *apiServer) resumeTasksFor(actor string, cards map[string]ReplyCard) ([]
 						CardID:   st.ReplyCardID,
 					})
 				}
-			}
-			// current = the first non-TERMINAL step: a superseded row is
-			// frozen replan history, never the working node (T-1aea).
-			if currentID == "" && !StepIsTerminal(st.Status) {
-				currentID, currentName = st.ID, st.Name
 			}
 			detailChars += len([]rune(st.Name)) + len([]rune(st.DoD))
 		}
@@ -999,6 +1022,14 @@ func (s *apiServer) HandleListTasksApiTasksGet(w http.ResponseWriter, r *http.Re
 		internalError(w, err)
 		return
 	}
+	// The current-step pointer (id + name only) — a second grouped query, NOT a
+	// per-task ListTaskSteps: this endpoint is uncapped, so the step read has to
+	// cost one statement for the whole population. dod text stays out.
+	currentByTask, err := s.dal.AllTaskCurrentStep()
+	if err != nil {
+		internalError(w, err)
+		return
+	}
 	depsByTask, err := s.dal.AllTaskDeps()
 	if err != nil {
 		internalError(w, err)
@@ -1042,7 +1073,8 @@ func (s *apiServer) HandleListTasksApiTasksGet(w http.ResponseWriter, r *http.Re
 		}
 		p := progressByTask[t.ID]
 		out = append(out, newTaskListItemDTO(
-			t, depsByTask[t.ID], p.Done, p.Total, artifactCountByTask[t.ID], byID))
+			t, depsByTask[t.ID], p.Done, p.Total, artifactCountByTask[t.ID], byID,
+			currentByTask[t.ID]))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -2836,8 +2868,8 @@ func (s *apiServer) HandleReportTaskCloseoutApiTasksTaskIdCloseoutPost(w http.Re
 // ── C.4 artifact set (T-3dc5) ────────────────────────────────────────────────
 
 // POST /api/tasks/{task_id}/artifact — the executing agent pins one deliverable
-// onto the task's artifact set (MCP add_task_artifact). Append-only and
-// repeatable. file/image reference a chat_attachment blob (attachment_id from a
+// onto the task's artifact set (MCP add_task_artifact). This verb only ADDS and
+// is repeatable; swapping what an existing pin points at is ReplaceTaskArtifact. file/image reference a chat_attachment blob (attachment_id from a
 // prior POST /api/chat/attachments — one blob mechanism, not two); link carries
 // a bare url (no upload). Guard order: 400 closed-set kind → 404 task → 403 not
 // the executor (admin excepted, §14) → 409 terminal → 400 missing/dangling ref.
@@ -2852,6 +2884,18 @@ func (s *apiServer) HandleAddTaskArtifactApiTasksTaskIdArtifactPost(w http.Respo
 			"kind must be one of file, image, link")
 		return
 	}
+	// The label is a one-line NAME, so it is capped at shortLabelMaxChars runes
+	// (128 CJK characters pass — the count is not in bytes). It sits with the
+	// other body-shape 400s, ahead of the task/permission guards, because it is
+	// a fault in the request itself and does not depend on which task it names.
+	// Over-length is REFUSED, never truncated. Existing rows are untouched.
+	label := trimmedOrEmpty(body.Label)
+	if n := utf8.RuneCountInString(label); n > shortLabelMaxChars {
+		writeError(w, http.StatusBadRequest, "artifact label is "+
+			strconv.Itoa(n)+" chars, over the "+
+			strconv.Itoa(shortLabelMaxChars)+"-char limit")
+		return
+	}
 	t, err := s.resolveTask(taskId)
 	if err != nil {
 		writeResolveError(w, err, "task", taskId)
@@ -2862,15 +2906,14 @@ func (s *apiServer) HandleAddTaskArtifactApiTasksTaskIdArtifactPost(w http.Respo
 		return
 	}
 	if TaskIsTerminal(t.Status) {
-		writeError(w, http.StatusConflict,
-			"task '"+taskId+"' is closed ("+t.Status+") — its deliverables are frozen")
+		writeError(w, http.StatusConflict, taskFrozenDeliverablesRefusal(*t))
 		return
 	}
 	art := TaskArtifact{
 		ID:        "ta-" + newHexID(12),
 		TaskID:    t.ID,
 		Kind:      kind,
-		Label:     trimmedOrEmpty(body.Label),
+		Label:     label,
 		CreatedTS: nowSecs(),
 		// §14 caller-identity: the registrar is the verified token sub.
 		CreatedBy: currentActor(r),
@@ -2924,41 +2967,20 @@ func (s *apiServer) HandleAddTaskArtifactApiTasksTaskIdArtifactPost(w http.Respo
 // the task's executor may remove its own deliverables, admin/owner may remove on
 // any task (§14). Guard order: 404 task → 403 not the executor → 409 the task is
 // closed → 404 artifact → 400 the artifact belongs to a different task. The
-// referenced blob is left intact (it may be shared with a chat message; the blob
-// store has no delete path).
+// LIVE row's blob is left intact (it may be shared with a chat message), but the
+// delete does not stop at the live row: DeleteTaskArtifact also drops every
+// retained version of this artifact and collects the blobs only those versions
+// referenced (see dal_task_artifacts.go).
 //
-// The 409 is the SYMMETRIC twin of add's freeze (owner ruling 2026-07-25, T-2654):
-// a closed task's deliverable set is frozen in BOTH directions. It used to be
+// The 409 is the SYMMETRIC twin of add's freeze (owner ruling 2026-07-25, T-2654),
+// and since T-60 replace eats it too: a closed task's deliverable set is frozen in
+// EVERY direction. It used to be
 // add-only, which made un-pin an unrecoverable data loss — the deliverable could
 // be removed from a closed card and never put back. Like add's, this guard sits
 // after the permission check, so admin/owner are not exempt either.
 func (s *apiServer) HandleRemoveTaskArtifactApiTasksTaskIdArtifactArtifactIdDelete(w http.ResponseWriter, r *http.Request, taskId, artifactId string) {
-	t, err := s.resolveTask(taskId)
-	if err != nil {
-		writeResolveError(w, err, "task", taskId)
-		return
-	}
-	if !s.callerMayEditTaskText(r, *t) {
-		writeError(w, http.StatusForbidden, executorGuardRefusal)
-		return
-	}
-	if TaskIsTerminal(t.Status) {
-		writeError(w, http.StatusConflict,
-			"task '"+taskId+"' is closed ("+t.Status+") — its deliverables are frozen")
-		return
-	}
-	art, err := s.dal.GetTaskArtifact(artifactId)
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	if art == nil {
-		writeError(w, http.StatusNotFound, "artifact '"+artifactId+"' not found")
-		return
-	}
-	if art.TaskID != t.ID {
-		writeError(w, http.StatusBadRequest,
-			"artifact '"+artifactId+"' does not belong to task '"+taskId+"'")
+	t, _, ok := s.artifactOnTask(w, r, taskId, artifactId, artifactWrite)
+	if !ok {
 		return
 	}
 	if _, err := s.dal.DeleteTaskArtifact(artifactId); err != nil {
@@ -2967,6 +2989,242 @@ func (s *apiServer) HandleRemoveTaskArtifactApiTasksTaskIdArtifactArtifactIdDele
 	}
 	s.publishTask(*t, requestTrigger(r))
 	s.writeTaskArtifactReceipt(w, *t, artifactId)
+}
+
+// taskFrozenDeliverablesRefusal is the ONE sentence all three artifact verbs
+// refuse a closed task with. Written once because the freeze is one rule: three
+// copies could drift into telling a caller three different things about the
+// same wall (owner ruling 2026-07-25).
+func taskFrozenDeliverablesRefusal(t Task) string {
+	return "task '" + t.ID + "' is closed (" + t.Status +
+		") — its deliverables are frozen"
+}
+
+// artifactAccess says which of the two rule sets a per-artifact route is asking
+// artifactOnTask for. A named type rather than a bool because the answer is not
+// a knob but a category, and the ZERO VALUE IS THE STRICT SIDE ON PURPOSE: a
+// call site that has not declared what it is doing gets the write rules.
+type artifactAccess int
+
+const (
+	// artifactWrite — the executor guard AND the closed-task 409 both apply.
+	artifactWrite artifactAccess = iota
+	// artifactRead — neither applies.
+	artifactRead
+)
+
+// artifactOnTask resolves the (task, artifact) pair the per-artifact routes
+// address and answers every guard they share, in the ONE order the wire
+// documents for the WRITE verbs: 404 task → 403 not the executor (admin
+// excepted, §14) → 409 the task is closed → 404 artifact → 400 the artifact
+// belongs to a different task.
+//
+// 🔴 READ AND WRITE ARE DELIBERATELY ASYMMETRIC (owner ruling, T-60), and this
+// sentence is here so the next reader does not "finish the job" by making them
+// match. artifactRead runs NEITHER the executor guard NOR the freeze:
+//   - no executor guard, because CONSISTENCY IS NOT LOOSENING. The main task
+//     read (HandleGetTaskApiTasksTaskIdGet) makes no caller distinction at all
+//     and its response already carries the artifact set. Gating the version
+//     history on being the executor would mean the same deliverable is readable
+//     through one door and refused through the other — two doors disagreeing
+//     about one set of rows is the very defect this line of work is treating.
+//   - no 409, because reading a finished task's deliverables is exactly when a
+//     reader wants to.
+//
+// Writing stays the executor's responsibility, so artifactWrite keeps both. Its
+// 409 sits AFTER the permission check on purpose — admin/owner are not exempt
+// from the freeze (owner ruling 2026-07-25) — and BEFORE the artifact lookup, so
+// a frozen task answers the same 409 whether or not the caller guessed a real
+// artifact id.
+func (s *apiServer) artifactOnTask(
+	w http.ResponseWriter, r *http.Request, taskID, artifactID string, access artifactAccess,
+) (*Task, *TaskArtifact, bool) {
+	t, err := s.resolveTask(taskID)
+	if err != nil {
+		writeResolveError(w, err, "task", taskID)
+		return nil, nil, false
+	}
+	if access == artifactWrite && !s.callerMayEditTaskText(r, *t) {
+		writeError(w, http.StatusForbidden, executorGuardRefusal)
+		return nil, nil, false
+	}
+	if access == artifactWrite && TaskIsTerminal(t.Status) {
+		writeError(w, http.StatusConflict, taskFrozenDeliverablesRefusal(*t))
+		return nil, nil, false
+	}
+	art, err := s.dal.GetTaskArtifact(artifactID)
+	if err != nil {
+		internalError(w, err)
+		return nil, nil, false
+	}
+	if art == nil {
+		writeError(w, http.StatusNotFound, "artifact '"+artifactID+"' not found")
+		return nil, nil, false
+	}
+	if art.TaskID != t.ID {
+		writeError(w, http.StatusBadRequest,
+			"artifact '"+artifactID+"' does not belong to task '"+taskID+"'")
+		return nil, nil, false
+	}
+	return t, art, true
+}
+
+// POST /api/tasks/{task_id}/artifact/{artifact_id}/replace — swap ONE pinned
+// deliverable's content while its id stays put (MCP replace_task_artifact,
+// T-60). The reason the verb exists rather than remove+add: remove+add mints a
+// NEW artifact id, so every reader holding the old one is left pointing at
+// nothing — and on a task that has since closed the pair is refused outright.
+//
+// Guard order mirrors add's exactly: 404 task → 403 not the executor (admin
+// excepted, §14) → 409 terminal → 404 artifact → 400 wrong task → 400 the
+// content rules. THE 409 IS THE THIRD COPY of the same freeze (owner ruling
+// 2026-07-25): a closed task's deliverable set is frozen in EVERY direction, and
+// like add's and remove's it sits AFTER the permission check, so admin/owner are
+// not exempt. A replace verb without it would be the freeze's open back door —
+// the content of a frozen deliverable could be swapped for anything.
+//
+// KIND IS IMMUTABLE ACROSS VERSIONS. The artifact id is what does not move, and
+// a reader that resolved it as an image must not find a link there next time; a
+// caller that wants a different kind un-pins and registers a new one.
+func (s *apiServer) HandleReplaceTaskArtifactApiTasksTaskIdArtifactArtifactIdReplacePost(
+	w http.ResponseWriter, r *http.Request, taskId, artifactId string,
+) {
+	var body TaskArtifactReplaceInputDTO
+	if !decodeJSONBody(w, r, &body) {
+		return
+	}
+	t, art, ok := s.artifactOnTask(w, r, taskId, artifactId, artifactWrite)
+	if !ok {
+		return
+	}
+	if kind := trimmedOrEmpty(body.Kind); kind != "" && kind != art.Kind {
+		writeError(w, http.StatusBadRequest, artifactKindRefusal(art.Kind, kind))
+		return
+	}
+	next := TaskArtifact{
+		ID:        art.ID,
+		TaskID:    art.TaskID,
+		Kind:      art.Kind,
+		Label:     trimmedOrEmpty(body.Label),
+		CreatedTS: nowSecs(),
+		CreatedBy: currentActor(r),
+	}
+	url, attID := trimmedOrEmpty(body.Url), trimmedOrEmpty(body.AttachmentId)
+	if art.Kind == ArtifactKindLink {
+		if attID != "" {
+			writeError(w, http.StatusBadRequest,
+				artifactKindRefusal(art.Kind, ArtifactKindFile))
+			return
+		}
+		if url == "" {
+			writeError(w, http.StatusBadRequest,
+				"url is required for a link artifact")
+			return
+		}
+		next.URL = url
+	} else {
+		if url != "" {
+			writeError(w, http.StatusBadRequest,
+				artifactKindRefusal(art.Kind, ArtifactKindLink))
+			return
+		}
+		if attID == "" {
+			writeError(w, http.StatusBadRequest,
+				"attachment_id is required for a "+art.Kind+" artifact")
+			return
+		}
+		if isMemberAvatarAttachmentID(attID) {
+			writeError(w, http.StatusBadRequest,
+				"attachment '"+attID+"' is reserved for a member avatar")
+			return
+		}
+		att, err := s.dal.GetChatAttachment(attID)
+		if err != nil {
+			internalError(w, err)
+			return
+		}
+		if att == nil {
+			writeError(w, http.StatusBadRequest,
+				"attachment '"+attID+"' not found (upload it first via POST /api/chat/attachments)")
+			return
+		}
+		next.AttachmentID = attID
+	}
+	replaced, err := s.dal.ReplaceTaskArtifact(next)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	if !replaced {
+		writeError(w, http.StatusNotFound, "artifact '"+artifactId+"' not found")
+		return
+	}
+	// Same fan-out as add/remove: the artifact set rides the EXISTING task
+	// topic, and the task row itself is unchanged.
+	s.publishTask(*t, requestTrigger(r))
+	versions, err := s.dal.ListTaskArtifactHistory(art.ID)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	arts, err := s.dal.ListTaskArtifacts(t.ID)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, taskArtifactReplaceReceiptDTO{
+		TaskID: t.ID, ArtifactID: art.ID, ArtifactCount: len(arts),
+		VersionCount: len(versions) + 1,
+	})
+}
+
+// artifactKindRefusal is the one sentence every cross-kind replacement is
+// refused with — written once so the three ways to ask for one (an explicit
+// kind, a url on a file, an attachment_id on a link) cannot answer differently
+// about the same rule.
+func artifactKindRefusal(pinned, asked string) string {
+	return "artifact kind cannot change across versions: this artifact is a " +
+		pinned + " and the replacement asks for a " + asked +
+		" — un-pin it and register a new artifact instead"
+}
+
+// GET /api/tasks/{task_id}/artifact/{artifact_id}/history — the retained
+// previous versions of one deliverable, newest first (T-60). MCPExclude: the
+// agent that replaced a deliverable already knows what it replaced, and this
+// list exists for the human reading the card.
+//
+// artifactRead, so NEITHER the executor guard NOR the terminal-task guard runs
+// here — see artifactOnTask for why the asymmetry with the write verbs is the
+// point rather than an omission. There is deliberately no restore face — an
+// older version goes back by replacing FORWARD with it.
+func (s *apiServer) HandleListTaskArtifactHistoryApiTasksTaskIdArtifactArtifactIdHistoryGet(
+	w http.ResponseWriter, r *http.Request, taskId, artifactId string,
+) {
+	_, art, ok := s.artifactOnTask(w, r, taskId, artifactId, artifactRead)
+	if !ok {
+		return
+	}
+	versions, err := s.dal.ListTaskArtifactHistory(art.ID)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	out := make([]taskArtifactVersionDTO, 0, len(versions))
+	for _, v := range versions {
+		// The SAME blob resolution the live projection does (taskArtifactDTOs):
+		// link kinds have no attachment, a missing blob resolves to nil and the
+		// version's filename stays honest-empty.
+		var att *ChatAttachment
+		if v.Kind != ArtifactKindLink && v.AttachmentID != "" {
+			att, err = s.dal.GetChatAttachment(v.AttachmentID)
+			if err != nil {
+				internalError(w, err)
+				return
+			}
+		}
+		out = append(out, newTaskArtifactVersionDTO(v, att))
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // T-4595 — get_my_task (GET /api/self/task) is RETIRED, tool and route alike.

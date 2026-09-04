@@ -290,64 +290,47 @@ func scanMember(row interface{ Scan(...any) error }) (Member, error) {
 	return m, nil
 }
 
-// ListMembers returns the STAFF roster (ANY roster_status — soft-removed rows
-// included; callers filter, mirroring repository.list_members). kind='outsource'
-// rows are EXCLUDED by design (A案 P7d): the merged storage keeps outsource
-// members out of the member-surface folds that still run through THIS
-// function, so their behaviour matches the pre-merge two-table world. The
-// outsource projection reads them through ListOutsourceWorkers (dal_tasks.go).
+// ListMembers returns the WHOLE roster — every kind (staff, warden AND
+// kind='outsource'), at ANY roster_status (soft-removed rows included; callers
+// filter). One query, one member population.
 //
-// Callers are NOT limited to the obvious lifecycle folds (reconcile.go,
-// api_monitoring.go, the role/machine folds, worker_spawn's staff scans).
-// Two live in api_chat.go and are easy to miss:
-//   - the chat-gallery names table (HandleListChatAttachments…): outsource
-//     rows are absent, so every outsource sender's from_name goes out BLANK.
-//     That is the whole reason ChatGalleryPanel takes a `resolveSender` prop
-//     — it is NOT dead code, and deleting it re-prints raw ow- ids.
-//   - the unread-count total (HandleChatUnreadCount…), which unions this
-//     staff list with ListOutsourceWorkers to decide which senders still
-//     count.
+// 🔴 IT USED TO CARRY `WHERE kind != 'outsource'`, AND THAT CLAUSE IS GONE
+// (T-14 項目 6). Two things follow, and the second is the one that bites:
 //
-// Treat the list above as illustrative, not exhaustive: grep before assuming
-// a surface does or does not see contractors.
+//  1. There is no longer a second function. `ListMembersIncludingOutsource`
+//     existed solely because this one excluded contractors; with the clause
+//     lifted the two queries were literally the same SELECT, so the twin was
+//     deleted and its seven call sites now name this one. Nothing about those
+//     seven changed — they always saw outsource rows.
 //
-// ⚠️ NOT "every member surface" any more. The REST list
-// (HandleListMembersApiMembersGet) and the waking agent's floor roster
-// (resumeFloorParts, api_chat.go) both call ListMembersIncludingOutsource
-// instead, so ow- rows DO appear in the wire roster and in boot context.
-// Behavioural roster convergence is a later, owner-gated step.
+//  2. EVERY OTHER CALLER NOW SEES ROWS IT NEVER SAW BEFORE. If you are reading
+//     this because you are about to add a call site: this function does NOT
+//     hand you "the staff". Decide, at YOUR call site, whether a contractor
+//     row belongs in your fold, and if it does not, say so in code. A
+//     lifecycle fold asks `lifecycleTickDriverFor(m) != driverReconcile`
+//     (lifecycle_roster.go) — the named predicate that REPLACED this WHERE
+//     clause, so the split is falsifiable by a parity test instead of being a
+//     property of a SQL string in this file. A non-lifecycle fold that
+//     genuinely wants staff only writes the kind test it means, next to the
+//     reason it means it. And a fold that filters NOTHING is a decision too —
+//     make it on purpose.
+//
+//     🔴 THE AUDIT OF TODAY'S CALL SITES IS NOT IN THIS COMMENT. It is
+//     listMembersCallSiteLedger in roster_widening_ledger_t14i6_test.go: one
+//     row per call site, saying whether PR ② widened it and what that fold
+//     does with a contractor row. It lives there because an enumeration
+//     written HERE is one nothing can check —
+//     TestListMembersCallSitesAreEachOnTheRecord joins the ledger against an
+//     AST scan in BOTH directions, so a caller with no row fails by name and a
+//     row with no caller fails by name. This paragraph used to carry the list
+//     itself, and it had already gone stale: it named three sites and did not
+//     mention reconcile.go's dispatchIdentitySweepNow, which PR ② widened too.
+//     Add your row there; do not re-grow the list here.
+//
+// ⚠️ "In this list" still does NOT mean "a member verb resolves". resolveMember
+// (api_helpers.go) answers 404 for every ow- id under staffOnly scope, and that
+// is deliberate. The two halves are only consistent when read together.
 func (d *DAL) ListMembers() ([]Member, error) {
-	rows, err := d.rdb.Query(`SELECT ` + memberColumns +
-		` FROM member WHERE kind != 'outsource' ORDER BY name COLLATE NOCASE`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Member
-	for rows.Next() {
-		m, err := scanMember(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, m)
-	}
-	return out, rows.Err()
-}
-
-// ListMembersIncludingOutsource backs the two surfaces that deliberately SHOW
-// contractors: the GET /api/members wire list
-// (HandleListMembersApiMembersGet) and the waking agent's floor roster
-// (resumeFloorParts, api_chat.go) — so an agent already sees outsource rows in
-// the roster it boots with, not only in the REST response.
-// Reconcile and every other member-surface fold must continue using
-// ListMembers, whose outsource exclusion keeps workers out of the member FSM.
-//
-// ⚠️ Being in THIS list does not mean the member API works on the row: the
-// twin of this decision is resolveMember (api_helpers.go), which still answers
-// 404 for every ow- id. "In the roster list" ≠ "a member verb resolves" — the
-// invariant lives in the interaction of these two functions and nowhere else,
-// so neither may be changed without reading the other.
-func (d *DAL) ListMembersIncludingOutsource() ([]Member, error) {
 	rows, err := d.rdb.Query(`SELECT ` + memberColumns +
 		` FROM member ORDER BY name COLLATE NOCASE`)
 	if err != nil {
@@ -1249,19 +1232,21 @@ func refIDsFromJSON(blob string, into map[string]bool) {
 // uploaded in chat can be PINNED onto a task card as a deliverable — so the
 // cascade re-checks every survivor before dropping a blob.
 //
-// This is the only GC path for the GENERAL attachment graph
-// (`DeleteTaskArtifact` deliberately leaves the blob alone). The T-c826 avatar
-// lifecycle has its own single-owner delete paths; HardDeleteMember reuses this
-// same survivor scan so corrupt/legacy cross-references still fail safe. As of
-// T-c826
-// the blob-referencing columns in the schema are exactly these five, and
-// `collectSurvivingBlobRefs` reads all five:
+// This is the widest GC path for the GENERAL attachment graph
+// (`DeleteTaskArtifact` leaves the LIVE artifact's blob alone, and collects the
+// blobs of its retained versions; `ReplaceTaskArtifact` collects the blob of a
+// version it trims off the end). The T-c826 avatar lifecycle has its own
+// single-owner delete paths; HardDeleteMember reuses this same survivor scan so
+// corrupt/legacy cross-references still fail safe. As of T-60 the
+// blob-referencing columns in the schema are exactly these six, and
+// `collectSurvivingBlobRefs` reads all six:
 //
 //	chat_message.meta $.attachments[].id
 //	reply_card.answer_attachments[].id
 //	reply_card.attachments[].id          (T-5e8a question side)
 //	task_artifact.attachment_id          (T-62a8 — file/image kinds; '' on link)
 //	member.avatar_attachment_id           (T-c826 — dedicated personal image)
+//	task_artifact_history.attachment_id   (T-60 — a REPLACED artifact version)
 //
 // ⚠️ ONE column holds blob ids and deliberately does NOT vote:
 // `chat_attachment_ref.attachment_id` (T-51, migration 00074). That table is a
@@ -1276,19 +1261,23 @@ func refIDsFromJSON(blob string, into map[string]bool) {
 // out from under that referrer with no error and no receipt. The failure mode
 // this closed was exactly that: a deliverable pinned on a task card went to a
 // dead link when the chat message it was uploaded in was removed — and a
-// terminal task's artifact set is frozen in both directions, so it could not
+// terminal task's artifact set is frozen in every direction, so it could not
 // be re-attached.
 //
 // ⚠️ Honest limit — this scan is NOT a general GC. It only ever considers the
 // blobs the just-deleted messages referenced (`candidates`); nothing re-visits
 // a blob later. So a blob spared here because a task_artifact held it becomes
-// permanently uncollectable if that artifact is subsequently un-pinned
-// (`DeleteTaskArtifact` leaves blobs alone by decree, and un-pinning is
+// permanently uncollectable if that LIVE artifact is subsequently un-pinned
+// (`DeleteTaskArtifact` leaves the live blob alone by decree, and un-pinning is
 // refused once the task is terminal, so the window is narrow). That is a
 // bounded disk leak accepted in exchange for not destroying a deliverable —
 // the two are not symmetric: the leak is recoverable by a future sweep, the
-// deletion is not recoverable at all. A real reachability sweep over the five
-// columns below is the proper fix and does not exist yet.
+// deletion is not recoverable at all. A real reachability sweep over the six
+// columns below is the proper fix and does not exist yet. T-60 deliberately did
+// NOT extend that leak to the versions a replace retires: those blobs are
+// collected at the moment they stop being nameable (a trim, or the un-pin that
+// deletes the whole series), which is the only moment anything still knows they
+// existed.
 //
 // Returns (deletedMessages, deletedAttachments).
 func (d *DAL) DeleteChatInvolving(memberID string) (int, int, error) {
@@ -1316,39 +1305,53 @@ func (d *DAL) DeleteChatInvolving(memberID string) (int, int, error) {
 		return 0, 0, err
 	}
 
-	surviving := map[string]bool{}
-	if len(candidates) > 0 {
-		if err := collectSurvivingBlobRefs(tx, surviving); err != nil {
-			return 0, 0, err
-		}
+	deletedAtts, err := collectOrphanBlobs(tx, candidates)
+	if err != nil {
+		return 0, 0, err
 	}
+	if err := tx.Commit(); err != nil {
+		return 0, 0, err
+	}
+	return int(deletedMsgs), deletedAtts, nil
+}
 
-	var deletedAtts int64
+// collectOrphanBlobs deletes, from a set of candidate blob ids, exactly those
+// that no still-stored record references — the single decision point every
+// blob collection goes through, so "is this blob still someone's?" is answered
+// by collectSurvivingBlobRefs and nowhere else. Call it AFTER the rows that
+// referenced the candidates are gone, from inside that same transaction.
+// Returns how many blobs were actually deleted.
+func collectOrphanBlobs(tx *sql.Tx, candidates map[string]bool) (int, error) {
+	if len(candidates) == 0 {
+		return 0, nil
+	}
+	surviving := map[string]bool{}
+	if err := collectSurvivingBlobRefs(tx, surviving); err != nil {
+		return 0, err
+	}
+	var deleted int64
 	for id := range candidates {
 		if surviving[id] {
 			continue
 		}
 		res, err := tx.Exec(`DELETE FROM chat_attachment WHERE id = ?`, id)
 		if err != nil {
-			return 0, 0, err
+			return 0, err
 		}
 		n, err := res.RowsAffected()
 		if err != nil {
-			return 0, 0, err
+			return 0, err
 		}
-		deletedAtts += n
+		deleted += n
 	}
-	if err := tx.Commit(); err != nil {
-		return 0, 0, err
-	}
-	return int(deletedMsgs), int(deletedAtts), nil
+	return int(deleted), nil
 }
 
 // collectSurvivingBlobRefs folds every chat_attachment id that a STILL-STORED
 // record references into `into` — the complete liveness verdict for the blob
-// store (the five columns enumerated on DeleteChatInvolving). Called after the
-// chat_message rows are deleted inside the same tx, so "still stored" is read
-// against the post-delete state.
+// store (the six columns enumerated on DeleteChatInvolving). Called after the
+// rows that referenced the candidates are deleted inside the same tx, so "still
+// stored" is read against the post-delete state.
 //
 // Deliberately one function rather than three inline blocks: the bug this
 // closed (T-62a8) was a MISSING source, and a missing source is far easier to
@@ -1387,7 +1390,7 @@ func collectSurvivingBlobRefs(tx *sql.Tx, into map[string]bool) error {
 
 	// 4. task artifacts (T-62a8) — a deliverable pinned onto a task card.
 	//    task_artifact rows have no cascade of their own and a terminal
-	//    task's set is frozen in both directions, so this reference is the
+	//    task's set is frozen in every direction, so this reference is the
 	//    strongest one in the schema: dropping its blob is unrecoverable.
 	//    The filter keeps LINK artifacts (no blob, attachment_id '') from
 	//    voting for a nonexistent empty-id blob.
@@ -1427,15 +1430,44 @@ func collectSurvivingBlobRefs(tx *sql.Tx, into map[string]bool) error {
 	if err != nil {
 		return err
 	}
-	defer memberRows.Close()
 	for memberRows.Next() {
 		var id string
 		if err := memberRows.Scan(&id); err != nil {
+			memberRows.Close()
 			return err
 		}
 		into[id] = true
 	}
-	return memberRows.Err()
+	if err := memberRows.Err(); err != nil {
+		memberRows.Close()
+		return err
+	}
+	memberRows.Close()
+
+	// 6. RETAINED ARTIFACT VERSIONS (T-60) — a deliverable that was REPLACED
+	//    keeps its previous versions, and a retained version's blob is as real
+	//    a referrer as the live row's: replacing an artifact must not delete
+	//    the file the earlier version still points at, and neither must the
+	//    removal of an unrelated chat message.
+	//
+	//    COALESCE for the same reason source 4 spells out: the fail-safe
+	//    direction of this predicate is "vote", and a bare `<> ''` against a
+	//    NULL is NULL, which silently stops the row voting.
+	histRows, err := tx.Query(
+		`SELECT attachment_id FROM task_artifact_history
+		 WHERE COALESCE(attachment_id, '') <> ''`)
+	if err != nil {
+		return err
+	}
+	defer histRows.Close()
+	for histRows.Next() {
+		var id string
+		if err := histRows.Scan(&id); err != nil {
+			return err
+		}
+		into[id] = true
+	}
+	return histRows.Err()
 }
 
 // collectChatMetaRefs folds every attachment id referenced by the

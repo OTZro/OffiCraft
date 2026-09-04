@@ -186,12 +186,50 @@ export type WireTaskReassign = components["schemas"]["TaskReassignDTO"];
  * M2 reply card is bound). */
 export type WireTaskStep = components["schemas"]["TaskStepDTO"];
 
+/** Mirrors `TaskStepDetailDTO` (`GET /api/tasks/{task_id}/steps/{step_id}` /
+ * MCP `get_task_step`, T-66): ONE step in full, note text included.
+ *
+ * 🔴 It exists because `WireTaskStep` no longer carries `note` at all. The task
+ * view reports each step's note SIZE (`note_size_chars`) and nothing else, so
+ * the cockpit draws the 備註 entry from that number and fetches the text only
+ * when someone opens it. `detail_level` is `"full"` here and `"summary"` on the
+ * task, which is how a reader tells the two apart. */
+export type WireTaskStepDetail = components["schemas"]["TaskStepDetailDTO"];
+
+/** Mirrors `TaskArtifactRefDTO` (T-66): ONE pinned deliverable reduced to an
+ * INDEX ROW — `id` + `label`, nothing else. This is what a task response's
+ * `artifacts` array holds since owner c-cd063427fb2f:「我覺得任務產物，只需要
+ * 預設給標題跟ID, 有需要再透過另一隻去拿就好了」. */
+export type WireTaskArtifactRef = components["schemas"]["TaskArtifactRefDTO"];
+
+/** Mirrors `TaskArtifactListDTO` (`GET /api/tasks/{task_id}/artifacts` / MCP
+ * `list_task_artifacts`, T-66): ONE task's artifacts in FULL.
+ *
+ * 🔴 It exists because `WireTaskArtifact` rows no longer ride the task read.
+ * `artifacts_detail_level` is `"full"` here and `"index"` on the task, which is
+ * how a reader tells the two apart. It is per-TASK and not per-artifact on the
+ * owner's ruling (c-f2d0fecb1168:「應該是指名任務？」) — the cockpit's panel
+ * opens onto the whole set, so a per-artifact door would cost one call a row. */
+export type WireTaskArtifactList = components["schemas"]["TaskArtifactListDTO"];
+
 /** Mirrors `TaskArtifactDTO` (T-3dc5): one pinned deliverable on a task's
  * artifact set. `kind` is file|image|link; file/image carry the blob serve
  * `url` + `mime`/`filename`/`is_image` (from the shared chat_attachment store),
  * link carries a bare external `url`. Folded into the full `WireTask.artifacts`
  * (get_task); the light list carries only `artifact_count`. */
 export type WireTaskArtifact = components["schemas"]["TaskArtifactDTO"];
+
+/** Mirrors `TaskArtifactVersionDTO` (T-60): ONE retained PREVIOUS version of a
+ * pinned deliverable, as `GET /api/tasks/{task_id}/artifact/{artifact_id}/history`
+ * lists them (newest first). The version carries the pointer WHOLE — a blob id
+ * or a url plus a label — so unlike a document revision there is no second read
+ * to fetch its content. It DOES carry `mime`/`filename`/`is_image` alongside the
+ * pointer (resolved read-time from the blob store, like the live artifact's own
+ * row): `filename` is load-bearing — `TaskArtifactVersionsModal` reads its
+ * extension to decide whether two versions can be diffed at all, so dropping the
+ * field would silently take text diffing away. */
+export type WireTaskArtifactVersion =
+  components["schemas"]["TaskArtifactVersionDTO"];
 
 /** Mirrors `TaskCountDTO` (`GET /api/tasks/count`): the open (non-terminal)
  * task count behind the tasks nav badge. */
