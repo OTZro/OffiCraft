@@ -238,15 +238,11 @@ func runMigrations(db *sql.DB) error {
 // instance's database (namespaced instances included) rather than a path someone
 // typed.
 func cmdBackup(env func(string) string, out io.Writer) int {
-	cfg, warnings, err := loadConfig(configPath(env))
-	if err != nil {
-		fmt.Fprintf(out, "[ocserverd] FATAL: %v\n", err)
-		return 1
+	_, dsn, rc := announceResolution("backup", env, out)
+	if rc != 0 {
+		return rc
 	}
-	for _, w := range warnings {
-		fmt.Fprintf(out, "[ocserverd] WARN: %s\n", w)
-	}
-	path, ok := sqliteFilePath(resolveDSN(env, cfg))
+	path, ok := sqliteFilePath(dsn)
 	if !ok {
 		fmt.Fprintln(out, "[ocserverd] FATAL: backup supports sqlite DSNs only")
 		return 1
@@ -281,15 +277,10 @@ func cmdBackup(env func(string) string, out io.Writer) int {
 // cmdMigrate resolves the DSN (env → oc.toml → sqlite convention default) and
 // runs goose up against it.
 func cmdMigrate(env func(string) string, out io.Writer) int {
-	cfg, warnings, err := loadConfig(configPath(env))
-	if err != nil {
-		fmt.Fprintf(out, "[ocserverd] FATAL: %v\n", err)
-		return 1
+	_, dsn, rc := announceResolution("migrate", env, out)
+	if rc != 0 {
+		return rc
 	}
-	for _, w := range warnings {
-		fmt.Fprintf(out, "[ocserverd] WARN: %s\n", w)
-	}
-	dsn := resolveDSN(env, cfg)
 	path, ok := sqliteFilePath(dsn)
 	if !ok {
 		fmt.Fprintf(out, "[ocserverd] FATAL: migrate supports sqlite DSNs only for now (got %q); postgres lands with the M3 dal step\n", dsn)
