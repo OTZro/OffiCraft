@@ -80,7 +80,21 @@ report_lock_state() {
       state="unknown"
       reason="git status exited $rc for $LOCK_REL"
     elif [[ -z "$porcelain" ]]; then
-      state="unchanged"
+      # An empty porcelain means "identical to the committed version" ONLY IF git
+      # can see this path at all. It is EQUALLY empty when git holds nothing
+      # here: the file is missing, the path is ignored, or LOCK_REL has drifted
+      # away from what the generator actually writes. Those three are "I could
+      # not tell", and reporting them as UNCHANGED is exactly the
+      # optimistic-by-default failure this whole script exists to remove — the
+      # same sentence, in a new place. Found by the independent reviewer of
+      # PR #417, who reproduced it: with the lock file absent, the script said
+      # "byte-identical to the committed version. Nothing to review."
+      if git -C "$ROOT" ls-files --error-unmatch -- "$LOCK_REL" >/dev/null 2>&1; then
+        state="unchanged"
+      else
+        state="unknown"
+        reason="git holds no version of $LOCK_REL (it is missing, ignored, or the path this script looks at has drifted from the one the generator writes), so an empty diff proves nothing"
+      fi
     elif [[ "$porcelain" == '??'* ]]; then
       state="unknown"
       reason="$LOCK_REL is UNTRACKED, so git holds no committed version to compare it against"

@@ -160,6 +160,28 @@ else
   fi
 fi
 
+# ── F5: git holds NO version of the lock path at all ─────────────────────────
+# `git status --porcelain -- <path>` is empty for TWO different reasons: the
+# tracked file matches its committed version, and git has never heard of the
+# path (missing / ignored / the LOCK_REL constant drifted away from what the
+# generator writes). Reading the second as "unchanged" reprints the very
+# sentence this script was written to delete, so the empty case must first
+# prove git can see the path. Found by the independent reviewer of PR #417,
+# who reproduced it against the pre-fix script.
+F5="$(make_fixture nolockfile nocommit clean)"
+rm -f "$F5/$LOCK_REL"
+if [[ -n "$(git -C "$F5" status --porcelain -- "$LOCK_REL")" ]]; then
+  bad "F5 setup — porcelain is not empty for a path git never heard of; this fixture proves nothing"
+else
+  OUT5="$(report "$F5")"
+  if says "$OUT5" "$UNKNOWN_CLAIM" && ! says "$OUT5" "$UNCHANGED_CLAIM" && ! says "$OUT5" "$OLD_BUG_CLAIM"; then
+    ok "F5 git holds no version of the lock path — an empty diff is reported as CANNOT DETERMINE, not as UNCHANGED"
+  else
+    bad "F5 git holds no version of the lock path — an empty diff was read as proof of sameness. Got:"
+    printf '%s\n' "$OUT5" >&2
+  fi
+fi
+
 # ── the generator's own count is carried through, not recomputed ─────────────
 if says "$OUT2" 'wrote migration.lock: 42 entries'; then
   ok "the generator's entry count is passed through verbatim"
