@@ -12,7 +12,15 @@ paths:
   - "src/components/SettingsPage*"
   - "src/components/DiffView*"
   - "src/components/diff-view.css"
+  - "src/components/DiffScreen*"
+  - "src/components/DiffPage*"
+  - "src/components/DiffModalHost*"
+  - "src/components/DiffShareLinkButton*"
+  - "src/components/diff-screen.css"
+  - "src/lib/diffLink.ts"
   - "src/components/DocumentHistory*"
+  - "src/components/TaskArtifactVersions*"
+  - "src/components/task-artifact-versions.css"
   - "src/lib/escapeLayers.ts"
   - "src/lib/useEscapeLayer.ts"
   - "src/lib/escapeLayerOwnership.test.ts"
@@ -53,3 +61,27 @@ DocCard 是設定頁可編輯長文件的共用外殼：標題、字數、版本
 lineDiff 只負責行結構，wordDiff 只負責相鄰取代列的 token，DiffView 只負責畫面。DiffView 永遠 render 完整 result.rows，不讀 hunks、不畫 @@；options 只暴露它真正擁有的 maxLines。相同版本與過大版本要是兩種不同空態，過大態要報行數。
 
 token 標亮只在兩側有共同非空白 token 時做，每側有上限；顏色由真瀏覽器守衛驗，jsdom 只驗 tint 的結構位置。
+
+## 比較的對外連結
+
+一份比較有兩種網址：沒有簽章的內部連結要登入才打得開，帶 `?sig=` 的對外連結誰都打得開。簽章只由 server 現鑄（`GET /api/diff/share-link`），回的是 server-relative path，由瀏覽器補 origin——跟附件分享連結同一套 `lib/shareLink.ts`。呼叫端手上原本的 `sig` 一律不回送：簽章是這個呼叫的產出，不是輸入。
+
+複製這條連結的控制項是 `DiffShareLinkButton`，圖示、沒有可見文字，三種狀態三個圖示；成功才說成功，鑄造或剪貼簿失敗要畫成看得出來的失敗，不可以退回閒置圖示。
+
+**這個控制項只畫在「確定有 session」的地方**，因為 mint route 跟其他 route 一樣要授權：studio 裡的 modal 是結構性的（`DiffModalHost` 在 AuthGate 內，獨立頁不掛這個 overlay）；獨立頁以 `params.sig === undefined` 當閘——main.tsx 把帶簽章的網址掛在 AuthGate 之前，那位讀者可能根本沒有帳號，不能給他一個按了會失敗、又能重鑄連結的按鈕。
+
+## 產物版本閱讀器
+
+TaskArtifactVersionsModal 是任務產物「被換過幾次、換掉的是什麼」的唯一讀面，形狀沿用 DocumentHistoryModal（左版本清單、右內容／差異），由產物列在 versionCount > 1 時的入口開啟。它 portal 到 document.body，所以產物 popover 的 click-outside 述詞要認得它的 root，跟 .md-preview 同一格。
+
+「目前版本」一律在開啟時向 server 讀（getTask），不得改讀 popover 手上的 SSE 快取——差異說的話必須等於伺服器現在的狀態，這條與文件閱讀器同一條判準。server 說產物已不在任務上就照實講，不拿手上最後知道的那份當現況。
+
+差異依產物型態分三種畫面，不是一種畫面留三個洞：兩份文字餵共用的 DiffView（不新刻比對元件、不改 DiffView／lineDiff，要放寬上限只能由呼叫端傳 DiffViewOptions.maxLines）；圖片與非文字檔改成前後切換；連結列出舊網址與新網址。
+
+「這份 bytes 是不是文字」問的是回應本身的 Content-Type，不是產物列上的 mime——列上的 mime 與 bytes 的 content type 是兩句話，讀的是後者；尤其不可拿 live 產物的 mime 去判某一版，那是另一個版本的事實。不是文字的回應不讀 body。
+
+版本 wire 的 `url`／`mime`／`filename`／`is_image` 都由 server 從那一版自己的 blob 解出，跟 live 產物走同一條解析：file/image 版本的 `url` 是 blob 端點（**不是** `task_artifact.url` 那一欄，那欄對 file/image 是空字串），照抄該欄會讓每個檔案版本在前端讀成 gone。
+
+🔴 但 mime 不是唯一判準：`text/*` 是文字、`image/*` 是圖片，兩者皆非時再看檔名副檔名（兩側同一條：filename 優先、label 次之；版本的 filename 由 wire 從它自己的 attachment_id 解出，是那一版自己的事實），命中一份封閉的文字副檔名清單就當文字讀。理由是 agent 上傳的報告回來是 `application/octet-stream`——那是上傳端「不知道」，不是「這是二進位」；只信 mime 會把報告、log、spec 這些最常見的產物全部推去前後切換，永遠 diff 不到。清單是封閉的，不在清單上的仍然不讀 body。
+
+沒有還原面，server 也沒有還原動詞；舊版要回來是往前 replace。

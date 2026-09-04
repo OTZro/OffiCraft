@@ -61,7 +61,7 @@ func mustBlobGone(t *testing.T, d *DAL, id, why string) {
 // A file uploaded in a chat message and then PINNED onto a task card as a
 // deliverable: removing the member deletes the message, but the task_artifact
 // row survives (artifact rows have no cascade, and a terminal task's set is
-// frozen in both directions) — so the blob is still referenced and must live.
+// frozen in every direction) — so the blob is still referenced and must live.
 //
 // On 2e74953 the survivor scan read chat_message.meta and both reply_card
 // columns only, so this blob was cascaded and the task card was left holding a
@@ -156,6 +156,76 @@ func TestDeleteChatInvolvingSparesMemberAvatarBlobs(t *testing.T) {
 	}
 	mustBlobAlive(t, d, "ava-member", "referenced by surviving member avatar")
 	mustBlobGone(t, d, "a-unreferenced", "referenced by nothing that survived")
+}
+
+// TestDeleteChatInvolvingSparesReplacedArtifactVersionBlobs pins the SIXTH
+// liveness source (T-60): a deliverable that has been REPLACED keeps its
+// previous versions, and a retained version's blob is as real a referrer as the
+// live row's — the file behind an earlier version is still reachable through
+// the artifact's history, so an unrelated member removal must not take it.
+//
+// The failure this closes is the T-62a8 defect one row over: with
+// task_artifact_history absent from the survivor scan, the earlier version's
+// blob is collected the next time anyone removes the chat member the file was
+// uploaded by, and the version list is left naming a file that is gone.
+func TestDeleteChatInvolvingSparesReplacedArtifactVersionBlobs(t *testing.T) {
+	d := newTestDAL(t)
+	seedLivenessBlobs(t, d, "a-old-version", "a-live", "a-unreferenced")
+
+	for _, m := range []ChatMessage{
+		{ID: "c-old", Sender: "m-uploader", Recipient: "owner", TS: 1.0,
+			Meta: map[string]any{"attachments": []any{
+				map[string]any{"id": "a-old-version"},
+			}}},
+		{ID: "c-live", Sender: "m-uploader", Recipient: "owner", TS: 2.0,
+			Meta: map[string]any{"attachments": []any{
+				map[string]any{"id": "a-live"},
+			}}},
+		{ID: "c-garbage", Sender: "m-uploader", Recipient: "owner", TS: 3.0,
+			Meta: map[string]any{"attachments": []any{
+				map[string]any{"id": "a-unreferenced"},
+			}}},
+	} {
+		if err := d.PutChat(m); err != nil {
+			t.Fatalf("put chat: %v", err)
+		}
+	}
+	// One deliverable, pinned with the first file and then replaced with the
+	// second: a-old-version now lives only in the version history.
+	if err := d.PutTaskArtifact(TaskArtifact{
+		ID: "ta-replaced", TaskID: "t-1", Kind: ArtifactKindFile,
+		AttachmentID: "a-old-version", Label: "v1.pdf", CreatedTS: 1.0,
+		CreatedBy: "m-uploader",
+	}); err != nil {
+		t.Fatalf("put task artifact: %v", err)
+	}
+	replaced, err := d.ReplaceTaskArtifact(TaskArtifact{
+		ID: "ta-replaced", TaskID: "t-1", Kind: ArtifactKindFile,
+		AttachmentID: "a-live", Label: "v2.pdf", CreatedTS: 2.0,
+		CreatedBy: "m-uploader",
+	})
+	if err != nil || !replaced {
+		t.Fatalf("replace artifact: %v (replaced=%v)", err, replaced)
+	}
+
+	msgs, atts, err := d.DeleteChatInvolving("m-uploader")
+	if err != nil {
+		t.Fatalf("delete involving: %v", err)
+	}
+	// Round-trip first: the store is the fact, the counter is a claim.
+	mustBlobAlive(t, d, "a-old-version", "referenced by a RETAINED artifact version")
+	mustBlobAlive(t, d, "a-live", "referenced by the live artifact row")
+	mustBlobGone(t, d, "a-unreferenced", "referenced by nothing that survived")
+	if msgs != 3 || atts != 1 {
+		t.Fatalf("delete counts = messages %d attachments %d, want 3/1", msgs, atts)
+	}
+
+	// The version row itself is untouched, so the history still resolves — the
+	// whole point of the sentinel.
+	versions, err := d.ListTaskArtifactHistory("ta-replaced")
+	if err != nil || len(versions) != 1 || versions[0].AttachmentID != "a-old-version" {
+		t.Fatalf("retained version must survive intact, got %+v (%v)", versions, err)
+	}
 }
 
 // TestHardDeleteMemberSparesAvatarBlobReferencedElsewhere pins the reverse
@@ -258,4 +328,62 @@ func TestDeleteChatInvolvingStillCollectsUnreferencedBlobs(t *testing.T) {
 	if atts != 3 {
 		t.Fatalf("all 3 unreferenced blobs must be collected, got %d", atts)
 	}
+}
+
+// TestDeleteChatInvolvingIgnoresTheGalleryIndex is the third sentinel, and it
+// guards a rule that is otherwise only written in prose: chat_attachment_ref
+// (migration 00074) indexes exactly ONE of the five places a blob can be
+// referenced from, so it must NEVER vote in the liveness verdict. Wiring it
+// into collectSurvivingBlobRefs would re-open T-62a8 wearing a different
+// shape — and the migration's own header says so, which is exactly the kind
+// of distant guard the production comment on the avatar source warns about:
+// "the liveness verdict must not rely on a distant string guard".
+//
+// The index row is written DIRECTLY, naming a message that does not exist, so
+// the triggers cannot clear it when the real message is deleted. That is the
+// only way to reach the state this pins: a blob that is a deletion candidate
+// and that ONLY this table still points at.
+//
+// Discrimination was verified by the inverse mutant (adding the table as a
+// sixth source in collectSurvivingBlobRefs): this test, and only this test,
+// goes red.
+func TestDeleteChatInvolvingIgnoresTheGalleryIndex(t *testing.T) {
+	d := newTestDAL(t)
+	seedLivenessBlobs(t, d, "a-candidate")
+
+	if err := d.PutChat(ChatMessage{
+		ID: "c-1", Sender: "m-1", Recipient: "owner", TS: 1.0,
+		Meta: map[string]any{"attachments": []any{
+			map[string]any{"id": "a-candidate"},
+		}},
+	}); err != nil {
+		t.Fatalf("put chat: %v", err)
+	}
+	// A row nothing will clean up: c-ghost is not a message, so the AFTER
+	// DELETE trigger never fires for it.
+	if _, err := d.wdb.Exec(
+		`INSERT INTO chat_attachment_ref
+		   (message_id, ord, attachment_id, sender, recipient, ts, mime, filename)
+		 VALUES ('c-ghost', 0, 'a-candidate', 'm-1', 'owner', 1.0, '', '')`); err != nil {
+		t.Fatalf("seed index row: %v", err)
+	}
+
+	if _, _, err := d.DeleteChatInvolving("m-1"); err != nil {
+		t.Fatalf("delete chat involving: %v", err)
+	}
+
+	// The precondition this test rests on: the index row really did survive
+	// the delete, so "collected anyway" means the scan ignored it rather than
+	// never having seen it.
+	var left int
+	if err := d.rdb.QueryRow(
+		`SELECT count(*) FROM chat_attachment_ref WHERE attachment_id = 'a-candidate'`,
+	).Scan(&left); err != nil {
+		t.Fatalf("count index rows: %v", err)
+	}
+	if left != 1 {
+		t.Fatalf("this test only pins anything while the index row survives, got %d", left)
+	}
+	mustBlobGone(t, d, "a-candidate",
+		"chat_attachment_ref must not keep a blob alive")
 }

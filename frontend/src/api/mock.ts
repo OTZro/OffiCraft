@@ -24,6 +24,7 @@ import type {
   DocumentHistoryView,
   DocumentRevisionView,
   DocumentSeedView,
+  DiffPairView,
   RoleSummaryView,
   RoleDefView,
   BootstrapView,
@@ -91,6 +92,7 @@ import type {
   SseConnectionState,
   AccountCostResetReceipt,
   CostResetReceipt,
+  TaskArtifactVersionView,
 } from "./adapter";
 import type {
   WireMember,
@@ -173,6 +175,26 @@ import {
   SEED_TASK_UNBLOCKED_MD,
 } from "./seeds";
 import { mockApiError } from "./errorCodes";
+import { formatDiffUrl, type DiffParams } from "../lib/diffLink";
+
+/** The offline cockpit's compare fixture — two texts that differ by one edited
+ * line and one added line, so both the line-level rows and the character-level
+ * tint have something real to draw. */
+const MOCK_DIFF_BEFORE = [
+  "# 專案說明",
+  "",
+  "第一段沒有改。",
+  "這一行的用字改過了。",
+  "最後一段沒有改。",
+].join("\n");
+const MOCK_DIFF_AFTER = [
+  "# 專案說明",
+  "",
+  "第一段沒有改。",
+  "這一行的措辭改過了。",
+  "新增的一行。",
+  "最後一段沒有改。",
+].join("\n");
 import {
   validateThemeBundle,
   isValidDisplayTheme,
@@ -884,6 +906,13 @@ let replyCards: ReplyCard[] = [];
 // badge had just said N.
 export type MockTaskRow = Omit<TaskView, "artifacts"> & { artifacts?: TaskArtifactView[] };
 let tasks: MockTaskRow[] = [];
+
+// The retained PREVIOUS versions of a pinned deliverable (T-60), keyed by
+// artifact id — the mock's stand-in for `task_artifact_history`. Nothing in the
+// cockpit WRITES here (replace is the executing agent's MCP verb, not an owner
+// action), so the only producer is __injectMockArtifactVersions; un-pinning an
+// artifact drops its versions the way the server's transaction does.
+let artifactVersions = new Map<string, TaskArtifactVersionView[]>();
 let outsourceWorkers: OutsourceWorkerView[] = [];
 let taskManuals: TaskManualView[] = [];
 
@@ -4098,8 +4127,8 @@ export const mockApi: Api = {
 
   async removeTaskArtifact(taskId: string, artifactId: string): Promise<void> {
     // Mirrors handle_remove_task_artifact (T-3dc5): the owner/admin un-pin.
-    // Closed task → 409 (T-2654: the deliverable set is frozen in BOTH
-    // directions, so un-pin is refused exactly like add). Unknown artifact →
+    // Closed task → 409 (T-2654: the deliverable set is frozen in EVERY
+    // direction, so un-pin is refused exactly like add and replace). Unknown artifact →
     // 404, wrong-task ownership → 400. The blob is left intact (the mock has no
     // blob store to touch). The 409 must come BEFORE the artifact lookup, same
     // as the server — a mock that deletes where production refuses is worse
@@ -4123,7 +4152,38 @@ export const mockApi: Api = {
     }
     t.artifacts = arts.filter((a) => a.id !== artifactId);
     t.artifactCount = t.artifacts.length;
+    // Server parity (T-60): un-pinning deletes the artifact's retained versions
+    // in the SAME transaction. A mock that kept them would let a version list
+    // outlive the artifact it belongs to — a state production cannot reach.
+    artifactVersions.delete(artifactId);
     emitTopic("task");
+  },
+
+  async listTaskArtifactVersions(
+    taskId: string,
+    artifactId: string,
+  ): Promise<TaskArtifactVersionView[]> {
+    // Mirrors handle_list_task_artifact_history (T-60): the retained PREVIOUS
+    // versions, newest first. An artifact that has never been replaced answers
+    // [] (the honest "nothing has been replaced here"), never a 404. Read-only:
+    // there is no restore verb to pair with it.
+    //
+    // KNOWN DIVERGENCE from the server's guard ladder: the server answers
+    // unknown task 404 → unknown artifact 404 → artifact-on-a-different-task
+    // 400, while this mock only ever looks inside the named task's own
+    // artifacts, so a real artifact id belonging to ANOTHER task comes back 404
+    // here and 400 there. No mock artifact verb models that 400, so do not
+    // build a test of the 400 branch on this stub.
+    const t = findTask(taskId);
+    const art = (t.artifacts ?? []).find((a) => a.id === artifactId);
+    if (!art) {
+      throw mockApiError(
+        `http 404 for GET /api/tasks/${taskId}/artifact/${artifactId}/history`,
+        404,
+        `artifact '${artifactId}' not found`,
+      );
+    }
+    return structuredClone(artifactVersions.get(artifactId) ?? []);
   },
 
   async postTaskMessage(id: string, msg: TaskMessageInput): Promise<void> {
@@ -6040,6 +6100,45 @@ export const mockApi: Api = {
     return { id: found.id, content: structuredClone(found.content) };
   },
 
+  async getDiff(params: DiffParams): Promise<DiffPairView> {
+    // A FIXTURE, and it says so: the mock cockpit has no blob store to read a
+    // side out of and no signature to check, so it answers a small, obviously
+    // synthetic pair rather than pretending to resolve an address. What it DOES
+    // reproduce faithfully is the shape the screen branches on — a heading per
+    // side, and the `missing` marker, which is the one state a fixture that
+    // always succeeds would leave permanently unreachable offline.
+    //
+    // The reserved address `att-000000000000` is how the offline cockpit
+    // reaches that state; every other address resolves.
+    //
+    // The labels are ECHOED, never invented: a side the url gave no heading
+    // comes back with none, exactly as the server answers it, so the reader's
+    // own 「目前存檔內容」/「初始版本」/「版本 #12」 path is reachable offline too.
+    const side = (address: string, label: string | undefined, text: string) =>
+      address === "att-000000000000"
+        ? { address, text: "", label, gone: true, goneReason: "mock: reserved gone address" }
+        : { address, text, label, gone: false };
+    return {
+      before: side(params.before, params.labelBefore, MOCK_DIFF_BEFORE),
+      after: side(params.after, params.labelAfter, MOCK_DIFF_AFTER),
+    };
+  },
+
+  async getDiffShareLink(params: DiffParams): Promise<string> {
+    // Mock face: the same URL SHAPE as the BE (the /diff page path + ?sig=)
+    // with a deterministic fake sig — never a verifiable credential (no secret
+    // in mock mode; the copy-link UI just needs a resolvable string). Any sig
+    // the caller happened to be holding is dropped, exactly as the real route
+    // drops it: the signature is what this call MINTS.
+    return formatDiffUrl({
+      before: params.before,
+      after: params.after,
+      labelBefore: params.labelBefore,
+      labelAfter: params.labelAfter,
+      sig: "mock-diff-share-sig",
+    });
+  },
+
   async getDocumentSeed(
     kind: DocumentKind,
     key: string
@@ -6160,6 +6259,7 @@ export function __resetMock(): void {
   chatReads.clear();
   replyCards = [];
   tasks = [];
+  artifactVersions = new Map();
   outsourceWorkers = [];
   taskManuals = [];
   mockPasswordSet = true;
@@ -6216,6 +6316,17 @@ export function __injectMockTask(task: TaskView | MockTaskRow): void {
   // hands back — pass index-only rows here and that read answers index-only
   // rows, which is the honest consequence of what was put in.
   tasks.push(task as MockTaskRow);
+  emitTopic("task");
+}
+
+// Test-only hook: land the retained PREVIOUS versions of one pinned deliverable
+// (T-60), newest first — what a sequence of `replace_task_artifact` calls would
+// have left behind. There is no cockpit write that can produce them.
+export function __injectMockArtifactVersions(
+  artifactId: string,
+  versions: TaskArtifactVersionView[],
+): void {
+  artifactVersions.set(artifactId, structuredClone(versions));
   emitTopic("task");
 }
 
