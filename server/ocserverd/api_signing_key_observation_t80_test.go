@@ -835,3 +835,49 @@ func TestEphemeralIdentitiesLeaveNoTraceInTheObservationMemo(t *testing.T) {
 			"no ceiling and no owner.", got, keysSeen)
 	}
 }
+
+// 🔴 THE WIRE STRING IS THE CONTRACT WITH ANOTHER MODULE, SO IT IS PINNED AS A
+// LITERAL AND NOT AS THE CONSTANT UNDER TEST.
+//
+// Every other assertion in this file compares against reconcileCmdRenew, which
+// is right for them — they are asking "did the station emit the renew frame",
+// and the constant is how you say that. It is exactly wrong for THIS question.
+// The reader of this frame is cli/ocwarden, a SEPARATE Go module with its own
+// copy of the string (rpcRenew) and no compiler between the two. Rename this
+// side and the expected value renames with it: this package stays green, and so
+// does the warden's, because its own tests pin its own literal. What actually
+// happens is that every renew frame is refused by every warden in the fleet as
+// unknown-rpc — logged, skipped, reader loop unharmed, nothing red anywhere, and
+// the credentials this whole ticket exists to rotate never move again.
+//
+// The `update` verb has the same shape and no such test; that gap is why this
+// one is written out rather than left to the reviewer to notice.
+//
+// The literal below MUST stay byte-identical to cli/ocwarden's rpcRenew. If you
+// are changing one of them on purpose, change both and say so in the commit.
+func TestTheRenewVerbOnTheWireIsTheLiteralTheWardenParses(t *testing.T) {
+	const wardenSideLiteral = "renew" // cli/ocwarden/command.go: rpcRenew
+
+	if reconcileCmdRenew != wardenSideLiteral {
+		t.Fatalf("the station emits rpc=%q but cli/ocwarden accepts %q — every "+
+			"renew frame would be refused as unknown-rpc by every warden, "+
+			"silently, and no other test in either module would notice",
+			reconcileCmdRenew, wardenSideLiteral)
+	}
+
+	// And prove the string actually reaches the wire in that position, rather
+	// than only agreeing as a constant: a frame whose verb lives somewhere the
+	// warden does not read is the same outage.
+	frame, ok := buildTargetFrame(reconcileCmdRenew, "m-somewhere")
+	if !ok {
+		t.Fatal("buildTargetFrame refused to build a renew frame")
+	}
+	digest, ok := decodeWardenCommandFrame(frame)
+	if !ok {
+		t.Fatalf("the renew frame is not a warden-command frame: %s", frame)
+	}
+	if digest.Verb != wardenSideLiteral {
+		t.Fatalf("the frame's rpc field reads %q; the warden reads that field and "+
+			"expects %q", digest.Verb, wardenSideLiteral)
+	}
+}
