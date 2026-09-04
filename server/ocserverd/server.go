@@ -195,8 +195,16 @@ func extractToken(r *http.Request) string {
 		}
 		return header
 	}
-	return r.URL.Query().Get("token")
+	return r.URL.Query().Get(authTokenQueryParam)
 }
+
+// authTokenQueryParam is the header-less credential extractToken accepts above.
+// Named here rather than typed at each use because it is not only read: GET
+// /api/chat refuses query parameters it does not declare (unknownChatQueryParams)
+// and has to know that this one is a credential rather than a typo — a second
+// spelling of it there would deny every EventSource and <img src> that carries
+// its token this way, and would deny them only in production.
+const authTokenQueryParam = "token"
 
 // requireAuth wraps a GATED handler with the JWT gate: the extracted token
 // (header first, then the `?token=` query fallback — see extractToken)
@@ -538,15 +546,10 @@ const stationShutdownTimeout = 5 * time.Second
 // (unless --no-reconcile) and the outsource-assignment scheduler cadence
 // (unless --no-outsource), bind host:port.
 func cmdServe(env func(string) string, noReconcile, noOutsource bool, out io.Writer) int {
-	cfg, warnings, err := loadConfig(configPath(env))
-	if err != nil {
-		fmt.Fprintf(out, "[ocserverd] FATAL: %v\n", err)
-		return 1
+	cfg, dsn, rc := announceResolution("serve", env, out)
+	if rc != 0 {
+		return rc
 	}
-	for _, w := range warnings {
-		fmt.Fprintf(out, "[ocserverd] WARN: %s\n", w)
-	}
-	dsn := resolveDSN(env, cfg)
 	dbPath, ok := sqliteFilePath(dsn)
 	if !ok {
 		fmt.Fprintf(out, "[ocserverd] FATAL: serve supports sqlite DSNs only for now (got %q)\n", dsn)
