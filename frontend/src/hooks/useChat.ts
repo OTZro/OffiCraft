@@ -1137,16 +1137,20 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       return;
     }
     // 🔴 A SCROLL IS A RETRY, AND UNTIL THIS PARAMETER EXISTED THAT SENTENCE
-    // WAS FALSE (independent review #17, F-1). The bound below is there to stop
-    // the LEVEL-TRIGGERED continuation from re-asking a question it has already
-    // been answered — it was never meant to bind the reader. But the scroll
-    // handler reaches this same door, so once a page came back carrying nothing
-    // new, scrolling did nothing at all: `hasNewer` still true, no spinner, no
-    // end marker, no arrow (that one measures the newest LOADED row), and only
-    // switching conversations cleared it. The stall this walk was written to end
-    // came back as a permanent one, and the comment two screens up promised the
-    // opposite. A reader asking again is new information — it cannot loop,
-    // because it takes a gesture each time.
+    // WAS FALSE (independent review #17, F-1). The bound below was written for
+    // a LEVEL-TRIGGERED continuation that no longer exists (T-48, owner
+    // rc-d2e1b69edc66 ①: one gesture, one page) — it was never meant to bind
+    // the reader, but the scroll handler reaches this same door, so once a page
+    // came back carrying nothing new, scrolling did nothing at all: `hasNewer`
+    // still true, no spinner, no end marker, no arrow (that one measures the
+    // newest LOADED row), and only switching conversations cleared it.
+    //
+    // ⚠️ NOW THAT EVERY CALLER IS A GESTURE, THE PAIR IS A RATE LIMIT AND THAT
+    // IS ITS WHOLE JOB. `forwardExhaustedRef` plus this 400ms window mean 「the
+    // same anchor is asked at most once per 400ms」 — which is what keeps ONE
+    // wheel flick, roughly 60 scroll events a second against a box that did not
+    // grow, from becoming 60 requests (measured at 20/s unthrottled, review #18
+    // A-2). A single flick still retries immediately.
     if (opts?.human && Date.now() - humanRetryAtRef.current >= HUMAN_RETRY_MIN_MS) {
       humanRetryAtRef.current = Date.now();
       forwardExhaustedRef.current = null;

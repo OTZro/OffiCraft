@@ -6,6 +6,8 @@ paths:
   - "src/components/TaskReplyCard*"
   - "src/components/TaskCardMessageBox*"
   - "src/components/ScheduledMessagesCard*"
+  - "visual-guards/chat-*"
+  - "visual-guards/stories/Chat*"
   - "src/components/replies.css"
   - "src/hooks/useChat*"
   - "src/hooks/useReplyCard*"
@@ -108,7 +110,13 @@ hash route #office/chat/<id>/msg/<msgId> 只做一次定位與 highlight。產�
 
 `loadAround` 回的是**三態**（`JumpOutcome`），不是 bool：`found` / `missing`（404、失敗、或**存在但屬於別條對話**——server 解析錨點不套 participant 過濾，那種 id 兩個請求都回 200＋空陣列，採用它會把聊天室寫成空白）/ `superseded`（被更晚的載入超車，**訊息還在**）。**不要把 superseded 併回 missing**：那會對著一則還在的訊息說「可能已經被清掉了」，而且跳轉閂已經用掉，沒有重試也沒有按鈕。三態各有自己的畫面語言（`chat.jumpTargetMissing` / `chat.jumpTargetInterrupted`），重排有上限。
 
-錨點視窗期間 `hasNewer=true`，這時**不標已讀**（`mayMarkRead`）、**不跑週期性/SSE 的最新頁載入**（把活尾巴併進歷史視窗會造出一段沒人撈過卻被畫成相鄰的縫）。往新的那條鏈是 **level-triggered**：捲到底由捲動事件**起頭**，但每一頁落地之後由一個 effect **重新評估**（`forwardWalkArmed` 且 `hasNewer`）決定要不要再撈一頁——不能只靠捲動事件，因為一頁貼上去之後畫面已經在底部，不會再有事件（T-48：實測停在 61/80 列、空等 10 秒不動、補一次捲動立刻補齊）。⚠️ **那個 effect 不准再量一次幾何**：往新的一頁是**貼在下面**的，30 列一落地底部就退開一個螢幕以上，所以「還在底部嗎」在每一頁落地當下必然答不是；它之所以大多還是走得完，只是因為 auto-follow 的 `scrollIntoView` 通常在同一拍先把畫面拉回底部。那個順序沒發生時走廊就死在半路，而且沒有 spinner、沒有結束標記（CI run 33794983804、macos-e2e 390 寬：rows 32 → 61、`scrollTop` 凍在貼上去之前的最大值 2702、一個 `?start_id=` 之後五秒內再無請求）。**「人不想走了」的訊號是方向，不是距離**：畫面**往上**走只有人做得到（貼一頁只會把底部往下推），所以停手由 `onMessagesScroll` 比對上一次的 `scrollTop` 決定。⚠️ jsdom 的每一個長度都是 0，量幾何的寫法在單元測試裡永遠是綠的；`ChatArea.anchor-entry.test.tsx` 的「一頁貼上去把底部推遠時」自己鋪了一份 81/369 的假版面，就是為了讓那個寫法紅。它的界是「整頁都是已有列的那個錨點不再問第二次」——**只涵蓋這一種**沒有進展的結局。**請求失敗不走這個界**：失敗只是沒有東西落地、沒有 re-render，所以鏈自己停下來（`catch` 一個字都沒寫進那個 ref）。捲動事件那條路帶 `human: true`，**進來清掉這個界，但每 400ms 最多一次**，所以「人再捲一次就是重試」是真的——這句話在 2026-09-03 之前是假的（獨立審查 #17 F-1 實測：停住之後再捲三次，零個新請求），當時捲動與 effect 走的是同一道門。那個節流不是門檻而是速率上限：一次滾輪是每秒約 60 個事件，不節流實測會變成**每秒 20 個請求**（獨立審查 #18 A-2），單次滾輪仍然立刻重試。回到活尾巴的路有兩條：往下捲 `loadNewer`（有世代票，晚到的一頁要丟掉，不然歷史會被接在最新後面而且 `hasNewer` 會翻回 true ⇒ 那條對話從此不標已讀）、或 `resetToLatest`（**取代**不是合併，並且負責解除 anchor 的載入 hold-off——不解除的話那間房從此不再刷新）。
+錨點視窗期間 `hasNewer=true`，這時**不標已讀**（`mayMarkRead`）、**不跑週期性/SSE 的最新頁載入**（把活尾巴併進歷史視窗會造出一段沒人撈過卻被畫成相鄰的縫）。往新的那條鏈是 **一次手勢一頁**（T-48，owner `rc-d2e1b69edc66` ①，取代原本的 level-triggered 走廊）：捲到底由捲動事件撈**一頁**，貼上去就停，下一頁要讀的人**再捲一次**。判準只有「當下在不在底部」（`onMessagesScroll` 的 `nowNearBottom && hasNewer`），沒有方向判準、沒有 armed、沒有落地後重新評估的 effect。
+
+⚠️ **讓「一頁」為真的不是「拿掉那個 effect」，是「錨點視窗裡不 auto-follow」**：`hasNewer` 為真時，捲動位置反應器**不呼叫** `endRef.scrollIntoView()`，畫面就停在讀的人捲到的地方，剛貼上的那一頁整頁落在視野下方（實測 81/369 假版面：`scrollTop` 凍在 2304、`scrollHeight` 2673 → 5022、離底部 2349px），所以原地再捲一次什麼都不會發生，得真的往下讀完那一頁才換得到下一頁。**只拿掉 effect、留著 auto-follow 是無效的**：真瀏覽器裡 `scrollIntoView` **自己會送出一個捲動事件**，落回同一支 `nowNearBottom && hasNewer` ⇒ 走廊換個名字繼續跑（實測 Chromium 1280×720：一次手勢變成 3～4 頁）。jsdom 的 `scrollIntoView` 是無事件的 no-op、每一個長度都是 0，**這一格單元測試看不見**，證人是 `visual-guards/chat-forward-walk.ct.spec.tsx`。不跟的條件是 `hasNewer`，**其他 auto-follow（活尾巴新訊息、自己剛送出、進房定位）一律不動**。
+
+`useChat` 那邊留著兩道界，理由變了但仍然活著：`forwardExhaustedRef`「整頁都是已有列的那個錨點不再問第二次」＋ `human: true` 的 400ms 節流（`HUMAN_RETRY_MIN_MS`）。現在每一次 `loadNewer` 都帶 `human: true`，所以兩者合起來的意思是**同一個錨點每 400ms 最多問一次** —— 擋的是一次滾輪的每秒約 60 個捲動事件（不節流實測每秒 20 個請求，獨立審查 #18 A-2），而不是擋讀的人。**請求失敗不走這個界**（`catch` 一個字都沒寫進那個 ref），失敗之後下一次手勢就是重試。
+
+回到活尾巴的路有兩條：往下捲 `loadNewer`（有世代票，晚到的一頁要丟掉，不然歷史會被接在最新後面而且 `hasNewer` 會翻回 true ⇒ 那條對話從此不標已讀）、或 `resetToLatest`（**取代**不是合併，並且負責解除 anchor 的載入 hold-off——不解除的話那間房從此不再刷新）。
 
 回覆卡的 red badge 與聊天未讀互不清除；任務關聯卡共用卡身，只顯示任務標題與查看詳情連結。
 

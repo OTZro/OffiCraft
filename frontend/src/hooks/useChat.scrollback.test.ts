@@ -553,9 +553,10 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
   });
 
   it("a walk that stopped on a page carrying nothing new is restarted by the reader scrolling again", async () => {
-    // 🔴 Independent review #17 (F-1). The no-progress bound belongs to the
-    // LEVEL-TRIGGERED continuation, not to the reader — but both reach the same
-    // door, so once a full page came back holding only rows we already had, a
+    // 🔴 Independent review #17 (F-1). The no-progress bound was written for a
+    // continuation that has since been removed (T-48: one gesture, one page),
+    // not for the reader — but both reach the same door, so once a full page
+    // came back holding only rows we already had, a
     // scroll issued no request at all: `hasNewer` still true, no spinner, no end
     // marker, and the arrow measures the newest LOADED row so it stays hidden
     // too. Only switching conversations cleared it. Measured, before the fix:
