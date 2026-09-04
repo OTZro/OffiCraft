@@ -205,6 +205,13 @@ export const zh = {
     // 收起時的字面留著「備註」兩字是刻意的 —— 有備註的步驟與沒備註的步驟,
     // 在收起狀態下就靠這顆按鈕在不在分辨。
     stepNoteExpand: "展開備註",
+    // T-66:備註全文改成「點開才抓」(owner rc-4c8065fb30a5:「座艙改成點開才抓」)。
+    // 卡片上只有大小(note_size_chars),全文要打一次 get_task_step —— 所以按下去
+    // 到文字出現之間有一段真實的空窗,而且它會失敗。這兩句就是那兩個狀態:
+    // 沒有它們,抓失敗的 overlay 會是一片空白,讀起來像「這一步的備註是空的」,
+    // 而那正是卡片上的入口已經否定過的事(入口只在有備註時才畫)。
+    stepNoteLoading: "讀取備註中…",
+    stepNoteFailed: "讀取備註失敗,請關閉後再試一次。",
     // deps:「等 <任務編號>」chip 可多筆(mockup 樣式,owner 2026-07-13)
     blockedByLabel: "等",
     // T-1d82:dep 指向的任務查不到(已刪 / 壞 id)。保留原始 id(那是僅剩的線索),
@@ -293,9 +300,34 @@ export const zh = {
       empty: "還沒有產物",
       close: "關閉產物",
       remove: "移除產物",
-      removeConfirm: "從任務卡移除這個產物?(不會刪除檔案本身)",
+      removeConfirm:
+        "從任務卡移除這個產物？目前指向的檔案會保留，但這個產物若曾被取代，保留下來的每個舊版本都會連同檔案一起永久刪除。",
+      loading: "載入產物中…",
+      loadFailed: "產物讀取失敗,請關掉再打開試試",
       downloadHint: "下載",
       openLinkHint: "開啟連結",
+      // ── T-60: a pinned deliverable can be REPLACED, keeping its id. The row
+      // gets a versions entry only when there is more than one version to look
+      // at; the reader behind it is read-only (there is no restore verb).
+      versionsEntry: "查看版本",
+      versionsCountTail: "版",
+      versionsTitle: "產物版本",
+      versionsClose: "關閉版本",
+      versionsPaneLabel: "檢視",
+      versionsPaneContent: "內容",
+      versionsPaneDiff: "差異",
+      versionsCurrent: "目前版本",
+      versionsVersionLabel: "版本",
+      versionsByLabel: "修改者",
+      versionsEmpty: "沒有更早的版本",
+      versionsLoading: "載入中…",
+      versionsLoadError: "讀不到版本紀錄",
+      versionsContentError: "讀不到這個版本的內容",
+      versionsContentGone: "這個版本沒有指向任何內容",
+      versionsUnnamed: "未命名",
+      versionsUnpinned: "這個產物已經不在任務上了",
+      versionsOpaqueLead: "這不是文字檔(",
+      versionsOpaqueTail: "),只能切換前後各看一次。",
     },
   },
   // ── 請示頁(M2 回覆卡 B2)──

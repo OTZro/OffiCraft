@@ -897,6 +897,13 @@
   },
   {
     "auth": "gated",
+    "mcp_tool": "get_task_step",
+    "method": "GET",
+    "path": "/api/tasks/{task_id}/steps/{step_id}",
+    "requires": "machine"
+  },
+  {
+    "auth": "gated",
     "mcp_tool": "set_task_deps",
     "method": "POST",
     "path": "/api/tasks/{task_id}/deps",
@@ -935,6 +942,20 @@
     "mcp_tool": "remove_task_artifact",
     "method": "DELETE",
     "path": "/api/tasks/{task_id}/artifact/{artifact_id}",
+    "requires": "agent"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": "list_task_artifacts",
+    "method": "GET",
+    "path": "/api/tasks/{task_id}/artifacts",
+    "requires": "machine"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": null,
+    "method": "GET",
+    "path": "/api/tasks/{task_id}/artifact/{artifact_id}/history",
     "requires": "agent"
   },
   {
@@ -1230,5 +1251,12 @@
     "method": "POST",
     "path": "/api/outsource-workers/{id}/force-stop",
     "requires": "admin_agent"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": "replace_task_artifact",
+    "method": "POST",
+    "path": "/api/tasks/{task_id}/artifact/{artifact_id}/replace",
+    "requires": "agent"
   }
 ]
