@@ -1,0 +1,55 @@
+-- +goose Up
+-- T-80 — member.token_key_id: WHICH signing key this station last VERIFIED a
+-- credential of this member's with. "" (the default) = never observed.
+--
+-- WHY THE COLUMN EXISTS. The signing keys are a ring (keyring.go): `rotate`
+-- appends a key and moves the signing mark, every older key keeps verifying, and
+-- `remove` is the actual revocation — immediate, with no grace period. So the
+-- only question standing between the owner and pressing remove is "has every
+-- machine come back on the new key yet", and today NOTHING in the system can
+-- answer it: the JWT header is a constant with no `kid`, and the server kept no
+-- per-machine record of which key verified. This column is that record.
+--
+-- 🔴 IT IS AN OBSERVATION, NOT A REPORT. The value is taken at the auth gate
+-- from the key that actually produced a matching HMAC (verifyJWTAnyKey →
+-- requireAuth). No machine can assert it. That is deliberate: an answer a
+-- machine could assert is an answer a stale, misconfigured or hostile machine
+-- could assert, and this value's only job is to make a DESTRUCTIVE, immediate
+-- action safe to press. A machine that has not authenticated since the rotation
+-- leaves its old value here, which reads correctly as "nothing has proved this
+-- one moved".
+--
+-- 🔴 NUMBER NOT FINAL — THIS IS A PLACEHOLDER (00099).
+-- It is deliberately parked well above every number in flight so it cannot
+-- collide by accident while this branch is being reviewed. It MUST be renumbered
+-- to the real next free number before landing, taken by sweeping BOTH sources
+-- (migrations/*.sql AND the Go migrations registered with
+-- goose.AddNamedMigrationContext) across main and every live remote branch —
+-- see server/CLAUDE.md §1 and migration_version_scan_t49e7_test.go. As of the
+-- last snapshot main was at 00074 with 00075/00076 (#394) and 00077-00079 (#389)
+-- claimed, so the real number is likely around 00080; that snapshot moves and is
+-- not a promise.
+--
+-- 🔴 AND A COLLISION IS NOT THE ONLY ORDERING HAZARD HERE. #394 rebuilds the
+-- WHOLE member table (00076_member_kind_assistant_to_staff.sql: CREATE TABLE
+-- member_rebuild … / INSERT … SELECT with a HAND-WRITTEN COLUMN LIST / DROP
+-- TABLE member / RENAME). That list does not mention token_key_id and cannot,
+-- because it was written before this column existed. If #394 lands ABOVE this
+-- file, its rebuild drops this column for every existing row — silently, with no
+-- merge conflict and with both branches' CI green in isolation. Whoever lands
+-- these two must either put this file ABOVE #394's rebuild or add token_key_id
+-- to that rebuild's column lists (both directions, Up and Down).
+--
+-- Renumbering this file touches these places, all of which name the number:
+--   1. this filename (which deliberately avoids the substring "_token": the
+--      repo's .gitignore carries a secrets denylist line `*_token*`, so a file
+--      named after this column would be silently untracked — measured, not
+--      guessed);
+--   2. server/ocserverd/dal.go — the Member.TokenKeyID doc comment;
+--   3. server/ocserverd/dal_member_patch.go — the mfTokenKeyID comment;
+--   4. server/ocserverd/migration.lock — regenerate with ./bin/gen-migration-lock.
+-- No test pins this version or its prior version.
+ALTER TABLE member ADD COLUMN token_key_id TEXT NOT NULL DEFAULT '';
+
+-- +goose Down
+ALTER TABLE member DROP COLUMN token_key_id;

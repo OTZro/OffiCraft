@@ -221,14 +221,41 @@ type Member struct {
 	// insertOnly), so no whole-row snapshot taken before a wake can put an older
 	// floor back over a newer one. Not on the wire.
 	AgentIatFloor float64
-	BankedCost    float64
-	LastOp        string
-	LastOpOK      *bool // nil = no op reported yet (three-valued)
-	LastOpLog     string
-	LastOpReason  string // structured "<code>: <detail>" cause; "" = none reported
-	LastOpAt      float64
-	RosterStatus  string  // "active" | "removed" (dismiss is a SOFT delete)
-	LinkedTaskID  *string // task binding (migrations/00024); nil = unbound. Outsource members carry their bound task id here.
+	// TokenKeyID is WHICH signing key (keyring.go) this station last VERIFIED a
+	// credential of this member's with, "" when it has never verified one.
+	//
+	// 🔴 IT IS THE STATION'S OWN OBSERVATION, NEVER A SELF-REPORT (T-80). The
+	// value is taken from verifyJWTAnyKey at the auth gate — the key that actually
+	// produced a matching HMAC — and there is no wire field, no claim and no
+	// heartbeat block a machine could use to say which key it holds. That is
+	// load-bearing rather than incidental: this column's ONLY purpose is to answer
+	// "is it safe to press remove on the outgoing key", and an answer a machine
+	// could assert would be an answer an out-of-date, wrong or hostile machine
+	// could assert. A credential that has not been presented since the last
+	// rotation therefore leaves a STALE value here, which is the honest reading:
+	// nothing has proved that machine moved.
+	//
+	// The JWT header is a constant and carries no kid, so the auth gate is the one
+	// and only moment in the process where this fact exists.
+	//
+	// Written through SetMemberTokenKeyID only; a whole-row write carries it on
+	// INSERT but never onto an existing row (mfTokenKeyID declares it insertOnly),
+	// for memberFromWorker's reason — it rebuilds a Member from zero and would
+	// send "" on every PutOutsourceWorker. Only warden rows are ever stamped, but
+	// the column is on the member table like every other per-identity fact.
+	//
+	// ON the wire, but only as MachineDTO.token_key_id (GET /api/machines) — a
+	// key ID is outside-safe by construction (keyring.go: ids are random, never
+	// derived from key material).
+	TokenKeyID   string
+	BankedCost   float64
+	LastOp       string
+	LastOpOK     *bool // nil = no op reported yet (three-valued)
+	LastOpLog    string
+	LastOpReason string // structured "<code>: <detail>" cause; "" = none reported
+	LastOpAt     float64
+	RosterStatus string  // "active" | "removed" (dismiss is a SOFT delete)
+	LinkedTaskID *string // task binding (migrations/00024); nil = unbound. Outsource members carry their bound task id here.
 	// ── A案 P7d (migrations/00025 — the outsource_worker fold) ────────────────
 	// Codename is the outsource display codename (O-7 / S-12 / H-3), globally
 	// unique and never reused (partial UNIQUE index); "" (stored NULL) on every
@@ -260,7 +287,7 @@ const memberColumns = `id, name, kind, role_key, runtime, model, actual_model, e
 	last_op, last_op_ok, last_op_log, last_op_reason, last_op_at, roster_status,
 	linked_task_id, codename, created_ts, released_ts, activated_ts,
 	avatar_attachment_id, forced_stop_at, handover_noticed_ts, agent_iat_floor,
-	restart_after_stop`
+	restart_after_stop, token_key_id`
 
 func scanMember(row interface{ Scan(...any) error }) (Member, error) {
 	var m Member
@@ -275,7 +302,7 @@ func scanMember(row interface{ Scan(...any) error }) (Member, error) {
 		&m.LastOp, &lastOpOK, &m.LastOpLog, &m.LastOpReason, &m.LastOpAt, &m.RosterStatus,
 		&linkedTaskID, &codename, &m.CreatedTS, &m.ReleasedTS, &m.ActivatedTS,
 		&m.AvatarAttachmentID, &m.ForcedStopAt, &m.HandoverNoticedTS, &m.AgentIatFloor,
-		&m.RestartAfterStop,
+		&m.RestartAfterStop, &m.TokenKeyID,
 	)
 	if err != nil {
 		return Member{}, err
@@ -3285,4 +3312,19 @@ func (d *DAL) displayNames(query string) (map[string]string, error) {
 // does. Nothing would have gone red on the day they diverged.
 func (d *DAL) SetMemberAgentIatFloor(id string, ts float64) error {
 	return d.PatchMember(id, mfAgentIatFloor(ts))
+}
+
+// SetMemberTokenKeyID records WHICH signing key this station just verified a
+// credential of this member's with (T-80). It is the SOLE writer that moves the
+// column: a whole-row write carries it on INSERT but never onto an existing row
+// (mfTokenKeyID declares it insertOnly).
+//
+// NOT forward-only, and it must not become so. The value is an OBSERVATION and
+// it legitimately moves in both directions: a machine reinstalled with an older
+// credential goes backwards, and that is exactly the fact the owner needs to see
+// before pressing remove. There is no ordering on key ids to be monotone about.
+//
+// A missing row is a clean no-op (0 rows affected, no error).
+func (d *DAL) SetMemberTokenKeyID(id, keyID string) error {
+	return d.PatchMember(id, mfTokenKeyID(keyID))
 }
