@@ -148,11 +148,23 @@ data: {"seq":42,"topic":"member","op":"patch","data":{"entity":"member","key":"o
   `trigger == self` is by construction its own action echoed back (e.g. its own
   `update_step_status` fanning its own task delta), pure token burn. Frames triggered by
   the owner, the server, or ANY other member MUST still be processed; an absent/blank
-  trigger MUST be processed (fail-open — old producer, unknown actor). **Exemption: the
-  `member` topic is NOT suppressed** — a member delta naming self is a lifecycle NUDGE
-  (wind-down / recycle hooks), not printed content, and the self-requested recycle
-  (`restart_self`, T-4c71) deliberately rides a SELF-triggered member delta whose
-  handover wake must still land; suppressing it would break graceful handover for zero token gain.
+  trigger MUST be processed (fail-open — old producer, unknown actor). **TWO topics are
+  exempt from the frame-layer rule.**
+  - **`member`** — a member delta naming self is a lifecycle NUDGE (wind-down / recycle
+    hooks), not printed content, and the self-requested recycle (`restart_self`, T-4c71)
+    deliberately rides a SELF-triggered member delta whose handover wake must still land;
+    suppressing it would break graceful handover for zero token gain.
+  - **`chat`** (T-48, owner ruling 2026-09-03) — a self-triggered chat delta MUST still
+    drive the drain. Dropping the frame does not avoid the work, it POSTPONES it: the
+    message the delta announced stays unread server-side until some other actor's delta
+    happens to flush it, which is the defect the paragraph below already describes. The
+    token saving the frame rule was after is delivered by the message layer instead: the
+    drain declines to PRINT a message whose sender is the listener itself, while still
+    filing its read receipt — the one place in T-48 where something is marked read without
+    being shown, and it is deliberate because the reader wrote it. One self-send costs one
+    extra `GET /api/chat`, and the audience of a self-addressed write is a set, so it is
+    one frame and one drain, never a fan of them. Marking read fans only `chat_read`,
+    which this listener does not act on, so the two cannot form a loop.
 - **The echo rule has a SECOND layer, on the refetched message's `from`.** The frame layer
   above is necessary but NOT sufficient, because on its own it can only ever DELAY a self
   echo: a suppressed chat delta never drives the listener's chat drain, so the message that
@@ -500,6 +512,23 @@ data: {"topic":"warden-command","data":{"rpc":"start","args":{"member_id":"m-1a2
     warden's own connection). A warden build that predates this verb MUST treat it as any
     unknown rpc: log + skip, reader loop unharmed — which is what makes shipping the verb
     fleet-wide non-breaking.
+  - `renew` (T-80 — the station has observed this machine still presenting a credential
+    signed by a key that is no longer the signing key): `{member_id}` — the warden runs
+    its OWN credential renewal NOW (`POST /api/machines/renew-credential` → subject check
+    → present the candidate at a read-only endpoint → atomic 0600 write → exec-in-place)
+    instead of waiting for an expiry that will never arrive, because warden credentials
+    are minted without one.
+    🔴 **THE FRAME CARRIES NO CREDENTIAL AND MUST NEVER BE GIVEN ONE.** The server says
+    GO and nothing else; the machine asks for its own credential over its own
+    authenticated connection. A frame able to carry a credential would be a channel that
+    rewrites any host's identity on the server's say-so, and the whole point of this verb
+    is that no such channel exists (owner ruling, option A). `member_id` is informational
+    addressing only, as with `update`.
+    No receipt rides back, and that is not fire-and-forget carelessness but the stronger
+    evidence: what settles whether a machine converged is the KEY ID THE SERVER OBSERVES
+    on that machine's next authenticated request, which a warden that answered politely
+    and did nothing cannot forge. A warden build that predates this verb MUST treat it as
+    any unknown rpc: log + skip, reader loop unharmed.
   - **Outsource workers ride the SAME `start`/`stop` verbs** (A案 P5b naming
     convergence — the former `worker_start`/`worker_stop` verbs are RETIRED):
     a worker spawn is a plain `start` with `member_id == <ow-id>`,

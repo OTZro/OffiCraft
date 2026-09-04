@@ -201,9 +201,17 @@ func mfDesiredMachineID(v string) memberField {
 // figure would silently REFUND spend the owner already saw — and the worker half
 // is worse, because memberFromWorker rebuilds the row from an OutsourceWorker
 // read at the same stale moment. The INSERT still carries it so a new row starts
-// at whatever it was born with; AddMemberBankedCost is the only writer that
-// moves it, and it accumulates in SQL so two concurrent banking edges cannot
-// lose each other's contribution.
+// at whatever it was born with; after that it moves only through a single-column
+// writer, and there are TWO of them by design — AddMemberBankedCost accumulates
+// (`banked_cost + ?`, in SQL, so two concurrent banking edges cannot lose each
+// other's contribution) and ZeroMemberBankedCost resets (`banked_cost = 0`, T-53).
+//
+// 🔴 THIS SENTENCE SAID "the only writer" AND THAT WAS FALSE — twice, in two
+// files, from two different branches. It is the shape that keeps coming back:
+// "sole writer" reads like a property of the column, but it is a claim about a
+// POPULATION, and a population grows. The reset arrived after the accumulator and
+// nothing anywhere went red. Whatever the count is when you read this, do not
+// trust it — `grep 'banked_cost' *.go` is the answer, and it is cheap.
 func mfBankedCost(v float64) memberField {
 	return memberField{col: "banked_cost", val: v, insertOnly: true}
 }
@@ -280,6 +288,25 @@ func mfAgentIatFloor(v float64) memberField {
 	return memberField{col: "agent_iat_floor", val: v, insertOnly: true, forwardOnly: true}
 }
 
+// mfTokenKeyID — the station's own observation of WHICH signing key this
+// member's credential is signed by (T-80, migrations/00080). It is
+// insert-only for memberFromWorker's reason, the same one handover_noticed_ts
+// and agent_iat_floor carry: that function rebuilds a Member from zero and does
+// not know this column, so every PutOutsourceWorker would send "" — and ""
+// here does not mean "no key", it means "never observed", which is a fact the
+// owner reads directly ("that machine has not authenticated since the
+// rotation"). A whole-row writer blanking it would turn a machine that HAS been
+// seen back into one that has not, i.e. make the fleet look less migrated than
+// it is, and the owner would go on not pressing remove.
+//
+// NOT forwardOnly, deliberately: key ids have no order, and the value must be
+// free to move backwards when a machine comes back on an older credential.
+// Guarded by TestPutMemberNeverOverwritesSingleColumnOwnedFields: clearing
+// insertOnly here turns that test red NAMING this column.
+func mfTokenKeyID(v string) memberField {
+	return memberField{col: "token_key_id", val: v, insertOnly: true}
+}
+
 // mfRestartAfterStop — 「下線之後要不要起來」 (T-14 項目 7, migrations/00070),
 // and the ONE owner-intent column on this table that is deliberately NOT
 // insert-only: restart_after_stop IS carried by the whole-row upsert.
@@ -333,7 +360,7 @@ func memberWholeRow(m Member) []memberField {
 		mfActivatedTS(m.ActivatedTS),
 		mfAvatarAttachmentID(m.AvatarAttachmentID), mfForcedStopAt(m.ForcedStopAt),
 		mfHandoverNoticedTS(m.HandoverNoticedTS), mfAgentIatFloor(m.AgentIatFloor),
-		mfRestartAfterStop(m.RestartAfterStop),
+		mfRestartAfterStop(m.RestartAfterStop), mfTokenKeyID(m.TokenKeyID),
 	}
 }
 

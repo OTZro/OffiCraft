@@ -297,6 +297,28 @@ type machineDTO struct {
 	// "effective"; collapsing it into green is the exact defect being retired.
 	// nil = this warden build does not report the verdict at all.
 	CutoverEffect *string `json:"cutover_effect"`
+	// TokenKeyID / TokenKeyCurrent are T-80's answer to the one question that
+	// stands between the owner and pressing 「移除」 on a retired signing key —
+	// an act with no grace period at all: has this machine come back on the
+	// current key yet?
+	//
+	// 🔴 BOTH ARE OBSERVATIONS THIS STATION MADE, NOT ANYTHING A MACHINE SAID.
+	// TokenKeyID is the id of the key whose HMAC actually verified this
+	// machine's credential at the auth gate (member.token_key_id). There is no
+	// claim, no header and no telemetry block a warden could use to assert it,
+	// and adding one would defeat the point: the value gates a destructive,
+	// immediate action, so it must not be assertable by the very machines being
+	// counted. nil = this station has never verified a credential of that
+	// machine's — for a machine that has not authenticated since the rotation
+	// the value simply stays where it was, which is the honest reading.
+	//
+	// TokenKeyCurrent is that id compared against the LIVE ring's signing key,
+	// computed here for hardware_stale's reason: a client doing the comparison
+	// would need the active key id on the wire too, and that is a second home
+	// for the same fact that can disagree with this one. nil exactly when
+	// TokenKeyID is nil.
+	TokenKeyID      *string `json:"token_key_id"`
+	TokenKeyCurrent *bool   `json:"token_key_current"`
 }
 
 type machineOnboardResultDTO struct {
@@ -1212,6 +1234,25 @@ type replyCardCountDTO struct {
 	// 近期已處理 header (and hide the pane at zero) without fetching the lists.
 	Answered int `json:"answered"`
 	Expired  int `json:"expired"`
+}
+
+// chatListDTO is the envelope EVERY path of GET /api/chat answers (T-48).
+//
+// It replaced a bare []chatMessageDTO. The array had nowhere to say "there is
+// more in this direction": a caller could only infer exhaustion from a page
+// shorter than `limit`, and a page is short for reasons that have nothing to do
+// with exhaustion — a participant filter, `caller_only`, an unread set spread
+// across senders. The inference was wrong exactly when it mattered, and wrong
+// silently.
+//
+// NextCursor is OPAQUE (see encodeChatCursor) and omitted when the walk has
+// ended — `omitempty`, so "no more" is the ABSENCE of the field rather than a
+// value a client has to remember to compare against. Messages is never null:
+// an empty page is `[]`, because a client that has to handle both null and []
+// for the same fact will eventually handle only one.
+type chatListDTO struct {
+	Messages   []chatMessageDTO `json:"messages"`
+	NextCursor string           `json:"next_cursor,omitempty"`
 }
 
 type chatUnreadCountDTO struct {

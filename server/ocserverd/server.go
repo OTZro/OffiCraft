@@ -173,9 +173,36 @@ type contextKey string
 
 const claimsContextKey contextKey = "ocserverd.claims"
 
+// verifyingKeyContextKey carries WHICH ring key verified this request's
+// credential (T-80). It is put here rather than acted on in the middleware
+// because the two questions are answered in different places: only requireAuth
+// can know which key matched, and only a handler can know whether this request
+// is evidence of anything.
+//
+// 🔴 WHY THAT SEPARATION IS THE WHOLE POINT. The first shape of this feature
+// recorded the key in the middleware, on every gated route — which is wrong in
+// the one direction that matters, because a request is not proof that the
+// machine is RUNNING on the credential it just presented. A warden renewing
+// itself presents its CANDIDATE credential to /api/machines before writing it
+// to disk (cli/ocwarden/renewapply.go: probe, then write, then exec), so the
+// middleware recorded "this machine has moved to the new key" about a
+// credential the machine might never adopt — and if the write then failed, the
+// station said converged while the machine kept running on the old key. That is
+// the number reading SAFE when it is not, on the one screen whose whole purpose
+// is to gate an irreversible removal.
+const verifyingKeyContextKey contextKey = "ocserverd.verifying_key_id"
+
 func claimsFromContext(ctx context.Context) map[string]any {
 	claims, _ := ctx.Value(claimsContextKey).(map[string]any)
 	return claims
+}
+
+// verifyingKeyFromContext returns the id of the ring key that verified this
+// request, or "" when there is none (an unauthenticated route, or a test that
+// built the context by hand).
+func verifyingKeyFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(verifyingKeyContextKey).(string)
+	return id
 }
 
 // extractToken pulls the bearer token from the request — the byte-faithful
@@ -195,8 +222,16 @@ func extractToken(r *http.Request) string {
 		}
 		return header
 	}
-	return r.URL.Query().Get("token")
+	return r.URL.Query().Get(authTokenQueryParam)
 }
+
+// authTokenQueryParam is the header-less credential extractToken accepts above.
+// Named here rather than typed at each use because it is not only read: GET
+// /api/chat refuses query parameters it does not declare (unknownChatQueryParams)
+// and has to know that this one is a credential rather than a typo — a second
+// spelling of it there would deny every EventSource and <img src> that carries
+// its token this way, and would deny them only in production.
+const authTokenQueryParam = "token"
 
 // requireAuth wraps a GATED handler with the JWT gate: the extracted token
 // (header first, then the `?token=` query fallback — see extractToken)
@@ -224,6 +259,13 @@ func extractToken(r *http.Request) string {
 // signature verification — a forged token is still just "invalid token" and
 // never reaches a roster read. It also binds every exp-less credential to an
 // active warden row; no other signed JWT may become permanent.
+//
+// T-80: the id of the ring key that verified this request is put on the context
+// (verifyingKeyContextKey) and NOT acted on here. requireAuth is the only place
+// that can know which key matched; it is emphatically NOT the place that can
+// know whether the request means the machine is RUNNING on that credential.
+// See verifyingKeyContextKey for what recording it here got wrong, and
+// HandleEventsApiEventsGet for where the answer is actually taken.
 func requireAuth(keys *keyring, ownerIatFloor func() int64, lookup func(id string) (*Member, error), next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if keys == nil || len(keys.verifySecrets()) == 0 {
@@ -235,7 +277,7 @@ func requireAuth(keys *keyring, ownerIatFloor func() int64, lookup func(id strin
 			writeError(w, http.StatusUnauthorized, "missing credentials")
 			return
 		}
-		claims, err := verifyJWTAnyKey(keys, token, time.Now().Unix())
+		claims, keyID, err := verifyJWTAnyKey(keys, token, time.Now().Unix())
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "invalid token")
 			return
@@ -291,7 +333,13 @@ func requireAuth(keys *keyring, ownerIatFloor func() int64, lookup func(id strin
 			writeError(w, http.StatusUnauthorized, refusal)
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), claimsContextKey, claims)))
+		// T-80: hand the verifying key id down, do not act on it. Everything
+		// above can still refuse, so a key id only reaches a handler on a
+		// credential that was actually accepted — but "accepted" is still not
+		// "the machine is running on it", which is why nothing is recorded here.
+		ctx := context.WithValue(r.Context(), claimsContextKey, claims)
+		ctx = context.WithValue(ctx, verifyingKeyContextKey, keyID)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -538,15 +586,10 @@ const stationShutdownTimeout = 5 * time.Second
 // (unless --no-reconcile) and the outsource-assignment scheduler cadence
 // (unless --no-outsource), bind host:port.
 func cmdServe(env func(string) string, noReconcile, noOutsource bool, out io.Writer) int {
-	cfg, warnings, err := loadConfig(configPath(env))
-	if err != nil {
-		fmt.Fprintf(out, "[ocserverd] FATAL: %v\n", err)
-		return 1
+	cfg, dsn, rc := announceResolution("serve", env, out)
+	if rc != 0 {
+		return rc
 	}
-	for _, w := range warnings {
-		fmt.Fprintf(out, "[ocserverd] WARN: %s\n", w)
-	}
-	dsn := resolveDSN(env, cfg)
 	dbPath, ok := sqliteFilePath(dsn)
 	if !ok {
 		fmt.Fprintf(out, "[ocserverd] FATAL: serve supports sqlite DSNs only for now (got %q)\n", dsn)

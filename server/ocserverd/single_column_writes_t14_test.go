@@ -77,9 +77,12 @@ var singleColumnOwnedFields = []struct {
 	// print — a reader who breaks this needs to be told WHICH column, not that
 	// "a member upsert regressed".
 	column string
-	// writer names the sole writer, so the message says where the fix lives.
+	// writer names the single-column writer this row stamps through, so the
+	// message says where the fix lives. It is not necessarily the column's ONLY
+	// writer (banked_cost has two: one accumulates, one resets); what the
+	// invariant below forbids is the WHOLE-ROW upsert carrying the column.
 	writer string
-	// stamp moves the column off its zero through that sole writer.
+	// stamp moves the column off its zero through that writer.
 	stamp func(*DAL, string) error
 	// want is the value stamp must have left behind. `any` rather than a
 	// number because the registry outgrew the numeric anchors it started on —
@@ -116,6 +119,22 @@ var singleColumnOwnedFields = []struct {
 		want:   float64(1700),
 		read:   func(m Member) any { return m.AgentIatFloor },
 		stale:  func(m *Member) { m.AgentIatFloor = 0 },
+	},
+	{
+		// T-80. "" is what "this station has never verified a credential of
+		// this member's" looks like, so a stale whole-row write that blanks the
+		// column turns a machine the owner has SEEN back into one he has not —
+		// and the whole point of the column is to tell him whether it is safe to
+		// remove the outgoing signing key. Under-counting the migrated fleet is
+		// the direction that keeps him from ever pressing it.
+		column: "token_key_id",
+		writer: "SetMemberTokenKeyID",
+		stamp: func(d *DAL, id string) error {
+			return d.SetMemberTokenKeyID(id, "k-observed")
+		},
+		want:  "k-observed",
+		read:  func(m Member) any { return m.TokenKeyID },
+		stale: func(m *Member) { m.TokenKeyID = "" },
 	},
 	{
 		column: "desired_machine_id",
@@ -268,8 +287,8 @@ func TestPutMemberNeverOverwritesSingleColumnOwnedFields(t *testing.T) {
 	// A deleted row is the one mutation the loop below cannot see: the guard
 	// would pass by iterating less. Bump this deliberately when the registry
 	// grows.
-	if len(singleColumnOwnedFields) != 17 {
-		t.Fatalf("singleColumnOwnedFields has %d entries, expected 17. Adding a "+
+	if len(singleColumnOwnedFields) != 18 {
+		t.Fatalf("singleColumnOwnedFields has %d entries, expected 18. Adding a "+
 			"column? Bump this number. REMOVING one? That means a column became "+
 			"writable by a whole-row write again — say why in the commit",
 			len(singleColumnOwnedFields))
@@ -289,7 +308,7 @@ func TestPutMemberNeverOverwritesSingleColumnOwnedFields(t *testing.T) {
 			}
 
 			// The whole-row writer: a snapshot taken BEFORE the stamp, which is
-			// every snapshot, since nothing but the sole writer moves the value.
+			// every snapshot, since nothing but a single-column writer moves it.
 			stale := seed
 			f.stale(&stale)
 			stale.Name = "renamed by an unrelated write"
@@ -309,9 +328,9 @@ func TestPutMemberNeverOverwritesSingleColumnOwnedFields(t *testing.T) {
 				// as `any` is STRICTER than the float64 it replaced, never
 				// looser — verified by seeding both of those pairs.
 				t.Fatalf("member.%s was clobbered by a whole-row upsert: %#v (%T) → %#v (%T).\n"+
-					"%s is the SOLE writer of this column; a whole-row write must "+
-					"never land it on an existing row. If you just cleared "+
-					"`insertOnly` on this column's constructor in "+
+					"%s writes this column one column at a time; a whole-row "+
+					"write must never land it on an existing row. If you just "+
+					"cleared `insertOnly` on this column's constructor in "+
 					"dal_member_patch.go, that is the line to restore.",
 					f.column, f.want, f.want, got, got, f.writer)
 			}
@@ -473,7 +492,7 @@ func TestEveryColumnOutOfTheSetListIsRegistered(t *testing.T) {
 // asking for one — so a newly constrained column cannot slip past the guard by
 // being unprobeable. The value only has to DIFFER from what fullMember seeds.
 var probeOverrides = map[string]string{
-	"kind": KindWarden, // CHECK kind IN ('assistant','warden','outsource'); fullMember seeds "assistant"
+	"kind": KindWarden, // CHECK kind IN ('staff','warden','outsource'); fullMember seeds "staff"
 }
 
 // survivesAStaleWholeRowUpsert writes a probe value straight into one column,
