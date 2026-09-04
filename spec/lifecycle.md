@@ -397,6 +397,16 @@ ceiling for non-warden agent-token mints.
     `GET /api/machines`. An implementation MUST NOT accept this fact from the machine:
     the answer gates an immediate, grace-period-free revocation, so an answer a machine
     can assert is an answer a stale or hostile machine can assert.
+    ⚠️ **Its READERS are wider than the owner.** `GET /api/machines` sits on
+    `principalMachine`, the LOWEST rank, so every authenticated principal — every agent
+    and every warden, not just the cockpit — can read every machine's `token_key_id`.
+    That is not a leak: key ids are drawn from crypto/rand and are never derived from key
+    material (keyring.go states why deriving one would be a password oracle), so the id
+    discloses nothing about the key. What it DOES disclose is how many distinct keys the
+    ring is currently in use across. Accepted deliberately rather than overlooked; an
+    implementation MUST NOT respond to this by putting the ACTIVE key id on the wire as
+    well, which is the shortcut that would let a client compute `token_key_current`
+    itself and would give the same fact a second home.
   - A machine observed on a key that is no longer signing is sent the `renew`
     warden-command (spec/sse.md), which carries no credential and no target — the station
     says GO, and the machine runs its own §1.4 renewal.
