@@ -77,13 +77,21 @@ api.listChat = async (
 // far inside the 400ms retry window, so this slows nothing down but the
 // arrival.
 const PAGE_LATENCY_MS = 40;
+// 🔴 THE LATENCY IS A KNOB BECAUSE THE 400ms RETRY WINDOW IS MEASURED FROM THE
+// ASK, NOT FROM THE LANDING (T-48, independent review #23 F-1). A guard that
+// wants to see what the product does with an event landing in the gap between
+// 「the page committed」 and 「React wrote its rows」 must have that gap fall
+// OUTSIDE the retry window — otherwise the throttle answers first and the gate
+// under test is never asked. Default stays 40ms: that is what a real forward
+// page costs, and every other test here depends on it.
+let pageLatency = PAGE_LATENCY_MS;
 
 api.listChatWindow = async (
   _withId: string,
   anchor: { startId?: string; endId?: string },
   limit: number,
 ) => {
-  await new Promise((r) => setTimeout(r, PAGE_LATENCY_MS));
+  await new Promise((r) => setTimeout(r, pageLatency));
   if (anchor.startId) {
     const w = window as unknown as Record<string, number>;
     w[FORWARD_COUNT_KEY] = (w[FORWARD_COUNT_KEY] ?? 0) + 1;
@@ -122,14 +130,33 @@ const peer: Member = {
   unreadCount: 0,
 };
 
-export function ChatForwardWalkStory() {
+export function ChatForwardWalkStory({
+  pageLatencyMs,
+  widthPx,
+}: {
+  pageLatencyMs?: number;
+  /** 🔴 PIN THE COLUMN WIDTH — for the guards that must NOT have the reflow in
+   * the answer (T-48, independent review #23). `.chat` is shrink-to-fit inside
+   * the unbounded mount point, so the column oscillates 273 ↔ 406px and row
+   * heights 165 ↔ 102 as content lands (fix3 §2.4). That instability is left on
+   * by DEFAULT and deliberately — it is what exposed the guard's own momentum
+   * bug — but a guard measuring what a CLAMP does needs the box to change size
+   * only when it is told to. */
+  widthPx?: number;
+} = {}) {
+  pageLatency = pageLatencyMs ?? PAGE_LATENCY_MS;
   return (
     <I18nProvider>
       {/* `.chat` is a height:100% flex column and the CT mount point has no
         * height of its own — without a bounded box the scroller is unbounded,
         * every row is on screen at once and there is no 「bottom」 to reach. */}
       <div
-        style={{ height: 720, display: "flex", background: "var(--color-main-bg)" }}
+        style={{
+          height: 720,
+          width: widthPx,
+          display: "flex",
+          background: "var(--color-main-bg)",
+        }}
       >
         <ChatArea
           key={peer.id}

@@ -172,6 +172,46 @@ type ChatSession = {
    * pull the view down when it is — if the owner scrolled UP to read history,
    * an arrival must NOT yank them back. */
   nearBottom: boolean;
+  /** `scrollTop` as of the previous scroll event on this conversation's
+   * viewport — the only thing that tells 「the reader pushed the box down」
+   * apart from 「the box moved under the reader」.
+   *
+   * 🔴 A `scroll` EVENT IS NOT A GESTURE, AND THE FORWARD WALK USED TO ASSUME
+   * IT WAS (T-48, independent review #22 F-1). When content SHRINKS — a
+   * reflow, a reply card resolving to something shorter, a window resize — the
+   * browser CLAMPS `scrollTop` to the new limit and fires a `scroll` event for
+   * the clamp. That event arrives with the viewport sitting in the bottom
+   * band, so 「near the bottom」 is true and a forward page is bought with
+   * nobody having touched anything.
+   *
+   * Measured in Chromium, `chat-forward-walk` 「版面自己縮矮把讀的人夾回極限的
+   * 那個事件,不准買到一頁」 (900px pinned column, no CPU throttle): the reader
+   * parked on the jump target at `scrollTop` 4984 in a 10491px box, 30 rows
+   * below the fold collapse, the box becomes 5346 — and Chromium fires exactly
+   * ONE `scroll` event, `scrollTop` 4984 → 4803, i.e. BACKWARDS, landing at
+   * distance 0. A clamp can only ever move `scrollTop` DOWN in value; a reader
+   * asking for more below moves it UP. So the direction is the discriminator,
+   * and it needs no threshold to be read.
+   *
+   * 📏 THE NUMBERS THAT USED TO BE HERE WERE WRONG, AND SO WAS THE STORY THEY
+   * TOLD (T-48, independent review #23 F-5). This note read 「the box went
+   * 15631 → 10110px and `scrollTop` 9932 → 9600 … and that clamp bought the
+   * second page — 31 reds in 40 runs」. In the trace it cites (fix3 §2.4) the
+   * clamp is `scrollTop` 9941 → 7344, and it landed at DISTANCE 2281 — nowhere
+   * near the 80px band, so it bought nothing. The page that ran was bought
+   * 87ms later by a FORWARD event (+116px, distance 24) that the guard's own
+   * re-measuring flick loop produced by re-walking travel it had already
+   * delivered. Those 31 reds belong to the guard's momentum bug, not to this
+   * rule. The rule stands on the measurement above, which is its own.
+   *
+   * 🟠 AND THE PRICE, ALSO MEASURED (review #23 F-4): swallowing the clamp
+   * leaves the reader ON the scroll limit, where further downward pushes move
+   * nothing and therefore fire NOTHING (measured: 5 pushes, 0 events). The next
+   * page then costs them TWO gestures — up, then down — instead of one. That is
+   * the right trade: a clamp is not a gesture and must not buy a page, and this
+   * cost is recoverable where a free page is not. Pinned in the guard above so
+   * that changing it is loud. */
+  lastScrollTop: number;
   /** Ids seen on the previous messages render — the diff basis for "which
    * messages are NEW" (a refetch replaces the whole array, so append detection
    * must go through ids, not length). */
@@ -237,6 +277,7 @@ function freshChatSession(unreadCount: number): ChatSession {
   return {
     initialUnread: unreadCount,
     nearBottom: true,
+    lastScrollTop: 0,
     prevIds: new Set(),
     prependAnchor: null,
     loadingOlder: false,
@@ -409,6 +450,20 @@ export function ChatArea({
   // just-clicked optimism, or the server-confirmed `waking` presence itself.
   const wakeInFlight = wakePending || member.lifecycle === "waking";
 
+  // Threshold (px) within which the viewport counts as "at the bottom" for
+  // auto-follow and the read watermark.
+  const NEAR_BOTTOM_PX = 80;
+
+  // The scroll viewport. Declared here rather than beside `endRef` below
+  // because `useChat` is handed a probe that reads it (F-6).
+  const messagesRef = useRef<HTMLDivElement>(null);
+  const readerAtBottom = useCallback(() => {
+    const el = messagesRef.current;
+    if (!el) return false;
+    // Same band as `onMessagesScroll` — and the same reason it is 80px there.
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
+  }, []);
+
   const {
     messages,
     peerLastReadTs,
@@ -426,7 +481,10 @@ export function ChatArea({
     // loads the live tail first and then throws it away — see useChat's note.
     // The fetch itself still happens below, in the jump reactor, because the
     // viewport, the highlight and the miss notice are this component's business.
-  } = useChat(member.id, jumpToMsgId);
+    // 🔴 F-6 (review #22): a swallowed gesture is replayed up to 400ms later,
+    // and the reader may have left the bottom band in between. The viewport is
+    // this component's, so the answer is too.
+  } = useChat(member.id, jumpToMsgId, readerAtBottom);
 
 
   // Released-worker codenames: an ow- participant that is NOT in the live
@@ -714,7 +772,6 @@ export function ChatArea({
   // and `endRef` is a bottom sentinel we scroll into view. We only auto-pull when
   // the user is already near the bottom OR just sent a message — if they scrolled
   // UP to read history, a new incoming message must NOT yank them back down.
-  const messagesRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
   // ===== LINE/FB-style unread jump (M2 batch 19) =====
@@ -851,9 +908,6 @@ export function ChatArea({
     // the latch stays untouched here.
   }, [messages]);
 
-  // Threshold (px) within which the viewport counts as "at the bottom" for
-  // auto-follow and the read watermark.
-  const NEAR_BOTTOM_PX = 80;
   function onMessagesScroll() {
     const el = messagesRef.current;
     if (!el) return;
@@ -865,6 +919,16 @@ export function ChatArea({
     }
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
     const nowNearBottom = distance <= NEAR_BOTTOM_PX;
+    // Did the READER move the box down, or did the box move under them? See
+    // `lastScrollTop` — a shrink CLAMPS `scrollTop` and fires a scroll event
+    // for the clamp, and only the direction tells the two apart.
+    //
+    // ⚠️ NOT MOVED IS NOT THE SAME AS MOVED BACKWARDS, and this asks only about
+    // backwards. A clamp can only ever lower `scrollTop`; an equal reading is a
+    // box that did not move (a synthetic event, and every length in jsdom),
+    // which this branch has always served and which this rule is not about.
+    const notClampedBack = el.scrollTop >= session.lastScrollTop;
+    session.lastScrollTop = el.scrollTop;
     // Near the BOTTOM of an ANCHOR WINDOW → pull ONE page FORWARDS, and then
     // stop (T-48 ③, owner rc-d2e1b69edc66 ①). The exact mirror of the top
     // branch above, and the reason the jump can afford to fetch only two pages:
@@ -891,7 +955,7 @@ export function ChatArea({
     // `human: true` — every call now comes from the reader moving the box, so
     // it clears the loader's no-progress bound (at most once per 400ms, which
     // is what keeps a 60-events-per-second wheel from becoming 60 requests).
-    if (nowNearBottom && hasNewer) {
+    if (nowNearBottom && hasNewer && notClampedBack) {
       void loadNewer({ human: true });
     }
     // ① The arrow's condition, and it is a DIFFERENT question from

@@ -18,6 +18,7 @@
 //      range as contiguous). resetToLatest() is the way back.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { StrictMode } from "react";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import type { ChatCursor, ChatMessage } from "../api/adapter";
 
@@ -230,6 +231,144 @@ describe("useChat scrollback (loadOlder / hasMore)", () => {
       trip2.result.current.messages.map((m) => m.id),
       "上一趟的往上捲頁不准接到這一趟的線頭上",
     ).toEqual(nowShowing);
+  });
+
+  it("那一頁還沒上畫面時,別的 commit 觸發的 render 不准把戳記清掉", async () => {
+    // 🔴 戳記存的是「那一列」而不是布林,而這條是它唯一的紅(獨立審查 #23 F-3
+    // 判「做不出鑑別」,那是因為押的窗口被 `loadingNewer` 那把鎖蓋掉了)。
+    //
+    // 能分出勝負的窗口有兩段,要**同時**用上:
+    //   ① 欠條寫在 `await view.commit(...)` **之前**,而 commit 會 await
+    //      `prefillWaitingCards` —— 一張掛住的請示卡就把 commit 停在那裡,欠條
+    //      已經寫下、什麼都還沒 render。這段裡 `loadOlder`(不拿世代票、也不碰
+    //      `loadingNewer`)commit 完會觸發 render ⇒ layout effect 被叫到,而欠
+    //      的那一列不在 `thread.messages` 裡。存布林 ⇒ 當場清掉、提早開閘。
+    //   ② `loadNewer` 收尾時鎖是**同步**放掉的,React 晚一步才畫 —— 所以放掉鎖
+    //      之後、那一頁上畫面之前有一格,而人為手勢在那一格裡不再被鎖擋住。
+    // 兩段接起來:①提早開的閘 ＋ ②沒有鎖的那一格 ⇒ 同一次手勢買到第二頁。
+    h.listChat.mockResolvedValueOnce(page("n", 1000, 30));
+    const { result } = renderHook(() => useChat("b"));
+    await waitFor(() => expect(result.current.messages).toHaveLength(30));
+    await act(async () => {
+      h.listChatWindow.mockResolvedValueOnce(page("w", 100, 30));
+      h.listChatWindow.mockResolvedValueOnce(page("w", 129, 30));
+      await result.current.loadAround("w0");
+      await settle();
+    });
+    // 讓 400ms 的節流窗口過去,最後那一次手勢擋不擋得住只剩下閘決定。
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 500));
+    });
+
+    // 往下那一頁的最後一列帶一張還在等的請示卡,而卡掛住 ⇒ commit 停在 prefill。
+    const card = deferred<unknown>();
+    h.getReplyCard.mockReturnValueOnce(card.promise as never);
+    h.listChatWindow.mockResolvedValueOnce([
+      ...page("f", 9000, 29),
+      mkCardMsg("fcard", "card1", 9029),
+    ]);
+    let forward!: Promise<void>;
+    act(() => {
+      forward = result.current.loadNewer();
+    });
+    await act(async () => {
+      await settle();
+    });
+    expect(
+      result.current.messages,
+      "前提:那一頁停在 prefill 上,欠條已經寫下、一列都還沒上畫面",
+    ).toHaveLength(30);
+
+    // 別的 commit 落地並且畫出來 —— 這一次 render 跟欠的那一列毫無關係。
+    h.listChat.mockResolvedValueOnce(page("o", 1, 30));
+    await act(async () => {
+      await result.current.loadOlder();
+      await settle();
+    });
+    expect(
+      result.current.messages,
+      "前提:那次 render 真的發生了(歷史頁接在前面),而且欠的那一列還是不在",
+    ).toHaveLength(60);
+
+    const before = h.listChatWindow.mock.calls.length;
+    h.listChatWindow.mockResolvedValueOnce(page("g", 9100, 30));
+    await act(async () => {
+      card.resolve({ id: "card1" });
+      await forward;
+      // 這一行就是那一格:鎖放掉了,列還沒被畫出來。
+      await result.current.loadNewer({ human: true });
+      await settle();
+    });
+    expect(
+      h.listChatWindow.mock.calls.length - before,
+      "別的 commit 觸發的 render 把戳記清掉了 —— 那一頁還沒上畫面,同一次手勢卻買到了第二頁",
+    ).toBe(0);
+  });
+
+  it("被 supersede 的那一頁不准把往下走訪永久鎖死 —— 欠條掛在一列永遠不會出現的訊息上", async () => {
+    // 🔴 順序就是這條測試的全部。`loadNewer` 在 commit **之前**記下欠條,而被
+    // supersede 的 commit 那一列永遠不會進 `thread.messages`,所以 layout effect
+    // 永遠清不掉它 ⇒ sight gate 永久關閘 ⇒ 往下走訪整條死掉。
+    // 既有測試看不見它,是因為它們都讓那一頁**先**落地、跳轉**後**完成,而
+    // `loadAround` 收尾時的 `dropPendingGesture()` 順手把欠條擦掉了。真實的順序
+    // 相反:跳轉很快完成,飛在空中的那一頁後到 —— 那時已經沒有人會清它。
+    h.listChat.mockResolvedValueOnce(page("n", 1000, 30));
+    const { result } = renderHook(() => useChat("b"));
+    await waitFor(() => expect(result.current.messages).toHaveLength(30));
+    await act(async () => {
+      h.listChatWindow.mockResolvedValueOnce(page("w", 100, 30));
+      h.listChatWindow.mockResolvedValueOnce(page("w", 129, 30));
+      await result.current.loadAround("w0");
+      await settle();
+    });
+
+    // 往下的那一頁飛出去,掛在空中。
+    const hungForward = deferred<ChatMessage[]>();
+    h.listChatWindow.mockReturnValueOnce(hungForward.promise);
+    let forward!: Promise<void>;
+    act(() => {
+      forward = result.current.loadNewer();
+    });
+
+    // 跳轉開跑,而且**先**完成 —— 它收尾時的 dropPendingGesture 因此清不到
+    // 那張還沒被寫下的欠條。
+    const above = deferred<ChatMessage[]>();
+    const below = deferred<ChatMessage[]>();
+    h.listChatWindow
+      .mockReturnValueOnce(above.promise)
+      .mockReturnValueOnce(below.promise);
+    let pending!: Promise<JumpOutcome>;
+    act(() => {
+      pending = result.current.loadAround("a0");
+    });
+    above.resolve(page("a", 100, 30));
+    below.resolve(page("a", 129, 30));
+    await act(async () => {
+      await pending;
+      await settle();
+    });
+
+    // 飛在空中的那一頁現在才落地,並且被 supersede。
+    await act(async () => {
+      hungForward.resolve(page("f", 9000, 30));
+      await forward;
+      await settle();
+    });
+
+    // 過 400ms 的節流窗口,讓下一次手勢是乾淨的一次。
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 500));
+    });
+    const before = h.listChatWindow.mock.calls.length;
+    h.listChatWindow.mockResolvedValueOnce(page("z", 5000, 30));
+    await act(async () => {
+      await result.current.loadNewer({ human: true });
+      await settle();
+    });
+    expect(
+      h.listChatWindow.mock.calls.length,
+      "supersede 之後往下走訪被鎖死了 —— 欠條掛在一列永遠不會出現的訊息上",
+    ).toBe(before + 1);
   });
 
   it("切走再切回同一個人,上一趟還在飛的往下捲頁不准接到這一趟的錨點窗上", async () => {
@@ -677,12 +816,17 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     ).toBe(afterWheel + 1);
   });
 
-  it("看過那一頁之後被時鐘吞掉的手勢會補送,那一頁還沒畫出來時的手勢尾巴不會", async () => {
+  it("看過那一頁之後被窗口吞掉的手勢會補送,箱子還沒長高時的手勢尾巴不會", async () => {
     // 🔴 這條是 F-1 與 F-2 的分界線本身,兩半都在這裡:
-    //   · 落地前的餘波(同一列)⇒ 不補送。一次 flick 是幾十個事件,每一個都排
-    //     補送就等於一次手勢兩頁(獨立審查 #21 F-1,真 Chromium 與 e2e 都量到)。
-    //   · 落地後的第二次手勢(新的一列)⇒ 補送。讀的人此時已壓在新的捲動極限
+    //   · 箱子還是原來那個高度 ⇒ 那一頁還沒上畫面 ⇒ 不補送、也不送。一次 flick
+    //     是幾十個事件,每一個都排補送就等於一次手勢兩頁(獨立審查 #21 F-1)。
+    //   · 箱子真的長高了之後的下一次手勢 ⇒ 補送。讀的人此時已壓在新的捲動極限
     //     上,再往下推不會有事件,所以「他再捲一次」不是他做得到的事(#20)。
+    //
+    // 🔴 分界線是**箱子的高度**,不是時鐘(獨立審查 #22 F-1)。上一版用「commit
+    // 之後 64ms」當「已經畫給人看了」的代理,而慢機器上那一個 render 就超過
+    // 64ms;而且單元測試只允許 [48,100],沒有任何值修得好。這裡量的是讀的人手上
+    // 那個箱子有沒有比買下那一頁時更高 —— 那是事實,不是猜的。
     h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
     const { result } = renderHook(() => useChat("b"));
     await waitFor(() => expect(result.current.messages).toHaveLength(30));
@@ -694,17 +838,14 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     });
     const entry = h.listChatWindow.mock.calls.length;
 
-    // 手勢① —— 一頁真的落地,最新那一列因此往前走。
+    // 手勢① —— 一頁真的落地,最新那一列因此往前走 —— 緊接著是同一次手勢的餘波,
+    // 而且**沒有經過一次 render**(整段包在同一個 `act` 裡,layout effect 要到
+    // 這個 act 結束才跑)。那正是缺陷的形狀:`commit` 同步推進鏡像,React 晚一
+    // 步才把新的列寫進箱子,所以這些事件不可能是有人看到那一頁之後的反應 ——
+    // 它們是買下那一頁的那次手勢自己的尾巴。不准排補送。
     h.listChatWindow.mockResolvedValueOnce(page("b", 200, 30));
     await act(async () => {
       await result.current.loadNewer({ human: true });
-    });
-    expect(h.listChatWindow.mock.calls.length).toBe(entry + 1);
-
-    // 同一次手勢的餘波:那一頁**才剛落地**,還沒被畫出來(`commit` 是同步推進
-    // 鏡像的,React 晚一個 render 才畫),所以這些事件不可能是有人看到它之後的
-    // 反應 —— 它們是買下那一頁的那次手勢自己的尾巴。不准排補送。
-    await act(async () => {
       for (let i = 0; i < 5; i++) {
         await result.current.loadNewer({ human: true });
         await new Promise((r) => setTimeout(r, 8));
@@ -712,7 +853,7 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     });
     expect(
       h.listChatWindow.mock.calls.length,
-      "窗口內的手勢應該被時鐘擋下,而不是每一個都送出去",
+      "那一頁還沒被寫進箱子,手勢的尾巴卻又送出了一通",
     ).toBe(entry + 1);
     h.listChatWindow.mockResolvedValue(page("c", 300, 30));
     await act(async () => {
@@ -720,16 +861,16 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     });
     expect(
       h.listChatWindow.mock.calls.length,
-      "那一頁還沒畫出來,它自己的手勢尾巴卻買到了第二頁 —— 一次手勢兩頁",
+      "那一頁還沒上畫面,它自己的手勢尾巴卻買到了第二頁 —— 一次手勢兩頁",
     ).toBe(entry + 1);
 
-    // 而讀的人看過那一頁之後再推一次 —— 那是真的第二次手勢。它落在下一個窗口
-    // 內被時鐘擋下,窗口結束時補送一次。
+    // 而讀的人看過那一頁之後再推一次 —— 箱子真的長高了,那是真的第二次手勢。
     h.listChatWindow.mockResolvedValueOnce(page("d", 400, 30));
     await act(async () => {
       await result.current.loadNewer({ human: true });
     });
     expect(h.listChatWindow.mock.calls.length).toBe(entry + 2);
+    // 第三次手勢落在下一個窗口內被時鐘擋下,窗口結束時補送一次。
     await act(async () => {
       await new Promise((r) => setTimeout(r, 100));
       await result.current.loadNewer({ human: true });
@@ -752,6 +893,121 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     expect(
       h.listChatWindow.mock.calls.length,
       "沒有手勢卻繼續往下撈 —— 那是被裁掉的自動走廊",
+    ).toBe(entry + 3);
+  });
+
+  it.each([
+    ["裸 render", undefined],
+    ["<StrictMode>", StrictMode],
+  ])(
+    "補送的戳記由 render 回寫,而那個回寫在 %s 下也只清該清的那一次",
+    async (_label, wrapper) => {
+      // 🔴 這條量的是修法自己的前提。「那一頁已經上畫面」現在是**框架回寫的**
+      // (帶著那一頁的那次 render 的 layout effect),而那押在兩件沒人量過的事
+      // 上:框架會不會**漏叫**、會不會**多叫**。多叫是真的會發生的 ——
+      // `main.tsx` 把整個 app 包在 `<StrictMode>` 裡,而 StrictMode 會把每一個
+      // effect 叫兩次。所以戳記存的是**那一列**而不是一個布林:多叫的那一次找
+      // 不到欠的東西,是 no-op;叫錯對象(別的 commit)也清不掉。
+      //
+      // 兩半都在這裡:同一次手勢的尾巴(那一頁還沒寫進 DOM)不准送出,而寫進去
+      // 之後的下一次手勢要送得出去。兩個 render 模式下答案必須一樣。
+      // `mockResolvedValue`, not `…Once`: `<StrictMode>` mounts twice, so the
+      // entry load happens twice and a one-shot mock would hand the second
+      // mount an empty thread.
+      h.listChat.mockResolvedValue(page("n", 9000, 30));
+      const { result } = renderHook(() => useChat("b"), { wrapper });
+      await waitFor(() => expect(result.current.messages).toHaveLength(30));
+      h.listChatWindow
+        .mockResolvedValueOnce(page("a", 100, 30))
+        .mockResolvedValueOnce(page("a", 129, 30));
+      await act(async () => {
+        await result.current.loadAround("a0");
+      });
+      const entry = h.listChatWindow.mock.calls.length;
+
+      h.listChatWindow.mockResolvedValueOnce(page("b", 200, 30));
+      await act(async () => {
+        await result.current.loadNewer({ human: true });
+        for (let i = 0; i < 5; i++) {
+          await result.current.loadNewer({ human: true });
+          await new Promise((r) => setTimeout(r, 8));
+        }
+      });
+      expect(
+        h.listChatWindow.mock.calls.length,
+        "那一頁還沒寫進 DOM,手勢的尾巴卻又送出了一通",
+      ).toBe(entry + 1);
+
+      // 那一次 render 跑完了(上面的 act 收尾時),戳記應該已經被回寫掉 ——
+      // 下一次手勢就要送得出去。回寫沒發生的話這一行會停在 entry + 1。
+      h.listChatWindow.mockResolvedValueOnce(page("c", 300, 30));
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 450));
+        await result.current.loadNewer({ human: true });
+      });
+      expect(
+        h.listChatWindow.mock.calls.length,
+        "那一頁已經在畫面上了,下一次手勢卻買不到東西 —— render 沒有回寫戳記",
+      ).toBe(entry + 2);
+    },
+  );
+
+  it("補送到期時人已經捲離底部帶,那一頁就不准落地", async () => {
+    // 🔴 獨立審查 #22 F-6:被窗口吞掉的手勢是 400ms 之前做的,而那 400ms 裡讀的
+    // 人可能已經往上捲去看歷史了。補送照樣落地 ⇒ 沒有人碰那個箱子卻多了一頁,
+    // 就是這張票要禁的「零手勢就撈」慢動作版。手勢的有效期只到讀的人還在原地。
+    const atBottom = { v: true };
+    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
+    const { result } = renderHook(() =>
+      useChat("b", undefined, () => atBottom.v),
+    );
+    await waitFor(() => expect(result.current.messages).toHaveLength(30));
+    h.listChatWindow
+      .mockResolvedValueOnce(page("a", 100, 30))
+      .mockResolvedValueOnce(page("a", 129, 30));
+    await act(async () => {
+      await result.current.loadAround("a0");
+    });
+    const entry = h.listChatWindow.mock.calls.length;
+
+    // 手勢① 買到一頁,箱子隨之長高;手勢② 在同一個窗口內被時鐘吞掉 ⇒ 排補送。
+    h.listChatWindow.mockResolvedValueOnce(page("b", 200, 30));
+    await act(async () => {
+      await result.current.loadNewer({ human: true });
+    });
+    expect(h.listChatWindow.mock.calls.length).toBe(entry + 1);
+    h.listChatWindow.mockResolvedValue(page("c", 300, 30));
+    await act(async () => {
+      await result.current.loadNewer({ human: true });
+    });
+    expect(h.listChatWindow.mock.calls.length).toBe(entry + 1);
+
+    // 補送到期之前,讀的人往上捲走了。
+    atBottom.v = false;
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 450));
+    });
+    expect(
+      h.listChatWindow.mock.calls.length,
+      "人已經捲離底部帶,補送還是把一頁塞了進來",
+    ).toBe(entry + 1);
+
+    // 陽性對照:同一條路,人還在底部帶時補送就會落地。
+    await act(async () => {
+      await result.current.loadNewer({ human: true });
+    });
+    expect(h.listChatWindow.mock.calls.length).toBe(entry + 2);
+    await act(async () => {
+      await result.current.loadNewer({ human: true });
+    });
+    expect(h.listChatWindow.mock.calls.length).toBe(entry + 2);
+    atBottom.v = true;
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 450));
+    });
+    expect(
+      h.listChatWindow.mock.calls.length,
+      "人還在底部帶,被吞掉的那次手勢卻沒有補送 —— 這條測試看不見 F-6 了",
     ).toBe(entry + 3);
   });
 

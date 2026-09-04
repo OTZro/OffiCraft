@@ -576,6 +576,97 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
     expect(bubbles(container)).not.toContain("a79");
   });
 
+  it("被窗口吞掉的手勢補送到期時,問的是這個箱子還在不在底部帶", async () => {
+    // 🔴 這條量的是**接線**:補送那條路上「讀的人還在不在底部帶」是誰回答的
+    // (獨立審查 #22 F-6)。規則本身釘在 `useChat.scrollback.test.ts`,那裡的探
+    // 針是測試自己給的;這裡用的是 ChatArea 真的那一支,量它問的是不是這個箱子。
+    seed(A, "a", 80, 100);
+    const { container } = render(view(alice, "a3"));
+    await waitFor(() =>
+      expect(container.querySelector('[data-msg-id="a3"]')).not.toBeNull(),
+    );
+    const box = container.querySelector(".chat__messages")! as HTMLElement;
+    const CH = 369;
+    let H = 3000;
+    Object.defineProperty(box, "clientHeight", { get: () => CH });
+    Object.defineProperty(box, "scrollHeight", { get: () => H });
+    const entry = windowCalls.length;
+
+    // 手勢① 買到一頁,箱子隨之長高;手勢② 在同一個 400ms 窗口內被時鐘吞掉。
+    box.scrollTop = H - CH;
+    fireEvent.scroll(box);
+    await waitFor(() => expect(windowCalls.length).toBe(entry + 1));
+    H = 6000;
+    box.scrollTop = H - CH;
+    fireEvent.scroll(box);
+    expect(windowCalls.length).toBe(entry + 1);
+
+    // 窗口結束 —— 人還壓在底部帶上,補送要落地。
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 450));
+    });
+    expect(
+      windowCalls.length,
+      "人還在底部帶,被吞掉的那次手勢卻沒有補送 —— 讀的人壓在極限上就靜默停住了",
+    ).toBe(entry + 2);
+  });
+
+  it("版面縮回去把捲動位置往回夾的那個事件,不准買到一頁", async () => {
+    // 🔴 一個 `scroll` 事件不等於一個手勢(獨立審查 #22 F-1 的機制)。內容變矮
+    // ——回覆卡解析成比較短的東西、視窗縮放、任何重排 —— 瀏覽器會把 `scrollTop`
+    // 夾回新的極限,並且為了那一夾送出一個 `scroll` 事件。那個事件天生落在底部
+    // 帶裡,於是「沒有人碰過箱子」卻買到了一頁。
+    // 夾回去只會讓 `scrollTop` 變小;讀的人往下要更多只會讓它變大 —— 方向就是
+    // 分界線,不需要任何門檻值。實測(chat-forward-walk 的「版面自己縮矮把讀的
+    // 人夾回極限的那個事件,不准買到一頁」,900px 釘死欄寬、不節流):讀的人停在
+    // 錨點 scrollTop 4984、箱子 10491,底下 30 列縮掉之後箱子 5346 ⇒ Chromium
+    // 送出剛好一個 scroll 事件,scrollTop 4984 → 4803(往回),落在 distance 0。
+    // 📏 這裡原本寫「箱子 15631 → 10110px,scrollTop 9932 → 9600,就是那一夾買
+    // 下了第二頁」——三句都不對(獨立審查 #23 F-5)。它引的那份 trace 裡那一夾
+    // 是 9941 → 7344,而且落在 distance 2281,離底部帶遠得很,什麼都沒買到;
+    // 買下第二頁的是 87ms 之後一個**往前**的事件(+116,distance 24),來源是
+    // 護欄自己重讀箱子的 flick 迴圈把已經走過的路又走了一遍。
+    seed(A, "a", 80, 100);
+    const { container } = render(view(alice, "a3"));
+    await waitFor(() =>
+      expect(container.querySelector('[data-msg-id="a3"]')).not.toBeNull(),
+    );
+    const box = container.querySelector(".chat__messages")! as HTMLElement;
+    const CH = 369;
+    let H = 3000;
+    Object.defineProperty(box, "clientHeight", { get: () => CH });
+    Object.defineProperty(box, "scrollHeight", { get: () => H });
+    const entry = windowCalls.length;
+
+    // 手勢① —— 讀的人把箱子往下推到底部帶,買到一頁。那一頁畫出來之後箱子長
+    // 高,而讀的人停在原地(這正是「一次手勢一頁」的樣子:新的那一頁在視野下
+    // 方,他要自己捲過去)。
+    box.scrollTop = H - CH;
+    fireEvent.scroll(box);
+    await waitFor(() => expect(windowCalls.length).toBe(entry + 1));
+    H = 6000;
+
+    // 然後版面縮回去,而且縮到比讀的人現在的位置還矮 —— 沒有人碰那個箱子。瀏覽
+    // 器把 `scrollTop` 夾回新的極限,並且為了那一夾送出事件,而它當然落在底部
+    // 帶裡。
+    H = 2500;
+    box.scrollTop = H - CH;
+    fireEvent.scroll(box);
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 1300));
+    });
+    expect(
+      windowCalls.length,
+      "版面自己縮回去就買到了一頁 —— 沒有人碰過那個箱子",
+    ).toBe(entry + 1);
+
+    // 陽性對照:同一個箱子,這次是讀的人真的把它往下推 —— 那就要買到一頁。
+    H = 6000;
+    box.scrollTop = H - CH;
+    fireEvent.scroll(box);
+    await waitFor(() => expect(windowCalls.length).toBe(entry + 2));
+  });
+
   it("那一頁一列新的都沒有時,同一個錨點不會在同一次滾輪裡被打第二次", async () => {
     // ⚠️ 一次滾輪是每秒約 60 個捲動事件,而讀的人如果停在底部(那一頁整頁都是
     // 已經握著的列 ⇒ 版面一格都沒長),每一個事件都會落回 `nowNearBottom &&

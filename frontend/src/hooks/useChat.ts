@@ -34,7 +34,7 @@
 // existing thread by id (older messages kept in front) instead of replacing
 // the whole array — a replace would silently eat the loaded history.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ChatMessage, ChatAttachmentInput } from "../api/adapter";
 import { api } from "../api";
 import { ApiError } from "../api/errors";
@@ -433,7 +433,18 @@ type ConversationSlot = {
   dropDebt: LatchRelease | null;
 };
 
-export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
+export function useChat(
+  withId: string,
+  entryAnchorMsgId?: string,
+  /** 🔴 IS THE READER STILL AT THE BOTTOM WHEN THE REPLAY COMES DUE (T-48,
+   * independent review #22 F-6)? A swallowed gesture is replayed up to 400ms
+   * after it was made, and until now nothing asked whether the reader was
+   * still there — they could have scrolled up to read history in between and
+   * the replay landed a page anyway, which is this ticket's own 「零手勢就
+   * 撈」 in slow motion. The viewport belongs to `ChatArea`, so the question
+   * is asked of it. Omitted (the hook suite) = unanswerable = not asked. */
+  readerAtBottom?: () => boolean,
+): UseChat {
   // The thread, its mirror and its generation clock — all three behind
   // `lib/threadCommit`, which is the only thing that can write them.
   const view = useThreadCommit();
@@ -515,17 +526,60 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   // was turned away by the mutex rather than by the clock. It is only worth
   // replaying if that page comes back EMPTY-HANDED — see the `finally`.
   const blockedInFlightRef = useRef(false);
-  // 🔴 THE READER CANNOT REACT TO A PAGE THEY HAVE NOT BEEN SHOWN. `commit`
-  // advances the mirror SYNCHRONOUSLY and React paints one render later, so
-  // there is a frame in which the newest row has already moved while the box on
-  // screen is still the old, short one. A scroll event landing in that gap is
-  // the tail of the gesture that BOUGHT the page — it is not somebody reacting
-  // to it — yet by the anchor test alone it looks exactly like a second gesture,
-  // and it bought a second page (measured: CT `chat-forward-walk` went 5 green
-  // in 6 runs on that hole). 64ms is four frames: comfortably past the paint,
-  // and far under the ~150ms a reader takes to see a page and push again.
-  const PAGE_SEEN_MIN_MS = 64;
-  const pageSeenAtRef = useRef(0);
+  // 🔴 THE READER CANNOT REACT TO A PAGE THEY HAVE NOT BEEN SHOWN — AND THAT
+  // IS MEASURED NOW, NOT TIMED (T-48, independent review #22 F-1).
+  //
+  // `commit` advances the mirror SYNCHRONOUSLY and the browser lays the rows
+  // out later, so there is a window in which the newest row has already moved
+  // while the BOX on screen is still the old, short one. A scroll event landing
+  // in that window is the tail of the gesture that BOUGHT the page, not
+  // somebody reacting to it — and by the anchor test alone it looks exactly
+  // like a second gesture.
+  //
+  // This used to be a clock: `Date.now()` at commit plus a fixed 64ms. A clock
+  // is a PROXY for the render, and the proxy had no safe setting — the jsdom
+  // suite pinned it to [48, 100] and a slow machine's single React commit can
+  // outlast the whole band (review #22 F-1, F-4). The render itself is not a
+  // proxy, and it is available: React tells us when it has written the rows.
+  //
+  // So the question is asked of the RENDER, not of a clock: a page is unseen
+  // from the moment its rows are merged until the layout effect for the commit
+  // that carries them has run — which is exactly when React has written those
+  // rows into the box. That boundary is an event, it costs no constant, and it
+  // is the same boundary on a fast machine and on a slow one.
+  //
+  // 🔴 IT HOLDS THE ROW, NOT A BOOLEAN, BECAUSE 「the framework called us」 IS
+  // NOT THE SAME FACT AS 「the page is on screen」. A flag cleared by any
+  // messages-effect trusts the call; an id cleared only when THAT ROW is in the
+  // thread checks it. Both failure directions are then closed by construction:
+  //   · called for something else (a history page committing inside the forward
+  //     page's await window — a real interleave, `loadOlder` takes no ticket)
+  //     ⇒ the owed row is not there ⇒ still owed;
+  //   · called twice for the same commit (`<StrictMode>` double-invokes every
+  //     effect in development, and `main.tsx` wraps the whole app in it) ⇒ the
+  //     second call finds nothing owed ⇒ no-op;
+  //   · not called at all ⇒ impossible for a commit that carries the row, which
+  //     is the only commit that may clear it.
+  //
+  // 📏 WHICH OF THOSE THREE IS MEASURED, AND BY WHAT (T-48, independent review
+  // #23 F-3 — which judged the row 「indistinguishable from a boolean」, and
+  // rightly refused to read `owedAbsent = 0` as evidence for it).
+  //   · 「called twice」 — 「補送的戳記由 render 回寫」 in
+  //     `useChat.scrollback.test.ts` counts it: 2 debts against 5 bare / 6
+  //     StrictMode calls, and every extra one a no-op.
+  //   · 「called for something else」 — 「那一頁還沒上畫面時,別的 commit 觸發的
+  //     render 不准把戳記清掉」, same file. A BOOLEAN LOSES THIS ONE. A hung
+  //     reply card holds `commit` inside `prefillWaitingCards` with the debt
+  //     already written; `loadOlder` (no ticket, no `loadingNewer`) commits and
+  //     RENDERS in that window; a boolean is cleared by a render carrying none
+  //     of the owed rows. The gesture that then arrives in the gap between this
+  //     function releasing its lock and React writing the rows buys a SECOND
+  //     page for one gesture. Deterministic: boolean mutant red 15 in 15, the
+  //     row green 15 in 15.
+  //   · 「not called at all」 — still NOT measured, and `owedAbsent = 0` cannot
+  //     stand in for it: a 0 there is what 「no test walks this path」 and 「the
+  //     check is right」 both look like.
+  const pageUnseenIdRef = useRef<string | null>(null);
   // 🔴 A PENDING GESTURE BELONGS TO THE THREAD IT WAS MADE AGAINST, AND
   // `withId` IS THE WRONG RADIUS FOR THAT (independent review #21, F-3). A jump
   // to a different message in the SAME conversation replaces the window without
@@ -540,7 +594,27 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     }
     blockedInFlightRef.current = false;
     lastServedAnchorRef.current = null;
+    // A page owed to a window that no longer exists is not a page anybody is
+    // waiting to be shown.
+    pageUnseenIdRef.current = null;
   }, []);
+
+  // 🔴 THE PAGE IS ON SCREEN NOW (see `pageUnseenIdRef`). A layout effect runs
+  // after React has written this render's rows into the DOM and before the
+  // browser paints, so it is the earliest moment at which 「the reader has been
+  // shown it」 is TRUE rather than estimated — and the row is looked for rather
+  // than assumed, so an extra call clears nothing and a call about some other
+  // commit clears nothing either.
+  useLayoutEffect(() => {
+    const owed = pageUnseenIdRef.current;
+    if (owed === null) return;
+    if (thread.messages.some((m) => m.id === owed)) pageUnseenIdRef.current = null;
+  }, [thread.messages]);
+
+  // Mirrored so the trailing replay reads the CURRENT probe rather than the one
+  // captured when `loadNewer` was last rebuilt.
+  const readerAtBottomRef = useRef(readerAtBottom);
+  readerAtBottomRef.current = readerAtBottom;
 
   // `loadNewer` calling itself: a self-reference inside its own `useCallback`
   // is a circular type, and the identity would go stale anyway.
@@ -1255,16 +1329,23 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       if (humanTrailingRef.current !== null) return;
       humanTrailingRef.current = setTimeout(() => {
         humanTrailingRef.current = null;
+        // The gesture being replayed was made against the bottom of this
+        // window. A reader who has scrolled away from it since is not asking
+        // for anything, and a page appended under them is the corridor.
+        if (readerAtBottomRef.current && !readerAtBottomRef.current()) return;
         void loadNewerRef.current({ human: true });
       }, Math.max(0, delay));
     };
     if (opts?.human) {
+      // THE SIGHT GATE (see `pageUnseenIdRef`). While the page the reader just
+      // bought is not on their screen there is nothing for this gesture to be
+      // about — the rows it would be asking past are not there to be asked
+      // past. No trailing replay either: this is the tail of the gesture that
+      // bought the page, and replaying it is the second page it must not buy.
+      if (pageUnseenIdRef.current !== null) return;
       const since = Date.now() - humanRetryAtRef.current;
       if (since < HUMAN_RETRY_MIN_MS) {
-        if (
-          anchorNow !== lastServedAnchorRef.current &&
-          Date.now() - pageSeenAtRef.current >= PAGE_SEEN_MIN_MS
-        ) {
+        if (anchorNow !== lastServedAnchorRef.current) {
           armTrailing(HUMAN_RETRY_MIN_MS - since);
         }
         return;
@@ -1323,6 +1404,12 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       // SECOND time against React's own `prev`, on purpose — see below.
       const held = new Set(view.current().messages.map((m) => m.id));
       const addsNothing = page.every((m) => held.has(m.id));
+      // Rows are about to be merged that the reader has not been shown — see
+      // `pageUnseenIdRef`. Written BEFORE the commit, because the commit is what
+      // schedules the render that clears it, and a page that adds nothing puts
+      // no new row on any screen and so hides nothing. The debt is the LAST row
+      // of the page: the one whose arrival on screen means the whole page did.
+      if (!addsNothing) pageUnseenIdRef.current = page[page.length - 1].id;
       // 🔴 THE STATE WRITE STAYS AN UPDATER, AND THAT IS NOT A STYLE CHOICE.
       // A first cut of this committed the merged OBJECT — the same one written
       // to the mirror — and that quietly threw away any OTHER load that had
@@ -1354,12 +1441,19 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
           hasNewer: page.length >= CHAT_PAGE_SIZE,
         };
       });
-      if (!ok) return;
+      if (!ok) {
+        // Superseded: this page never joined any thread, so nobody is owed a
+        // sight of it — and leaving the debt standing would block the walk on a
+        // row that is never going to appear. (`loadAround`/`resetToLatest`, the
+        // only two paths that can supersede, drop the pending gesture when they
+        // START; a forward page still in the air lands after that.)
+        pageUnseenIdRef.current = null;
+        return;
+      }
       // The walk's own stop sign, decided by the page that just landed: the
       // anchor we asked from is exhausted when its page held nothing new; a
       // page that did carry rows clears whatever was marked before.
       forwardExhaustedRef.current = addsNothing ? newest.id : null;
-      pageSeenAtRef.current = Date.now();
     } catch (e) {
       console.warn("useChat: loadNewer failed", e);
     } finally {
