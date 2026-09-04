@@ -34,6 +34,13 @@
 -- open PR rather than the ones anybody remembered: main was at 00074, #394 held
 -- 00075/00076, #389 held 00077-00079, so 00080 is the smallest safe number.
 --
+-- 📌 THAT PARAGRAPH IS A DATED SNAPSHOT, AND TWO OF ITS THREE FACTS HAVE SINCE
+-- MOVED (2026-09-05): #394 landed, so 00075/00076 are in main now; and #389 was
+-- renumbered to 00081-00083 to land AFTER this file. 00080 is still the right
+-- number — it is recorded here so a later reader does not re-derive from the
+-- 2026-09-04 line and conclude #389 still holds 00077-00079. Sweep both sources
+-- yourself rather than trusting either paragraph.
+--
 -- ⚠️ MAIN'S NUMBERS ARE NOT CONTIGUOUS — there are seven gaps below this file
 -- (00026->00028, 00037->00039, 00053->00055, 00058->00060, 00063->00065,
 -- 00065->00069, 00071->00074). DO NOT take one of them. A number picked out of a
