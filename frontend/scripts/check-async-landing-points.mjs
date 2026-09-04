@@ -329,6 +329,13 @@ const REGISTRY = [
   },
   {
     file: "hooks/useChat.ts",
+    kind: "setTimeout/setInterval",
+    count: 1,
+    verdict:
+      "\u{1F534} THE COALESCED HUMAN RETRY (T-48, independent review #20). A gesture refused by the 400ms clock is not dropped — the FIRST refusal inside a window arms a timer that re-asks once when the window ends. It has to exist because the reader who was refused is already pinned AT THE SCROLL LIMIT, and a browser only fires `scroll` when the box actually moves: measured in real Chromium, five further downward pushes produced ZERO events, so a dropped gesture was a silent stall with no spinner and no end marker. What stops it landing in the wrong place: it re-enters `loadNewer`, which re-asks `hasNewer`, the anchor latch and the generation ticket on the CURRENT room, and the timer is cleared by the cleanup keyed on `withId`, so a conversation switch or unmount disarms it before it can fire. ⚠️ Only a REFUSED `human` call may arm it — arming it on every call turns this back into the automatic corridor the owner ruled out (mutant: 5 requests where 4 are allowed). Its interaction with SSE / resetToLatest / loadAround is reasoned from those same re-asks, NOT covered by a test of its own",
+  },
+  {
+    file: "hooks/useChat.ts",
     kind: "addEventListener",
     count: 2,
     verdict: "focus / visibilitychange; removed in the same effect's cleanup",

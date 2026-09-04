@@ -638,8 +638,10 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     // F-1). Nothing durable records a failure — the exhausted marker is only
     // ever written by a page that landed — so the clock is the only thing that
     // can bound this side. Measured before the gate moved: 10 asks, 10 requests.
+    // 靜一個完整的窗口再加補送的那一通自己的窗口 —— 被吞掉的手勢會在 400ms
+    // 補送,那一通又開一個新窗口,兩個都過完才是真的「安靜之後」。
     await act(async () => {
-      await new Promise((r) => setTimeout(r, 450));
+      await new Promise((r) => setTimeout(r, 900));
     });
     const afterWheel = h.listChatWindow.mock.calls.length;
     h.listChatWindow.mockRejectedValue(new Error("500"));
@@ -650,6 +652,27 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
       h.listChatWindow.mock.calls.length,
       "失敗路徑上一次滾輪打了不只一通",
     ).toBe(afterWheel + 1);
+
+    // 🔴 而窗口關掉之後,被吞掉的那些手勢合併成**一通**補送(獨立審查 #20):
+    // 丟掉它們會讓壓在捲動極限上的讀者再也送不出事件(那一格 jsdom 看不見,證人
+    // 在 `visual-guards/chat-forward-walk.ct.spec.tsx`)。所以這道界的上限是每
+    // 個窗口「首次 ＋ 補送一次」,不是每個捲動事件一通。
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 450));
+    });
+    expect(
+      h.listChatWindow.mock.calls.length,
+      "被吞掉的手勢沒有補送 —— 捲到底的讀者從此送不出下一個事件",
+    ).toBe(afterWheel + 2);
+
+    // 補送不會自己接下去:沒有人再碰它,三個窗口過去也不再有請求。
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 1300));
+    });
+    expect(
+      h.listChatWindow.mock.calls.length,
+      "沒有手勢卻繼續往下撈 —— 那是被裁掉的自動走廊",
+    ).toBe(afterWheel + 2);
   });
 
   it("a history page that lands while a forward page is in the air is not thrown away by it", async () => {

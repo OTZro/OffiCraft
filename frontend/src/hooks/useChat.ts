@@ -503,6 +503,15 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   // path too, which is what review #19 F-1 found it did not (see the gate).
   const HUMAN_RETRY_MIN_MS = 400;
   const humanRetryAtRef = useRef(-Infinity);
+  // The one gesture the open window swallowed, held until the window closes —
+  // see the trailing edge in `loadNewer`. Non-null = a REAL gesture is waiting;
+  // it is never armed by anything but a refused `human` call.
+  const humanTrailingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // `loadNewer` calling itself: a self-reference inside its own `useCallback`
+  // is a circular type, and the identity would go stale anyway.
+  const loadNewerRef = useRef<(opts?: { human?: boolean }) => Promise<void>>(
+    async () => {},
+  );
   // The entry anchor, mirrored for the subscription effect below. Read in the
   // effect's SETUP body only — never a dependency, or a route that keeps the
   // msgId in the hash (it does) would re-subscribe the whole SSE sink.
@@ -1177,8 +1186,43 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     //     nothing durable was written to remember the failure.
     // An outcome flag ("only remember it when it worked") cannot do the first
     // half: failure writes nothing, so it bounds nothing.
+    //
+    // 🔴 BUT A DROPPED GESTURE IS NOT A GESTURE THE READER CAN REPEAT
+    // (independent review #20). `return` alone was measured to strand the
+    // reader for good: gesture ② landing 150ms after ① was swallowed, and by
+    // then `scrollTop` was already pinned at the scroll limit — and a browser
+    // only emits `scroll` WHEN THE BOX ACTUALLY MOVES. So the five further
+    // downward scrolls that crossed the window produced ZERO events, and three
+    // seconds later the thread still held one page, `hasNewer` true, no
+    // spinner, no end marker. Measured in Chromium (chat-forward-walk CT,
+    // 「窗口內被吞掉的那次手勢…」): 1 page before, 2 after. jsdom cannot see
+    // it — every length there reads 0, so the swallowed gesture is always
+    // repeatable and this walked straight through review #19.
+    //
+    // So a swallowed gesture is COALESCED, not discarded: the window remembers
+    // that somebody asked, and replays exactly ONE ask when it closes (trailing
+    // edge). Per window that is at most first + trailing, so the 5xx bound
+    // above survives — a held wheel settles at one request per window instead
+    // of one per scroll event.
+    //
+    // ⚠️ THE TRAILING ASK IS STILL GESTURE-DRIVEN, AND THAT LINE IS THE WHOLE
+    // POINT. It is armed ONLY by a real `human` call that this window refused;
+    // nothing a landed page does can arm it (a forward page is deliberately not
+    // auto-followed, so it emits no scroll event of its own). With nobody
+    // touching the box the timer is never scheduled and never re-schedules
+    // itself — which is what keeps this from being the level-triggered corridor
+    // the owner removed (rc-d2e1b69edc66 ①) wearing a timer for a hat.
     if (opts?.human) {
-      if (Date.now() - humanRetryAtRef.current < HUMAN_RETRY_MIN_MS) return;
+      const since = Date.now() - humanRetryAtRef.current;
+      if (since < HUMAN_RETRY_MIN_MS) {
+        if (humanTrailingRef.current === null) {
+          humanTrailingRef.current = setTimeout(() => {
+            humanTrailingRef.current = null;
+            void loadNewerRef.current({ human: true });
+          }, HUMAN_RETRY_MIN_MS - since);
+        }
+        return;
+      }
       humanRetryAtRef.current = Date.now();
       forwardExhaustedRef.current = null;
     }
@@ -1263,6 +1307,19 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       release();
     }
   }, [withId, conv, view]);
+  loadNewerRef.current = loadNewer;
+
+  // A trailing gesture belongs to the conversation that made it. Leaving the
+  // room (or unmounting) drops it — every other latch in this hook is a lease
+  // on one conversation and this timer is no different.
+  useEffect(() => {
+    return () => {
+      if (humanTrailingRef.current !== null) {
+        clearTimeout(humanTrailingRef.current);
+        humanTrailingRef.current = null;
+      }
+    };
+  }, [withId]);
 
   // 🔴 THE JUMP THAT CANNOT MISS SILENTLY (T-48 ③). Two windows around one
   // message id — `end_id` for the context ABOVE it, `start_id` for the context

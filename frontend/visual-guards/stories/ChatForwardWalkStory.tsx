@@ -9,6 +9,12 @@
 // — the level-triggered corridor this ticket removed, running under a different
 // name.
 //
+// The same story also carries the SECOND thing only a browser can show (review
+// #20): a scroller already pinned at its limit emits no `scroll` event, so a
+// reader whose gesture the retry throttle refused cannot simply「scroll again」
+// — the refused gesture has to be replayed for them. jsdom's lengths all read
+// 0, so a swallowed gesture is always repeatable there and that defect shipped.
+//
 // jsdom is NOT blind to the cause: with the follow's `if (!hasNewer)` deleted,
 // `ChatArea.anchor-entry.test.tsx` goes 14 passed / 1 FAILED, because it asserts
 // on which element was scrolled to and jsdom records the call. What jsdom cannot
