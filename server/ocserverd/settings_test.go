@@ -350,7 +350,7 @@ func TestLoginVerifiesAgainstMigratedHash(t *testing.T) {
 	api := newAPIServer(d, NewHub(), singleKeyring(auth.secret), auth.ownerTokenTTL, "../..")
 	api.agentTokenTTL = auth.agentTokenTTL
 	api.passwordHash = auth.passwordHash
-	h, err := buildHandler(specsFor(api), api.keys, d.GetMember, nil, nil)
+	h, err := buildHandler(specsFor(api), api.keys, d.GetMember, nil)
 	if err != nil {
 		t.Fatalf("buildHandler: %v", err)
 	}

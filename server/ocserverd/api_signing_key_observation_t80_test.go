@@ -19,6 +19,7 @@ package main
 // a temp ring, httptest.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -59,6 +60,65 @@ func t80Warden(t *testing.T, api *apiServer, id, name string) string {
 // ordinary gated route a live warden genuinely calls (see the liveCall list in
 // api_auth_machine_revoke_test.go) and it writes nothing, which the
 // write-suppression test below depends on.
+// t80Connect opens the machine's LONG-LIVED stream through the real handler and
+// then hangs up — the event T-80 records on.
+//
+// 🔴 IT MUST GO THROUGH REAL HTTP, not HandleEventsApiEventsGet with a
+// hand-built context. The whole feature is that requireAuth resolves WHICH key
+// verified the credential and hands it down; a test that builds the context
+// itself supplies that answer instead of measuring it, and would stay green with
+// the middleware unwired entirely.
+//
+// The observation runs before the stream is established, so a response header is
+// already proof it happened; the body is never read and the request is cancelled
+// immediately.
+func t80Connect2(t *testing.T, base, token string) (int, string) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", base+"/api/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return resp.StatusCode, ""
+	}
+	// 🔴 READ THE STREAM, DO NOT POP THE QUEUE. A summons raised by THIS connect
+	// is drained onto THIS stream and the pending row is deleted as it is
+	// written, so the queue is empty afterwards whether the frame was sent or
+	// never existed. Reading the socket is the only measurement that tells those
+	// two apart — and it is also the stronger one, because it is the bytes the
+	// warden would actually receive.
+	var sb strings.Builder
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		buf := make([]byte, 4096)
+		for {
+			n, rerr := resp.Body.Read(buf)
+			sb.Write(buf[:n])
+			if rerr != nil {
+				return
+			}
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		cancel()
+		<-done
+	}
+	return resp.StatusCode, sb.String()
+}
+
 func t80Get(t *testing.T, url, token string) (int, string) {
 	t.Helper()
 	req, err := http.NewRequest("GET", url, nil)
@@ -119,7 +179,7 @@ func TestAMachineAuthenticatingRecordsTheKeyThatVerifiedItsCredential(t *testing
 			"carry no observation; got %q", got)
 	}
 
-	if st, body := t80Get(t, srv.URL+"/api/members", tok); st != http.StatusOK {
+	if st, body := t80Connect2(t, srv.URL, tok); st != http.StatusOK {
 		t.Fatalf("POSITIVE CONTROL FAILED — a live warden credential must pass "+
 			"the gate; got %d %s", st, body)
 	}
@@ -259,7 +319,7 @@ func TestAfterARotationOnlyMachinesThatCameBackReadAsOnTheCurrentKey(t *testing.
 	oldKey := keys.activeKeyID()
 
 	for who, tok := range map[string]string{"m-moved": movedTok, "m-stuck": stuckTok} {
-		if st, body := t80Get(t, srv.URL+"/api/members", tok); st != http.StatusOK {
+		if st, body := t80Connect2(t, srv.URL, tok); st != http.StatusOK {
 			t.Fatalf("POSITIVE CONTROL FAILED — %s must pass the gate before the "+
 				"rotation; got %d %s", who, st, body)
 		}
@@ -285,14 +345,14 @@ func TestAfterARotationOnlyMachinesThatCameBackReadAsOnTheCurrentKey(t *testing.
 	if err != nil {
 		t.Fatalf("re-mint: %v", err)
 	}
-	if st, body := t80Get(t, srv.URL+"/api/members", reissued); st != http.StatusOK {
+	if st, body := t80Connect2(t, srv.URL, reissued); st != http.StatusOK {
 		t.Fatalf("the re-credentialled machine must pass the gate; got %d %s", st, body)
 	}
 
 	// m-stuck goes on working, on the credential it has always had. The old key
 	// is still on the ring, so this is a 200 — that is the whole point of the
 	// ring and the whole reason the owner cannot tell by looking at failures.
-	if st, body := t80Get(t, srv.URL+"/api/members", stuckTok); st != http.StatusOK {
+	if st, body := t80Connect2(t, srv.URL, stuckTok); st != http.StatusOK {
 		t.Fatalf("PREMISE FAILED: a machine on the OUTGOING key must still be "+
 			"served (that is what makes this question hard); got %d %s", st, body)
 	}
@@ -374,7 +434,7 @@ func TestRepeatedRequestsOnAnUnchangedKeyCostNoFurtherWrites(t *testing.T) {
 	tok := t80Warden(t, api, "m-box", "box-1")
 
 	// The FIRST request is the one that legitimately writes.
-	if st, body := t80Get(t, srv.URL+"/api/members", tok); st != http.StatusOK {
+	if st, body := t80Connect2(t, srv.URL, tok); st != http.StatusOK {
 		t.Fatalf("POSITIVE CONTROL FAILED — got %d %s", st, body)
 	}
 	if got := t80TokenKeyOf(t, dal, "m-box"); got == "" {
@@ -384,7 +444,7 @@ func TestRepeatedRequestsOnAnUnchangedKeyCostNoFurtherWrites(t *testing.T) {
 	before := t80TotalChanges(t, dal)
 	const requests = 25
 	for i := 0; i < requests; i++ {
-		if st, body := t80Get(t, srv.URL+"/api/members", tok); st != http.StatusOK {
+		if st, body := t80Connect2(t, srv.URL, tok); st != http.StatusOK {
 			t.Fatalf("request %d: got %d %s", i, st, body)
 		}
 	}
@@ -411,7 +471,7 @@ func TestRepeatedRequestsOnAnUnchangedKeyCostNoFurtherWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-mint: %v", err)
 	}
-	if st, body := t80Get(t, srv.URL+"/api/members", reissued); st != http.StatusOK {
+	if st, body := t80Connect2(t, srv.URL, reissued); st != http.StatusOK {
 		t.Fatalf("re-credentialled request: got %d %s", st, body)
 	}
 	if got, want := t80TokenKeyOf(t, dal, "m-box"), keys.activeKeyID(); got != want {
@@ -561,6 +621,31 @@ func t80DrainRenews(t *testing.T, api *apiServer, id string) [][]byte {
 	return out
 }
 
+// t80RenewFramesIn pulls the renew frames out of what a connect actually WROTE
+// to the socket.
+//
+// 🔴 IT REPLACES POPPING THE QUEUE, AND THE REASON IS A BEHAVIOUR CHANGE, NOT A
+// STYLE ONE. A summons raised while a machine connects is drained onto THAT
+// connection and its pending row is deleted as the bytes go out, so afterwards
+// the queue is empty whether the frame was delivered or never existed. Counting
+// the queue therefore reports zero for both, which is the measurement failing,
+// not the feature. These bytes are what the warden receives.
+func t80RenewFramesIn(body string) []string {
+	out := []string{}
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		digest, ok := decodeWardenCommandFrame([]byte(line))
+		if !ok || digest.Verb != reconcileCmdRenew {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
 // t80StaleMachine sets up the whole premise in one place: a machine seen on the
 // key that is signing now, then a rotation, so its permanent credential is now
 // signed by an OUTGOING key while still verifying perfectly.
@@ -569,7 +654,7 @@ func t80StaleMachine(t *testing.T, srv *httptest.Server, api *apiServer, keys *k
 	t.Helper()
 	tok := t80Warden(t, api, id, id+"-box")
 	t80OnlineWarden(t, api, id)
-	if st, body := t80Get(t, srv.URL+"/api/members", tok); st != http.StatusOK {
+	if st, body := t80Connect2(t, srv.URL, tok); st != http.StatusOK {
 		t.Fatalf("POSITIVE CONTROL FAILED — %s must pass the gate before the "+
 			"rotation; got %d %s", id, st, body)
 	}
@@ -590,19 +675,20 @@ func TestAMachineStillOnAnOutgoingKeyIsToldToRenew(t *testing.T) {
 	srv, keys, dal, api := t62Stack(t, []byte(interopSecret))
 	tok := t80StaleMachine(t, srv, api, keys, dal, "m-stale")
 
-	if st, body := t80Get(t, srv.URL+"/api/members", tok); st != http.StatusOK {
+	st, body := t80Connect2(t, srv.URL, tok)
+	if st != http.StatusOK {
 		t.Fatalf("PREMISE FAILED: the old key is still on the ring, so this must "+
 			"be a 200; got %d %s", st, body)
 	}
 
-	frames := t80DrainRenews(t, api, "m-stale")
+	frames := t80RenewFramesIn(body)
 	if len(frames) != 1 {
 		t.Fatalf("a machine observed on an OUTGOING key must be told to renew: "+
 			"got %d frames, want 1.\nWithout this the station counts correctly "+
 			"and the fleet never moves — the number is right and frozen forever.",
 			len(frames))
 	}
-	digest, ok := decodeWardenCommandFrame(frames[0])
+	digest, ok := decodeWardenCommandFrame([]byte(frames[0]))
 	if !ok {
 		t.Fatalf("the frame is not a warden-command frame: %s", frames[0])
 	}
@@ -625,14 +711,15 @@ func TestAMachineStillOnAnOutgoingKeyIsToldToRenew(t *testing.T) {
 func TestTheRenewFrameCarriesNoCredentialAtAll(t *testing.T) {
 	srv, keys, dal, api := t62Stack(t, []byte(interopSecret))
 	tok := t80StaleMachine(t, srv, api, keys, dal, "m-stale")
-	if st, _ := t80Get(t, srv.URL+"/api/members", tok); st != http.StatusOK {
-		t.Fatalf("PREMISE FAILED")
+	st, body := t80Connect2(t, srv.URL, tok)
+	if st != http.StatusOK {
+		t.Fatalf("PREMISE FAILED: got %d", st)
 	}
-	frames := t80DrainRenews(t, api, "m-stale")
+	frames := t80RenewFramesIn(body)
 	if len(frames) != 1 {
 		t.Fatalf("PREMISE FAILED: want exactly one frame, got %d", len(frames))
 	}
-	raw := string(frames[0])
+	raw := frames[0]
 
 	// ① No field whose NAME could carry a credential. The renew args shape is
 	// member_id and nothing else, so any of these appearing means the payload
@@ -674,18 +761,20 @@ func TestAStaleMachineIsAskedOnceNoMatterHowOftenItCallsBack(t *testing.T) {
 	tok := t80StaleMachine(t, srv, api, keys, dal, "m-stale")
 
 	const requests = 25
+	seen := 0
 	for i := 0; i < requests; i++ {
-		if st, body := t80Get(t, srv.URL+"/api/members", tok); st != http.StatusOK {
+		st, body := t80Connect2(t, srv.URL, tok)
+		if st != http.StatusOK {
 			t.Fatalf("request %d: %d %s", i, st, body)
 		}
+		seen += len(t80RenewFramesIn(body))
 	}
-	frames := t80DrainRenews(t, api, "m-stale")
-	if len(frames) != 1 {
-		t.Fatalf("%d requests from one stale machine produced %d renew frames, "+
+	if seen != 1 {
+		t.Fatalf("%d connects from one stale machine produced %d renew frames, "+
 			"want exactly 1. The ask is throttled by the memo, and the QUEUE is "+
 			"not that state — a pending row is deleted the moment the frame is "+
 			"written, so an empty queue never means 'already asked'.",
-			requests, len(frames))
+			requests, seen)
 	}
 }
 
@@ -705,34 +794,37 @@ func TestAStaleMachineIsAskedAgainOnceTheIntervalHasPassed(t *testing.T) {
 	api.keyRenewClock = func() time.Time { return base.Add(offset) }
 
 	tok := t80StaleMachine(t, srv, api, keys, dal, "m-stale")
-	if st, _ := t80Get(t, srv.URL+"/api/members", tok); st != http.StatusOK {
+	st, body := t80Connect2(t, srv.URL, tok)
+	if st != http.StatusOK {
 		t.Fatalf("PREMISE FAILED")
 	}
-	if got := len(t80DrainRenews(t, api, "m-stale")); got != 1 {
+	if got := len(t80RenewFramesIn(body)); got != 1 {
 		t.Fatalf("PREMISE FAILED: the first ask must have happened, got %d", got)
 	}
 
 	// Just short of the interval: still silent.
 	offset = renewAskInterval - time.Second
-	if st, _ := t80Get(t, srv.URL+"/api/members", tok); st != http.StatusOK {
+	st, body = t80Connect2(t, srv.URL, tok)
+	if st != http.StatusOK {
 		t.Fatalf("request inside the interval failed")
 	}
-	if got := len(t80DrainRenews(t, api, "m-stale")); got != 0 {
+	if got := len(t80RenewFramesIn(body)); got != 0 {
 		t.Fatalf("inside the interval the machine must not be asked again, got %d frames", got)
 	}
 
 	// Past it: asked again.
 	offset = renewAskInterval + time.Second
-	if st, _ := t80Get(t, srv.URL+"/api/members", tok); st != http.StatusOK {
+	st, body = t80Connect2(t, srv.URL, tok)
+	if st != http.StatusOK {
 		t.Fatalf("request past the interval failed")
 	}
-	frames := t80DrainRenews(t, api, "m-stale")
+	frames := t80RenewFramesIn(body)
 	if len(frames) != 1 {
 		t.Fatalf("past the interval the machine must be asked AGAIN, got %d "+
 			"frames. A warden that restarted has forgotten it was ever asked, "+
 			"and nothing on that side will remind it.", len(frames))
 	}
-	if digest, ok := decodeWardenCommandFrame(frames[0]); !ok || digest.Verb != reconcileCmdRenew {
+	if digest, ok := decodeWardenCommandFrame([]byte(frames[0])); !ok || digest.Verb != reconcileCmdRenew {
 		t.Fatalf("the re-ask must be the same verb: %s", frames[0])
 	}
 }
@@ -762,7 +854,7 @@ func TestAMachineAlreadyOnTheCurrentKeyIsNeverAsked(t *testing.T) {
 			t.Fatalf("re-mint: %v", err)
 		}
 		for i := 0; i < 5; i++ {
-			if st, body := t80Get(t, srv.URL+"/api/members", reissued); st != http.StatusOK {
+			if st, body := t80Connect2(t, srv.URL, reissued); st != http.StatusOK {
 				t.Fatalf("request %d: %d %s", i, st, body)
 			}
 		}
@@ -777,7 +869,7 @@ func TestAMachineAlreadyOnTheCurrentKeyIsNeverAsked(t *testing.T) {
 		tok := t80Warden(t, api, "m-only", "only-box")
 		t80OnlineWarden(t, api, "m-only")
 		for i := 0; i < 5; i++ {
-			if st, body := t80Get(t, srv.URL+"/api/members", tok); st != http.StatusOK {
+			if st, body := t80Connect2(t, srv.URL, tok); st != http.StatusOK {
 				t.Fatalf("request %d: %d %s", i, st, body)
 			}
 		}
@@ -815,7 +907,7 @@ func TestEphemeralIdentitiesLeaveNoTraceInTheObservationMemo(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if st, body := t80Get(t, srv.URL+"/api/members", tok); st != http.StatusOK {
+		if st, body := t80Connect2(t, srv.URL, tok); st != http.StatusOK {
 			t.Fatalf("POSITIVE CONTROL FAILED — %s must authenticate; got %d %s",
 				id, st, body)
 		}
@@ -879,5 +971,82 @@ func TestTheRenewVerbOnTheWireIsTheLiteralTheWardenParses(t *testing.T) {
 	if digest.Verb != wardenSideLiteral {
 		t.Fatalf("the frame's rpc field reads %q; the warden reads that field and "+
 			"expects %q", digest.Verb, wardenSideLiteral)
+	}
+}
+
+// 🔴 THE REGRESSION TEST FOR THE DEFECT THIS DESIGN EXISTS TO PREVENT.
+//
+// The scenario, in the order it happens on a real host (cli/ocwarden/renewapply.go):
+//
+//  1. the warden asks the station for a fresh credential
+//  2. it PRESENTS that candidate on a gated route to check the station accepts it
+//  3. only then does it write the credential to disk
+//  4. and only then does it exec into it
+//
+// Step 3 can fail — a read-only filesystem, a full disk — and the warden is
+// written to survive that: it keeps the old credential and retries. So the
+// machine goes on running on the OUTGOING key.
+//
+// The first shape of this feature recorded the signing key at the auth gate,
+// which meant step 2 alone marked the machine converged. The owner would then be
+// looking at a screen saying every machine has moved, press remove — an act with
+// no grace period and no undo — and cut off a machine that never adopted the new
+// credential at all.
+//
+// This test is that story with nothing else in it: present a new-key credential
+// on an ordinary gated route, write nothing, and require that the station has
+// not changed its mind about which key that machine is on.
+func TestPresentingACredentialOnAnOrdinaryRouteIsNotEvidenceOfRunningOnIt(t *testing.T) {
+	srv, keys, dal, api := t62Stack(t, []byte(interopSecret))
+	tok := t80Warden(t, api, "m-probe", "m-probe-box")
+	t80OnlineWarden(t, api, "m-probe")
+
+	// The machine is up and running on the key that signs today.
+	if st, body := t80Connect2(t, srv.URL, tok); st != http.StatusOK {
+		t.Fatalf("PREMISE FAILED: %d %s", st, body)
+	}
+	beforeKey := t80TokenKeyOf(t, dal, "m-probe")
+	if beforeKey == "" {
+		t.Fatal("PREMISE FAILED: the running machine must have been observed")
+	}
+
+	// The owner rotates. The machine is now on an outgoing key and does not know it.
+	if _, err := keys.rotate(dal); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+
+	// The warden mints itself a candidate and PRESENTS it — step 2. This is a
+	// real request with a real new-key credential; the only thing that does NOT
+	// happen is the machine adopting it.
+	candidate, err := api.mintWardenToken(Member{ID: "m-probe", Kind: machineKind})
+	if err != nil {
+		t.Fatalf("mint candidate: %v", err)
+	}
+	if st, body := t80Get(t, srv.URL+"/api/machines", candidate); st != http.StatusOK {
+		t.Fatalf("PREMISE FAILED: the candidate must be ACCEPTED — that is what "+
+			"the warden's probe checks, and the whole trap is that it succeeds; "+
+			"got %d %s", st, body)
+	}
+
+	// Step 3 failed. Nothing was written. The machine is still running on the old
+	// credential, so the station must still say so.
+	if got := t80TokenKeyOf(t, dal, "m-probe"); got != beforeKey {
+		t.Fatalf("the station moved this machine to %q on the strength of a "+
+			"credential it merely PRESENTED (want it left at %q).\n"+
+			"On a real host the write after that probe can fail, and the machine "+
+			"keeps running on the outgoing key — while this number tells the "+
+			"owner it is safe to press remove. That press has no grace period "+
+			"and no undo.", got, beforeKey)
+	}
+	// And the same thing read the way the OWNER reads it, off the wire.
+	ownerTok := mintOwnerAt(t, keys, time.Now().Unix())
+	row, ok := t80ListMachines(t, srv.URL, ownerTok)["m-probe"]
+	if !ok {
+		t.Fatalf("GET /api/machines does not list m-probe")
+	}
+	if row.TokenKeyCurrent != nil && *row.TokenKeyCurrent {
+		t.Fatal("the machine reads as token_key_current=true after only " +
+			"PRESENTING a credential it never adopted — this is the number " +
+			"saying SAFE at the one moment it must not")
 	}
 }

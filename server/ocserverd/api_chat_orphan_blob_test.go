@@ -30,7 +30,7 @@ func newWiredTestServerWithDB(t *testing.T) (*httptest.Server, []byte, *sql.DB) 
 	}
 	secret := []byte(interopSecret)
 	api := newAPIServer(dal, NewHub(), singleKeyring(secret), 3600, "../..")
-	h, err := buildHandler(specsFor(api), api.keys, dal.GetMember, nil, nil)
+	h, err := buildHandler(specsFor(api), api.keys, dal.GetMember, nil)
 	if err != nil {
 		t.Fatalf("buildHandler: %v", err)
 	}
