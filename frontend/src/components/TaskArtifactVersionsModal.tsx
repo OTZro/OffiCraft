@@ -15,14 +15,16 @@
 //
 // 🔴 THE ONE CRITERION, inherited verbatim from DocumentHistoryModal: what the
 // diff says must equal the actual state. So the 「目前」 side is read from the
-// SERVER when this modal opens (`api.getTask`), NOT from the artifact rows the
-// popover is holding. Those rows are an SSE-driven cache: they are refetched
-// when a `task` event fans, which means they are right most of the time and
+// SERVER when this modal opens (`api.listTaskArtifacts` — `api.getTask`
+// carries only id+label since T-66, and a version diff needs
+// kind/url/filename/mime), NOT from the artifact rows the popover is
+// holding. Those rows are an SSE-driven cache: they are refetched when a
+// `task` event fans, which means they are right most of the time and
 // silently stale exactly when they are not — a replace that landed while the
-// popover sat open, or a fan-out that was dropped. A diff whose `+` side is a
-// cache is a claim about the server that nothing verifies, and the document
-// series records that this class of lie survives a fully green suite. One read
-// at open costs one request and removes the class.
+// popover sat open, or a fan-out that was dropped. A diff whose `+` side is
+// a cache is a claim about the server that nothing verifies, and the
+// document series records that this class of lie survives a fully green
+// suite. One read at open costs one request and removes the class.
 //
 // If the artifact is GONE from the task the server just handed back (un-pinned
 // from another surface while this was opening), that is said out loud — the
