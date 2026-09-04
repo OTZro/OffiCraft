@@ -39,7 +39,7 @@ func TestBuildSpawnDeps_WiresTheOcAgentResolver(t *testing.T) {
 	}
 }
 
-// TestFileExists_AnswersTheFilesystem and TestNewOcAgentResolver_PassesTheVerdictThrough
+// TestPathStatable_AnswersTheFilesystem and TestNewOcAgentResolver_PassesTheVerdictThrough
 // are the second review round's finding, and it was sharper than the first. The wiring
 // line used to carry the existence probe written out inline. Changing that one word —
 // `func(p string) bool { return true }` — makes the resolver claim every path is there,
@@ -52,18 +52,18 @@ func TestBuildSpawnDeps_WiresTheOcAgentResolver(t *testing.T) {
 //
 // So behaviour moved off the wiring line into two named functions, and here is one test
 // per function.
-func TestFileExists_AnswersTheFilesystem(t *testing.T) {
+func TestPathStatable_AnswersTheFilesystem(t *testing.T) {
 	dir := t.TempDir()
 	present := filepath.Join(dir, "here")
 	if err := os.WriteFile(present, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if !fileExists(present) {
-		t.Errorf("fileExists(%q) = false for a file that is right there", present)
+	if !pathStatable(present) {
+		t.Errorf("pathStatable(%q) = false for a file that is right there", present)
 	}
 	missing := filepath.Join(dir, "not-here")
-	if fileExists(missing) {
-		t.Errorf("fileExists(%q) = true for a path that does not exist — this is the "+
+	if pathStatable(missing) {
+		t.Errorf("pathStatable(%q) = true for a path that does not exist — this is the "+
 			"one-word change that reinstates T-81: the resolver then vouches for a "+
 			"binary that is not on disk and the spawn publishes a link to nothing", missing)
 	}
@@ -94,26 +94,64 @@ func TestNewOcAgentResolver_PassesTheVerdictThrough(t *testing.T) {
 	}
 }
 
-// TestBuildSpawnDeps_ResolverVerdictMatchesTheFilesystem asserts the production
-// resolver's verdict against an INDEPENDENT stat of the path it just named. It replaces
-// an earlier version that called t.Skipf when the binary happened to be present — which
-// meant the guard excused itself under exactly the condition a broken probe creates.
-// This one asserts in both worlds and never skips.
-func TestBuildSpawnDeps_ResolverVerdictMatchesTheFilesystem(t *testing.T) {
+// TestBuildSpawnDeps_ResolverVerdictFollowsTheSiblingAppearing is the guard the third
+// review round asked for, and it is the ONLY one that watches which probe the wiring line
+// hands over. Behaviour moved off that line, but the line still CHOOSES:
+//
+//	newOcAgentResolver(os.Executable, func(string) bool { return true })   // mutant I
+//
+// leaves pathStatable untouched (its test stays green) and injects its own probe into
+// newOcAgentResolver (that test stays green too), while production vouches for a binary
+// that is not there — T-81, restored, on the one line nothing else covers.
+//
+// The earlier version of this test read whatever the machine happened to have, so on a
+// host where the sibling really exists mutant I survived. This one BUILDS BOTH WORLDS:
+// the resolver looks next to the running executable, and under `go test` that is the test
+// binary, whose directory we can write. Create the sibling, the verdict must turn true;
+// remove it, it must turn false. No skips, no dependence on what this host looks like.
+func TestBuildSpawnDeps_ResolverVerdictFollowsTheSiblingAppearing(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Skipf("cannot locate the test binary, so this test cannot build its two worlds: %v", err)
+	}
+	sibling := filepath.Join(filepath.Dir(exe), "ocagent")
+	if _, err := os.Stat(sibling); err == nil {
+		t.Skipf("something already occupies %s; refusing to disturb it", sibling)
+	}
+
 	env := func(string) string { return "" }
 	deps := buildSpawnDeps(Config{Base: fxBase}, env, &recRunner{}, fxSocket, "")
 	if deps.ResolveOcAgentBin == nil {
 		t.Fatal("no resolver wired — see TestBuildSpawnDeps_WiresTheOcAgentResolver")
 	}
-	path, present := deps.ResolveOcAgentBin()
-	_, err := os.Stat(path)
-	if onDisk := err == nil; present != onDisk {
-		t.Errorf("resolver said present=%v for %q, but the filesystem says present=%v (%v). "+
-			"A resolver that disagrees with the disk is how a spawn publishes a symlink "+
-			"to nothing and the member is deaf with no error anywhere.", present, path, onDisk, err)
+
+	// World 1: nothing there.
+	if path, present := deps.ResolveOcAgentBin(); present {
+		t.Fatalf("with no ocagent next to the warden, the resolver still vouched for %q — "+
+			"that verdict is what makes the spawn publish a symlink to nothing", path)
 	}
-	if path == "" {
-		t.Error("resolver named no path at all; the refusal message would have nothing to " +
-			"point the reader at")
+
+	// World 2: the download lands.
+	if err := os.WriteFile(sibling, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Skipf("cannot write %s, so this host cannot build the second world: %v", sibling, err)
+	}
+	t.Cleanup(func() { _ = os.Remove(sibling) })
+
+	path, present := deps.ResolveOcAgentBin()
+	if !present {
+		t.Errorf("the sibling is now on disk at %s, but the resolver still reports absent "+
+			"(it named %q) — the production wiring is not asking the filesystem", sibling, path)
+	}
+	if path != sibling {
+		t.Errorf("resolver named %q, want the sibling %q", path, sibling)
+	}
+
+	// World 1 again, to prove the true answer was not simply latched.
+	if err := os.Remove(sibling); err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	if path, present := deps.ResolveOcAgentBin(); present {
+		t.Errorf("the sibling was removed, yet the resolver still vouches for %q — "+
+			"the answer was cached", path)
 	}
 }

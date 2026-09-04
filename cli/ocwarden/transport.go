@@ -539,10 +539,17 @@ func resolveRepoRoot(executable func() (string, error)) string {
 // $HOME/cli/ocagent/ocagent — a path that has never existed on any machine — and the
 // caller symlinked to it without asking. Returning the existence bit is what lets the
 // spawn path tell "here it is" apart from "I had to guess and the guess is not there".
-// fileExists is the production existence probe. It is a named function, not a closure
+// pathStatable is the production existence probe. It is a named function, not a closure
 // written at the wiring site, precisely so a mutant that guts it (`return true`) has a
-// test standing on it — see TestFileExists_AnswersTheFilesystem.
-func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
+// test standing on it — see TestPathStatable_AnswersTheFilesystem.
+//
+// It is called pathStatable and not fileExists because a reviewer pointed out that the
+// shorter name promised more than the body delivers: os.Stat succeeds on a DIRECTORY too,
+// and nothing here looks at the executable bit. Named honestly, the gap is visible to the
+// next reader instead of being implied away — and for the one question this answers ("did
+// the download land yet?") a bare stat is the right amount of checking, because install
+// writes to a temp path and renames into place, so the name never exists half-written.
+func pathStatable(p string) bool { _, err := os.Stat(p); return err == nil }
 
 // newOcAgentResolver builds the per-spawn seam SpawnDeps carries. It exists so the
 // production wiring line contains a REFERENCE and no behaviour: everything it does is
@@ -645,7 +652,7 @@ func buildSpawnDeps(cfg Config, env func(string) string, runner CmdRunner, socke
 		// green, because nothing testable owned that line. Both halves now live in
 		// named functions that have tests of their own, so the wiring is a reference
 		// and not a place where behaviour can be written.
-		ResolveOcAgentBin: newOcAgentResolver(os.Executable, fileExists),
+		ResolveOcAgentBin: newOcAgentResolver(os.Executable, pathStatable),
 		WriteFile:         osWriteFile,
 		MkdirAll:          os.MkdirAll,
 		// Symlink / Remove publish the workdir `ocagent` as a symlink to OcAgentBin.

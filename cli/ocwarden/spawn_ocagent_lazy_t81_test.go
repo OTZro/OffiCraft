@@ -135,6 +135,20 @@ func TestStart_RefusesWhenResolverMissing(t *testing.T) {
 	if !strings.Contains(out.Reason, "ocagent_not_found") {
 		t.Errorf("Reason = %q, want ocagent_not_found", out.Reason)
 	}
+	// The unset seam names no path, so the message has to say so rather than render the
+	// empty string into "no ocagent binary at ." — a sentence that reads like a real
+	// filesystem answer and sends the reader looking in the current directory. The
+	// reviewer found this line had no guard at all after praising it, which is its own
+	// lesson: a compliment is not a test.
+	if strings.Contains(out.Reason, "binary at .") {
+		t.Errorf("Reason = %q — the empty path rendered as \".\", which reads as a real "+
+			"location and misdirects whoever goes looking", out.Reason)
+	}
+	if !strings.Contains(out.Reason, "without an ocagent resolver") {
+		t.Errorf("Reason = %q, want it to say the warden was built without a resolver — "+
+			"that is a different fault from \"the download has not landed\" and needs a "+
+			"different fix", out.Reason)
+	}
 	if len(links) != 0 {
 		t.Errorf("published %v, want NO symlink", links)
 	}
