@@ -33,6 +33,15 @@ func TestNormalizeBase_HostDecidesTheScheme(t *testing.T) {
 		{"://", "://"},
 		{"http://", "http://"},
 		{":9999", ":9999"},
+
+		// 🔴 REGRESSION (caught by resolvePaths' own test, 2026-09-04): a scheme we
+		// do not recognise, or no scheme at all, must come back UNTOUCHED. An
+		// earlier draft turned these into https://x and https://notaurl, which then
+		// passed ocBaseShape — the normaliser had repaired input a guard exists to
+		// reject.
+		{"ftp://x", "ftp://x"},
+		{"notaurl", "notaurl"},
+		{"HTTP://officraft.hardcoretech.link", "https://officraft.hardcoretech.link"},
 	}
 	for _, tc := range cases {
 		if got := normalizeBase(tc.in); got != tc.want {

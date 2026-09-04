@@ -69,17 +69,29 @@ func schemeForHost(host string) string {
 // way in instead. A base it cannot make sense of is handed back UNCHANGED —
 // refusing to guess beats inventing a URL that reaches nothing.
 func normalizeBase(raw string) string {
-	host := strings.TrimSpace(raw)
-	if i := strings.Index(host, "://"); i >= 0 {
-		host = host[i+3:]
+	s := strings.TrimSpace(raw)
+	// ONLY a base that already declares http or https is re-schemed. Everything
+	// else is handed back UNTOUCHED so the caller's own validation still sees
+	// exactly what the operator typed.
+	//
+	// 🔴 THIS GUARD WAS ADDED AFTER IT FAILED. An earlier draft normalised any
+	// input, so "ftp://x" became "https://x" and a bare "notaurl" became
+	// "https://notaurl" — and both then PASSED ocBaseShape, which exists to
+	// reject exactly those. resolvePaths' own test caught it
+	// (install_test.go: expected shape error for OC_BASE="ftp://x").
+	// A normaliser that repairs malformed input does not help the operator; it
+	// deletes the check that would have told them.
+	lower := strings.ToLower(s)
+	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
+		return raw
 	}
+	host := s[strings.Index(s, "://")+3:]
 	// Anything after the authority is a path the caller appended, not the base.
 	if i := strings.IndexAny(host, "/?#"); i >= 0 {
 		host = host[:i]
 	}
-	// "", "://", "http://" and a bare ":9999" all land here. There is no host to
-	// re-scheme, and inventing one produces a URL that reaches nothing — hand the
-	// original back and let the caller's own validation say so.
+	// "http://" and "http://:9999" land here: no host to re-scheme, and inventing
+	// one produces a URL that reaches nothing.
 	if host == "" || strings.HasPrefix(host, ":") {
 		return raw
 	}
