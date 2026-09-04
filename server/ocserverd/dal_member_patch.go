@@ -281,7 +281,7 @@ func mfAgentIatFloor(v float64) memberField {
 }
 
 // mfTokenKeyID — the station's own observation of WHICH signing key this
-// member's credential is signed by (T-80, migrations/00099 placeholder). It is
+// member's credential is signed by (T-80, migrations/00080). It is
 // insert-only for memberFromWorker's reason, the same one handover_noticed_ts
 // and agent_iat_floor carry: that function rebuilds a Member from zero and does
 // not know this column, so every PutOutsourceWorker would send "" — and ""
