@@ -454,20 +454,59 @@ func TestAStationAtTheReleasedVersionCanUpgradeToThisTree(t *testing.T) {
 			local, err = os.ReadFile(filepath.Base(rm.path))
 		}
 		if err != nil {
-			// Reachable, and the likely cause is not exotic: RENAMING a shipped file.
-			// goose identifies a Go migration by the string passed to
-			// AddNamedMigration*, not by the filename, so a rename leaves the version
-			// declared while the path main knows is gone — and saying only "the two
-			// scans disagree" would send the reader looking for a scanner bug.
-			t.Fatalf("main ships released migration %d as %s, and this tree still declares "+
-				"version %d, but that path cannot be read here: %v.\nThe usual cause is that "+
-				"the FILE WAS RENAMED (or moved). A released migration's path is part of what "+
-				"shipped: goose identifies a Go migration by its registration string rather "+
-				"than its filename, so renaming one is invisible to goose and leaves this "+
-				"check unable to compare it against what stations actually ran. FIX: put the "+
-				"file back where main has it. If the path genuinely has to change, that is a "+
-				"decision for a person, not something to route around here.",
-				v, rm.path, v, err)
+			// TWO DIFFERENT EVENTS LAND HERE AND THEY NEED OPPOSITE FIXES, so this
+			// must not name one of them and stop (T-64, measured 2026-09-04):
+			//
+			//   RENAME — this tree once had main's file and moved it. goose
+			//   identifies a Go migration by the string passed to AddNamedMigration*
+			//   rather than by the filename, so a rename leaves the version declared
+			//   while the path main knows is gone. FIX: put the file back.
+			//
+			//   COLLISION — two branches independently took the same free number.
+			//   main's file was never in this tree at all; the other branch landed
+			//   first. FIX: renumber THIS tree's file upward.
+			//
+			// On the file listing alone the two are IDENTICAL — main has one path at
+			// version v, this tree has another — so telling them apart needs history,
+			// not the working tree. The measured cost of guessing is not symmetric:
+			// "put the file back where main has it" told at a COLLISION is an
+			// instruction to overwrite a migration somebody else has already shipped.
+			// So when history cannot answer, print BOTH rather than pick one.
+			// ":(top)" anchors the pathspec at the REPO ROOT. Without it git resolves
+			// rm.path relative to the CWD — which for this package is server/ocserverd
+			// — so every lookup silently finds nothing and EVERY case reads as a
+			// collision, including the renames. Measured: the rename arm came back
+			// "NEVER existed in this tree's history" for a file with two commits on it.
+			seenHere, histErr := gitOut("log", "--oneline", "-1", "HEAD", "--", ":(top)"+rm.path)
+
+			var diagnosis string
+			switch {
+			case histErr != nil:
+				diagnosis = fmt.Sprintf("WHICH OF THE TWO THIS IS could not be determined "+
+					"— reading this tree's history for that path failed (%v) — so both are "+
+					"below. Tell them apart by hand, from the repo root: "+
+					"`git log HEAD -- %s`. Commits ⇒ RENAME. "+
+					"Nothing ⇒ COLLISION.", histErr, rm.path)
+			case seenHere == "":
+				diagnosis = fmt.Sprintf("THIS IS A COLLISION, not a rename: %s has NEVER "+
+					"existed in this tree's history, so this tree did not move it — another "+
+					"branch took version %d and landed first. FIX: renumber THIS tree's file "+
+					"(%s) to %d, the lowest number free of both this tree and main. DO NOT "+
+					"put main's file 'back': it was never here, and writing your version of "+
+					"%d over a migration that has already shipped is the failure this whole "+
+					"check exists to prevent.", rm.path, v, tree[v].where, nextFree, v)
+			default:
+				diagnosis = fmt.Sprintf("THIS IS A RENAME, not a collision: %s DOES appear "+
+					"in this tree's history (%s), so this tree had it and moved it. A "+
+					"released migration's path is part of what shipped. FIX: put the file "+
+					"back where main has it. If the path genuinely has to change, that is a "+
+					"decision for a person, not something to route around here.",
+					rm.path, seenHere)
+			}
+
+			t.Fatalf("main ships released migration %d as %s, and this tree declares "+
+				"version %d at %s, but main's path cannot be read here: %v.\n%s",
+				v, rm.path, v, tree[v].where, err, diagnosis)
 		}
 		if strings.TrimSpace(rm.body) != strings.TrimSpace(string(local)) {
 			kind := "migration file"
