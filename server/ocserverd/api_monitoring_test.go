@@ -2109,8 +2109,11 @@ func TestGetMonitoring_ReportWithoutRuntimesCannotRefreshThem(t *testing.T) {
 //
 // Root cause the sentinels below exist to keep dead: the three VALUE folds
 // (acctByHost / freshRL → five_hour+seven_day / acctCost) iterated `members`,
-// and `dal.ListMembers()` is `WHERE kind != 'outsource'` — so SQL removed every
-// worker before the fold ever ran. The accounts row itself was still MINTED,
+// and at that time `dal.ListMembers()` was `WHERE kind != 'outsource'` — so SQL
+// removed every worker before the fold ever ran. (The clause is gone since T-14
+// 項目 6; `members` is now narrowed by the handler's own driver guard instead,
+// which is what TestGetMonitoring_LiveContractorCountsAsOneAgentNotTwo pins. The
+// root cause below is unchanged — only the mechanism that produced it is.) The accounts row itself was still MINTED,
 // because the raw-key loop near the end of the handler scans the WHOLE
 // telemetry snapshot. Net effect: a green card with three dashes.
 //
@@ -2471,8 +2474,10 @@ func TestGetMonitoring_WorkerOnlyAccountFillsMachineCostAndValidWindows(t *testi
 // sentinel: the seth-m5-claude shape, a key held by a staff member AND an
 // outsource worker at once. It pins the exact total, so widening the fold to
 // `members ∪ workers` may not double-count either side's live cost or banked
-// balance. If members and workers ever stop being disjoint (they are disjoint
-// by SQL today: kind != 'outsource' vs kind = 'outsource'), this goes red.
+// balance. If members and workers ever stop being disjoint, this goes red. ⚠️
+// They are NOT disjoint by SQL any more (T-14 項目 6 deleted ListMembers'
+// `WHERE kind != 'outsource'`): the handler's own driver guard is what separates
+// them now, so this test's premise is a guard someone can delete, not a query.
 func TestGetMonitoring_SharedAccountSumsMemberAndWorkerExactlyOnce(t *testing.T) {
 	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
 		telemetry: newMemStore(), gauge: newMemStore()}
@@ -3206,5 +3211,68 @@ func TestHardwareInvalidKeys(t *testing.T) {
 	}
 	if got := hardwareInvalidKeys(map[string]any{}); len(got) != 0 {
 		t.Errorf("an empty sample accuses nobody, got %v", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// T-14 項目 6 — the merged roster read must not make ONE contractor look like TWO.
+//
+// The bug this pins is SILENT and cannot go red on its own: after
+// ListMembers' `WHERE kind != 'outsource'` was deleted (dal.go), this handler's
+// roster read returns the contractor's MEMBER row, and its worker loop returns
+// the SAME contractor off ListOutsourceWorkers. Both branches resolve the host
+// through the same expression (observedHost / observedWorkerHost both fall back
+// to telemetry `machine`), so the one contractor lands in `actors` twice on the
+// same host key and `hostCounts[host]++` runs twice for it.
+//
+// What the owner sees: a machine card reading one more agent than the box is
+// running. No error, no log line, no other assertion in this file moves.
+//
+// The discrimination is VERIFIED, not reasoned: with the driver guard at the
+// top of HandleGetMonitoringApiMonitoringGet this reads 2; with the guard's
+// `continue` deleted it reads 3.
+func TestGetMonitoring_LiveContractorCountsAsOneAgentNotTwo(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	// One registered machine. Its own warden member is an actor on its own row
+	// and has always counted as one live agent (see
+	// TestGetMonitoring_ReleasedWorkerSpendStaysInTheAccount for why the
+	// baseline is 1 and not 0), so the expected total below is warden + worker.
+	seedRegisteredMachine(t, s, "m-eva-m5")
+	// Exactly ONE live contractor, on that box.
+	seedWorker(t, s, "ow-eva", "E1", 0, WorkerStatusActive)
+	if rec := doIngestTelemetry(s, "ow-eva", "m-eva-m5",
+		`{"runtime":"claude","account":"eva-m5-claude","cost":1.25}`); rec.Code != 200 {
+		t.Fatalf("worker ingest: %d %s", rec.Code, rec.Body.String())
+	}
+
+	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
+	mr := machineRowIn(d, "m-eva-m5")
+	if mr == nil {
+		t.Fatalf("no machines row for m-eva-m5 in %v", d["machines"])
+	}
+	if mr["agents"] != 2.0 {
+		t.Errorf("machines[m-eva-m5].agents = %v, want 2 (the box's own warden + the "+
+			"ONE live contractor). 3 means the merged roster read let the same "+
+			"contractor into `actors` twice — once off its member row, once off its "+
+			"worker row — and the owner is reading an agent count for a box that "+
+			"gained no agent", mr["agents"])
+	}
+
+	// The same double-entry also duplicates the SESSIONS row. It is invisible in
+	// the cockpit today (MonitorPage filters every `ow-` id out of this list),
+	// but findSessionFor / joinSessionRuntime are `sessions.find(...)` — first
+	// match wins — so a duplicate silently decides WHICH of the two rows any
+	// telemetry join lands on. Assert the id appears once.
+	seen := 0
+	for _, raw := range d["sessions"].([]any) {
+		if raw.(map[string]any)["id"] == "ow-eva" {
+			seen++
+		}
+	}
+	if seen != 1 {
+		t.Errorf("sessions rows for ow-eva = %d, want exactly 1 — two rows share an "+
+			"id and a name but are built from different presence expressions, so "+
+			"which one a first-match join picks is decided by loop order", seen)
 	}
 }

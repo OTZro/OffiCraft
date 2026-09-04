@@ -11,8 +11,9 @@ import (
 //
 // The failure this file exists to catch, in the owner's words, is somebody
 // giving a formality to 正職 and 完全不管外包. Before the shared list that could
-// not fail: the worker roster never passes through runReconcileTick (ListMembers
-// is `WHERE kind != 'outsource'`), so a staff-only pass and a pass that does not
+// not fail: the worker roster never passes through runReconcileTick (then via
+// ListMembers' `WHERE kind != 'outsource'`, since T-14 項目 6 via that half's
+// driver guard), so a staff-only pass and a pass that does not
 // exist are INDISTINGUISHABLE from a worker's side. It happened twice already
 // (the token-expiry lead and the survived-stop sweep, both missing until stage
 // 1), and neither was visible in any test.

@@ -1184,7 +1184,7 @@ func (s *apiServer) HandleListChatAttachmentsApiChatAttachmentsGet(w http.Respon
 	sort.SliceStable(involved, func(i, j int) bool {
 		return involved[i].TS > involved[j].TS
 	})
-	members, err := s.dal.ListMembersIncludingOutsource()
+	members, err := s.dal.ListMembers()
 	if err != nil {
 		internalError(w, err)
 		return
@@ -1734,7 +1734,7 @@ func resumeChatPackBudget(budget int, generatedAt string) int {
 // ListChat() table scan (api_helpers.go unreadCountsForRequest), and hanging
 // the most expensive query in the system off the boot path would multiply it by
 // fleet size. Everything below is one bounded query or in-memory:
-//   - ONE ListMembersIncludingOutsource (single SELECT over the member table)
+//   - ONE ListMembers (single SELECT over the member table)
 //   - ONE hub.OnlineMembers map (in-memory; NOT one IsOnline call per member)
 //   - observedHost / PresenceState (pure + in-memory)
 //   - ONE role lookup per DISTINCT role, deduped below — not per member
@@ -1751,7 +1751,7 @@ func resumeChatPackBudget(budget int, generatedAt string) int {
 //     contractor — never a per-contractor ListTaskSteps, which would drag
 //     back every step's Name/DoD text onto a path every agent boots through.
 func (s *apiServer) resumeFloorParts(actor string) ([]resumeRosterMemberDTO, resumeMachinesDTO, int, int, map[string]string, error) {
-	members, err := s.dal.ListMembersIncludingOutsource()
+	members, err := s.dal.ListMembers()
 	if err != nil {
 		return nil, resumeMachinesDTO{}, 0, 0, nil, err
 	}
