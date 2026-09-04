@@ -86,9 +86,21 @@ func normalizeBase(raw string) string {
 		return raw
 	}
 	host := s[strings.Index(s, "://")+3:]
-	// Anything after the authority is a path the caller appended, not the base.
+	// Anything after the authority is a path, query or fragment the caller
+	// appended, not the base. ⚠️ ALL THREE delimiters matter: the reviewer
+	// showed that dropping "#" here is a change every module's own suite still
+	// passes, because not one test input carried a fragment. The cases below
+	// now do.
 	if i := strings.IndexAny(host, "/?#"); i >= 0 {
 		host = host[:i]
+	}
+	// userinfo is not part of the host. Without this, "user:pass@127.0.0.1:7755"
+	// splits on the LAST colon, leaves "user:pass@127.0.0.1", and is judged NOT
+	// loopback — so a local base would be upgraded to https and stop working.
+	// (Reviewer finding; it fails toward the encrypted answer, which is why it
+	// is a wrong answer rather than an unsafe one.)
+	if i := strings.LastIndex(host, "@"); i >= 0 {
+		host = host[i+1:]
 	}
 	// "http://" and "http://:9999" land here: no host to re-scheme, and inventing
 	// one produces a URL that reaches nothing.

@@ -41,6 +41,19 @@ func TestNormalizeBase_HostDecidesTheScheme(t *testing.T) {
 		// reject.
 		{"ftp://x", "ftp://x"},
 		{"notaurl", "notaurl"},
+
+		// 🔴 THESE THREE EXIST BECAUSE OF A MUTANT THE MIRROR GUARD CANNOT SEE.
+		// The independent reviewer changed IndexAny(host, "/?#") to "/?" in ALL
+		// THREE copies at once: the guard passed (the copies still matched) and
+		// every module's suite passed (not one input carried a fragment). The
+		// guard defends against DRIFT, not against the same mistake made
+		// everywhere — only a test input can do that.
+		{"http://officraft.hardcoretech.link#frag", "https://officraft.hardcoretech.link"},
+		{"http://127.0.0.1:7755#frag", "http://127.0.0.1:7755"},
+		{"http://officraft.hardcoretech.link?a=b", "https://officraft.hardcoretech.link"},
+		// userinfo is not the host: without stripping it, this reads as NOT
+		// loopback and a working local base gets upgraded to https.
+		{"http://user:pass@127.0.0.1:7755", "http://127.0.0.1:7755"},
 		{"HTTP://officraft.hardcoretech.link", "https://officraft.hardcoretech.link"},
 	}
 	for _, tc := range cases {
