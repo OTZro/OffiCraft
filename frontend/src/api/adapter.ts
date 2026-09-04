@@ -407,19 +407,40 @@ export interface TaskStepView {
    * waiting step's reason. OPTIONAL so hand-built fixtures stay valid (the
    * replyCardStatus precedent); the mapper always sets it. */
   waitingReason?: string;
-  /** The step's free-text working note — what it got to and what comes next
-   * (T-cc3e). The field the handover SOP means by "把還在進行中的工作寫回 task
-   * step note"; unlike `waitingReason` it is bound to no status, so it carries
-   * progress at whatever moment a handover lands. OPTIONAL so hand-built
-   * fixtures stay valid (the replyCardStatus precedent); the mapper always
-   * sets it. */
-  note?: string;
+  /** How many characters of working note this step has ON THE SERVER (T-66).
+   *
+   * 🔴 THE NOTE TEXT IS NOT ON THIS VIEW MODEL, and that is the whole shape of
+   * the ticket (owner rc-4c8065fb30a5:「整個拿掉…座艙改成點開才抓」). The task
+   * read no longer carries it, so this number is what the card has to work
+   * from: `> 0` draws the 備註 entry, `0` draws nothing because the step
+   * genuinely has none. The text arrives from `getTaskStep` when someone opens
+   * it. A component that wants to SHOW a note and finds only this number is
+   * being told, correctly, to go and fetch it.
+   *
+   * OPTIONAL so hand-built fixtures stay valid (the replyCardStatus
+   * precedent); the mapper always sets it. */
+  noteSizeChars?: number;
   /** Non-empty ⇒ this leaf runs inside a parallel stage (同時進行 · N 項並行);
    * consecutive steps sharing the group render as one parallel block. */
   parallelGroup: string;
   orderIdx: number;
   startedTs: number;
   finishedTs: number;
+}
+
+/** ONE step in FULL (T-66) — what `getTaskStep` answers, and the only place the
+ * cockpit ever holds a step note's text. Everything a `TaskStepView` carries,
+ * plus the `note` itself and the two size numbers.
+ *
+ * `detailLevel` is carried across from the wire rather than dropped: it is the
+ * payload's own statement that this is the whole step, the mirror of the task
+ * view's `"summary"`. Keeping it means a caller that somehow received the wrong
+ * projection can say so instead of silently rendering a blank note. */
+export interface TaskStepDetailView extends TaskStepView {
+  detailLevel: string;
+  note: string;
+  noteSizeChars: number;
+  noteCapChars: number;
 }
 
 /**
@@ -527,18 +548,40 @@ export interface TaskView {
   progressDone: number;
   progressTotal: number;
   steps: TaskStepView[];
-  /** The task's curated deliverable set (T-3dc5), oldest→newest. Only the FULL
-   * task (getTask) carries these; the LIGHT list leaves it [] (it carries only
-   * `artifactCount` for the collapsed card's 「產物 N」 badge). The popover
-   * hydrates the full task to render them. OPTIONAL so hand-built test fixtures
-   * stay valid (the replyCardStatus precedent); the mapper always sets it. */
-  artifacts?: TaskArtifactView[];
+  /** The task's curated deliverable set (T-3dc5), oldest→newest, as an INDEX:
+   * each entry is `{ id, label }` and NOTHING else.
+   *
+   * 🔴 THE ARTIFACT DETAIL IS NOT ON THIS VIEW MODEL (T-66, owner
+   * c-cd063427fb2f:「我覺得任務產物，只需要預設給標題跟ID, 有需要再透過另一隻去
+   * 拿就好了」). url / filename / mime / kind / isImage / attachmentId /
+   * createdTs / createdBy arrive from `listTaskArtifacts`, one call for the
+   * whole ticket. A component that wants to RENDER an artifact and finds only
+   * these two fields is being told, correctly, to go and fetch it.
+   *
+   * Only the FULL task (getTask) carries even the index; the LIGHT list leaves
+   * it [] (it carries only `artifactCount` for the collapsed card's 「產物 N」
+   * badge). OPTIONAL so hand-built test fixtures stay valid (the
+   * replyCardStatus precedent); the mapper always sets it. */
+  artifacts?: TaskArtifactRefView[];
   /** Number of pinned deliverables — the collapsed card's 「產物 N」 badge (0 ⇒
    * badge hidden). On the light list it is the SERVER count (`artifact_count`);
    * on a hydrated full task it equals `artifacts.length` (kept consistent so a
    * post-hydrate card keeps the same badge). OPTIONAL so hand-built fixtures
    * stay valid; the mapper always sets it. */
   artifactCount?: number;
+}
+
+/** ONE pinned deliverable as an INDEX ROW (T-66): which one it is and what it
+ * is called, and nothing that would need a second read. This is what a
+ * `TaskView.artifacts` entry is.
+ *
+ * `label` is honest-empty when the deliverable was pinned without one — it is
+ * NOT backfilled from a filename or a url here, because those live on the full
+ * row. Deciding what to SHOW for a nameless artifact is the renderer's job, on
+ * the full row it fetched. */
+export interface TaskArtifactRefView {
+  id: string;
+  label: string;
 }
 
 /** ONE pinned deliverable on a task's artifact set (T-3dc5), in view-model
@@ -1999,6 +2042,36 @@ export interface Api {
    * updatedTs moves while expanded) to hydrate the workflow timeline.
    */
   getTask(id: string): Promise<TaskView>;
+  /**
+   * Fetch ONE step in full (`GET /api/tasks/{task_id}/steps/{step_id}`, T-66) —
+   * the only read that carries a step's working-note TEXT.
+   *
+   * 🔴 It exists because `getTask` stopped carrying it. The task read reports
+   * each step's `noteSizeChars` and nothing else, so the 任務卡 draws the 備註
+   * entry from that number and calls this ONLY when the reader opens one —
+   * owner rc-4c8065fb30a5:「座艙改成點開才抓」. Do not call it per step while
+   * rendering a timeline; that is the cost the split removed.
+   *
+   * A step id that belongs to a different task is a 404 (ApiError), not another
+   * task's step.
+   */
+  getTaskStep(taskId: string, stepId: string): Promise<TaskStepDetailView>;
+  /**
+   * Fetch ONE task's pinned deliverables in full
+   * (`GET /api/tasks/{task_id}/artifacts`, T-66) — the only read that carries
+   * an artifact's url / filename / mime / kind / isImage / attachmentId /
+   * createdTs / createdBy.
+   *
+   * 🔴 It exists because `getTask` stopped carrying them: a task's `artifacts`
+   * are an id+label INDEX now (owner c-cd063427fb2f), so anything that DRAWS an
+   * artifact calls this. ONE call answers the WHOLE ticket — there is
+   * deliberately no per-artifact read (owner c-f2d0fecb1168:「應該是指名任務？」),
+   * because the cockpit's deliverables panel opens onto the entire set and a
+   * per-artifact door would cost one call per row.
+   *
+   * An unknown task id is a 404 (ApiError); a task with nothing pinned is [].
+   */
+  listTaskArtifacts(taskId: string): Promise<TaskArtifactView[]>;
   /** The task counts behind the nav badge (`GET /api/tasks/count`) — a cheap
    * dedicated endpoint so the badge can refetch on every "task" SSE delta
    * without pulling the list. `open` = non-terminal (the badge). `total` = every

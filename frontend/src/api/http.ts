@@ -85,6 +85,8 @@ import type {
   OutsourceWorkerView,
   TaskTypeView,
   TaskCountView,
+  TaskStepDetailView,
+  TaskArtifactView,
   TaskManualSummaryView,
   TaskManualView,
   TaskManualPatch,
@@ -136,6 +138,8 @@ import {
   toServerSettings,
   toTask,
   toTaskListItem,
+  toTaskStepDetail,
+  toTaskArtifact,
   toOutsourceWorker,
   toTaskType,
   toTaskManual,
@@ -1684,6 +1688,34 @@ export const httpApi: Api = {
       }),
     );
     return toTask(wire);
+  },
+
+  async getTaskStep(taskId: string, stepId: string): Promise<TaskStepDetailView> {
+    // GET /api/tasks/{task_id}/steps/{step_id} -> TaskStepDetailDTO (T-66).
+    // The ONE read that carries a step note's text: getTask reports each step's
+    // note_size_chars and stopped carrying the note itself, so the card opens
+    // this on demand. A step that belongs to another task 404s through the
+    // client middleware as an ApiError.
+    const wire = unwrap(
+      await client.GET("/api/tasks/{task_id}/steps/{step_id}", {
+        params: { path: { task_id: taskId, step_id: stepId } },
+      }),
+    );
+    return toTaskStepDetail(wire);
+  },
+
+  async listTaskArtifacts(taskId: string): Promise<TaskArtifactView[]> {
+    // GET /api/tasks/{task_id}/artifacts -> TaskArtifactListDTO (T-66). The ONE
+    // read that carries an artifact's url/filename/mime/kind/is_image: getTask
+    // carries an id+label INDEX and stopped carrying the rest, so anything that
+    // DRAWS an artifact opens this. One call answers the whole ticket; an
+    // unknown task 404s through the client middleware as an ApiError.
+    const wire = unwrap(
+      await client.GET("/api/tasks/{task_id}/artifacts", {
+        params: { path: { task_id: taskId } },
+      }),
+    );
+    return (wire.artifacts ?? []).map(toTaskArtifact);
   },
 
   async getTaskCount(): Promise<TaskCountView> {

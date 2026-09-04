@@ -438,9 +438,10 @@ func (s *apiServer) runOutsourceTick(now float64) {
 	// 🔴 T-170e: THREE staff passes ride this projection now, not one, and the
 	// reason the other two were missing is structural rather than an oversight
 	// anybody could have spotted by reading them. Every shared wind-down pass is
-	// reached from runReconcileTick, whose roster read is ListMembers — and
-	// ListMembers is `WHERE kind != 'outsource'` by construction (dal.go), so a
-	// worker is NEVER offered to any of them. A pass that guards staff and a pass
+	// reached from runReconcileTick, which never offers a worker to any of them —
+	// then because ListMembers was `WHERE kind != 'outsource'` (dal.go), now
+	// because that half's driver guard drops the row (T-14 項目 6 deleted the
+	// clause). Either way a worker is NEVER offered to any of them. A pass that guards staff and a pass
 	// that does not exist look identical from the worker's side, which is exactly
 	// how a worker ended up with no token-expiry lead and no survived-stop sweep
 	// while the code implementing both sat in the same package.

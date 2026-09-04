@@ -266,7 +266,10 @@ func (s *apiServer) taskDTOOf(t Task) (taskDTO, error) {
 		return taskDTO{}, err
 	}
 	dto := newTaskDTO(t, steps, deps, s.replyCardStatusesForSteps(steps))
-	artifacts, err := s.taskArtifactDTOs(t.ID)
+	// INDEX rows only (T-66, owner c-cd063427fb2f). The full set — url,
+	// filename, mime, kind, is_image, attachment_id, created_by, created_ts —
+	// is served by taskArtifactDTOs through GET /api/tasks/{task_id}/artifacts.
+	artifacts, err := s.taskArtifactRefDTOs(t.ID)
 	if err != nil {
 		return taskDTO{}, err
 	}
@@ -306,6 +309,26 @@ func (s *apiServer) blockingTasksOf(taskID string) ([]taskDepRefDTO, error) {
 		out = append(out, taskDepRefDTO{
 			ID: w.ID, TaskNo: TaskNo(w.ID), Title: w.Title, Status: w.Status,
 		})
+	}
+	return out, nil
+}
+
+// taskArtifactRefDTOs lists one task's artifacts as INDEX rows (id + label) —
+// what the shared task projection serves since T-66. Never nil.
+//
+// 🔴 IT DOES NOT TOUCH chat_attachment AT ALL. taskArtifactDTOs below runs one
+// GetChatAttachment per file/image row; this runs exactly one query no matter
+// how many artifacts a task has pinned, because the index carries no blob
+// metadata to resolve. That is why the slimming is a latency change on the task
+// read and not only a payload one.
+func (s *apiServer) taskArtifactRefDTOs(taskID string) ([]taskArtifactRefDTO, error) {
+	arts, err := s.dal.ListTaskArtifacts(taskID)
+	if err != nil {
+		return nil, err
+	}
+	out := []taskArtifactRefDTO{}
+	for _, a := range arts {
+		out = append(out, newTaskArtifactRefDTO(a))
 	}
 	return out, nil
 }
@@ -871,7 +894,8 @@ func (s *apiServer) resumeTasksFor(actor string, cards map[string]ReplyCard) ([]
 		if err != nil {
 			return nil, 0, err
 		}
-		currentID, currentName := "", ""
+		// current step: the shared rule (domain.CurrentStep), not a local copy.
+		currentID, currentName := CurrentStep(steps)
 		detailChars := 0
 		answered := []resumeAnsweredCardStepDTO{}
 		for _, st := range steps {
@@ -889,11 +913,6 @@ func (s *apiServer) resumeTasksFor(actor string, cards map[string]ReplyCard) ([]
 						CardID:   st.ReplyCardID,
 					})
 				}
-			}
-			// current = the first non-TERMINAL step: a superseded row is
-			// frozen replan history, never the working node (T-1aea).
-			if currentID == "" && !StepIsTerminal(st.Status) {
-				currentID, currentName = st.ID, st.Name
 			}
 			detailChars += len([]rune(st.Name)) + len([]rune(st.DoD))
 		}
@@ -999,6 +1018,14 @@ func (s *apiServer) HandleListTasksApiTasksGet(w http.ResponseWriter, r *http.Re
 		internalError(w, err)
 		return
 	}
+	// The current-step pointer (id + name only) — a second grouped query, NOT a
+	// per-task ListTaskSteps: this endpoint is uncapped, so the step read has to
+	// cost one statement for the whole population. dod text stays out.
+	currentByTask, err := s.dal.AllTaskCurrentStep()
+	if err != nil {
+		internalError(w, err)
+		return
+	}
 	depsByTask, err := s.dal.AllTaskDeps()
 	if err != nil {
 		internalError(w, err)
@@ -1042,7 +1069,8 @@ func (s *apiServer) HandleListTasksApiTasksGet(w http.ResponseWriter, r *http.Re
 		}
 		p := progressByTask[t.ID]
 		out = append(out, newTaskListItemDTO(
-			t, depsByTask[t.ID], p.Done, p.Total, artifactCountByTask[t.ID], byID))
+			t, depsByTask[t.ID], p.Done, p.Total, artifactCountByTask[t.ID], byID,
+			currentByTask[t.ID]))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -2852,6 +2880,18 @@ func (s *apiServer) HandleAddTaskArtifactApiTasksTaskIdArtifactPost(w http.Respo
 			"kind must be one of file, image, link")
 		return
 	}
+	// The label is a one-line NAME, so it is capped at shortLabelMaxChars runes
+	// (128 CJK characters pass — the count is not in bytes). It sits with the
+	// other body-shape 400s, ahead of the task/permission guards, because it is
+	// a fault in the request itself and does not depend on which task it names.
+	// Over-length is REFUSED, never truncated. Existing rows are untouched.
+	label := trimmedOrEmpty(body.Label)
+	if n := utf8.RuneCountInString(label); n > shortLabelMaxChars {
+		writeError(w, http.StatusBadRequest, "artifact label is "+
+			strconv.Itoa(n)+" chars, over the "+
+			strconv.Itoa(shortLabelMaxChars)+"-char limit")
+		return
+	}
 	t, err := s.resolveTask(taskId)
 	if err != nil {
 		writeResolveError(w, err, "task", taskId)
@@ -2870,7 +2910,7 @@ func (s *apiServer) HandleAddTaskArtifactApiTasksTaskIdArtifactPost(w http.Respo
 		ID:        "ta-" + newHexID(12),
 		TaskID:    t.ID,
 		Kind:      kind,
-		Label:     trimmedOrEmpty(body.Label),
+		Label:     label,
 		CreatedTS: nowSecs(),
 		// §14 caller-identity: the registrar is the verified token sub.
 		CreatedBy: currentActor(r),

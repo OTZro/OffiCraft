@@ -256,6 +256,28 @@ const (
 	// `grep -n 'msg := ChatMessage{' server/ocserverd/*.go` names every writer,
 	// and each one answers for its own body length.
 	chatBodyMaxChars = 4000
+	// shortLabelMaxChars caps the SHORT NAMING fields at 128 UTF-8 CHARACTERS
+	// (runes via utf8.RuneCountInString — NOT bytes, so 128 CJK characters, 384
+	// bytes, still passes; a byte cap would have rejected them). Today it binds
+	// two fields, both of which are a NAME that a card prints on one line:
+	//   * a task artifact's label   (POST /api/tasks/{task_id}/artifact)
+	//   * a chat attachment's filename (resolveChatAttachment — the ONE seam the
+	//     inline base64 path and the `ocagent upload` streaming path share, so
+	//     the cap binds both without a second copy)
+	// Over-length is REFUSED (400), never silently truncated: a name the server
+	// quietly shortened is a name that no longer matches the thing it names.
+	//
+	// 128 is the owner's number, verbatim 「128字元」 (c-92c734ef561e), on
+	// 「過去先不管 新的都要限制長度」 (c-5d058a53ef74). Both halves of that are
+	// load-bearing: EXISTING ROWS ARE LEFT ALONE — there is no migration, no
+	// backfill and no truncation of stored data, so a read can still return a
+	// longer label than a write would now accept.
+	//
+	// 🔴 The refusal message says the length and the limit and NOTHING ELSE — no
+	// advice about where the text should go instead. Owner, verbatim:
+	// 「不用在錯誤訊息寫」 (c-b9bb4cfde26a). That is deliberately UNLIKE the
+	// chatBodyMaxChars refusal above, which does point at attachments.
+	shortLabelMaxChars = 128
 )
 
 // imageMimeExt maps a sniffed image mime to the default pasted-image
@@ -375,6 +397,17 @@ func resolveChatAttachment(raw []byte, filename, mimeType string) (*ChatAttachme
 	}
 	var name *string
 	if trimmed := strings.TrimSpace(filename); trimmed != "" {
+		// The 128-rune cap (shortLabelMaxChars). Enforced HERE, on the shared
+		// seam, so the inline base64 path and the `ocagent upload` streaming
+		// path cannot disagree — and BEFORE PutChatAttachment, so a refused name
+		// never leaves a stored blob behind. Counted in runes: 128 CJK
+		// characters pass. The defaulted pasted-image name below is a server
+		// constant and cannot be over-length, so it is not re-checked.
+		if n := utf8.RuneCountInString(trimmed); n > shortLabelMaxChars {
+			return nil, chatBadRequest{"attachment filename is " +
+				strconv.Itoa(n) + " chars, over the " +
+				strconv.Itoa(shortLabelMaxChars) + "-char limit"}
+		}
 		name = &trimmed
 	} else if isImage {
 		ext, ok := imageMimeExt[resolved]
@@ -1699,7 +1732,7 @@ func (s *apiServer) HandleListChatAttachmentsApiChatAttachmentsGet(w http.Respon
 	sort.SliceStable(involved, func(i, j int) bool {
 		return involved[i].TS > involved[j].TS
 	})
-	members, err := s.dal.ListMembersIncludingOutsource()
+	members, err := s.dal.ListMembers()
 	if err != nil {
 		internalError(w, err)
 		return
@@ -2252,7 +2285,7 @@ func resumeChatPackBudget(budget int, generatedAt string) int {
 // T-48 replaced a full ListChat() table scan + a Go fold with one SQL
 // aggregate — but cheaper is not free, and the reason to keep it off the wake
 // path is unchanged. Everything below is one bounded query or in-memory:
-//   - ONE ListMembersIncludingOutsource (single SELECT over the member table)
+//   - ONE ListMembers (single SELECT over the member table)
 //   - ONE hub.OnlineMembers map (in-memory; NOT one IsOnline call per member)
 //   - observedHost / PresenceState (pure + in-memory)
 //   - ONE role lookup per DISTINCT role, deduped below — not per member
@@ -2269,7 +2302,7 @@ func resumeChatPackBudget(budget int, generatedAt string) int {
 //     contractor — never a per-contractor ListTaskSteps, which would drag
 //     back every step's Name/DoD text onto a path every agent boots through.
 func (s *apiServer) resumeFloorParts(actor string) ([]resumeRosterMemberDTO, resumeMachinesDTO, int, int, map[string]string, error) {
-	members, err := s.dal.ListMembersIncludingOutsource()
+	members, err := s.dal.ListMembers()
 	if err != nil {
 		return nil, resumeMachinesDTO{}, 0, 0, nil, err
 	}

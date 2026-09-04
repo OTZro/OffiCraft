@@ -23,9 +23,10 @@ package main
 // 🔴 AND THAT IS THE SHAPE BOTH REAL FAILURES HAD. Neither the missing
 // token-expiry lead nor the missing survived-stop sweep was a listed pass that
 // somebody narrowed. Nobody wrote `Kind != KindOutsource` anywhere. The staff
-// pass simply ran inside runReconcileTick, whose roster read is ListMembers, and
-// ListMembers is `WHERE kind != 'outsource'` BY CONSTRUCTION (dal.go) — so the
-// staff-only-ness was a property of the DATA SOURCE and appeared in no
+// pass simply ran inside runReconcileTick, which no worker row reaches — then
+// because ListMembers was `WHERE kind != 'outsource'` (dal.go), now because that
+// half's driver guard drops the row (T-14 項目 6 deleted the clause). Either way
+// the staff-only-ness is a property of the ROSTER PLUMBING, not of any
 // expression a kind-scan could ever see. A guard that only hunts for `Kind ==`
 // would have caught neither of them.
 //
@@ -520,17 +521,18 @@ var identityGateLedger = map[string]string{
 		"machine-vs-person axis, not the 正職／外包 one.",
 	"lifecycle_roster.go :: lifecycleTickDriverFor :: m.Kind == KindOutsource": "" +
 		"WHICH HALF of the merged tick drives the row — NOT whether the row is treated " +
-		"differently. This is the 正職／外包 split that already exists and has never been " +
-		"written down: it is a side effect of dal.ListMembers being `WHERE kind != " +
-		"'outsource'`, which is today the ONLY thing keeping one row out of both FSMs " +
-		"in a single tick. T-14 項目 6 merges that clause away; this expression is the " +
-		"same split re-sited into a named total predicate FIRST, so the invariant " +
-		"becomes falsifiable (TestLifecycleTickDriver_EveryRowHasExactlyOneDriver) " +
-		"instead of implicit in a query. It adds no differentiated TREATMENT — both " +
-		"halves run the same shared formalities and the same entry filter — so the " +
-		"owner's 2026-08-26 question is answered by: this branch is the routing that " +
-		"the two-executor split needs while it exists, and deleting it is the follow-up " +
-		"card (retire the outsource half), not this step.",
+		"differently. This is the 正職／外包 split that USED to be written down nowhere: " +
+		"it was a side effect of dal.ListMembers being `WHERE kind != 'outsource'`, " +
+		"which was then the only thing keeping one row out of both FSMs in a single " +
+		"tick. 🔴 T-14 項目 6 HAS NOW DELETED THAT CLAUSE, so this expression is not a " +
+		"stand-in for a query any more — it IS the split, load-bearing today, and the " +
+		"invariant is falsifiable " +
+		"(TestLifecycleTickDriver_EveryRowHasExactlyOneDriver) instead of implicit. It " +
+		"adds no differentiated TREATMENT — both halves run the same shared formalities " +
+		"and the same entry filter — so the owner's 2026-08-26 question is answered by: " +
+		"this branch is the routing that the two-executor split needs while it exists, " +
+		"and deleting it is the follow-up card (retire the outsource half), not this " +
+		"step.",
 	"reconcile.go :: runReconcileTick :: lifecycleTickDriverFor(m)": "" +
 		"the staff half ASKING the driver question — 「這一列是不是我的」 — at the head " +
 		"of its candidate loop, before the entry filter and before any formality. It " +
@@ -542,6 +544,39 @@ var identityGateLedger = map[string]string{
 		"deleting the guard makes this key stale and the gate fails by name, which is " +
 		"the property the PR text claimed and the parity test could not deliver (it " +
 		"guards the predicate, not its callers).",
+	"reconcile.go :: reconcileMemberNow :: lifecycleTickDriverFor(*m)": "" +
+		"the staff half asking the SAME driver question on its EVENT-DRIVEN door " +
+		"(activate / deactivate / relocate / refocus / accelerated-stop / uninstall) " +
+		"that runReconcileTick asks on the cadence door. Same predicate, same " +
+		"population, no differentiated TREATMENT: a row it keeps then runs the same " +
+		"shared entry filter and the same shared passes. It is on the record as a seam " +
+		"CALL, not a kind comparison, because the kind branch lives exactly once — in " +
+		"lifecycleTickDriverFor. 🔴 WHY IT IS NOT REDUNDANT WITH THE CADENCE ENTRY: " +
+		"this door reads GetMember, so it was never narrowed by ListMembers' " +
+		"`WHERE kind != 'outsource'` and T-14 項目 6 did not widen it. What it had " +
+		"instead was seven callers that each happen to hand it a staff row " +
+		"(api_members ×5 via resolveMember(…, staffOnly); api_machines via " +
+		"resolveMachine, which demands kind==warden; onboarding with the seed " +
+		"assistant's own id) — the guard lived in seven argument lists across two " +
+		"other files, and api_members.go:790 / api_machines.go:1280 already pass " +
+		"anyMember elsewhere, so the precedent for a future caller widening it exists. " +
+		"This entry turns 「呼叫者剛好都傳正職」 into a property of the function. On " +
+		"today's reachable paths it is a no-op, which is the point: it is a no-op that " +
+		"cannot be UNDONE from another file. Pinned by " +
+		"TestReconcileMemberNow_AContractorIsNotDrivenByTheMemberFSM.",
+	"api_monitoring.go :: HandleGetMonitoringApiMonitoringGet :: lifecycleTickDriverFor(m)": "" +
+		"NOT a lifecycle guard — a DE-DUPLICATION guard, and the only reason the " +
+		"cockpit's agent count is right. This handler folds `members ∪ workers`; since " +
+		"T-14 項目 6 its roster read is the whole member table, so every live contractor " +
+		"also arrives off ListOutsourceWorkers and both branches resolve the host " +
+		"through the same expression. Without this `continue` one contractor enters " +
+		"`actors` twice on one host key (machines[].agents reads N+1) and `sources` " +
+		"twice under one id (two sessions rows, same id and name, different presence " +
+		"expressions — a first-match join then picks by loop order). Asked by NAME " +
+		"rather than as `m.Kind != KindOutsource` so the definition PR ① unified is not " +
+		"re-forked, and so this handler is on this ledger at all. Pinned behaviourally " +
+		"by TestGetMonitoring_LiveContractorCountsAsOneAgentNotTwo (verified 2 with the " +
+		"guard, 3 without).",
 	"outsource_sched.go :: runOutsourceTick :: lifecycleTickDriverFor(memberFromWorker(w))": "" +
 		"the outsource half asking the same driver question about the same population, " +
 		"through memberFromWorker — the worker row IS a member row, so both halves ask " +
@@ -1338,8 +1373,9 @@ func TestIdentityScanExclusionsEachNameALiveFile(t *testing.T) {
 //
 // The historical failures — a worker with no token-expiry lead, a worker with no
 // survived-stop sweep — contained NO kind expression at all. The staff-only-ness
-// came from runReconcileTick's roster read being ListMembers, which is
-// `WHERE kind != 'outsource'` by construction. So the next instance of that
+// came from no worker row reaching runReconcileTick at all — first via
+// ListMembers' `WHERE kind != 'outsource'`, and since T-14 項目 6 via that half's
+// driver guard. So the next instance of that
 // mistake is a plain `for … range members { … }` written inline in one of the
 // two producers, with nothing in it for a kind-scanner to find.
 //
@@ -1691,8 +1727,9 @@ func TestTickProducersHaveNoUndeclaredRosterLoop(t *testing.T) {
 			"🔴 THIS IS THE SHAPE OF BOTH HISTORICAL FAILURES. A worker got no "+
 			"token-expiry lead and no survived-stop sweep, and NEITHER of them "+
 			"contained a `Kind ==` anywhere: the staff pass simply ran inline in "+
-			"runReconcileTick, whose roster read is ListMembers — `WHERE kind != "+
-			"'outsource'` by construction (dal.go). From a worker's side, a formality "+
+			"runReconcileTick, which no worker row reaches (first via ListMembers' "+
+			"`WHERE kind != 'outsource'`, since T-14 項目 6 via that half's driver "+
+			"guard). From a worker's side, a formality "+
 			"that guards only 正職 and a formality that does not exist are "+
 			"indistinguishable.\n"+
 			"So, for the loop above:\n"+

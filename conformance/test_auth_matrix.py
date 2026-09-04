@@ -1440,6 +1440,16 @@ MATRIX: dict[str, Route] = {
             *_matrix_task_step(ctx)),
         body={"edits": [{"old": "", "new": "conf matrix note patch"}]},
     ),
+    "GET /api/tasks/{task_id}/steps/{step_id}": Route(
+        # T-66. A READ, so it carries GET /api/tasks/{task_id}'s floor and NOT
+        # the agent write gate the three POSTs on this same path segment carry:
+        # there is no executor guard, so no `agent_other` override — a second
+        # agent reading somebody else's step is a 200, exactly as it already is
+        # through get_task. If that is ever wrong it is wrong for both reads.
+        requires="machine",
+        path=lambda ctx, _i: "/api/tasks/{}/steps/{}".format(
+            *_matrix_task_step(ctx)),
+    ),
     "POST /api/tasks/{task_id}/deps": Route(
         requires="agent",
         overrides={"agent_other": 403},
@@ -1504,6 +1514,17 @@ MATRIX: dict[str, Route] = {
         overrides={"agent_other": 403},
         path=lambda ctx, _i: "/api/tasks/{}/artifact/{}".format(
             *_matrix_task_artifact(ctx)),
+    ),
+    "GET /api/tasks/{task_id}/artifacts": Route(
+        # T-66. A READ, so it carries GET /api/tasks/{task_id}'s floor and NOT
+        # the agent write gate the two artifact WRITES on the neighbouring path
+        # carry: there is no executor guard, so no `agent_other` override — a
+        # second agent reading somebody else's artifacts is a 200, exactly as it
+        # already was through get_task before this ticket moved the full rows
+        # here. No field this serves was behind a stricter door before, so a
+        # tighter floor here would close nothing.
+        requires="machine",
+        path=lambda ctx, _i: f"/api/tasks/{_matrix_task(ctx)}/artifacts",
     ),
     # ── outsource panel (M3) ────────────────────────────────────────────────
     "GET /api/outsource-workers": Route(requires="machine"),

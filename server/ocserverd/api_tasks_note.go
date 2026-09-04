@@ -122,10 +122,13 @@ func (s *apiServer) HandlePatchTaskStepNoteApiTasksTaskIdStepsStepIdNotePatchPos
 	if !ok {
 		return
 	}
-	// get_task, not get_lessons: the anchor-miss message tells the caller where
-	// to look next, and a step note is read back through the task view (the
-	// reason ApplyDocEdits takes the tool name as a parameter).
-	next, applied, err := ApplyDocEdits(step.Note, edits, "get_task")
+	// get_task_step, not get_lessons and — since T-66 — no longer get_task: the
+	// anchor-miss message tells the caller where to look next, and get_task
+	// stopped carrying the note TEXT. Sending a caller to a read that reports
+	// only the note's SIZE is the exact misdirection ApplyDocEdits takes this
+	// parameter to prevent — it would re-anchor against nothing and miss again,
+	// silently.
+	next, applied, err := ApplyDocEdits(step.Note, edits, "get_task_step")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

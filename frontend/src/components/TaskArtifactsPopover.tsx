@@ -13,6 +13,20 @@
 // old tab order (檔案 → 圖片 → 連結) so the eye still reads them as three
 // families without a control to operate.
 //
+// 🔴 THE ROWS ARE FETCHED WHEN THE PANEL OPENS, and they are the ONLY reason
+// this component talks to the server. T-66 took url / filename / mime / kind /
+// is_image / attachment_id / created_by / created_ts off the task read (owner
+// c-cd063427fb2f:「我覺得任務產物，只需要預設給標題跟ID, 有需要再透過另一隻去拿
+// 就好了」), so a hydrated task carries an id+label INDEX and nothing this file
+// can draw a row from. `api.listTaskArtifacts` is 「另一隻」, and it answers the
+// WHOLE ticket in one call (owner c-f2d0fecb1168:「應該是指名任務？」) — which is
+// exactly the shape this panel needs, because it opens onto every row at once.
+//
+// There is therefore NO SEED and no fallback to whatever the card had: the
+// reader gets a LOADING state and then either rows or a visible failure. A
+// silent blank panel would say 「還沒有產物」 about a task the badge has just
+// told them has N of them, which is the one thing this must never do.
+//
 // File/image artifacts REUSE the shared attachment renderer (AttachmentStrip)
 // and its preview overlay — deliverable #2's 「復用聊天附件那套顯示」. Every
 // blob row, file or image, opens the one MarkdownPreviewOverlay (T-f014 retired
@@ -49,6 +63,26 @@ function asAttachmentView(a: TaskArtifactView): ChatAttachmentView {
   };
 }
 
+/** What a LINK row is called on screen.
+ *
+ * 🔴 IT CAN NEVER RETURN "", and that is the whole reason it exists. The
+ * expression here was `a.label || a.url`, which held only because a link row was
+ * assumed to always carry a url — and T-66 makes that assumption something this
+ * component has to earn rather than inherit, since the rows now arrive from
+ * `listTaskArtifacts` instead of riding the task read. If that fetch ever hands
+ * back a row with neither (a label-less pin whose url did not survive), the old
+ * chain rendered an anchor with NO TEXT: invisible, unclickable, and silently
+ * one row short of the count the badge promised. The id tail is the same
+ * identifier `artifactMetaLabel` already prints beneath the name, so the worst
+ * case is a row named after itself rather than a row named nothing.
+ *
+ * The blob kinds do not come through here: `AttachmentStrip` already falls back
+ * to 「下載附件」 for a nameless file and `renderExtra` to 「圖片」 for a nameless
+ * image, and duplicating those here would mean two answers to one question. */
+function artifactDisplayName(a: TaskArtifactView): string {
+  return a.label || a.filename || a.url || `#${a.id.replace(/^ta-/, "")}`;
+}
+
 /** T-6338: two pinned artifacts can carry the IDENTICAL filename (the same
  * demo file re-uploaded) — the row must still let the owner tell them apart
  * and trust the delete button they're about to click. `formatAbsolute` only
@@ -68,13 +102,12 @@ function artifactMetaLabel(a: TaskArtifactView, nowTs: number): string {
 
 export function TaskArtifactsBadge({
   task,
-  onHydrate,
   onRemoveArtifact,
 }: {
-  task: { id: string; artifactCount?: number; artifacts?: TaskArtifactView[] };
-  /** Hydrate the FULL task to read its artifact rows (the light list carries
-   * only the count). Reused from the card's existing hydrate seam. */
-  onHydrate: (id: string) => Promise<{ artifacts?: TaskArtifactView[] }>;
+  /** Only the id and the COUNT are read here. The card's own `artifacts` are an
+   * id+label index since T-66 and carry nothing a row could be drawn from, so
+   * this component deliberately does not take them — it fetches. */
+  task: { id: string; artifactCount?: number };
   /** Owner/admin un-pin. Absent ⇒ the popover is display-only (no × affordance). */
   onRemoveArtifact?: (taskId: string, artifactId: string) => Promise<void>;
 }) {
@@ -143,8 +176,6 @@ export function TaskArtifactsBadge({
       {open && (
         <ArtifactsPopover
           taskId={task.id}
-          seed={task.artifacts}
-          onHydrate={onHydrate}
           onRemoveArtifact={onRemoveArtifact}
           onClose={() => setOpen(false)}
         />
@@ -155,37 +186,52 @@ export function TaskArtifactsBadge({
 
 function ArtifactsPopover({
   taskId,
-  seed,
-  onHydrate,
   onRemoveArtifact,
   onClose,
 }: {
   taskId: string;
-  /** Artifacts already in hand (an expanded card's hydrated detail); the popover
-   * still refetches for liveness, but this avoids an empty first frame. */
-  seed?: TaskArtifactView[];
-  onHydrate: (id: string) => Promise<{ artifacts?: TaskArtifactView[] }>;
   onRemoveArtifact?: (taskId: string, artifactId: string) => Promise<void>;
   onClose: () => void;
 }) {
   const { t } = useI18n();
-  const [artifacts, setArtifacts] = useState<TaskArtifactView[]>(seed ?? []);
+  const [artifacts, setArtifacts] = useState<TaskArtifactView[]>([]);
+  // The reader has a PHASE, not just a list. "loaded" is what separates 「還沒有
+  // 產物」 from 「還沒回來」, and `failed` is what separates BOTH of them from a
+  // fetch that died: with one flat list, all three render as an empty panel and
+  // the reader is told the task has no deliverables — which the badge they just
+  // clicked has already denied.
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
   // A pinned artifact's timestamp never ticks live — this only decides
   // whether formatAbsolute prefixes the year, so a plain render-time read is
   // fine (no state/interval needed, unlike RepliesPage's counters).
   const nowTs = Date.now() / 1000;
 
-  // Fetch the full artifact set on open, and keep it live while open (a task
-  // delta fans when an artifact is pinned/removed) — the ChatGalleryPanel
-  // pattern. A hydrate failure keeps the seed rather than blanking.
+  // Fetch the full artifact set ON OPEN — this effect runs when the popover
+  // mounts, which is the click on the badge — and keep it live while open (a
+  // task delta fans when an artifact is pinned/removed), the ChatGalleryPanel
+  // pattern. Nothing is fetched while the panel is shut.
+  //
+  // 🔴 A FAILURE IS SHOWN, NEVER SWALLOWED. The previous version logged to the
+  // console and kept the seed, which was survivable when the rows already rode
+  // the task read; now there is no seed, so a swallowed failure IS an empty
+  // panel. A failed REFETCH keeps whatever is already on screen (stale rows beat
+  // no rows) and adds the failure line above them.
   useEffect(() => {
     let alive = true;
     const refetch = () => {
-      onHydrate(taskId)
-        .then((full) => {
-          if (alive) setArtifacts(full.artifacts ?? []);
+      api
+        .listTaskArtifacts(taskId)
+        .then((rows) => {
+          if (!alive) return;
+          setArtifacts(rows);
+          setFailed(false);
+          setLoaded(true);
         })
-        .catch((e) => console.warn("ArtifactsPopover: hydrate failed", e));
+        .catch((e) => {
+          console.warn("ArtifactsPopover: listTaskArtifacts failed", e);
+          if (alive) setFailed(true);
+        });
     };
     refetch();
     const unsubscribe = api.subscribeEvents((topic) => {
@@ -195,7 +241,7 @@ function ArtifactsPopover({
       alive = false;
       unsubscribe();
     };
-  }, [taskId, onHydrate]);
+  }, [taskId]);
 
   // Esc closes the popover — but only while it is the TOP layer. A preview
   // overlay opened from one of its rows registers above it, so the first Esc
@@ -273,8 +319,22 @@ function ArtifactsPopover({
         </button>
       </div>
       <div className="task-artifacts__body">
-        {artifacts.length === 0 ? (
-          <div className="task-artifacts__empty">{t.tasks.artifacts.empty}</div>
+        {/* The three not-a-list states are DISTINCT lines, never one blank
+            panel: 「載入中」 while the fetch is out, 「讀取失敗」 when it died,
+            and 「還沒有產物」 only once a fetch has actually come back empty. */}
+        {failed && (
+          <div className="task-artifacts__empty" data-testid="task-artifacts-error">
+            {t.tasks.artifacts.loadFailed}
+          </div>
+        )}
+        {!loaded && !failed ? (
+          <div className="task-artifacts__empty" data-testid="task-artifacts-loading">
+            {t.tasks.artifacts.loading}
+          </div>
+        ) : artifacts.length === 0 ? (
+          !failed && (
+            <div className="task-artifacts__empty">{t.tasks.artifacts.empty}</div>
+          )
         ) : (
           <>
             <AttachmentStrip
@@ -316,12 +376,14 @@ function ArtifactsPopover({
                       href={a.url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      title={a.label || a.url}
-                      aria-label={`${a.label || a.url} — ${artifactMetaLabel(a, nowTs)} — ${t.tasks.artifacts.openLinkHint}`}
+                      title={artifactDisplayName(a)}
+                      aria-label={`${artifactDisplayName(a)} — ${artifactMetaLabel(a, nowTs)} — ${t.tasks.artifacts.openLinkHint}`}
                     >
                       <ExternalLinkIcon size={14} />
                       <span className="task-artifacts__chip-text">
-                        <span className="task-artifacts__chip-name">{a.label || a.url}</span>
+                        <span className="task-artifacts__chip-name">
+                          {artifactDisplayName(a)}
+                        </span>
                         <span className="task-artifacts__chip-meta">
                           {artifactMetaLabel(a, nowTs)}
                         </span>

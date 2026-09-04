@@ -525,11 +525,15 @@ describe("ChatGalleryPanel", () => {
   });
 
   it("resolves an unnamed outsource sender through resolveSender, not the raw id", async () => {
-    // The server leaves from_name "" for an outsource sender: the gallery
-    // handler's names table comes from `dal.ListMembers`, which is `WHERE kind
-    // != 'outsource'` (api_chat.go) — so the caller-provided resolver
-    // (ChatArea's nameOf codename chain) is what names the row and its
-    // uploader option; without a resolver hit the raw id would show.
+    // A row whose from_name the server left "" — whatever the cause. The
+    // caller-provided resolver (ChatArea's nameOf codename chain) is what names
+    // the row and its uploader option; without a resolver hit the raw id shows.
+    //
+    // ⚠️ This used to say the blank is guaranteed, because the gallery handler's
+    // names table is `WHERE kind != 'outsource'`. That reason is dead twice over
+    // (the handler had already moved to the wider roster read, and T-14 項目 6
+    // deleted the narrow query), so this is a test of the RESOLVER PATH given a
+    // blank name, not evidence that outsource names arrive blank.
     galleryRows = [
       row("a1", "image/png", "ow-533c0c4f9dba", "", 100, "work.png"),
     ];
