@@ -7,6 +7,8 @@
 import { describe, it, expect } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
 import { Markdown } from "./Markdown";
+import { DiffOpenerContext } from "../hooks/useDiffOpener";
+import type { DiffParams } from "../lib/diffLink";
 
 function renderMd(source: string): HTMLElement {
   const { container } = render(<Markdown source={source} />);
@@ -221,6 +223,66 @@ describe("Markdown", () => {
     const c = renderMd("[click me](javascript:alert(1))");
     expect(c.querySelector("a")).toBeNull();
     expect(c.textContent).toContain("[click me](javascript:alert(1))");
+  });
+
+  // T-59 — the compare url is a THIRD link class, and its whole promise is
+  // that it does not stop being an ordinary link. Interception is the studio's
+  // (see DiffModalHost.test.tsx); what is pinned HERE is that the renderer
+  // hands out a real anchor either way, so copy-link, middle-click and
+  // open-in-new-tab keep working, and that nothing is intercepted where there
+  // is no studio to intercept it.
+  describe("compare urls (T-59)", () => {
+    const href = `${window.location.origin}/diff?before=att-0123456789ab&after=att-fedcba987654`;
+
+    it("stays a real anchor with the same href, target and rel as any other link", () => {
+      const c = renderMd(`[比較](${href})`);
+      const a = c.querySelector("a");
+      expect(a?.getAttribute("href")).toBe(href);
+      expect(a?.getAttribute("target")).toBe("_blank");
+      expect(a?.getAttribute("rel")).toBe("noopener noreferrer");
+    });
+
+    it("intercepts nothing outside the studio: no provider, no click handler", () => {
+      const c = renderMd(`[比較](${href})`);
+      // Marked only where the click IS swallowed — the standalone compare page
+      // renders markdown too, and a compare link there must navigate.
+      expect(c.querySelector("a")?.hasAttribute("data-diff-link")).toBe(false);
+    });
+
+    // The two features below (compare urls, bare-URL autolinking) were built on
+    // separate branches and only meet here. Pasting a BARE compare url is how a
+    // comparison actually travels, so the autolinked form has to reach the same
+    // interception the written [text](url) form does — and the second case is
+    // the negative control proving that reach was not widened.
+    it("intercepts a BARE compare url too, not only the [text](url) form", () => {
+      const opened: DiffParams[] = [];
+      const { container } = render(
+        <DiffOpenerContext.Provider value={(p) => opened.push(p)}>
+          <Markdown source={`看這個 ${href} 就知道`} />
+        </DiffOpenerContext.Provider>
+      );
+      const a = container.querySelector("a");
+      expect(a?.getAttribute("href")).toBe(href);
+      expect(a?.hasAttribute("data-diff-link")).toBe(true);
+      fireEvent.click(a!);
+      expect(opened.length).toBe(1);
+      expect(opened[0].before).toBe("att-0123456789ab");
+      expect(opened[0].after).toBe("att-fedcba987654");
+    });
+
+    it("leaves a bare ORDINARY url alone inside the studio: still navigates", () => {
+      const opened: DiffParams[] = [];
+      const { container } = render(
+        <DiffOpenerContext.Provider value={(p) => opened.push(p)}>
+          <Markdown source="see https://example.com/diff?before=x for detail" />
+        </DiffOpenerContext.Provider>
+      );
+      const a = container.querySelector("a");
+      expect(a?.getAttribute("href")).toBe("https://example.com/diff?before=x");
+      expect(a?.hasAttribute("data-diff-link")).toBe(false);
+      fireEvent.click(a!);
+      expect(opened).toEqual([]);
+    });
   });
 
   // T-59 — bare-URL autolinking. Owner ruling: a pasted URL is the most common

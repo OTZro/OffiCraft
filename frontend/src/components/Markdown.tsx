@@ -33,9 +33,23 @@
 //               http/https URLs are ALSO autolinked, everywhere, with no flag
 //               and no per-surface opt-in (T-59) — the rule runs after the
 //               tokenizer, so it only ever sees leftover plain text; see the
-//               block comment above `renderInline`.
+//               block comment above `renderInline`. A THIRD class is our own
+//               compare url (`/diff?before=…&after=…`, T-59): still an
+//               ordinary <a> that passed the allowlist above, but a plain left
+//               click on it opens the comparison in place instead of
+//               navigating — see `ExternalOrDiffLink` below. Both the written
+//               [text](url) form and the autolinked bare form go through it.
 
-import { Fragment, useLayoutEffect, useRef, type ReactNode } from "react";
+import {
+  Fragment,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from "react";
+import { diffParamsFromHref } from "../lib/diffLink";
+import { useDiffOpener } from "../hooks/useDiffOpener";
 
 interface MarkdownProps {
   source: string;
@@ -131,6 +145,54 @@ const DOC_REL_PATH_RE = /^[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*\.md$/;
 interface InlineOpts {
   resolveDocLink?: (target: string) => (() => void) | null;
   tableSizing?: "content-aware";
+}
+
+/** An http/https/mailto link — and, when it happens to be one of OUR OWN
+ * compare urls and the studio is around to host it, the THIRD link class.
+ *
+ * SECURITY: this is NOT a loosening of anything. The external-scheme allowlist
+ * (`SAFE_URL_RE`) has already said yes before this component is reached; every
+ * link it renders is a link the renderer was going to render anyway. What is
+ * added is a CLICK HANDLER on same-origin `/diff?…` links, and three things
+ * have to be true for it to fire — same origin, exactly the /diff path, and
+ * params that parse as two addresses (lib/diffLink.ts). Anything else keeps the
+ * ordinary anchor, which is also what happens outside the studio, where
+ * `useDiffOpener()` answers null.
+ *
+ * IT STAYS A REAL ANCHOR. `href` and `target` are unchanged, so copy-link,
+ * middle-click, ⌘/ctrl-click and 「open in new tab」 all still do exactly what
+ * the reader expects — the handler only swallows the PLAIN left click, which is
+ * the one that would otherwise throw away the page they are reading. A
+ * <button> here (the doc-link class's shape) would take all four of those away,
+ * and this link is one people are meant to be able to copy and paste onward.
+ */
+function ExternalOrDiffLink({ href, label }: { href: string; label: string }) {
+  const openDiff = useDiffOpener();
+  const params = useMemo(() => diffParamsFromHref(href), [href]);
+  const intercept =
+    openDiff !== null && params !== null
+      ? (e: ReactMouseEvent<HTMLAnchorElement>) => {
+          // Every modified click is a deliberate "open this somewhere else" and
+          // must be left alone. React only fires onClick for the primary
+          // button, but the check is written out rather than assumed.
+          if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
+            return;
+          }
+          e.preventDefault();
+          openDiff(params);
+        }
+      : undefined;
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={intercept}
+      data-diff-link={intercept ? "" : undefined}
+    >
+      {label}
+    </a>
+  );
 }
 
 // ── Bare-URL autolinking (T-59) ─────────────────────────────────────────────
@@ -229,11 +291,13 @@ function autolinkBareUrls(text: string): ReactNode[] {
       continue;
     }
     if (m.index > last) out.push(text.slice(last, m.index));
-    out.push(
-      <a key={key++} href={url} target="_blank" rel="noopener noreferrer">
-        {url}
-      </a>
-    );
+    // A bare compare url is the SHAPE THIS FEATURE IS FOR — pasting one to
+    // someone is how a comparison travels — so the autolinked form goes
+    // through the same component as the written [text](url) form. It widens
+    // nothing: ExternalOrDiffLink only intercepts when all three of its
+    // conditions hold (same origin, exactly /diff, params that parse as two
+    // addresses) and otherwise renders the identical anchor.
+    out.push(<ExternalOrDiffLink key={key++} href={url} label={url} />);
     last = BARE_URL_RE.lastIndex;
   }
   if (out.length === 0) return [text];
@@ -292,11 +356,7 @@ function renderInline(text: string, opts?: InlineOpts): ReactNode[] {
           }
           return <Fragment key={i}>{part}</Fragment>;
         }
-        return (
-          <a key={i} href={target} target="_blank" rel="noopener noreferrer">
-            {label}
-          </a>
-        );
+        return <ExternalOrDiffLink key={i} href={target} label={label} />;
       }
       // Nothing structural matched: plain prose. This is the ONLY branch bare
       // URLs are autolinked in — see the block comment above renderInline.
