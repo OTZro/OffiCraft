@@ -45,8 +45,12 @@ package main
 //
 //   - It does not FETCH. It reads the local origin/main ref, because network
 //     inside a unit test is one more thing that fails quietly. A stale ref means a
-//     stale baseline, which can only make this check TOO PERMISSIVE — never a
-//     false alarm. The SHA and its date are logged for exactly this reason.
+//     stale baseline, and it skews the two halves OPPOSITE ways: version numbers
+//     go TOO PERMISSIVE (smaller released max), while shipped bodies go TOO
+//     STRICT — main's own edits since that ref are reported as this tree editing
+//     a shipped migration. So a stale ref DOES raise false alarms, and they are
+//     the specific, believable kind. The SHA and its date are logged for exactly
+//     this reason; read them before believing a red.
 //   - It does not stop two branches picking the SAME free number. "Greater than
 //     main's maximum" is necessary, not sufficient; the collision only becomes
 //     visible once both branches meet, where the duplicate-version guard catches
