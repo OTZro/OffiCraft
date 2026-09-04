@@ -431,6 +431,16 @@ export function MonitorPage() {
   // no way to draw). The prefix is the contract — a worker that happens to be
   // missing from the roster fold must not fall through into this lane and get
   // listed twice.
+  //
+  // T-14 項目 6 reviewed this filter and DELIBERATELY LEFT IT. It is not a
+  // client-side patch over the duplicate `sessions` rows the merged roster read
+  // could have produced — that duplicate is gone at the source (the monitoring
+  // handler's own driver guard; server-side test
+  // TestGetMonitoring_LiveContractorCountsAsOneAgentNotTwo asserts exactly one
+  // row per contractor id). This filter answers a DIFFERENT question that is
+  // still live: workers legitimately ride this array so the worker lane can
+  // join their telemetry, and without the prefix test they would render in BOTH
+  // lanes. Deleting it would be a regression with nothing to do with 項目 6.
   const aiSessions = sessions.filter((s) => {
     if (s.id.startsWith("ow-")) return false;
     const m = members.find((x) => x.id === s.id);

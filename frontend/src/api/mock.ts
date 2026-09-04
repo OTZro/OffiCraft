@@ -294,9 +294,11 @@ const MOCK_WIRE_MEMBERS: WireMember[] = [
     schema_version: 2,
   },
   // A LIVE outsource worker, carried in the roster fixture because the roster
-  // ENDPOINT carries one: GET /api/members answers ListMembersIncludingOutsource
-  // (the P7 convergence), so a cockpit that runs against a mock with no `ow-`
-  // row is running against a roster the server never serves.
+  // ENDPOINT carries one: GET /api/members answers over the WHOLE member table,
+  // contractors included (the P7 convergence; since T-14 項目 6 that is the only
+  // roster query there is — `dal.ListMembers`, with no kind clause), so a
+  // cockpit that runs against a mock with no `ow-` row is running against a
+  // roster the server never serves.
   //
   // 🔴 WHAT ITS ABSENCE COST (T-26): the roster hands an `ow-` id to the
   // held-id mirror, a chat delta naming that one id takes the per-item fast
