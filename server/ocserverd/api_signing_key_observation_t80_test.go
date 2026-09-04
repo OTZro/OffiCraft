@@ -20,7 +20,9 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -520,5 +522,316 @@ func TestTheRefusalFromTheRingNeverNamesAKeyIsTheContractOfVerifyJWTAnyKey(t *te
 				"did not verify and NOTHING about the ring — jwt.go's header "+
 				"declares this, and a per-key error is what it forbids: %v", id, err)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ④ the SUMMONS — the station tells a stale machine to go renew (owner ruling A)
+// ---------------------------------------------------------------------------
+//
+// 🔴 THIS BLOCK EXISTS BECAUSE THE LOOP WAS ONCE OPEN. The station could see and
+// count which machines were still on the outgoing key, and the warden could act
+// on a `renew` verb, and NOBODY SENT ONE — so the count was correct, honest, and
+// permanently frozen at "nobody moved". Every test below drives real HTTP and
+// then reads the frames that would actually go out on that machine's downlink.
+
+// t80OnlineWarden brings a warden's SSE downlink up so the fail-closed
+// reachability gate in enqueueToWarden admits frames. A frame is only ever
+// enqueued for a machine the hub says is connected — that is the production
+// rule, not a test convenience.
+func t80OnlineWarden(t *testing.T, api *apiServer, id string) {
+	t.Helper()
+	if _, err := api.hub.Connect(id, id); err != nil {
+		t.Fatalf("bring %s online: %v", id, err)
+	}
+	if !api.hub.IsOnline(id) {
+		t.Fatalf("PREMISE FAILED: %s must be online for a frame to be enqueued", id)
+	}
+}
+
+// t80DrainRenews pops that warden's FIFO and returns the frames on it. It uses
+// the same drain the SSE connection uses, so what it inspects is byte-for-byte
+// what would have been written to the socket.
+func t80DrainRenews(t *testing.T, api *apiServer, id string) [][]byte {
+	t.Helper()
+	out := [][]byte{}
+	for _, c := range api.hub.DrainWardenCommands(id) {
+		out = append(out, c.Frame)
+	}
+	return out
+}
+
+// t80StaleMachine sets up the whole premise in one place: a machine seen on the
+// key that is signing now, then a rotation, so its permanent credential is now
+// signed by an OUTGOING key while still verifying perfectly.
+func t80StaleMachine(t *testing.T, srv *httptest.Server, api *apiServer, keys *keyring,
+	dal *DAL, id string) string {
+	t.Helper()
+	tok := t80Warden(t, api, id, id+"-box")
+	t80OnlineWarden(t, api, id)
+	if st, body := t80Get(t, srv.URL+"/api/members", tok); st != http.StatusOK {
+		t.Fatalf("POSITIVE CONTROL FAILED — %s must pass the gate before the "+
+			"rotation; got %d %s", id, st, body)
+	}
+	if _, err := keys.rotate(dal); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	// Anything the pre-rotation traffic queued is not what these tests are about.
+	t80DrainRenews(t, api, id)
+	return tok
+}
+
+// TestAMachineStillOnAnOutgoingKeyIsToldToRenew is the load-bearing test of the
+// summons half, and the one whose absence left this loop open.
+//
+// Mutant: delete the enqueueToWarden call in askMachineToRenewIfStale — the
+// station still sees, still counts, still reports, and this is what goes red.
+func TestAMachineStillOnAnOutgoingKeyIsToldToRenew(t *testing.T) {
+	srv, keys, dal, api := t62Stack(t, []byte(interopSecret))
+	tok := t80StaleMachine(t, srv, api, keys, dal, "m-stale")
+
+	if st, body := t80Get(t, srv.URL+"/api/members", tok); st != http.StatusOK {
+		t.Fatalf("PREMISE FAILED: the old key is still on the ring, so this must "+
+			"be a 200; got %d %s", st, body)
+	}
+
+	frames := t80DrainRenews(t, api, "m-stale")
+	if len(frames) != 1 {
+		t.Fatalf("a machine observed on an OUTGOING key must be told to renew: "+
+			"got %d frames, want 1.\nWithout this the station counts correctly "+
+			"and the fleet never moves — the number is right and frozen forever.",
+			len(frames))
+	}
+	digest, ok := decodeWardenCommandFrame(frames[0])
+	if !ok {
+		t.Fatalf("the frame is not a warden-command frame: %s", frames[0])
+	}
+	if digest.Verb != reconcileCmdRenew {
+		t.Fatalf("verb = %q, want %q", digest.Verb, reconcileCmdRenew)
+	}
+	if digest.MemberID != "m-stale" {
+		t.Fatalf("the frame must address the machine it is for: member_id = %q",
+			digest.MemberID)
+	}
+}
+
+// TestTheRenewFrameCarriesNoCredentialAtAll is owner ruling A on the wire: the
+// station SUMMONS, it never sends. It asserts the BYTES that would reach the
+// socket, not the absence of a line of code — a frame shape that gained a token
+// field later would be caught here even though nothing about this file changed.
+//
+// Mutant: give the renew frame a wardenStartArgs-shaped payload (which carries
+// MemberToken) instead of wardenTargetArgs, and this goes red.
+func TestTheRenewFrameCarriesNoCredentialAtAll(t *testing.T) {
+	srv, keys, dal, api := t62Stack(t, []byte(interopSecret))
+	tok := t80StaleMachine(t, srv, api, keys, dal, "m-stale")
+	if st, _ := t80Get(t, srv.URL+"/api/members", tok); st != http.StatusOK {
+		t.Fatalf("PREMISE FAILED")
+	}
+	frames := t80DrainRenews(t, api, "m-stale")
+	if len(frames) != 1 {
+		t.Fatalf("PREMISE FAILED: want exactly one frame, got %d", len(frames))
+	}
+	raw := string(frames[0])
+
+	// ① No field whose NAME could carry a credential. The renew args shape is
+	// member_id and nothing else, so any of these appearing means the payload
+	// changed shape.
+	for _, forbidden := range []string{
+		"member_token", "token", "secret", "key", "persona_context", "credential",
+	} {
+		if strings.Contains(raw, forbidden) {
+			t.Fatalf("the renew frame contains the field name %q — the station "+
+				"tells a machine to GO, it never sends it anything (owner ruling "+
+				"A). Frame: %s", forbidden, raw)
+		}
+	}
+	// ② And no VALUE that is one, whatever it is called: the machine's own live
+	// credential and every key id on the ring.
+	if strings.Contains(raw, tok) {
+		t.Fatalf("the renew frame carries the machine's own credential: %s", raw)
+	}
+	for _, meta := range keys.snapshot() {
+		if strings.Contains(raw, meta.ID) {
+			t.Fatalf("the renew frame names signing key %q: %s", meta.ID, raw)
+		}
+	}
+	// ③ Positive control: the frame really is the renew, so ①/② are not passing
+	// against an empty string.
+	if !strings.Contains(raw, reconcileCmdRenew) || !strings.Contains(raw, "m-stale") {
+		t.Fatalf("POSITIVE CONTROL FAILED — this is not the renew frame: %s", raw)
+	}
+}
+
+// TestAStaleMachineIsAskedOnceNoMatterHowOftenItCallsBack pins the suppression.
+// A stale machine keeps working and keeps making requests; one frame per request
+// would be one per heartbeat per machine, forever.
+//
+// Mutant: delete the claimRenewAsk gate (ask unconditionally) and this goes red
+// naming the count.
+func TestAStaleMachineIsAskedOnceNoMatterHowOftenItCallsBack(t *testing.T) {
+	srv, keys, dal, api := t62Stack(t, []byte(interopSecret))
+	tok := t80StaleMachine(t, srv, api, keys, dal, "m-stale")
+
+	const requests = 25
+	for i := 0; i < requests; i++ {
+		if st, body := t80Get(t, srv.URL+"/api/members", tok); st != http.StatusOK {
+			t.Fatalf("request %d: %d %s", i, st, body)
+		}
+	}
+	frames := t80DrainRenews(t, api, "m-stale")
+	if len(frames) != 1 {
+		t.Fatalf("%d requests from one stale machine produced %d renew frames, "+
+			"want exactly 1. The ask is throttled by the memo, and the QUEUE is "+
+			"not that state — a pending row is deleted the moment the frame is "+
+			"written, so an empty queue never means 'already asked'.",
+			requests, len(frames))
+	}
+}
+
+// TestAStaleMachineIsAskedAgainOnceTheIntervalHasPassed is the other half, and
+// it is not symmetry for its own sake: the warden's "I was asked" flag is
+// process-local and dies with a warden restart, so a one-shot ask is silently
+// lost by exactly the machines that most need asking.
+//
+// Time is moved with the injected clock rather than slept.
+//
+// Mutant: make the ask fire once and never again (e.g. return early whenever
+// renewAskedAt is non-zero) and this goes red.
+func TestAStaleMachineIsAskedAgainOnceTheIntervalHasPassed(t *testing.T) {
+	srv, keys, dal, api := t62Stack(t, []byte(interopSecret))
+	base := time.Now()
+	var offset time.Duration
+	api.keyRenewClock = func() time.Time { return base.Add(offset) }
+
+	tok := t80StaleMachine(t, srv, api, keys, dal, "m-stale")
+	if st, _ := t80Get(t, srv.URL+"/api/members", tok); st != http.StatusOK {
+		t.Fatalf("PREMISE FAILED")
+	}
+	if got := len(t80DrainRenews(t, api, "m-stale")); got != 1 {
+		t.Fatalf("PREMISE FAILED: the first ask must have happened, got %d", got)
+	}
+
+	// Just short of the interval: still silent.
+	offset = renewAskInterval - time.Second
+	if st, _ := t80Get(t, srv.URL+"/api/members", tok); st != http.StatusOK {
+		t.Fatalf("request inside the interval failed")
+	}
+	if got := len(t80DrainRenews(t, api, "m-stale")); got != 0 {
+		t.Fatalf("inside the interval the machine must not be asked again, got %d frames", got)
+	}
+
+	// Past it: asked again.
+	offset = renewAskInterval + time.Second
+	if st, _ := t80Get(t, srv.URL+"/api/members", tok); st != http.StatusOK {
+		t.Fatalf("request past the interval failed")
+	}
+	frames := t80DrainRenews(t, api, "m-stale")
+	if len(frames) != 1 {
+		t.Fatalf("past the interval the machine must be asked AGAIN, got %d "+
+			"frames. A warden that restarted has forgotten it was ever asked, "+
+			"and nothing on that side will remind it.", len(frames))
+	}
+	if digest, ok := decodeWardenCommandFrame(frames[0]); !ok || digest.Verb != reconcileCmdRenew {
+		t.Fatalf("the re-ask must be the same verb: %s", frames[0])
+	}
+}
+
+// TestAMachineAlreadyOnTheCurrentKeyIsNeverAsked is the discriminating half. A
+// summons that went to everybody would pass every test above while being exactly
+// wrong: it would tell an already-migrated fleet to churn its credentials on
+// every interval, forever.
+//
+// The second arm covers the install that has NEVER rotated — a one-key ring must
+// summon nobody, and it gets that for free because the key that verified is by
+// construction the only key there is.
+//
+// Mutant: drop the `keyID == active` early return in askMachineToRenewIfStale
+// and both arms go red.
+func TestAMachineAlreadyOnTheCurrentKeyIsNeverAsked(t *testing.T) {
+	t.Run("a machine on the current key", func(t *testing.T) {
+		srv, keys, dal, api := t62Stack(t, []byte(interopSecret))
+		t80StaleMachine(t, srv, api, keys, dal, "m-fresh")
+		// It re-credentials, which is what the summons is for.
+		m, err := dal.GetMember("m-fresh")
+		if err != nil || m == nil {
+			t.Fatalf("read m-fresh: %v %v", m, err)
+		}
+		reissued, err := api.mintWardenToken(*m)
+		if err != nil {
+			t.Fatalf("re-mint: %v", err)
+		}
+		for i := 0; i < 5; i++ {
+			if st, body := t80Get(t, srv.URL+"/api/members", reissued); st != http.StatusOK {
+				t.Fatalf("request %d: %d %s", i, st, body)
+			}
+		}
+		if frames := t80DrainRenews(t, api, "m-fresh"); len(frames) != 0 {
+			t.Fatalf("a machine already on the CURRENT key must never be told to "+
+				"renew, got %d frames: %s", len(frames), frames[0])
+		}
+	})
+
+	t.Run("an install that has never rotated", func(t *testing.T) {
+		srv, _, _, api := t62Stack(t, []byte(interopSecret))
+		tok := t80Warden(t, api, "m-only", "only-box")
+		t80OnlineWarden(t, api, "m-only")
+		for i := 0; i < 5; i++ {
+			if st, body := t80Get(t, srv.URL+"/api/members", tok); st != http.StatusOK {
+				t.Fatalf("request %d: %d %s", i, st, body)
+			}
+		}
+		if frames := t80DrainRenews(t, api, "m-only"); len(frames) != 0 {
+			t.Fatalf("a ring with one key has nothing to migrate to, so nobody "+
+				"may be summoned; got %d frames: %s", len(frames), frames[0])
+		}
+	})
+}
+
+// TestEphemeralIdentitiesLeaveNoTraceInTheObservationMemo is a MEMORY-SHAPE
+// guard, and it reads an internal field because the property has no other
+// surface: a map that grows without bound looks identical from the wire until
+// the station is already fat.
+//
+// The memo is keyed by the token's `sub`. Machines are a roster and keep their
+// ids; outsource workers mint a brand-new `ow-…` per ticket and pass through the
+// very same gate — memoising them would grow this map monotonically with every
+// worker the station has ever run, with nothing reclaiming it.
+//
+// Mutant: memoise the non-machine branch of noteTokenKeyObservation (an
+// `s.rememberTokenKey(sub, …)` before its return) and this goes red.
+func TestEphemeralIdentitiesLeaveNoTraceInTheObservationMemo(t *testing.T) {
+	srv, keys, _, api := t62Stack(t, []byte(interopSecret))
+	t80Warden(t, api, "m-box", "box-1")
+	now := time.Now().Unix()
+
+	// Twelve one-shot identities, each authenticating once — the shape a station
+	// sees over its lifetime as tickets come and go.
+	for i := 0; i < 12; i++ {
+		id := fmt.Sprintf("ow-ephemeral-%d", i)
+		w := testAgent(id)
+		putTestMember(t, api, w)
+		tok, err := mintJWT(id, "agent", 3600, keys.signingSecret(), now, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st, body := t80Get(t, srv.URL+"/api/members", tok); st != http.StatusOK {
+			t.Fatalf("POSITIVE CONTROL FAILED — %s must authenticate; got %d %s",
+				id, st, body)
+		}
+	}
+
+	api.tokenKeyObsMu.Lock()
+	got := len(api.tokenKeyObs)
+	keysSeen := make([]string, 0, got)
+	for k := range api.tokenKeyObs {
+		keysSeen = append(keysSeen, k)
+	}
+	api.tokenKeyObsMu.Unlock()
+	if got != 0 {
+		t.Fatalf("twelve one-shot identities left %d memo entries (%v). Only "+
+			"MACHINES may be memoised — they are a bounded roster; worker ids are "+
+			"minted per ticket and never reused, so memoising them is a leak with "+
+			"no ceiling and no owner.", got, keysSeen)
 	}
 }

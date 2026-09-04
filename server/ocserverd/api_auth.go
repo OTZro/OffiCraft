@@ -229,11 +229,67 @@ func (s *apiServer) HandleBootstrapApiBootstrapPost(w http.ResponseWriter, r *ht
 	})
 }
 
-// ── T-80: which key is each machine's credential actually signed by ──────────
+// ── T-80: which key is each machine's credential actually signed by ─────────
+
+// renewAskInterval is how often the station will re-ask ONE machine to renew
+// while it is still observed on an outgoing key.
+//
+// WHY THERE IS AN INTERVAL AT ALL. The observation below runs on every
+// authenticated request, and a machine stuck on the old key keeps making them —
+// without a floor, one stale machine would mint one frame per request.
+//
+// 🔴 WHY IT REPEATS RATHER THAN FIRING ONCE. The warden's "I have been asked to
+// renew" flag is PROCESS-LOCAL: it dies with a warden restart, and nothing on
+// that side remembers to ask again. A one-shot ask would therefore be silently
+// lost by exactly the machines most likely to be misbehaving, and the station's
+// count would sit at "still on the old key" forever with no further action.
+//
+// WHY FIVE MINUTES. It is bounded from BELOW by the settle loop: a renew is
+// answered by nothing (no receipt — owner ruling A), so the only evidence it
+// worked is this machine's NEXT authenticated request carrying the new key. A
+// live warden heartbeats every 30s, so five minutes gives a renew about ten
+// heartbeats to complete and be observed before the station concludes nothing
+// happened and asks again — re-asking a machine that is already mid-renew is
+// noise, not pressure. It is bounded from ABOVE by the restart case: a warden
+// that reboots and forgets its flag waits at most this long to be reminded. The
+// cost at this value is one frame per stale machine per five minutes, against a
+// heartbeat that is already ten times more frequent.
+const renewAskInterval = 5 * time.Minute
+
+// tokenKeyObservation is one MACHINE's memo row.
+//
+// 🔴 ONLY MACHINES ARE MEMOISED, AND THAT IS A BOUND, NOT AN OPTIMISATION. The
+// map is keyed by the token's `sub`. Machines are a roster: finite, small, and
+// they keep their ids across restarts, so a memo keyed on them has a ceiling
+// equal to the number of machines ever seen by this process. Agents and
+// outsource workers do NOT: every outsource ticket mints a brand-new `ow-…`
+// identity, and they pass through this same gate, so memoising them would make
+// the map grow monotonically with the number of workers this station has ever
+// run, with nothing ever reclaiming it. That is a slow leak with no upper bound
+// and no owner — the kind that is invisible until a long-running station is
+// already fat.
+//
+// THE PRICE IS REAL AND WORTH NAMING: a non-machine caller now pays one
+// GetMember per authenticated request instead of a map read. That is a fourth
+// read of a row requireAuth ALREADY reads up to three times on the same request
+// (agentIatFloorRefusal, permanentCredentialRefusal, revocationRefusal), and it
+// lands on the READ pool (8 connections), never the write pool. Paying a
+// bounded, already-paid-for read to avoid an unbounded map is the right side of
+// that trade. The alternative — an eviction policy — would be new machinery for
+// a problem nobody has measured.
+type tokenKeyObservation struct {
+	// keyID is the signing-key id last RECORDED for this machine.
+	keyID string
+	// renewAskedAt is when a renew was last ASKED FOR while this machine was
+	// observed on keyID; zero = never. It stamps the ATTEMPT, not the success:
+	// an unreachable warden must not be retried (or log-spammed) once per
+	// request either.
+	renewAskedAt time.Time
+}
 
 // noteTokenKeyObservation records, against the identity that just
-// authenticated, WHICH signing key verified its credential — and it is the only
-// producer of member.token_key_id.
+// authenticated, WHICH signing key verified its credential — and, when that key
+// is no longer the one signing, asks that machine to go get a new credential.
 //
 // 🔴 THE VALUE IS THIS STATION'S OWN OBSERVATION, AND THE DESIGN LEANS ON THAT.
 // keyID comes from verifyJWTAnyKey: the key whose HMAC actually matched. There
@@ -261,11 +317,11 @@ func (s *apiServer) HandleBootstrapApiBootstrapPost(w http.ResponseWriter, r *ht
 // now it, and TestRepeatedRequestsOnAnUnchangedKeyCostNoFurtherWrites dies
 // without it.
 //
-// Only warden rows are stamped (Kind == machineKind). Agents and outsource
-// workers reach the same gate, but their credentials are short-lived and
-// re-minted by the server itself, so they are never what stands between the
-// owner and a removal. They still take a memo slot, which is what keeps the
-// roster read below off the common path for them too.
+// Only warden rows are stamped and only warden rows are summoned (Kind ==
+// machineKind). Agents and outsource workers reach the same gate, but their
+// credentials are short-lived and re-minted by the server itself, so they are
+// never what stands between the owner and a removal. They take NO memo slot —
+// see tokenKeyObservation for why that bound matters more than their hot path.
 func (s *apiServer) noteTokenKeyObservation(claims map[string]any, keyID string) {
 	if s == nil || s.dal == nil || keyID == "" {
 		return
@@ -275,37 +331,115 @@ func (s *apiServer) noteTokenKeyObservation(claims map[string]any, keyID string)
 		return
 	}
 	s.tokenKeyObsMu.Lock()
-	seen, ok := s.tokenKeyObs[sub]
+	obs, ok := s.tokenKeyObs[sub]
 	s.tokenKeyObsMu.Unlock()
-	if ok && seen == keyID {
-		return
+
+	if !ok || obs.keyID != keyID {
+		// Cold memo, or the observed key CHANGED. This is the one and only path
+		// that touches the database.
+		m, err := s.dal.GetMember(sub)
+		if err != nil {
+			// A read failure is not evidence of anything. Leave the memo alone
+			// so the next request retries, exactly as the roster-revocation seam
+			// declines to treat a lookup error as a verdict (server/CLAUDE.md §2).
+			return
+		}
+		if m == nil || m.Kind != machineKind {
+			// Not a machine: nothing to record and nothing to summon — and
+			// deliberately NOTHING MEMOISED either, so this map cannot grow with
+			// the number of ephemeral worker identities. See the type's header.
+			return
+		}
+		if err := s.dal.SetMemberTokenKeyID(sub, keyID); err != nil {
+			// Do not memo a write that did not land, or the observation is lost
+			// until the next rotation.
+			return
+		}
+		// A changed key resets renewAskedAt to zero: the previous stamp was
+		// about a DIFFERENT key, and a machine that has just moved deserves an
+		// immediate ask if it landed somewhere that is still not current.
+		obs = tokenKeyObservation{keyID: keyID}
+		s.rememberTokenKey(sub, obs)
 	}
-	m, err := s.dal.GetMember(sub)
-	if err != nil {
-		// A read failure is not evidence of anything. Leave the memo alone so
-		// the next request retries, exactly as the roster-revocation seam
-		// declines to treat a lookup error as a verdict (server/CLAUDE.md §2).
-		return
-	}
-	if m == nil || m.Kind != machineKind {
-		// Not a machine: remember the answer so this lookup does not repeat on
-		// every request of an ordinary agent's session.
-		s.rememberTokenKey(sub, keyID)
-		return
-	}
-	if err := s.dal.SetMemberTokenKeyID(sub, keyID); err != nil {
-		// Do not memo a write that did not land, or the observation is lost
-		// until the next rotation.
-		return
-	}
-	s.rememberTokenKey(sub, keyID)
+
+	s.askMachineToRenewIfStale(sub, keyID)
 }
 
-func (s *apiServer) rememberTokenKey(sub, keyID string) {
+// askMachineToRenewIfStale is the SUMMONS half (T-80, owner ruling A): when the
+// credential this machine keeps presenting is signed by a key that is no longer
+// the signing one, push the `renew` verb down its warden-command downlink.
+//
+// 🔴 THE STATION SAYS "GO", IT DOES NOT SEND ANYTHING. The frame is
+// buildTargetFrame's member_id-only shape — no token, no key, no material of any
+// kind. member_id is informational addressing; the frame already rides that
+// machine's own connection.
+//
+// 🔴 THE QUEUE IS NOT THE SUPPRESSION STATE. PutWardenCommand is
+// conflict-do-nothing and a pending row is DELETED when the frame is written to
+// the stream, so "the queue is empty" says nothing about whether this machine
+// has been asked. The memo is what remembers, and only the memo.
+//
+// A one-key ring can never reach the ask: the key that verified is by
+// construction on the ring, so on a ring of one it IS the active key and the
+// comparison below returns early. An install that has never rotated therefore
+// summons nobody.
+func (s *apiServer) askMachineToRenewIfStale(machineID, keyID string) {
+	if s.keys == nil || s.hub == nil {
+		return
+	}
+	active := s.keys.activeKeyID()
+	if active == "" || keyID == active {
+		return
+	}
+	if !s.claimRenewAsk(machineID, keyID) {
+		return
+	}
+	frame, ok := buildTargetFrame(reconcileCmdRenew, machineID)
+	if !ok {
+		return
+	}
+	// A warden's id IS its machine id, so the frame's target and its subject are
+	// the same value. enqueueToWarden carries the usual fail-closed reachability
+	// gate: an offline warden gets nothing, and will be asked again after the
+	// interval — the ask is already stamped, so an unreachable machine costs one
+	// attempt per interval rather than one per request.
+	s.enqueueToWarden(machineID, machineID, frame)
+}
+
+// claimRenewAsk is the compare-and-stamp that makes the interval hold under
+// concurrency: two requests arriving together must not both decide the interval
+// has elapsed. Reports whether THIS caller won the right to ask.
+func (s *apiServer) claimRenewAsk(machineID, keyID string) bool {
+	now := s.keyRenewNow()
+	s.tokenKeyObsMu.Lock()
+	defer s.tokenKeyObsMu.Unlock()
+	obs, ok := s.tokenKeyObs[machineID]
+	if !ok || obs.keyID != keyID {
+		// The memo moved underneath us; the request that moved it owns the
+		// decision.
+		return false
+	}
+	if !obs.renewAskedAt.IsZero() && now.Sub(obs.renewAskedAt) < renewAskInterval {
+		return false
+	}
+	obs.renewAskedAt = now
+	s.tokenKeyObs[machineID] = obs
+	return true
+}
+
+// keyRenewNow reads the injectable clock; nil means the real one.
+func (s *apiServer) keyRenewNow() time.Time {
+	if s.keyRenewClock != nil {
+		return s.keyRenewClock()
+	}
+	return time.Now()
+}
+
+func (s *apiServer) rememberTokenKey(sub string, obs tokenKeyObservation) {
 	s.tokenKeyObsMu.Lock()
 	defer s.tokenKeyObsMu.Unlock()
 	if s.tokenKeyObs == nil {
-		s.tokenKeyObs = map[string]string{}
+		s.tokenKeyObs = map[string]tokenKeyObservation{}
 	}
-	s.tokenKeyObs[sub] = keyID
+	s.tokenKeyObs[sub] = obs
 }
