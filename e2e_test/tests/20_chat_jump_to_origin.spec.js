@@ -502,3 +502,236 @@ test.describe('T-48 · 錨點還在飛的時候切去別條對話', () => {
     ).toHaveCount(0);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T-48 fix14 · 同一間房裡的**第二次**跳轉 —— e2e 層在這一輪之前是零覆蓋，而它
+// 正是 fix14 修的主角。
+//
+// 🔴 為什麼它是自己一格，而不是上面那幾支的重複：OfficePage 的 key 是 peerId，
+// 所以「房間已經開著、只換 msgId」（同一位成員的第二次跳轉、上一頁、舊連結）
+// **不會 remount**。fix14 之前 `initialLoading` 答的是「這條對話第一次載入」，
+// 在這條路上恆為 false ⇒ 整段走訪畫面停在**舊內容**、零指示，而那正是最慢的一格
+// （走訪要一路撈到活尾巴才 commit）。
+//
+// 🔴 而且不能只驗轉圈。實作者自己挖到的那一格：旗標若在 commit **之後**才放下，
+// 轉圈是**取代**訊息區的 ⇒ commit 落在還是轉圈的那一幀時，跳轉的 reactor 在 DOM
+// 裡查不到目標列 ⇒ **沒有人捲**。畫面上會是「轉圈出現過、訊息也回來了、但人停在
+// 錯的地方」—— 只斷言轉圈的測試會全綠。所以每一次跳轉都要把
+// 「轉圈在場 → 訊息區被它取代 → 落在目標那一則且亮起定位閃光」整條走完。
+test.describe('T-48 fix14 · 同一間房裡的第二次跳轉', () => {
+  test('房間已經開著、只換 msgId —— 兩次跳轉都有轉圈，而且都真的停在目標那一則', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const request = page.request;
+    const token = await ownerToken(request);
+    const M = await hireMember(request, token, uniqueName('SecondJump M'));
+
+    const ids = [];
+    for (let i = 1; i <= TOTAL; i++) {
+      const msg = await postChatAs(request, token, M.id, `line ${i} ${PAD}`);
+      ids.push(msg.id);
+    }
+
+    await bootAuthedSpa(page, token);
+    // ① 先用**普通的方式**進房 —— 沒有 msgId，房間開著、停在活尾巴。
+    //    這一步就是這支的前提：接下來每一次跳轉都是「房間已經開著」的那條路。
+    await page.goto(`/#office/chat/${M.id}`);
+    const thread = page.locator('.chat__messages');
+    await expect(
+      thread.locator(`[data-msg-id="${ids[TOTAL - 1]}"]`),
+      '前提：普通進房要落在活尾巴',
+    ).toBeInViewport({ timeout: 15_000 });
+
+    // 把開窗那兩個請求押慢 —— 轉圈延遲 150ms 才出現，走訪在本機快到肉眼與斷言
+    // 都追不上。押慢的是**網路**，不是被測的判準：真實世界的慢網路就是這個形狀。
+    const HOLD_MS = 1200;
+    const isAnchorWindow = (url) =>
+      url.pathname === '/api/chat' &&
+      (url.searchParams.has('start_id') || url.searchParams.has('end_id'));
+    await page.route(isAnchorWindow, async (route) => {
+      await new Promise((r) => setTimeout(r, HOLD_MS));
+      await route.continue();
+    });
+
+    const spinner = page.locator('.chat__loading');
+
+    // 只換 hash 的 msgId —— 這就是不會 remount 的那條路。
+    const jumpTo = async (msgId) => {
+      await page.evaluate(
+        ([cid, mid]) => {
+          window.location.hash = `#office/chat/${cid}/msg/${mid}`;
+        },
+        [M.id, msgId],
+      );
+    };
+    // 一次跳轉要走完的整條脊椎：轉圈在場 → 它**取代**訊息區 → 落在目標那一則 →
+    // 定位閃光在那一列上 → 轉圈收掉。
+    const expectSpinnerThenLandOn = async (msgId, label) => {
+      await expect(spinner, `${label}：走訪期間必須有轉圈`).toBeVisible({
+        timeout: 15_000,
+      });
+      await expect(spinner).toContainText('正在載入對話…');
+      await expect(
+        thread,
+        `${label}：轉圈是取代訊息區的 —— 沒取代的話下面那格量不到 fix14 的風險`,
+      ).toHaveCount(0);
+      const target = thread.locator(`[data-msg-id="${msgId}"]`);
+      await expect(
+        target,
+        `${label}：🔴 轉圈出現過不算數 —— 要真的有人把畫面捲到目標那一則`,
+      ).toBeInViewport({ timeout: 20_000 });
+      await expect(target).toHaveClass(/chat__msg--located/);
+      await expect(spinner, `${label}：撈完了轉圈就該收掉`).toHaveCount(0);
+    };
+
+    // ② 第一次跳轉（房間已經開著）。
+    await jumpTo(ids[49]);
+    await expectSpinnerThenLandOn(ids[49], '同房第一次跳轉');
+
+    // ③ 🔴 第二次跳轉，同一間房、只換 msgId —— fix14 的主角。
+    //    起跳時畫面上**已經有內容**（上一次跳轉的窗），這正是「問在
+    //    messages.length 之後就永遠走不到轉圈那個分支」的那一格。
+    await jumpTo(ids[TARGET_INDEX - 1]);
+    await expectSpinnerThenLandOn(ids[TARGET_INDEX - 1], '同房第二次跳轉');
+    await expect(
+      thread.locator(`[data-msg-id="${ids[TARGET_INDEX - 1]}"]`),
+    ).toContainText(`line ${TARGET_INDEX} `);
+
+    // ④ 🔴 另一半，而且它是「轉圈判準變寬」之後唯一擋得住把它變成**恆亮**的東西。
+    //    第二次跳轉之後整條線（80 則）都已經在手上了，再跳到**已經載進來**的一則
+    //    不需要任何網路 —— 所以這一格要成立的是相反的三件事：
+    //      · 一個開窗請求都不准再發（已經握在手上的東西不用再買一次）；
+    //      · 一格轉圈都不准畫（ChatThreadLoading 自己的話：「A WAIT NOBODY
+    //        NOTICED IS NOT A WAIT WORTH DRAWING」—— 沒有等待就畫轉圈是雜訊，
+    //        而且會讓畫面閃一下）；
+    //      · 但**還是要真的捲過去**，落在那一則並亮起定位閃光。
+    //    ⚠️ 這一格是實測出來的，不是推的：加這支時原本這裡也寫成「要有轉圈」，
+    //    紅了之後量到第三、第四次跳轉的 `/api/chat` 請求數是 0（見
+    //    work/T-48-docs/fix13-e2e-walk-to-latest.md 第三輪的 [DIAG] 逐字輸出），
+    //    是**測試寫錯了**，不是產品少畫了。
+    const chatReqs = [];
+    page.on('request', (r) => {
+      const u = new URL(r.url());
+      if (u.pathname === '/api/chat') chatReqs.push(u.search);
+    });
+    await expect(
+      thread.locator(`[data-msg-id="${ids[70]}"]`),
+      '前提：這一則已經在手上了 —— 否則下面量的不是「不用再撈」那一格',
+    ).toBeAttached();
+
+    await jumpTo(ids[70]);
+    const landed = thread.locator(`[data-msg-id="${ids[70]}"]`);
+    await expect(landed).toBeInViewport({ timeout: 15_000 });
+    await expect(landed).toHaveClass(/chat__msg--located/);
+    await expect(
+      spinner,
+      '目標已經在手上，沒有等待可言 —— 不准畫轉圈',
+    ).toHaveCount(0);
+    expect(
+      chatReqs,
+      '目標已經在手上 —— 不准再買一次',
+    ).toEqual([]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T-48 fix14 · 走訪**還在撈**的時候切去別條對話 —— 另一格 e2e 今天沒有的。
+//
+// 上面 R3-1 那支量的是「帶著錨點**開機**、第一次掛載還在飛時切走」。這一支量的是
+// 另一個入口，也是 fix14 新增 `cancelled` 態要守的那個：房間**已經開著**、在同一間
+// 房裡發動跳轉，走訪的迴圈已經在一頁一頁打請求了，這時候讀者切去別人。
+//
+// 🔴 兩件事要同時成立，而且第二件是新的：
+//   · 切過去的那一間要**正常載得起來**（不准被上一條的閂鎖住）；
+//   · 舊走訪的結果**不准落到新畫面上** —— 它被叫停之後什麼都不准 commit。
+//     沒有這一條，讀者會在 B 的房間裡看到 A 的歷史，而那是最難看懂的一種錯。
+test.describe('T-48 fix14 · 同房跳轉還在撈的時候切去別條對話', () => {
+  test('切過去的那一間正常載入，被叫停的走訪一列都不准落到新畫面上', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const request = page.request;
+    const token = await ownerToken(request);
+    const NAME_A = uniqueName('CancelWalk A');
+    const NAME_B = uniqueName('CancelWalk B');
+    const A = await hireMember(request, token, NAME_A);
+    const B = await hireMember(request, token, NAME_B);
+
+    const idsA = [];
+    for (let i = 1; i <= TOTAL; i++) {
+      const msg = await postChatAs(request, token, A.id, `A line ${i} ${PAD}`);
+      idsA.push(msg.id);
+    }
+    const B_COUNT = 5;
+    for (let i = 1; i <= B_COUNT; i++) {
+      await postChatAs(request, token, B.id, `B line ${i} ${PAD}`);
+    }
+
+    await bootAuthedSpa(page, token);
+    // 前提：A 的房間用普通的方式開著。
+    await page.goto(`/#office/chat/${A.id}`);
+    const thread = page.locator('.chat__messages');
+    await expect(
+      thread.locator(`[data-msg-id="${idsA[TOTAL - 1]}"]`),
+    ).toBeInViewport({ timeout: 15_000 });
+
+    const HOLD_MS = 8000;
+    const isAnchorWindow = (url) =>
+      url.pathname === '/api/chat' &&
+      (url.searchParams.has('start_id') || url.searchParams.has('end_id'));
+    await page.route(isAnchorWindow, async (route) => {
+      await new Promise((r) => setTimeout(r, HOLD_MS));
+      await route.continue();
+    });
+    // 前提量的是**請求真的在空中**，不是轉圈在不在：轉圈是另一條線（fix14 的
+    // `initialLoading`）的產物，拿它當這一支的前提，會讓「取消壞掉」跟「轉圈壞掉」
+    // 紅成同一個樣子。
+    const anchorReqs = [];
+    page.on('request', (r) => {
+      const u = new URL(r.url());
+      if (isAnchorWindow(u)) anchorReqs.push(u.href);
+    });
+
+    // 在**已經開著的**房間裡發動跳轉 —— 走訪開始飛。
+    await page.evaluate(
+      ([cid, mid]) => {
+        window.location.hash = `#office/chat/${cid}/msg/${mid}`;
+      },
+      [A.id, idsA[TARGET_INDEX - 1]],
+    );
+    const spinner = page.locator('.chat__loading');
+    await expect
+      .poll(() => anchorReqs.length, { message: '前提：走訪真的在飛' })
+      .toBeGreaterThanOrEqual(2);
+
+    // 使用者手勢：點 B 的 roster row。
+    await page.locator('.member-card', { hasText: NAME_B }).click();
+
+    // ① B 的房間必須在 A 的走訪落地**之前**就填滿。
+    await expect(
+      thread.locator('.chat__msg'),
+      'B 的房間被上一條對話的走訪鎖住了',
+    ).toHaveCount(B_COUNT, { timeout: HOLD_MS - 2000 });
+    await expect(thread.locator('.chat__msg').last()).toContainText(
+      `B line ${B_COUNT} `,
+    );
+    await expect(spinner, 'B 載完了轉圈不准賴在畫面上').toHaveCount(0);
+
+    // ② 🔴 等到 A 的走訪本來會落地的時間點之後 —— 它一列都不准 commit 到 B。
+    await page.waitForTimeout(HOLD_MS + 2000);
+    await expect(
+      thread.locator('.chat__msg'),
+      '被叫停的走訪把 A 的列灌進 B 的房間了',
+    ).toHaveCount(B_COUNT);
+    await expect(
+      thread.locator(`[data-msg-id="${idsA[TARGET_INDEX - 1]}"]`),
+      'A 的錨點不准落在 B 的房間裡',
+    ).toHaveCount(0);
+    await expect(
+      thread.locator(`[data-msg-id="${idsA[TOTAL - 1]}"]`),
+      'A 的活尾巴也不准落在 B 的房間裡',
+    ).toHaveCount(0);
+    await expect(spinner, '切走之後不准留下一顆轉不完的轉圈').toHaveCount(0);
+  });
+});
