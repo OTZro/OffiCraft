@@ -230,7 +230,7 @@ test.describe('B9 · unread — badge, entry divider anchor, 進房 mark-read, f
     //
     // 兩種內容都被**扣住到落地之後**才放行:圖片扣在
     // `/api/chat/attachment/**`,請示卡扣在 `/api/reply-cards/rc-*` —— 後者今天
-    // 是一個**陰性對照**:那條路一次都不該被走到,`cardFetches` 就是在數它。
+    // 是一個**陰性對照**:那條路今天一次都不會被走到,所以那一列的高度不會變。
     // 視窗**下方**長高對讀者是 0px 位移(實測),推不動任何東西,所以兩者都在上方。
     let releaseImages;
 
@@ -249,21 +249,18 @@ test.describe('B9 · unread — badge, entry divider anchor, 進房 mark-read, f
 
     // 請示卡的 GET 被延遲 CARD_FETCH_DELAY_MS —— 這條路今天**一次都不該被走到**。
     //
-    //   · 今天的碼:卡片收合,`ChatReplyCard` 在展開之前不 fetch ⇒ `cardFetches`
-    //     必須是 0,而那一列從落地到靜止高度一格都不動。
+    //   · 今天的碼:卡片收合 ⇒ 那一列從落地到靜止,高度一格都不動。
     //   · 把「一律收合」拿掉的 mutant:訊息立刻上畫面、卡片先畫成 49px 的空殼,
     //     GET 在 600ms 後才回來 —— 也就是**跳轉之後**才長高。歷史實測 strip
     //     199ms、按下 221ms、卡片 49→303px、最新那一列被推走 195.77px。
     //
     // ⚠️ 那個 221ms 是**一次本機量測**(獨立審查 F-H)。CI 上一台慢的 runner 把
     // 「落地 → 按下」拖過 600ms,延遲就會在按下之前先回來 ⇒ **mutant 示範**會
-    // 假綠。它削弱的是示範,不是出貨的護欄:`cardFetches === 0` 那一格不看這個
-    // 延遲的死線,它問的是那通請求到底有沒有發出去。
+    // 假綠。它削弱的是示範,不是出貨的護欄:列高那一格不看這個
+    // 延遲的死線,它問的是那一列的高度有沒有變過。
     // 只攔 `rc-*`:`/api/reply-cards/count`(等我回覆徽章的輪詢)不在其中。
     const CARD_FETCH_DELAY_MS = 600;
-    let cardFetches = 0;
     await page.route('**/api/reply-cards/rc-*', async (route) => {
-      cardFetches += 1;
       await new Promise((r) => setTimeout(r, CARD_FETCH_DELAY_MS));
       await route.continue();
     });
@@ -395,14 +392,17 @@ test.describe('B9 · unread — badge, entry divider anchor, 進房 mark-read, f
       landed.imageHeights.length,
       'the three held thumbnails must be on screen at landing',
     ).toBe(3);
-    // 陰性對照 ①:那通 GET 一次都沒發出去。這是「卡片不可能晚到」今天最強的
-    // 說法 —— 不是「長高被吸收掉了」,是「沒有東西要長」。
-    expect(
-      cardFetches,
-      `收合的請示卡不可以去撈卡片(量到 ${cardFetches} 通)—— 那一列要顯示的字` +
-        `訊息本身就帶著`,
-    ).toBe(0);
-    // 陰性對照 ②:那一列從落地到靜止,高度一格都沒動。
+    // ⚠️ 這裡曾經斷言「那通 GET 一次都沒發出去」,已拿掉(owner `c-a86165fb9f0d`
+    // 點名)。它違反的是〈測試撰寫規則〉**第 4 條**而不是第 3 條:寫在它旁邊的
+    // 理由是「以後就算有人改成照樣去撈、再吸收位移也會被擋下來」——守的是「以後
+    // 的人不准怎麼做」,不是「這個功能必須做到什麼」。
+    //
+    // 🔴 **少守了什麼(第 4 條最後一句要求寫明)**:今天沒有任何東西釘住「收合的
+    // 卡一通請求都不發」。有人改成一次把所有卡都撈回來、再用別的方法把位移吸收
+    // 掉的話,這裡兩條照樣綠 —— 畫面是對的,流量不是。代價是長對話上每張卡一通
+    // GET,不是看得見的缺陷,所以它是一句註記而不是一條斷言。
+    //
+    // 陰性對照:那一列從落地到靜止,高度一格都沒動。
     expect(
       landed.cardHeight,
       `請示卡那一列在落地當下(${landed.cardHeight}px)與版面靜止後` +

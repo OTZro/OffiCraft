@@ -10,9 +10,24 @@
 // no longer "fetch the card before committing the messages" — it is that EVERY
 // card, waiting ones included, renders COLLAPSED: one row built from what the
 // carrying message already carries (the summary IS the message body, the status
-// IS its hint), so there is no fetch to be late with and no interior to grow
-// into. This spec therefore asserts the STRONGER thing: the target does not
-// move AND the page never asked for the card at all.
+// IS its hint), so there is nothing to be late with and no interior to grow
+// into. What this spec asserts is the OBSERVABLE result of that — the target
+// does not move and the card's row keeps its height — NOT the mechanism.
+//
+// ⚠️ It briefly asserted "the page never issued a getReplyCard", counted through
+// the story. Removed — owner named it (`c-a86165fb9f0d`), and the rule it broke
+// is 任務手冊 §測試撰寫規則 4 rather than 3: the reason written beside it was
+// 「以後就算有人改成照樣去撈、再吸收位移,也會被擋下來」, i.e. it guarded 「以後的
+// 人不准怎麼做」 rather than 「這個功能必須做到什麼」. A later fix that reached
+// the same still screen another way would have reddened it for no reason the
+// reader could act on.
+//
+// 🔴 WHAT IS NO LONGER GUARDED, SO NOBODY HAS TO GO LOOKING (rule 4's last
+// line): nothing pins that a collapsed card issues ZERO requests. A change that
+// fetched every card up front and absorbed the growth some other way would keep
+// both widths green here — the screen would be right and the traffic would not.
+// That cost is per-card GETs on a long history, not a visible defect, which is
+// why it is a note and not an assertion.
 //
 // jsdom cannot reach any of this: no layout engine, every rect is 0.
 //
@@ -46,7 +61,7 @@ for (const [label, width, height] of [
   ["1280", 1280, 800],
   ["390", 390, 844],
 ] as const) {
-  test(`${label}px: the jump target does not move, and the waiting card is never fetched`, async ({
+  test(`${label}px: the jump target and the card's row both stay where they are`, async ({
     mount,
     page,
   }) => {
@@ -95,17 +110,12 @@ for (const [label, width, height] of [
     expect(after.y).toBeGreaterThanOrEqual(port.y - 1);
     expect(after.y).toBeLessThanOrEqual(port.y + port.height + 1);
 
-    // (3) THE STRONGER FORM: nothing was fetched, so nothing could arrive late.
-    // This is the assertion that would survive somebody re-introducing a
-    // compensator: a fix that absorbs the growth still fetches, this one does
-    // not ask at all.
-    expect(
-      await page.evaluate(() => window.__cardFetches ?? -1),
-      "a collapsed card must not fetch — the row is built from what the message already carries",
-    ).toBe(0);
+    // (3) …and the card's own row is the same height it was painted at. This is
+    // the seam everything below it rides on: the target above cannot move
+    // without this moving first, so it says WHERE a failure of (1) came from.
     expect(
       (await card.boundingBox())!.height,
-      "the collapsed row must not have changed height either",
+      "the card's row changed height after it was painted — something arrived late",
     ).toBeCloseTo(cardFirst.height, 0);
 
     // THE DENOMINATOR, taken at the END so it can only ever explain a failure of

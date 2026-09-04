@@ -9,10 +9,7 @@
 // (T-48, owner 2026-09-04). A shell would have to fake that, i.e. fake the
 // answer. jsdom cannot measure it at all (no layout engine, every rect is 0),
 // which is why this is a CT guard and not a vitest one.
-//
-// The story counts every `getReplyCard` the page makes (`window.__cardFetches`)
-// so the spec can assert the STRONGEST form of the fix: not "the growth was
-// absorbed" but "nothing was ever fetched to grow into".
+
 //
 // The api seam is patched in place (the house pattern — see
 // ScheduledMessagesClampStory / SoftwareUpdateStory): `api` IS `mockApi` under
@@ -108,14 +105,7 @@ api.listChatWindow = async (
     ? log.slice(Math.max(0, at - limit + 1), at + 1)
     : log.slice(at, at + limit);
 };
-declare global {
-  interface Window {
-    __cardFetches?: number;
-  }
-}
-window.__cardFetches = 0;
 api.getReplyCard = async (id: string): Promise<ReplyCard> => {
-  window.__cardFetches = (window.__cardFetches ?? 0) + 1;
   await sleep(CARD_LATENCY_MS);
   return { ...CARD, id };
 };
