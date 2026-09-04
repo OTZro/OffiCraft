@@ -952,7 +952,7 @@ func realMain(argv []string, env func(string) string, out io.Writer) int {
 	}
 
 	runtimeProbe := func() map[string]any {
-		return collectRuntimeCapabilities(env, runner, claudeProbe.collect())
+		return collectRuntimeCapabilities(env, runner, claudeProbe.collect(), logf)
 	}
 	rc := run(ctx, cfg, collect, machine, post, fingerprints.collect, claudeProbe.collect,
 		wardenShapeOf, cutoverEffectOf, sleepUntil, iters, out, runtimeProbe)
