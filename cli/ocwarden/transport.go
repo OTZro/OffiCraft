@@ -565,7 +565,13 @@ func buildClaudeCredProbe(env func(string) string, runner CmdRunner) func() clau
 	}
 }
 
-func buildCommandDeps(cfg Config, env func(string) string, runner CmdRunner) CommandDeps {
+// buildSpawnDeps is the production SpawnDeps literal, pulled out of buildCommandDeps so
+// a test can look at it (T-81). That sounds like a formality; it is not. An independent
+// reviewer showed that setting ONE field of this literal — ResolveOcAgentBin — to nil
+// restored the original T-81 defect in full, and the entire package stayed green,
+// because the line that wires the fix into production had no test anywhere near it.
+// Guarding the function is not the same as guarding its caller.
+func buildSpawnDeps(cfg Config, env func(string) string, runner CmdRunner, socket, ns string) SpawnDeps {
 	// Real spawn mechanism, fully wired (only reached with the gate ON — a PoC
 	// default-OFF build never constructs a live connection, so start() never runs).
 	// Resolve claude ROBUSTLY: a launchd daemon inherits a MINIMAL PATH (no
@@ -575,12 +581,7 @@ func buildCommandDeps(cfg Config, env func(string) string, runner CmdRunner) Com
 	claudeBin := resolveClaudeBin(env)
 	codexBin := resolveCodexBin(env)
 	wardenBin, _ := os.Executable()
-	// The instance namespace keys the tmux socket + agent home (validated at
-	// process entry — realMain refuses an invalid OC_NAMESPACE before any
-	// transport is built, so the error case here is unreachable).
-	ns, _ := namespaceFromEnv(env)
-	socket := tmuxSocketFor(ns)
-	spawnDeps := SpawnDeps{
+	return SpawnDeps{
 		Runner:    runner,
 		Base:      cfg.Base,
 		Socket:    socket,
@@ -638,6 +639,18 @@ func buildCommandDeps(cfg Config, env func(string) string, runner CmdRunner) Com
 		// the seam's nil-skip contract is unchanged.
 		Pretrust: nil,
 	}
+}
+
+func buildCommandDeps(cfg Config, env func(string) string, runner CmdRunner) CommandDeps {
+	// Resolve claude ROBUSTLY: a launchd daemon inherits a MINIMAL PATH (no
+	// ~/.local/bin), so a bare exec.LookPath("claude") returns "" and start()
+	// silently refuses every spawn (the Phase-4-flip boot-death root cause).
+	// The instance namespace keys the tmux socket + agent home (validated at
+	// process entry — realMain refuses an invalid OC_NAMESPACE before any
+	// transport is built, so the error case here is unreachable).
+	ns, _ := namespaceFromEnv(env)
+	socket := tmuxSocketFor(ns)
+	spawnDeps := buildSpawnDeps(cfg, env, runner, socket, ns)
 	// The real ~/.claude.json pre-trust target (OC_CLAUDE_JSON can redirect it).
 	claudeJSONPath := defaultClaudeJSONPath(env)
 	return CommandDeps{

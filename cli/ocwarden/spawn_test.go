@@ -226,6 +226,11 @@ func (r *recRunner) sawArgv(want ...string) bool {
 	return false
 }
 
+// fxOcAgentResolver is the T-81 seam every start() test needs now that it is required.
+// It answers the same path the pre-T-81 construction used and reports it present, so a
+// test that is not ABOUT ocagent resolution reads exactly as it did before.
+func fxOcAgentResolver() (string, bool) { return ocAgentSymlinkTarget(fxRepoRoot, ""), true }
+
 func newStartDeps(t *testing.T, run *recRunner, files map[string]string) SpawnDeps {
 	t.Helper()
 	return newStartDepsLinks(t, run, files, map[string]string{})
@@ -246,6 +251,8 @@ func newStartDepsLinks(t *testing.T, run *recRunner, files, links map[string]str
 		MkdirAll:  func(string, os.FileMode) error { return nil },
 		Symlink:   func(oldname, newname string) error { links[newname] = oldname; return nil },
 		Remove:    func(string) error { return nil },
+
+		ResolveOcAgentBin: fxOcAgentResolver,
 	}
 }
 
@@ -441,6 +448,8 @@ func TestStart_PublishesOcAgentSymlink(t *testing.T) {
 		MkdirAll:  func(string, os.FileMode) error { return nil },
 		Symlink:   func(oldname, newname string) error { links[newname] = oldname; return nil },
 		Remove:    func(name string) error { removed = append(removed, name); return nil },
+
+		ResolveOcAgentBin: fxOcAgentResolver,
 	}
 	out := deps.start(StartParams{MemberID: "alice", MemberToken: fxToken, SessionName: "member-alice"})
 	if !out.OK {
@@ -514,6 +523,8 @@ func TestStart_OcAgentSymlinkRemoveNotExistOK(t *testing.T) {
 		MkdirAll:  func(string, os.FileMode) error { return nil },
 		Symlink:   func(oldname, newname string) error { links[newname] = oldname; return nil },
 		Remove:    func(string) error { return os.ErrNotExist },
+
+		ResolveOcAgentBin: fxOcAgentResolver,
 	}
 	out := deps.start(StartParams{MemberID: "alice", MemberToken: fxToken, SessionName: "member-alice"})
 	if !out.OK {

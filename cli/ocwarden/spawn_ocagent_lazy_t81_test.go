@@ -1,7 +1,6 @@
 package main
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
@@ -115,25 +114,28 @@ func TestStart_ProceedsWhenOcAgentPresent(t *testing.T) {
 	}
 }
 
-// TestStart_NilResolverKeepsPreT81Construction: the seam is optional. Every start() test
-// written before T-81 leaves it nil and must keep passing unchanged — the nil branch is
-// the old repoRoot-relative path with no new gate. This is stated as a test rather than
-// left implicit because the nil branch is the one a future edit is most likely to delete
-// as dead code.
-func TestStart_NilResolverKeepsPreT81Construction(t *testing.T) {
+// TestStart_RefusesWhenResolverMissing: an UNSET seam refuses too, and this is the
+// finding that changed the design. The first draft made nil mean "use the old
+// repoRoot-relative path and assume it is there" — comfortable, because every start()
+// test written before T-81 kept passing untouched. An independent reviewer then set
+// exactly that one field to nil in buildSpawnDeps and ran the whole package: green.
+// The lenient nil had quietly restored the original bug and covered for it. So an
+// unset seam is now a construction fault, and buildSpawnDeps carries its own test
+// (transport_ocagent_wiring_t81_test.go) asserting production never ships one.
+func TestStart_RefusesWhenResolverMissing(t *testing.T) {
 	links := map[string]string{}
 	run := &recRunner{err: map[string]error{"tmux -L officraft has-session -t member-alice": errAbsent()}}
 	deps := newStartDepsLinks(t, run, map[string]string{}, links)
-	if deps.ResolveOcAgentBin != nil {
-		t.Fatalf("newStartDepsLinks must leave the seam nil for this test to mean anything")
-	}
+	deps.ResolveOcAgentBin = nil
+
 	out := deps.start(StartParams{MemberID: "alice", MemberToken: fxToken, SessionName: "member-alice"})
-	if !out.OK {
-		t.Fatalf("outcome = %+v, want ok", out)
+	if out.OK {
+		t.Fatalf("outcome = %+v, want a refusal — deps that never said where ocagent comes from must not guess", out)
 	}
-	if got, want := links["/home/oc/.officraft/agents/alice/ocagent"], ocAgentSymlinkTarget(fxRepoRoot, ""); got != want {
-		t.Errorf("nil resolver must keep the pre-T-81 target: got %q want %q", got, want)
+	if !strings.Contains(out.Reason, "ocagent_not_found") {
+		t.Errorf("Reason = %q, want ocagent_not_found", out.Reason)
+	}
+	if len(links) != 0 {
+		t.Errorf("published %v, want NO symlink", links)
 	}
 }
-
-var _ = os.Stat

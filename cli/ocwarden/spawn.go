@@ -228,8 +228,10 @@ func buildAppendSystemPrompt(agentID, role, personaFile string) string {
 // never online).
 //
 // The target is ocAgentBin when set (resolveOcAgentBin's answer: the ocwarden SIBLING
-// $HOME/.officraft/warden/ocagent once home-installed, guaranteed present by install's
-// download step), else it FALLS BACK to the repoRoot-relative <repoRoot>/cli/ocagent/ocagent
+// $HOME/.officraft/warden/ocagent once home-installed — install's download step puts it
+// there, but NOT before the warden starts, which is the T-81 window: for a while after a
+// fresh install the sibling is simply not there yet), else it FALLS BACK to the
+// repoRoot-relative <repoRoot>/cli/ocagent/ocagent
 // (dev / in-tree, no home install). The sibling path is LOAD-BEARING once the warden is
 // home-installed: the durable ocwarden runs from $HOME/.officraft/warden, so
 // resolveRepoRoot's os.Executable walk lands on $HOME (not the real checkout) and the
@@ -251,11 +253,12 @@ func ocAgentSymlinkTarget(repoRoot, ocAgentBin string) string {
 
 // ocAgentTarget is the per-spawn resolution seam (T-81). It exists so start() can ask
 // the question at the moment it needs the answer instead of reading a value frozen at
-// warden boot. A nil ResolveOcAgentBin keeps the pre-T-81 dev/test construction working
-// — the repoRoot-relative path, reported as present so those callers see no new gate.
+// warden boot. An unset seam is a CONSTRUCTION fault, not a dev mode: it means whoever
+// built these deps never decided where ocagent comes from, and guessing on their behalf
+// is how a machine ends up silently deaf. Refuse and say so.
 func (d SpawnDeps) ocAgentTarget() (string, bool) {
 	if d.ResolveOcAgentBin == nil {
-		return ocAgentSymlinkTarget(d.RepoRoot, ""), true
+		return "", false
 	}
 	return d.ResolveOcAgentBin()
 }
@@ -723,8 +726,16 @@ type SpawnDeps struct {
 	// no warden restart and nobody having to intervene.
 	// The bool is the OTHER half: it says the chosen path EXISTS. start() refuses the
 	// spawn when it is false, which turns "silently deaf forever" into one visible
-	// failure the server records. nil ⇒ the legacy repoRoot-relative dev path with NO
-	// existence gate (test/dev construction only; production always injects it).
+	// failure the server records.
+	//
+	// 🔴 REQUIRED. An earlier draft let nil mean "fall back to the repoRoot-relative
+	// dev path, and assume it is there" — and an independent reviewer showed that was
+	// the whole bug wearing a different hat: setting this ONE field to nil in
+	// buildSpawnDeps restored the original defect exactly, and the entire package
+	// stayed green. A lenient nil is a hole with a test-shaped cover on it, because
+	// nothing guards the single line that wires production up. So nil now REFUSES the
+	// spawn (see ocAgentTarget), and buildSpawnDeps has a test of its own asserting
+	// this field is set.
 	ResolveOcAgentBin func() (string, bool)
 	WriteFile         func(path, content string, mode os.FileMode) error
 	MkdirAll          func(path string, perm os.FileMode) error
@@ -974,12 +985,16 @@ func (d SpawnDeps) start(p StartParams) SpawnOutcome {
 		// the outside that member is indistinguishable from one that crashed or
 		// ran out of tokens. This Reason travels back to the server with the
 		// spawn result, so the failure has somewhere to be seen.
+		where := ocAgentTarget
+		if where == "" {
+			where = "<no path: this warden was built without an ocagent resolver>"
+		}
 		return SpawnOutcome{OK: false, Reason: fmt.Sprintf(
 			"ocagent_not_found: no ocagent binary at %s. The agent would start "+
 				"but could never connect. If this machine was just installed, the "+
 				"download may still be running — the next spawn picks it up with no "+
 				"warden restart. Otherwise re-install the warden on this machine.",
-			ocAgentTarget)}
+			where)}
 	}
 	if err := d.Symlink(ocAgentTarget, ocAgentLink); err != nil {
 		return SpawnOutcome{OK: false, Reason: fmt.Sprintf(
