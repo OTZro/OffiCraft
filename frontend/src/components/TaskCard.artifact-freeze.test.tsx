@@ -16,6 +16,19 @@ import { I18nProvider } from "../i18n";
 import { TaskCard } from "./TaskCard";
 import type { TaskView } from "../api/adapter";
 
+// T-66: the artifact rows come from the SERVER when the panel opens, not from
+// the card's `onHydrate` (the task read carries an id+label index now — owner
+// c-cd063427fb2f), so the fixture has to be handed in through this stub.
+const { listTaskArtifacts } = vi.hoisted(() => ({ listTaskArtifacts: vi.fn() }));
+vi.mock("../api", () => ({
+  api: {
+    subscribeEvents: () => () => {},
+    getChatAttachmentShareLink: vi.fn(),
+    getTaskStep: vi.fn(),
+    listTaskArtifacts,
+  },
+}));
+
 let seq = 0;
 
 function mkTask(over: Partial<TaskView>): TaskView {
@@ -75,7 +88,7 @@ function renderCard(task: TaskView) {
         onSetPriority={NOOP as never}
         onReassign={NOOP as never}
         onSendMessage={NOOP as never}
-        onHydrate={(async () => ({ artifacts: [ARTIFACT] })) as never}
+        onHydrate={(async () => ({ artifacts: [{ id: ARTIFACT.id, label: ARTIFACT.label }] })) as never}
         onRemoveArtifact={NOOP as never}
       />
     </I18nProvider>
@@ -88,6 +101,8 @@ async function openArtifactPopover() {
 }
 
 beforeEach(() => {
+  listTaskArtifacts.mockReset();
+  listTaskArtifacts.mockResolvedValue([ARTIFACT]);
   seq = 0;
   window.location.hash = "";
 });

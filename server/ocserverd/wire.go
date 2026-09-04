@@ -1464,8 +1464,9 @@ type taskStepStatusReceiptDTO struct {
 // taskArtifactReceiptDTO is the bounded confirmation returned after pinning or
 // un-pinning ONE deliverable (T-a98d). Same posture as taskStepStatusReceiptDTO:
 // the write answers with what the write did — the artifact it touched and the
-// resulting set size — not with the whole task. Full task detail, artifact list
-// included, remains available through get_task.
+// resulting set size — not with the whole task. Full task detail remains
+// available through get_task, and the artifact SET through list_task_artifacts
+// — since T-66 get_task carries only an id+label index of the artifacts.
 type taskArtifactReceiptDTO struct {
 	TaskID        string `json:"task_id"`
 	ArtifactID    string `json:"artifact_id"`
@@ -1576,12 +1577,24 @@ type taskStepDTO struct {
 	// WaitingReason: non-empty only while the step is waiting_external (T-9ca5 —
 	// the task-level waiting_reason moved down to the step here).
 	WaitingReason string `json:"waiting_reason"`
-	// Note: the step's free-text working note — what this step got to and what
-	// comes next (T-cc3e). Bound to no status: writable in every one of them,
-	// unlike WaitingReason. This is the field the handover SOP has always meant
-	// by "把還在進行中的工作寫回 task step note"; before T-cc3e that instruction
-	// named nothing that existed. See TaskStepDTO in the spec.
-	Note string `json:"note"`
+	// 🔴 THERE IS NO `Note` FIELD HERE, AND ITS ABSENCE IS THE DELIVERABLE
+	// (T-66, owner card rc-4c8065fb30a5: 「整個拿掉，做在組裝票那一層（九個介面
+	// 一起瘦），座艙改成點開才抓」). The note text used to ride EVERY response
+	// built from this struct — get_task, terminate, reassign, claim, duplicate,
+	// deps, the create dedupe hit, description, title — nine exits carrying a
+	// 4,000-rune-capped free-text field per step for callers that wanted one of
+	// them or none.
+	//
+	// It was removed from the SCHEMA rather than left declared-and-empty on
+	// purpose. A field that is present on the wire and always blank is a silent
+	// lie: every existing reader keeps compiling and starts reading "" as "this
+	// step has no note". Deleting it makes the cockpit's TypeScript fail to
+	// build, which is the loud failure the owner asked for. Do not reinstate it
+	// "for compatibility" — that IS the failure mode this removal exists to
+	// prevent. The text is served by taskStepDetailDTO (GET
+	// /api/tasks/{task_id}/steps/{step_id}, MCP get_task_step), one step at a
+	// time.
+	//
 	// NoteSizeChars / NoteCapChars are the note's two numbers, the same pair
 	// every other capped document on this station reports on its own read
 	// (T-6bd2). Until this ticket the step note was the ONE capped document
@@ -1602,6 +1615,65 @@ type taskStepDTO struct {
 	StartedTS     float64 `json:"started_ts"`
 	FinishedTS    float64 `json:"finished_ts"`
 }
+
+// taskStepDetailDTO is ONE step served IN FULL (T-66) — the other half of the
+// split taskStepDTO's missing Note opens. It is deliberately a SEPARATE type
+// rather than taskStepDTO plus a field, because the two are answers to two
+// different questions and one struct with a sometimes-filled Note is exactly
+// the shape that makes "" ambiguous again.
+//
+// It carries NO task fields and NO sibling steps. A caller that wanted one
+// note and got the ticket is what this ticket is about; answering with the
+// task's other 30 fields "while we are here" reinstates the cost on a smaller
+// scale.
+//
+// DetailLevel is the self-description AC: a reader tells this response apart
+// from taskDTO's steps by what the payload SAYS, not by inspecting which fields
+// happen to be present.
+type taskStepDetailDTO struct {
+	DetailLevel     string  `json:"detail_level"`
+	ID              string  `json:"id"`
+	TaskID          string  `json:"task_id"`
+	OrderIdx        int     `json:"order_idx"`
+	Name            string  `json:"name"`
+	DoD             string  `json:"dod"`
+	Status          string  `json:"status"`
+	ParallelGroup   string  `json:"parallel_group"`
+	IsGate          bool    `json:"is_gate"`
+	ReplyCardID     string  `json:"reply_card_id"`
+	ReplyCardStatus string  `json:"reply_card_status"`
+	WaitingReason   string  `json:"waiting_reason"`
+	Note            string  `json:"note"`
+	NoteSizeChars   int     `json:"note_size_chars"`
+	NoteCapChars    int     `json:"note_cap_chars"`
+	StartedTS       float64 `json:"started_ts"`
+	FinishedTS      float64 `json:"finished_ts"`
+}
+
+// taskDetailLevelSummary / taskDetailLevelFull are the two values of the
+// self-description pair. They are constants rather than literals at the two
+// build sites so the pairing cannot drift into three spellings.
+const (
+	taskDetailLevelSummary = "summary"
+	taskDetailLevelFull    = "full"
+)
+
+// taskArtifactsDetailLevelIndex / ...Full are the two values of the ARTIFACT
+// half of the self-description (T-66, owner c-cd063427fb2f:「我覺得任務產物，只
+// 需要預設給標題跟ID, 有需要再透過另一隻去拿就好了」). Same reason the pair above
+// are constants: the two build sites (the shared task projection and
+// list_task_artifacts) must not drift into three spellings.
+//
+// 🔴 THE VALUE IS A NAME, NOT A BOOLEAN, and that is deliberate. A flag like
+// `artifacts_included: false` would be a permanently-false marker, and this
+// repo's hard lesson is that a guard which never fires reads exactly like a
+// green one. "index" is a positive statement that is TRUE of every payload that
+// carries it — this response's artifact rows are an INDEX (id + label) — and its
+// counterpart "full" is likewise true of every payload that carries THAT one.
+const (
+	taskArtifactsDetailLevelIndex = "index"
+	taskArtifactsDetailLevelFull  = "full"
+)
 
 // taskArtifactDTO is one pinned deliverable on a task's artifact set (T-3dc5).
 // For a link: URL is the external url, AttachmentID/Mime/Filename empty,
@@ -1674,6 +1746,40 @@ func newTaskArtifactVersionDTO(h TaskArtifactHistory, att *ChatAttachment) taskA
 	return dto
 }
 
+// taskArtifactRefDTO is ONE artifact reduced to the two things a caller needs
+// in order to decide whether it wants the artifact at all: WHICH one it is (ID
+// — the handle every other artifact call takes) and WHAT it is called (Label).
+// It is what the shared task projection serves; the full row above is served
+// by GET /api/tasks/{task_id}/artifacts (MCP list_task_artifacts).
+//
+// 🔴 WHY THE SPLIT IS BY TASK AND NOT BY ARTIFACT. The obvious symmetry with
+// get_task_step would be a get_task_artifact taking one id. The owner ruled
+// against it (c-f2d0fecb1168:「應該是指名任務？」): the cockpit's artifact panel
+// opens onto the WHOLE set at once, so a per-artifact door would cost one call
+// per row — 32 calls for a 32-artifact ticket — whereas a step note is read one
+// at a time, which is why THAT split is per-step and this one is per-task.
+//
+// Label is honest-empty when the artifact was pinned without one; it is NOT
+// backfilled from the filename or the url here, because those live on the full
+// row and inventing a display name in the index would make the index look like
+// it carried more than it does. Deciding what to SHOW for a nameless artifact
+// is the renderer's job, on the full row it fetched.
+type taskArtifactRefDTO struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
+// taskArtifactListDTO is the answer of GET /api/tasks/{task_id}/artifacts: one
+// task's artifact set IN FULL, oldest→newest. It is a wrapped list rather than
+// a bare array so the response can say what it is — ArtifactsDetailLevel here
+// is "full", the counterpart of the "index" the task projection declares, the
+// same way taskStepDetailDTO answers "full" against taskDTO's "summary".
+type taskArtifactListDTO struct {
+	TaskID               string            `json:"task_id"`
+	ArtifactsDetailLevel string            `json:"artifacts_detail_level"`
+	Artifacts            []taskArtifactDTO `json:"artifacts"`
+}
+
 type taskDTO struct {
 	ID           string         `json:"id"`
 	TaskNo       string         `json:"task_no"`
@@ -1702,15 +1808,56 @@ type taskDTO struct {
 	ClosedTS           *float64      `json:"closed_ts"` // null while open
 	Deps               []string      `json:"deps"`
 	Steps              []taskStepDTO `json:"steps"`
-	ProgressDone       int           `json:"progress_done"`
-	ProgressTotal      int           `json:"progress_total"`
+	// DetailLevel / NotesIncluded are the response DESCRIBING ITSELF (T-66).
+	// The AC is verbatim「成功的回應不得看起來像完整的 task」: a caller must be
+	// able to tell FROM THE PAYLOAD that something was left out, without
+	// knowing which fields a full task used to carry.
+	//
+	// Always "summary" / false — constants on THIS type, not a mode switch.
+	// There is no ?detail=full and there is not meant to be one: the counterpart
+	// read is get_task_step, whose taskStepDetailDTO answers "full".
+	//
+	// 🔴 THERE IS NO third "the step LIST may be cut" marker, and that is an
+	// executor judgement backed by evidence, not an oversight. resume_summary
+	// carries exactly such a pair (resumeChatCutDTO{Omitted, Hint}) because its
+	// chat block IS budget-packed, so the marker has a trigger. This face has
+	// none: taskDTOOf's steps come from DAL.ListTaskSteps — one unbounded
+	// `SELECT ... WHERE task_id = ? ORDER BY order_idx, id`, no LIMIT, no
+	// cursor, no caller-supplied cap — and newTaskDTO appends every row it is
+	// handed. A marker here would be a guard that can never fire, and a guard
+	// that can never fire reads exactly like a green one. The completeness is
+	// stated in the tool description instead, where a caller can act on it.
+	DetailLevel   string `json:"detail_level"`
+	NotesIncluded bool   `json:"notes_included"`
+	// ArtifactsDetailLevel is the ARTIFACT half of the same self-description
+	// (T-66, owner c-cd063427fb2f). Always "index" on this type: the Artifacts
+	// rows below carry id + label and nothing else, and
+	// GET /api/tasks/{task_id}/artifacts (list_task_artifacts) answers "full".
+	//
+	// It is a NAME rather than an `artifacts_included: false` flag on purpose —
+	// see taskArtifactsDetailLevelIndex. And it is a separate field from
+	// DetailLevel rather than folded into it because the two abridgements are
+	// undone by two DIFFERENT calls: a caller reading "summary" is told to go to
+	// get_task_step, a caller reading "index" is told to go to
+	// list_task_artifacts, and one string cannot name both destinations.
+	ArtifactsDetailLevel string `json:"artifacts_detail_level"`
+	ProgressDone         int    `json:"progress_done"`
+	ProgressTotal        int    `json:"progress_total"`
 	// CloseoutReported flips true once the executor reports the close-out
 	// follow-ups done (report_task_closeout; §6.3 — terminal tasks only).
 	CloseoutReported bool `json:"closeout_reported"`
 	// Artifacts is the task's curated deliverable set (T-3dc5), oldest→newest;
 	// always present ([] when none). Optional in the spec (§12) but always
-	// serialised — the FE popover reads it, the light list reads only the count.
-	Artifacts []taskArtifactDTO `json:"artifacts"`
+	// serialised — the light list reads only the count.
+	//
+	// 🔴 SINCE T-66 THESE ARE INDEX ROWS (id + label), not the full artifact.
+	// Owner c-cd063427fb2f:「我覺得任務產物，只需要預設給標題跟ID, 有需要再透過
+	// 另一隻去拿就好了」. url / filename / mime / kind / is_image / attachment_id
+	// / created_by / created_ts are served by list_task_artifacts, one call per
+	// TASK (owner c-f2d0fecb1168) — never per artifact. ArtifactsDetailLevel
+	// above says so in the payload, so a caller does not have to know which
+	// fields a full row used to carry in order to notice the difference.
+	Artifacts []taskArtifactRefDTO `json:"artifacts"`
 	// Handoff / HandoffNote / HandoffTaskID: the DECLARED destination of the
 	// ball at close (T-74f8). "" = never declared (every task whose creator IS
 	// its executor, and every pre-column row); otherwise return_to_creator |
@@ -1782,6 +1929,18 @@ type taskListItemDTO struct {
 	DepTasks      []taskDepRefDTO `json:"dep_tasks"`
 	ProgressDone  int             `json:"progress_done"`
 	ProgressTotal int             `json:"progress_total"`
+	// CurrentStepID / CurrentStepName point at the step the task is ON right
+	// now — the FIRST non-terminal step in timeline order (domain.CurrentStep,
+	// the same rule the wake snapshot's resumeTaskDTO uses). Both are "" when
+	// the plan is empty or every step has finished; that empty is honest and
+	// must not be read as "the first step". The pair is an id and a name and
+	// nothing else about the step — where this belongs on the light list is
+	// still open (owner c-2823f0ff85b5:「我覺得這不屬於 list task 的範疇」;
+	// c-1648d14be429:「先不動這個 之後要調再說」), so nothing here or in the tool
+	// description recommends it as a route. The light list still carries no
+	// step ROWS (no dod text) — only these two display fields.
+	CurrentStepID   string `json:"current_step_id"`
+	CurrentStepName string `json:"current_step_name"`
 	// ArtifactCount is the number of pinned deliverables (T-3dc5) — the collapsed
 	// card's 「產物 N」 badge; 0 (the zero value) when none, so the badge hides.
 	// The light list never loads the artifact rows themselves (get_task folds
@@ -2117,6 +2276,33 @@ func newTaskStepDTO(st TaskStep, cardStatus map[string]string) taskStepDTO {
 		ReplyCardID:     st.ReplyCardID,
 		ReplyCardStatus: cardStatus[st.ReplyCardID],
 		WaitingReason:   st.WaitingReason,
+		// 🔴 st.Note is measured here and NOT carried (T-66). The size is the
+		// whole statement the summary row makes about the note: a caller reads
+		// note_size_chars and decides whether to spend a get_task_step.
+		NoteSizeChars: utf8.RuneCountInString(st.Note),
+		NoteCapChars:  chatBodyMaxChars,
+		StartedTS:     st.StartedTS,
+		FinishedTS:    st.FinishedTS,
+	}
+}
+
+// newTaskStepDetailDTO projects ONE step onto the single-step wire (T-66),
+// note text included. cardStatus is the same read-time join newTaskStepDTO
+// takes, so the two faces of a step can never disagree about a bound card.
+func newTaskStepDetailDTO(st TaskStep, cardStatus map[string]string) taskStepDetailDTO {
+	return taskStepDetailDTO{
+		DetailLevel:     taskDetailLevelFull,
+		ID:              st.ID,
+		TaskID:          st.TaskID,
+		OrderIdx:        st.OrderIdx,
+		Name:            st.Name,
+		DoD:             st.DoD,
+		Status:          st.Status,
+		ParallelGroup:   st.ParallelGroup,
+		IsGate:          st.IsGate,
+		ReplyCardID:     st.ReplyCardID,
+		ReplyCardStatus: cardStatus[st.ReplyCardID],
+		WaitingReason:   st.WaitingReason,
 		Note:            st.Note,
 		NoteSizeChars:   utf8.RuneCountInString(st.Note),
 		NoteCapChars:    chatBodyMaxChars,
@@ -2167,13 +2353,28 @@ func newTaskDTO(t Task, steps []TaskStep, deps []string, cardStatus map[string]s
 		UpdatedTS:          t.UpdatedTS,
 		Deps:               deps,
 		Steps:              stepDTOs,
-		ProgressDone:       done,
-		ProgressTotal:      total,
-		CloseoutReported:   t.CloseoutTS > 0,
+		// T-66: every exit built through here says what it is. Nine responses
+		// share this builder (get_task, terminate, reassign, claim, duplicate,
+		// deps, the create dedupe hit, description, title), so the declaration
+		// lands on all of them at once — which is the point of doing the
+		// slimming HERE rather than in each handler.
+		DetailLevel:   taskDetailLevelSummary,
+		NotesIncluded: false,
+		// T-66 / owner c-cd063427fb2f: the artifact rows are an INDEX on every
+		// one of those same nine responses. EXECUTOR JUDGEMENT, not an owner
+		// ruling: the owner said what the default payload should carry, not
+		// which layer should do the slimming. It is done HERE, on the shared
+		// builder, for the same reason the step note was — a per-handler
+		// projection is nine copies of one rule, and the copy nobody watches is
+		// the one that keeps serving the fat rows.
+		ArtifactsDetailLevel: taskArtifactsDetailLevelIndex,
+		ProgressDone:         done,
+		ProgressTotal:        total,
+		CloseoutReported:     t.CloseoutTS > 0,
 		// Artifacts default to [] — the handler (taskDTOOf) folds the resolved
 		// set in after this pure projection, since resolving file/image blob
 		// metadata needs a DAL lookup that does not belong in a pure builder.
-		Artifacts: []taskArtifactDTO{},
+		Artifacts: []taskArtifactRefDTO{},
 		// Blocking defaults to [] for the same reason Artifacts does: resolving
 		// the reverse edge is a DAL read, and this builder is pure. taskDTOOf
 		// folds the real set in; a projection built without it (the create
@@ -2260,9 +2461,24 @@ func artifactBlobFacts(att *ChatAttachment) (artifactBlobFields, bool) {
 	return b, true
 }
 
+// newTaskArtifactRefDTO projects one artifact row onto the INDEX wire (T-66):
+// the id and the label, and deliberately nothing that would need a second read.
+//
+// 🔴 IT TAKES NO ChatAttachment, and that is the point rather than an omission.
+// newTaskArtifactDTO above needs one lookup PER file/image artifact to resolve
+// mime/filename/is_image, so the shared task projection used to pay a
+// GetChatAttachment per pinned blob on all nine of its exits. The index needs
+// none of those fields, so the whole join leaves the task read; it is paid once,
+// on the artifacts call, by a caller that actually asked for the blob metadata.
+func newTaskArtifactRefDTO(a TaskArtifact) taskArtifactRefDTO {
+	return taskArtifactRefDTO{ID: a.ID, Label: a.Label}
+}
+
 // newTaskListItemDTO projects one task + its deps + pre-counted step progress
-// onto the LIGHT list wire (GET /api/tasks). done/total come from
-// dal.AllTaskStepProgress (a grouped COUNT) so the list never loads step rows;
+// + its pre-resolved current step onto the LIGHT list wire (GET /api/tasks).
+// done/total come from dal.AllTaskStepProgress (a grouped COUNT) and current
+// from dal.AllTaskCurrentStep (one grouped window query, id/name only), so the
+// list still never loads step rows;
 // closed_ts serialises null while open, exactly like newTaskDTO.
 //
 // byID is the caller's map of the WHOLE task population (the handler builds it
@@ -2274,6 +2490,7 @@ func artifactBlobFacts(att *ChatAttachment) (artifactBlobFields, bool) {
 // cost zero extra queries (T-a3e4).
 func newTaskListItemDTO(
 	t Task, deps []string, done, total, artifactCount int, byID map[string]Task,
+	current TaskCurrentStep,
 ) taskListItemDTO {
 	if deps == nil {
 		deps = []string{}
@@ -2301,6 +2518,11 @@ func newTaskListItemDTO(
 		DepTasks:           newTaskDepRefDTOs(deps, byID),
 		ProgressDone:       done,
 		ProgressTotal:      total,
+		// current comes from dal.AllTaskCurrentStep (one grouped query for the
+		// whole population) — its zero value IS "no current step", which is the
+		// right answer for an empty or fully-finished plan.
+		CurrentStepID:   current.ID,
+		CurrentStepName: current.Name,
 	}
 	if t.ClosedTS > 0 {
 		ts := t.ClosedTS

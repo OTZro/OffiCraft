@@ -75,7 +75,7 @@ func TestReplaceArtifactKeepsTheIdAndRetainsTheReplacedVersion(t *testing.T) {
 	artID := decodeBody[taskArtifactReceiptDTO](t, rec).ArtifactID
 
 	// Before any replace the deliverable has exactly one version — itself.
-	if got := getTaskView(t, api, task.ID).Artifacts[0].VersionCount; got != 1 {
+	if got := getTaskArtifacts(t, api, task.ID).Artifacts[0].VersionCount; got != 1 {
 		t.Fatalf("a never-replaced artifact has 1 version, got %d", got)
 	}
 
@@ -92,7 +92,7 @@ func TestReplaceArtifactKeepsTheIdAndRetainsTheReplacedVersion(t *testing.T) {
 	}
 
 	// THE WHOLE POINT: one artifact, the same id, new content.
-	view := getTaskView(t, api, task.ID)
+	view := getTaskArtifacts(t, api, task.ID)
 	if len(view.Artifacts) != 1 {
 		t.Fatalf("replace must not add a row, got %+v", view.Artifacts)
 	}
@@ -156,7 +156,7 @@ func TestReplaceArtifactOnTerminalTaskIs409(t *testing.T) {
 		t.Fatalf("terminal task replace by owner must 409, got %d %s", rec.Code, rec.Body.String())
 	}
 	// The refusals left the deliverable exactly as the close froze it.
-	live := getTaskView(t, api, task.ID).Artifacts[0]
+	live := getTaskArtifacts(t, api, task.ID).Artifacts[0]
 	if live.URL != "https://x/pr/2" || live.VersionCount != 2 {
 		t.Fatalf("a refused replace must change nothing, got %+v", live)
 	}
@@ -194,7 +194,7 @@ func TestReplaceArtifactRefusesACrossKindReplacement(t *testing.T) {
 	}
 
 	// Nothing moved, and nothing was versioned by a refused write.
-	for _, a := range getTaskView(t, api, task.ID).Artifacts {
+	for _, a := range getTaskArtifacts(t, api, task.ID).Artifacts {
 		if a.VersionCount != 1 {
 			t.Fatalf("a refused replace must retain no version: %+v", a)
 		}

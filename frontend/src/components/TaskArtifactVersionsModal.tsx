@@ -216,18 +216,19 @@ export function TaskArtifactVersionsModal({
   const nowTs = Date.now() / 1000;
 
   // 🔴 The `+` side comes from the SERVER, in the same breath as the journal —
-  // see the header. `getTask` is the cockpit's own full-task read; the popover's
-  // rows are not consulted here at all.
+  // see the header. `listTaskArtifacts` is the cockpit's own FULL artifact read
+  // (T-66 left `getTask` carrying an id+label index a version reader cannot be
+  // drawn from); the popover's rows are not consulted here at all.
   useEffect(() => {
     let alive = true;
     Promise.all([
       api.listTaskArtifactVersions(taskId, artifactId),
-      api.getTask(taskId),
+      api.listTaskArtifacts(taskId),
     ])
-      .then(([list, task]) => {
+      .then(([list, artifacts]) => {
         if (!alive) return;
         setVersions(list);
-        setLive(task.artifacts?.find((a) => a.id === artifactId) ?? null);
+        setLive(artifacts.find((a) => a.id === artifactId) ?? null);
         setSelected(list.length > 0 ? list[0]!.id : "live");
       })
       .catch((e) => {

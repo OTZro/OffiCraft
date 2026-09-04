@@ -23,19 +23,18 @@ import { toTaskArtifactVersion } from "../api/mappers";
 import type {
   TaskArtifactView,
   TaskArtifactVersionView,
-  TaskView,
 } from "../api/adapter";
 
 vi.mock("../api", () => ({
   api: {
-    getTask: vi.fn(),
+    listTaskArtifacts: vi.fn(),
     listTaskArtifactVersions: vi.fn(),
     subscribeEvents: () => () => {},
   },
 }));
 
 const mockedApi = api as unknown as {
-  getTask: ReturnType<typeof vi.fn>;
+  listTaskArtifacts: ReturnType<typeof vi.fn>;
   listTaskArtifactVersions: ReturnType<typeof vi.fn>;
 };
 
@@ -74,8 +73,8 @@ function mkVersion(over: Partial<TaskArtifactVersionView>): TaskArtifactVersionV
   };
 }
 
-function mkTask(artifacts: TaskArtifactView[]): TaskView {
-  return { id: "t-1", artifacts, artifactCount: artifacts.length } as TaskView;
+function mkArtifacts(artifacts: TaskArtifactView[]): TaskArtifactView[] {
+  return artifacts;
 }
 
 /** A fetch that answers per blob path with a declared content type. `cancel`
@@ -148,8 +147,8 @@ describe("TaskArtifactVersionsModal", () => {
     // learns to accept the popover's artifact row instead, this stays the
     // assertion that reddens: the popover's row is stale by construction.
     mockedApi.listTaskArtifactVersions.mockResolvedValue([mkVersion({})]);
-    mockedApi.getTask.mockResolvedValue(
-      mkTask([mkArtifact({ url: "/api/chat/attachment/att-fresh" })]),
+    mockedApi.listTaskArtifacts.mockResolvedValue(
+      mkArtifacts([mkArtifact({ url: "/api/chat/attachment/att-fresh" })]),
     );
     stubFetch({
       "/api/chat/attachment/att-old": { mime: "text/plain", text: "one\n" },
@@ -161,7 +160,7 @@ describe("TaskArtifactVersionsModal", () => {
     fireEvent.click(await screen.findByTestId("ta-versions-pane-diff"));
     await waitFor(() => expect(screen.getByTestId("ta-versions-diff")).toBeTruthy());
     expect(diffLinesOnScreen()).toEqual(["one", "two"]);
-    expect(mockedApi.getTask).toHaveBeenCalledWith("t-1");
+    expect(mockedApi.listTaskArtifacts).toHaveBeenCalledWith("t-1");
   });
 
   // The artifact was un-pinned from another surface while this was opening, so
@@ -170,7 +169,7 @@ describe("TaskArtifactVersionsModal", () => {
   // this client happened to know.
   it("says the current version is gone while still reading the retained one", async () => {
     mockedApi.listTaskArtifactVersions.mockResolvedValue([mkVersion({})]);
-    mockedApi.getTask.mockResolvedValue(mkTask([]));
+    mockedApi.listTaskArtifacts.mockResolvedValue(mkArtifacts([]));
     stubFetch({ "/api/chat/attachment/att-old": { mime: "text/plain", text: "one\n" } });
     openModal();
 
@@ -183,7 +182,7 @@ describe("TaskArtifactVersionsModal", () => {
 
   it("compares two text files through the shared DiffView", async () => {
     mockedApi.listTaskArtifactVersions.mockResolvedValue([mkVersion({})]);
-    mockedApi.getTask.mockResolvedValue(mkTask([mkArtifact({})]));
+    mockedApi.listTaskArtifacts.mockResolvedValue(mkArtifacts([mkArtifact({})]));
     stubFetch({
       "/api/chat/attachment/att-old": { mime: "text/plain", text: "alpha\nbeta\n" },
       "/api/chat/attachment/att-live": { mime: "text/plain", text: "alpha\ngamma\n" },
@@ -203,8 +202,8 @@ describe("TaskArtifactVersionsModal", () => {
     mockedApi.listTaskArtifactVersions.mockResolvedValue([
       mkVersion({ label: "recon.md", filename: "" }),
     ]);
-    mockedApi.getTask.mockResolvedValue(
-      mkTask([mkArtifact({ label: "recon.md", filename: "recon.md", mime: "application/octet-stream" })]),
+    mockedApi.listTaskArtifacts.mockResolvedValue(
+      mkArtifacts([mkArtifact({ label: "recon.md", filename: "recon.md", mime: "application/octet-stream" })]),
     );
     stubFetch({
       "/api/chat/attachment/att-old": {
@@ -232,8 +231,8 @@ describe("TaskArtifactVersionsModal", () => {
     mockedApi.listTaskArtifactVersions.mockResolvedValue([
       mkVersion({ label: "", filename: "recon.md" }),
     ]);
-    mockedApi.getTask.mockResolvedValue(
-      mkTask([mkArtifact({ label: "", filename: "recon.md", mime: "application/octet-stream" })]),
+    mockedApi.listTaskArtifacts.mockResolvedValue(
+      mkArtifacts([mkArtifact({ label: "", filename: "recon.md", mime: "application/octet-stream" })]),
     );
     stubFetch({
       "/api/chat/attachment/att-old": {
@@ -273,8 +272,8 @@ describe("TaskArtifactVersionsModal", () => {
         created_by: "mira",
       }),
     ]);
-    mockedApi.getTask.mockResolvedValue(
-      mkTask([
+    mockedApi.listTaskArtifacts.mockResolvedValue(
+      mkArtifacts([
         mkArtifact({
           label: "",
           filename: "report.md",
@@ -305,8 +304,8 @@ describe("TaskArtifactVersionsModal", () => {
     mockedApi.listTaskArtifactVersions.mockResolvedValue([
       mkVersion({ label: "core.bin", filename: "" }),
     ]);
-    mockedApi.getTask.mockResolvedValue(
-      mkTask([mkArtifact({ label: "core.bin", filename: "core.bin", mime: "application/octet-stream" })]),
+    mockedApi.listTaskArtifacts.mockResolvedValue(
+      mkArtifacts([mkArtifact({ label: "core.bin", filename: "core.bin", mime: "application/octet-stream" })]),
     );
     const { cancel, readText } = stubFetch({
       "/api/chat/attachment/att-old": { mime: "application/octet-stream" },
@@ -323,8 +322,8 @@ describe("TaskArtifactVersionsModal", () => {
     mockedApi.listTaskArtifactVersions.mockResolvedValue([
       mkVersion({ kind: "link", url: "https://x/pr/1", filename: "", attachmentId: "" }),
     ]);
-    mockedApi.getTask.mockResolvedValue(
-      mkTask([
+    mockedApi.listTaskArtifacts.mockResolvedValue(
+      mkArtifacts([
         mkArtifact({
           kind: "link",
           url: "https://x/pr/2",
@@ -366,8 +365,8 @@ describe("TaskArtifactVersionsModal", () => {
     mockedApi.listTaskArtifactVersions.mockResolvedValue([
       mkVersion({ kind: "image", url: "/api/chat/attachment/att-shot1", filename: "shot1.png" }),
     ]);
-    mockedApi.getTask.mockResolvedValue(
-      mkTask([
+    mockedApi.listTaskArtifacts.mockResolvedValue(
+      mkArtifacts([
         mkArtifact({
           kind: "image",
           isImage: true,
@@ -399,7 +398,7 @@ describe("TaskArtifactVersionsModal", () => {
       mkVersion({ id: 2, url: "/api/chat/attachment/att-v2" }),
       mkVersion({ id: 1, url: "/api/chat/attachment/att-v1" }),
     ]);
-    mockedApi.getTask.mockResolvedValue(mkTask([mkArtifact({})]));
+    mockedApi.listTaskArtifacts.mockResolvedValue(mkArtifacts([mkArtifact({})]));
     stubFetch({
       "/api/chat/attachment/att-v2": { mime: "text/plain", text: "v2" },
       "/api/chat/attachment/att-v1": { mime: "text/plain", text: "v1" },
@@ -437,8 +436,8 @@ describe("TaskArtifactVersionsModal", () => {
     mockedApi.listTaskArtifactVersions.mockResolvedValue([
       mkVersion({ id: 2, label: "", filename: "report.md", url: "/api/chat/attachment/att-v2" }),
     ]);
-    mockedApi.getTask.mockResolvedValue(
-      mkTask([mkArtifact({ label: "", filename: "report-final.md" })]),
+    mockedApi.listTaskArtifacts.mockResolvedValue(
+      mkArtifacts([mkArtifact({ label: "", filename: "report-final.md" })]),
     );
     stubFetch({
       "/api/chat/attachment/att-v2": { mime: "text/plain", text: "old" },
@@ -455,7 +454,7 @@ describe("TaskArtifactVersionsModal", () => {
 
   it("says the version history could not be read rather than showing an empty list", async () => {
     mockedApi.listTaskArtifactVersions.mockRejectedValue(new Error("boom"));
-    mockedApi.getTask.mockResolvedValue(mkTask([mkArtifact({})]));
+    mockedApi.listTaskArtifacts.mockResolvedValue(mkArtifacts([mkArtifact({})]));
     stubFetch({});
     vi.spyOn(console, "warn").mockImplementation(() => {});
     openModal();
