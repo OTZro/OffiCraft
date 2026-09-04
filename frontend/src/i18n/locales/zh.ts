@@ -196,6 +196,13 @@ export const zh = {
     // 收起時的字面留著「備註」兩字是刻意的 —— 有備註的步驟與沒備註的步驟,
     // 在收起狀態下就靠這顆按鈕在不在分辨。
     stepNoteExpand: "展開備註",
+    // T-66:備註全文改成「點開才抓」(owner rc-4c8065fb30a5:「座艙改成點開才抓」)。
+    // 卡片上只有大小(note_size_chars),全文要打一次 get_task_step —— 所以按下去
+    // 到文字出現之間有一段真實的空窗,而且它會失敗。這兩句就是那兩個狀態:
+    // 沒有它們,抓失敗的 overlay 會是一片空白,讀起來像「這一步的備註是空的」,
+    // 而那正是卡片上的入口已經否定過的事(入口只在有備註時才畫)。
+    stepNoteLoading: "讀取備註中…",
+    stepNoteFailed: "讀取備註失敗,請關閉後再試一次。",
     // deps:「等 <任務編號>」chip 可多筆(mockup 樣式,owner 2026-07-13)
     blockedByLabel: "等",
     // T-1d82:dep 指向的任務查不到(已刪 / 壞 id)。保留原始 id(那是僅剩的線索),
@@ -285,6 +292,8 @@ export const zh = {
       close: "關閉產物",
       remove: "移除產物",
       removeConfirm: "從任務卡移除這個產物?(不會刪除檔案本身)",
+      loading: "載入產物中…",
+      loadFailed: "產物讀取失敗,請關掉再打開試試",
       downloadHint: "下載",
       openLinkHint: "開啟連結",
     },

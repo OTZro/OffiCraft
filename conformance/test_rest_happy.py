@@ -695,6 +695,24 @@ def _happy_task_step(ctx: HCtx) -> tuple[str, str]:
     return task_id, step_id
 
 
+_HAPPY_STEP_NOTE = "conf happy single-step note — 做到哪、下一步接什麼"
+
+
+def _happy_step_with_note(ctx: HCtx) -> str:
+    """A fresh task+step whose note has been WRITTEN through the real write
+    face, so the single-step read has something non-empty to prove it serves
+    (T-66). Reading back a blank note would pass against a handler that never
+    looked at the column."""
+    task_id, step_id = _happy_task_step(ctx)
+    r = ctx.client.post(
+        f"/api/tasks/{task_id}/steps/{step_id}/note",
+        json={"note": _HAPPY_STEP_NOTE},
+        headers=_auth(ctx.agent.token),
+    )
+    assert r.status_code == 200, f"happy note seed failed: {r.status_code} {r.text}"
+    return f"/api/tasks/{task_id}/steps/{step_id}"
+
+
 def _happy_closed_task(ctx: HCtx) -> str:
     """A fresh DONE task the happy agent executed (close-out targets are
     terminal-only). Task status is DERIVED (T-9ca5): a one-step plan reported
@@ -2073,6 +2091,23 @@ HAPPY: dict[str, Happy] = {
             and d["note"] == "conf happy note patch",
         ),
     ),
+    "GET /api/tasks/{task_id}/steps/{step_id}": Happy(
+        # T-66: the single-step read. The check is on the VALUE that came back,
+        # not on the shape: a note is written through the real write face first
+        # and this row asserts the same text comes out, plus the self-declared
+        # detail_level="full" that tells a caller this response is the whole
+        # step. A handler that answered the summary projection (no note) or
+        # forgot the marker cannot pass.
+        identity="agent",
+        path=_happy_step_with_note,
+        check=lambda _c, r: _expect(
+            r,
+            lambda d: d["detail_level"] == "full"
+            and d["note"] == _HAPPY_STEP_NOTE
+            and d["note_size_chars"] == len(_HAPPY_STEP_NOTE)
+            and d["note_cap_chars"] > 0,
+        ),
+    ),
     "POST /api/tasks/{task_id}/deps": Happy(
         identity="agent",
         path=lambda ctx: f"/api/tasks/{_happy_task(ctx)}/deps",
@@ -2116,6 +2151,27 @@ HAPPY: dict[str, Happy] = {
         path=lambda ctx: "/api/tasks/{}/artifact/{}".format(
             *_happy_task_artifact(ctx)),
         check=lambda _c, r: _expect(r, lambda d: d["artifact_count"] == 0),
+    ),
+    "GET /api/tasks/{task_id}/artifacts": Happy(
+        # T-66: the full-artifact read. The check is on the VALUES that came
+        # back, not on the shape — the artifact is pinned through the real write
+        # face first and this row asserts the same url/label/kind come out,
+        # plus the self-declared artifacts_detail_level="full" that tells a
+        # caller this response is the whole row. A handler that answered the
+        # id+label INDEX the task view carries (no url, no kind) cannot pass,
+        # and neither can one that forgot the marker.
+        identity="agent",
+        path=lambda ctx: "/api/tasks/{}/artifacts".format(
+            *_happy_task_artifact(ctx)),
+        check=lambda _c, r: _expect(
+            r,
+            lambda d: d["artifacts_detail_level"] == "full"
+            and len(d["artifacts"]) == 1
+            and d["artifacts"][0]["kind"] == "link"
+            and d["artifacts"][0]["url"] == "https://example.com/pr/1"
+            and d["artifacts"][0]["label"] == "conf PR"
+            and d["artifacts"][0]["created_ts"] > 0,
+        ),
     ),
     # ── outsource panel (M3) ─────────────────────────────────────────────────
     "GET /api/outsource-workers": Happy(

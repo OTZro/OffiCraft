@@ -167,6 +167,13 @@ export const en: Dict = {
     // the collapsed label on purpose — it is the only thing that tells a step
     // WITH a note apart from one without while both are closed.
     stepNoteExpand: "Show note",
+    // T-66: the note text is fetched ON OPEN (owner rc-4c8065fb30a5). The card
+    // carries only its size, so there is a real gap between the click and the
+    // text — and the fetch can fail. Without these two the failed overlay is
+    // blank, which reads as "this step's note is empty" — exactly what the
+    // entry control already denied by being there at all.
+    stepNoteLoading: "Loading note…",
+    stepNoteFailed: "Could not load the note. Close and try again.",
     blockedByLabel: "Waiting on",
     // T-1d82: a dep row whose task cannot be resolved (deleted / bad id). Keeps
     // the raw id — it is the only handle left — but says plainly that there is
@@ -249,6 +256,8 @@ export const en: Dict = {
       close: "Close artifacts",
       remove: "Remove artifact",
       removeConfirm: "Remove this artifact from the task card? (The file itself is kept.)",
+      loading: "Loading artifacts…",
+      loadFailed: "Could not load artifacts — close and reopen to retry",
       downloadHint: "Download",
       openLinkHint: "Open link",
     },
