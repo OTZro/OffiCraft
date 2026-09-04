@@ -79,6 +79,27 @@
   {
     "auth": "gated",
     "mcp_tool": null,
+    "method": "GET",
+    "path": "/api/auth/signing-keys",
+    "requires": "owner"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": null,
+    "method": "POST",
+    "path": "/api/auth/signing-keys/rotate",
+    "requires": "owner"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": null,
+    "method": "POST",
+    "path": "/api/auth/signing-keys/{key_id}/remove",
+    "requires": "owner"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": null,
     "method": "POST",
     "path": "/api/auth/mfa/enroll",
     "requires": "owner"
@@ -862,6 +883,13 @@
   },
   {
     "auth": "gated",
+    "mcp_tool": "get_task_step",
+    "method": "GET",
+    "path": "/api/tasks/{task_id}/steps/{step_id}",
+    "requires": "machine"
+  },
+  {
+    "auth": "gated",
     "mcp_tool": "set_task_deps",
     "method": "POST",
     "path": "/api/tasks/{task_id}/deps",
@@ -901,6 +929,13 @@
     "method": "DELETE",
     "path": "/api/tasks/{task_id}/artifact/{artifact_id}",
     "requires": "agent"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": "list_task_artifacts",
+    "method": "GET",
+    "path": "/api/tasks/{task_id}/artifacts",
+    "requires": "machine"
   },
   {
     "auth": "gated",

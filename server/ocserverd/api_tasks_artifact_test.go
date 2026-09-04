@@ -33,7 +33,21 @@ func removeArtifact(t *testing.T, api *apiServer, taskID, artID, sub, scope stri
 	return rec
 }
 
-// getTaskView reads the full task view (folds the artifact set).
+// getTaskArtifacts reads one task's artifacts IN FULL through the T-66 read
+// face (GET /api/tasks/{task_id}/artifacts). The full row stopped riding
+// get_task on owner c-cd063427fb2f, so a metadata assertion belongs here.
+func getTaskArtifacts(t *testing.T, api *apiServer, taskID string) taskArtifactListDTO {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	api.HandleListTaskArtifactsApiTasksTaskIdArtifactsGet(rec,
+		taskReq(t, "GET", "/api/tasks/"+taskID+"/artifacts", nil, "owner", "owner"), taskID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list task artifacts: %d %s", rec.Code, rec.Body.String())
+	}
+	return decodeBody[taskArtifactListDTO](t, rec)
+}
+
+// getTaskView reads the full task view (folds the artifact INDEX since T-66).
 func getTaskView(t *testing.T, api *apiServer, taskID string) taskDTO {
 	t.Helper()
 	rec := httptest.NewRecorder()
@@ -106,10 +120,16 @@ func TestAddLinkArtifact(t *testing.T) {
 	if len(view.Artifacts) != 1 {
 		t.Fatalf("expected 1 artifact, got %+v", view.Artifacts)
 	}
-	a := view.Artifacts[0]
-	if a.ID != receipt.ArtifactID {
-		t.Fatalf("receipt must name the artifact it pinned: %q vs %q", receipt.ArtifactID, a.ID)
+	if view.Artifacts[0].ID != receipt.ArtifactID {
+		t.Fatalf("receipt must name the artifact it pinned: %q vs %q",
+			receipt.ArtifactID, view.Artifacts[0].ID)
 	}
+	// The METADATA lives on the T-66 artifacts read, not on the task view.
+	full := getTaskArtifacts(t, api, task.ID)
+	if len(full.Artifacts) != 1 {
+		t.Fatalf("expected 1 full artifact, got %+v", full.Artifacts)
+	}
+	a := full.Artifacts[0]
 	if a.Kind != "link" || a.URL != "https://github.com/x/y/pull/123" ||
 		a.Label != "PR #123" || a.AttachmentID != "" || a.IsImage {
 		t.Fatalf("link artifact wrong shape: %+v", a)
@@ -144,11 +164,11 @@ func TestAddFileAndImageArtifactResolveBlobMetadata(t *testing.T) {
 		"m-exec", "agent"); rec.Code != http.StatusOK {
 		t.Fatalf("add file: %d %s", rec.Code, rec.Body.String())
 	}
-	view := getTaskView(t, api, task.ID)
-	if len(view.Artifacts) != 2 {
-		t.Fatalf("expected 2 artifacts, got %+v", view.Artifacts)
+	full := getTaskArtifacts(t, api, task.ID)
+	if len(full.Artifacts) != 2 {
+		t.Fatalf("expected 2 artifacts, got %+v", full.Artifacts)
 	}
-	img, file := view.Artifacts[0], view.Artifacts[1]
+	img, file := full.Artifacts[0], full.Artifacts[1]
 	if img.Kind != "image" || !img.IsImage || img.Mime != "image/png" ||
 		img.Filename != "diagram.png" || img.URL != "/api/chat/attachment/att-img1" {
 		t.Fatalf("image artifact metadata wrong: %+v", img)

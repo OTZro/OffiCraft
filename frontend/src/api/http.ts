@@ -30,6 +30,7 @@ import type {
   VersionView,
   ReleaseCheckView,
   BackupHealthView,
+  SigningKeyView,
   AuthStatusView,
   MfaEnrollView,
   MfaStateView,
@@ -83,6 +84,8 @@ import type {
   OutsourceWorkerView,
   TaskTypeView,
   TaskCountView,
+  TaskStepDetailView,
+  TaskArtifactView,
   TaskManualSummaryView,
   TaskManualView,
   TaskManualPatch,
@@ -113,6 +116,7 @@ import {
   toVersion,
   toReleaseCheck,
   toBackupHealth,
+  toSigningKeys,
   toGlobalContext,
   toBootDoc,
   toDocumentHistory,
@@ -133,6 +137,8 @@ import {
   toServerSettings,
   toTask,
   toTaskListItem,
+  toTaskStepDetail,
+  toTaskArtifact,
   toOutsourceWorker,
   toTaskType,
   toTaskManual,
@@ -1418,8 +1424,9 @@ export const httpApi: Api = {
 
   async getChatAttachmentShareLink(attachmentId: string): Promise<string> {
     // GET /api/chat/attachments/{attachment_id}/share-link -> {url}: the
-    // blob's serve path + its permanent ?sig= HMAC credential (grants reading
-    // exactly that one blob; no expiry). The caller absolutizes with the page
+    // blob's serve path + its ?sig= HMAC credential (grants reading exactly
+    // that one blob; no expiry, but voided when the signing key it was made
+    // under leaves the ring — T-62). The caller absolutizes with the page
     // origin — the server never knows its public host.
     const wire = unwrap(
       await client.GET("/api/chat/attachments/{attachment_id}/share-link", {
@@ -1651,6 +1658,34 @@ export const httpApi: Api = {
       }),
     );
     return toTask(wire);
+  },
+
+  async getTaskStep(taskId: string, stepId: string): Promise<TaskStepDetailView> {
+    // GET /api/tasks/{task_id}/steps/{step_id} -> TaskStepDetailDTO (T-66).
+    // The ONE read that carries a step note's text: getTask reports each step's
+    // note_size_chars and stopped carrying the note itself, so the card opens
+    // this on demand. A step that belongs to another task 404s through the
+    // client middleware as an ApiError.
+    const wire = unwrap(
+      await client.GET("/api/tasks/{task_id}/steps/{step_id}", {
+        params: { path: { task_id: taskId, step_id: stepId } },
+      }),
+    );
+    return toTaskStepDetail(wire);
+  },
+
+  async listTaskArtifacts(taskId: string): Promise<TaskArtifactView[]> {
+    // GET /api/tasks/{task_id}/artifacts -> TaskArtifactListDTO (T-66). The ONE
+    // read that carries an artifact's url/filename/mime/kind/is_image: getTask
+    // carries an id+label INDEX and stopped carrying the rest, so anything that
+    // DRAWS an artifact opens this. One call answers the whole ticket; an
+    // unknown task 404s through the client middleware as an ApiError.
+    const wire = unwrap(
+      await client.GET("/api/tasks/{task_id}/artifacts", {
+        params: { path: { task_id: taskId } },
+      }),
+    );
+    return (wire.artifacts ?? []).map(toTaskArtifact);
   },
 
   async getTaskCount(): Promise<TaskCountView> {
@@ -2192,6 +2227,31 @@ export const httpApi: Api = {
     // app-wide, and monitoring re-fetches on every telemetry event.
     const wire = unwrap(await client.GET("/api/backup-health"));
     return toBackupHealth(wire);
+  },
+
+  async getSigningKeys(): Promise<SigningKeyView[]> {
+    // GET /api/auth/signing-keys -> SigningKeysDTO (T-62). Owner-gated and off
+    // the MCP surface: it describes the key that authenticates every caller.
+    const wire = unwrap(await client.GET("/api/auth/signing-keys"));
+    return toSigningKeys(wire);
+  },
+
+  async rotateSigningKey(): Promise<SigningKeyView[]> {
+    // POST /api/auth/signing-keys/rotate -> the ring AFTER the rotation.
+    const wire = unwrap(await client.POST("/api/auth/signing-keys/rotate"));
+    return toSigningKeys(wire);
+  },
+
+  async removeSigningKey(keyId: string): Promise<SigningKeyView[]> {
+    // POST /api/auth/signing-keys/{key_id}/remove -> the ring AFTER the
+    // removal. 409 when the key is still signing, 404 when the id is unknown;
+    // both surface as a rejected promise the card renders as its own message.
+    const wire = unwrap(
+      await client.POST("/api/auth/signing-keys/{key_id}/remove", {
+        params: { path: { key_id: keyId } },
+      }),
+    );
+    return toSigningKeys(wire);
   },
 
   async getAuthStatus(): Promise<AuthStatusView> {

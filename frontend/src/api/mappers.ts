@@ -22,6 +22,7 @@ import type {
   VersionView,
   ReleaseCheckView,
   BackupHealthView,
+  SigningKeyView,
   BackupHealthStatus,
   BackupHealthCode,
   GlobalContextView,
@@ -58,6 +59,7 @@ import type {
   WireVersion,
   WireReleaseCheck,
   WireBackupHealth,
+  WireSigningKeys,
   WireGlobalContext,
   WireBootDoc,
   WireDocumentHistory,
@@ -86,7 +88,9 @@ import type {
   WireTaskListItem,
   WireTaskDepRef,
   WireTaskStep,
+  WireTaskStepDetail,
   WireTaskArtifact,
+  WireTaskArtifactRef,
   WireOutsourceWorker,
   WireTaskManual,
   WireTaskManualListItem,
@@ -111,7 +115,9 @@ import type {
   TaskView,
   TaskDepRefView,
   TaskStepView,
+  TaskStepDetailView,
   TaskArtifactView,
+  TaskArtifactRefView,
   OutsourceWorkerView,
   TaskTypeView,
   TaskManualSummaryView,
@@ -469,9 +475,14 @@ export function toTaskStep(w: WireTaskStep): TaskStepView {
     // One-line reason while the step sits in waiting_external; "" otherwise
     // (T-9ca5). Honest passthrough.
     waitingReason: w.waiting_reason ?? "",
-    // The step's working note (T-cc3e) — bound to no status, unlike
-    // waitingReason above. Honest passthrough.
-    note: w.note ?? "",
+    // 🔴 The note TEXT is not here, and it is not here on the WIRE either
+    // (T-66, owner rc-4c8065fb30a5). What the task view carries is its SIZE,
+    // and that number is the whole basis of the cockpit's 備註 entry: > 0 means
+    // there is something to open, 0 means the step genuinely has none. The text
+    // is fetched on open through `getTaskStep`. Honest passthrough of an
+    // additive-optional wire field, so an old payload reads as 0 rather than
+    // fabricating an entry.
+    noteSizeChars: w.note_size_chars ?? 0,
     // Read-time join the server computes (`reply_card_status`): the bound card's
     // live status for the card-bearing step, "" otherwise. Closed set only, else
     // honest null.
@@ -485,6 +496,21 @@ export function toTaskStep(w: WireTaskStep): TaskStepView {
     orderIdx: w.order_idx,
     startedTs: w.started_ts ?? 0,
     finishedTs: w.finished_ts ?? 0,
+  };
+}
+
+/** Map one wire SINGLE step → `TaskStepDetailView` (T-66) — the response of
+ * `get_task_step`, the only read that serves a step note's text. Honest
+ * passthrough; `detailLevel` is carried across rather than dropped, because it
+ * is the payload's own statement that this is the full step and not the task
+ * view's summary row. */
+export function toTaskStepDetail(w: WireTaskStepDetail): TaskStepDetailView {
+  return {
+    ...toTaskStep(w),
+    detailLevel: w.detail_level,
+    note: w.note,
+    noteSizeChars: w.note_size_chars,
+    noteCapChars: w.note_cap_chars,
   };
 }
 
@@ -509,6 +535,16 @@ export function toTaskArtifact(w: WireTaskArtifact): TaskArtifactView {
     createdTs: w.created_ts ?? 0,
     createdBy: w.created_by ?? "",
   };
+}
+
+/** Map one wire artifact INDEX row → `TaskArtifactRefView` (T-66) — the two
+ * fields a task response carries per deliverable since owner c-cd063427fb2f.
+ * Honest passthrough: an artifact pinned without a label maps to "", and this
+ * mapper does NOT invent one from a filename or a url, because it has neither.
+ * The renderer decides what a nameless artifact looks like, on the full row it
+ * fetched through `listTaskArtifacts`. */
+export function toTaskArtifactRef(w: WireTaskArtifactRef): TaskArtifactRefView {
+  return { id: w.id, label: w.label ?? "" };
 }
 
 /** Map one wire dep ref → `TaskDepRefView` (T-a3e4). Honest passthrough: an
@@ -561,7 +597,9 @@ export function toTask(w: WireTask): TaskView {
       .sort((a, b) => a.orderIdx - b.orderIdx),
     // Full task carries the resolved set; count kept == length so a hydrated
     // card keeps the same 「產物 N」 badge as its light-list frame.
-    artifacts: (w.artifacts ?? []).map(toTaskArtifact),
+    // INDEX rows (T-66): id + label. The full rows come from
+    // `listTaskArtifacts`, not from here — see TaskView.artifacts.
+    artifacts: (w.artifacts ?? []).map(toTaskArtifactRef),
     artifactCount: (w.artifacts ?? []).length,
   };
 }
@@ -1207,6 +1245,27 @@ export function toReleaseCheck(w: WireReleaseCheck): ReleaseCheckView {
  * The nullable numbers coalesce to null (a defaulted-away wire field arrives as
  * `undefined`); nothing here manufactures a timestamp or an age.
  */
+/**
+ * WireSigningKeys → SigningKeyView[] (T-62), preserving the server's order
+ * (oldest first).
+ *
+ * The one narrowing: `created_ts` of 0 becomes null. Zero is how the wire says
+ * "this key has been here since before the ring existed and its creation time
+ * was never recorded" — passed through as a number it would render as January
+ * 1970, which is not an unknown date but a WRONG one. Narrowing it here means
+ * no component has to remember the convention.
+ *
+ * 🔴 Nothing is derived from a key here, and there is nothing to derive from:
+ * the wire carries no key material at all.
+ */
+export function toSigningKeys(w: WireSigningKeys): SigningKeyView[] {
+  return w.keys.map((k) => ({
+    keyId: k.key_id,
+    createdTs: k.created_ts === 0 ? null : k.created_ts,
+    isSigning: k.is_signing,
+  }));
+}
+
 export function toBackupHealth(w: WireBackupHealth): BackupHealthView {
   const status: BackupHealthStatus =
     w.status === "healthy" || w.status === "unhealthy" ? w.status : "unknown";

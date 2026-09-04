@@ -1030,7 +1030,7 @@ func (s *apiServer) buildStartFrame(m Member) ([]byte, bool) {
 	if m.RosterStatus != RosterStatusActive {
 		return nil, false
 	}
-	if len(s.secret) == 0 {
+	if len(s.keys.signingSecret()) == 0 {
 		return nil, false
 	}
 	boot, err := s.buildBootContext("", &m)
@@ -1286,6 +1286,11 @@ func (s *apiServer) resolveEmptyRuntimeForPlacement(m *Member, warden string) {
 // decision whose state is NOT advanced, so the next tick retries — the
 // producer never records a command it did not deliver.
 func (s *apiServer) reconcileOne(m Member, st reconcileState, now float64) reconcileDecision {
+	// 下線 → 重啟, spent (T-14 項目 7). BEFORE the observation is built, because
+	// flipping desired_state back to online is what makes this tick take the
+	// decideUp arm and START the member — the same tick the stop converged on,
+	// not the one after it. A no-op for every member with nothing queued.
+	s.consumeRestartAfterStop(&m, now)
 	obs := memberObservation{
 		MemberID:       m.ID,
 		Desired:        parseDesired(m.DesiredState),
@@ -1592,8 +1597,8 @@ func stampOpReceipt(lastOp *string, lastOpOK **bool, lastOpLog, lastOpReason *st
 // of persisting. The receipt itself is stampOpReceipt's; this is the staff shell.
 //
 // ⚠️ IT NO LONGER MAKES THE EXPLANATION AND THE CHANGE ONE WRITE (T-55), which
-// is what this comment used to promise. The five receipt columns left
-// PutMember's DO UPDATE SET, so a caller's whole-row write carries the change
+// is what this comment used to promise. The five receipt columns became
+// insert-only, so a caller's whole-row write carries the change
 // and a separate dal.SetMemberOpReceipt carries the explanation. STAMPING ALONE
 // STORES NOTHING — a caller that forgets the second write leaves a receipt that
 // exists only in memory, and nothing goes red.
@@ -2782,6 +2787,17 @@ func (s *apiServer) runReconcileTick(now float64) {
 	}
 	var members []Member
 	for _, m := range all {
+		// WHICH HALF drives this row (lifecycle_roster.go), asked BEFORE the
+		// entry filter — "is this mine to decide" comes before "should it
+		// exist". 🔴 NOT a no-op any more: ListMembers' `WHERE kind !=
+		// 'outsource'` is GONE (T-14 項目 6), so `all` genuinely contains
+		// contractor rows and THIS LINE is the only thing keeping them out of the
+		// member FSM. Deleting it re-creates the measured double-drive recorded
+		// on lifecycleTickDriverFor: one row taking a `start` from both halves in
+		// the same tick.
+		if lifecycleTickDriverFor(m) != driverReconcile {
+			continue
+		}
 		// THE entry filter (lifecycle_roster.go). It used to be written out here
 		// by hand, and again in reconcileMemberNow, and a third time — in its
 		// outsource dialect — in runOutsourceTick. One question, one answer.
@@ -2836,6 +2852,26 @@ func (s *apiServer) reconcileMemberNow(memberID string) reconcileDecision {
 	defer s.reconcileMu.Unlock()
 	m, err := s.dal.GetMember(memberID)
 	if err != nil || m == nil {
+		return reconcileDecision{}
+	}
+	// WHICH HALF drives this row — the SAME question runReconcileTick asks at
+	// the head of its candidate loop, asked here too so that the answer is a
+	// property of THIS FUNCTION rather than a coincidence in its callers.
+	//
+	// This door reads GetMember, not ListMembers, so T-14 項目 6 did not widen
+	// it — but it never narrowed it either: every one of the seven non-test
+	// callers happens to hand it a staff row (api_members ×5 via
+	// resolveMember(…, staffOnly), api_machines via resolveMachine which demands
+	// kind==warden, onboarding with the seed assistant's own id), so the guard
+	// that keeps a contractor out of the member FSM on the EVENT-DRIVEN path
+	// lived in seven argument lists across two other files. That is not a
+	// no-op that can be deleted: it is a no-op that can be UNDONE by a future
+	// caller passing anyMember — and api_members.go:790 / api_machines.go:1280
+	// already do exactly that elsewhere, so the precedent for widening exists.
+	// With the clause gone, a contractor reaching here would take a `start`
+	// from the member FSM while the outsource half takes its own — the measured
+	// double-drive recorded on lifecycleTickDriverFor (lifecycle_roster.go).
+	if lifecycleTickDriverFor(*m) != driverReconcile {
 		return reconcileDecision{}
 	}
 	// THE entry filter, the same one the cadence asks (lifecycle_roster.go).

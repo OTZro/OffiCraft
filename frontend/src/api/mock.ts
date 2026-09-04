@@ -11,6 +11,7 @@ import type {
   VersionView,
   ReleaseCheckView,
   BackupHealthView,
+  SigningKeyView,
   AuthStatusView,
   MfaEnrollView,
   MfaStateView,
@@ -71,6 +72,8 @@ import type {
   OutsourceWorkerView,
   TaskTypeView,
   TaskCountView,
+  TaskStepDetailView,
+  TaskArtifactView,
   TaskManualSummaryView,
   TaskManualView,
   TaskManualPatch,
@@ -94,6 +97,7 @@ import type {
   WireMonSession,
   WireVersion,
   WireBackupHealth,
+  WireSigningKeys,
   WireGlobalContext,
   WireBootDoc,
   WireDocumentHistory,
@@ -114,6 +118,7 @@ import {
   toVersion,
   toReleaseCheck,
   toBackupHealth,
+  toSigningKeys,
   toGlobalContext,
   toBootDoc,
   toDocumentHistory,
@@ -289,9 +294,11 @@ const MOCK_WIRE_MEMBERS: WireMember[] = [
     schema_version: 2,
   },
   // A LIVE outsource worker, carried in the roster fixture because the roster
-  // ENDPOINT carries one: GET /api/members answers ListMembersIncludingOutsource
-  // (the P7 convergence), so a cockpit that runs against a mock with no `ow-`
-  // row is running against a roster the server never serves.
+  // ENDPOINT carries one: GET /api/members answers over the WHOLE member table,
+  // contractors included (the P7 convergence; since T-14 項目 6 that is the only
+  // roster query there is — `dal.ListMembers`, with no kind clause), so a
+  // cockpit that runs against a mock with no `ow-` row is running against a
+  // roster the server never serves.
   //
   // 🔴 WHAT ITS ABSENCE COST (T-26): the roster hands an `ow-` id to the
   // held-id mirror, a chat delta naming that one id takes the per-item fast
@@ -867,7 +874,16 @@ let replyCards: ReplyCard[] = [];
 // §5.1) — the owner creates every type. Tests inject via __injectMockTask /
 // __injectMockOutsourceWorker / __injectMockTaskType to exercise the
 // list / filter / terminate / priority / message / manual seams.
-let tasks: TaskView[] = [];
+// 🔴 THE STORE HOLDS EACH ARTIFACT WHOLE, which is why the row type is not
+// plain `TaskView`. T-66 narrowed `TaskView.artifacts` to an id+label INDEX,
+// but an index is a READ SHAPE, not what a store keeps: the server's store
+// holds the full deliverable and its two reads project from it (`get_task` →
+// the index, `list_task_artifacts` → the full rows). A mock whose store held
+// only the index could not answer the second read at all — which is exactly
+// how it came to `return []` and tell a reader 「還沒有產物」 about a task whose
+// badge had just said N.
+export type MockTaskRow = Omit<TaskView, "artifacts"> & { artifacts?: TaskArtifactView[] };
+let tasks: MockTaskRow[] = [];
 let outsourceWorkers: OutsourceWorkerView[] = [];
 let taskManuals: TaskManualView[] = [];
 
@@ -1177,7 +1193,7 @@ function findTaskManual(typeKey: string): TaskManualView {
   return m;
 }
 
-function findTask(id: string): TaskView {
+function findTask(id: string): MockTaskRow {
   const t = tasks.find((x) => x.id === id);
   if (!t) {
     throw mockApiError(
@@ -2355,6 +2371,21 @@ let relocationPendingNext = false;
 // has no live agent to wind down, so this is staged rather than derived — same
 // shape as relocationPendingNext, and equally sticky.
 let relocationDeferredNext = false;
+
+// The id shape is PRODUCTION'S, not a short stand-in: the server mints
+// "k-" + 16 hex (keyring.go newKeyID). A mock that models a narrower row than
+// the real one is a mock that hides layout defects from every guard mounted on
+// it — which is exactly what happened the first time this fixture was written
+// with "k-mock0". `created_ts: 0` is likewise the real convention, not a
+// placeholder: it is how an install that predates the ring reports a key whose
+// creation time was never recorded, so the card's "unknown" branch is exercised
+// by default.
+const MOCK_WIRE_SIGNING_KEYS: WireSigningKeys["keys"] = [
+  { key_id: "k-a1b2c3d4e5f60718", created_ts: 0, is_signing: true },
+];
+let mockSigningKeys: WireSigningKeys["keys"] = structuredClone(
+  MOCK_WIRE_SIGNING_KEYS,
+);
 
 export const mockApi: Api = {
   async listMembers(_opts?: { light?: boolean }): Promise<Member[]> {
@@ -3567,10 +3598,75 @@ export const mockApi: Api = {
         ...st,
         replyCardStatus: mockReplyCardStatusOf(st.replyCardId || null),
       })),
-      // Full task carries the resolved set; count kept == length (server parity).
-      artifacts: task.artifacts ?? [],
+      // Full task carries the artifact INDEX (T-66: id + label per deliverable);
+      // count kept == length (server parity). The full rows are listTaskArtifacts.
+      //
+      // 🔴 PROJECTED, not passed through. The store row holds each artifact
+      // whole, and a `TaskArtifactView` is structurally a `TaskArtifactRefView`
+      // too — so handing the stored row straight back type-checks and would
+      // quietly make mock mode the ONE place a task read carries url / mime /
+      // filename. The cockpit would then render from the task read here and
+      // 404 against a real server. The mapper is the guard, so the mock has to
+      // narrow exactly like it does.
+      artifacts: (task.artifacts ?? []).map((a) => ({ id: a.id, label: a.label })),
       artifactCount: (task.artifacts ?? []).length,
     };
+  },
+
+  async getTaskStep(taskId: string, stepId: string): Promise<TaskStepDetailView> {
+    // Mirrors GET /api/tasks/{task_id}/steps/{step_id} (T-66): ONE step, note
+    // text included, and NOTHING of the task.
+    //
+    // 🔴 A step that is not on the named task is a NOT-FOUND here too, not the
+    // other task's step. The server answers 404 for it, and a mock that happily
+    // resolved a step id against the whole store would let a cockpit bug that
+    // mixes task and step ids look correct in mock mode and 404 only in front
+    // of a real server.
+    //
+    // The mock task fixtures carry no step notes (they never have), so `note`
+    // is "" and `noteSizeChars` 0 — which is why no 備註 entry renders in mock
+    // mode. That is the honest projection of the fixtures, not a stub: a mock
+    // that invented note text would make the fetch-on-open path look exercised
+    // when the fixtures say there is nothing to open.
+    const task = findTask(taskId);
+    const step = task.steps.find((s) => s.id === stepId);
+    if (!step) {
+      throw mockApiError(
+        `http 404 for /api/tasks/${taskId}/steps/${stepId}`,
+        404,
+        `step '${stepId}' not found`
+      );
+    }
+    return {
+      ...structuredClone(step),
+      replyCardStatus: mockReplyCardStatusOf(step.replyCardId || null),
+      detailLevel: "full",
+      note: "",
+      noteSizeChars: 0,
+      noteCapChars: 4000,
+    };
+  },
+
+  async listTaskArtifacts(taskId: string): Promise<TaskArtifactView[]> {
+    // Mirrors GET /api/tasks/{task_id}/artifacts (T-66): the WHOLE ticket's
+    // deliverables, each in full, in one call.
+    //
+    // 🔴 THE ROWS COME OFF THE TASK, and a `[]` here would be a lie the reader
+    // can see. This used to `return []` under a comment claiming the mock
+    // fixtures never carry artifacts — false in this very file: `getTask`
+    // reads `task.artifacts`, `removeTaskArtifact` writes it, and
+    // `__injectMockTask` lands whole sets. The visible effect of the lie was
+    // the one thing TaskArtifactsPopover says it must never do: the badge
+    // saying 「產物 N」 over a panel saying 「還沒有產物」.
+    //
+    // Deliberately UNFILTERED and unpaged: the server's handler answers the
+    // whole ticket's set in one call, which is the shape the panel opens onto.
+    // Cloned so a caller mutating a row cannot reach into the store.
+    //
+    // `findTask` still runs, so an unknown task id is a not-found here exactly
+    // as it is against a real server — never a silent [].
+    const task = findTask(taskId);
+    return structuredClone(task.artifacts ?? []);
   },
 
   async getTaskCount(): Promise<TaskCountView> {
@@ -4695,6 +4791,49 @@ export const mockApi: Api = {
     wire.newest_backup_ts = now - (wire.newest_backup_age_secs ?? 0);
     wire.checked_ts = now;
     return toBackupHealth(wire);
+  },
+
+  async getSigningKeys(): Promise<SigningKeyView[]> {
+    return toSigningKeys({ keys: mockSigningKeys });
+  },
+
+  async rotateSigningKey(): Promise<SigningKeyView[]> {
+    // A real rotation: ADD a key, move the signing mark, drop nothing — so the
+    // mock cannot make the card look right while the server behaviour it
+    // stands in for would be wrong.
+    for (const k of mockSigningKeys) k.is_signing = false;
+    mockSigningKeys.push({
+      key_id: `k-${mockSigningKeys.length}${"0123456789abcdef".repeat(2).slice(0, 15)}`,
+      created_ts: Math.floor(Date.now() / 1000),
+      is_signing: true,
+    });
+    return toSigningKeys({ keys: mockSigningKeys });
+  },
+
+  async removeSigningKey(keyId: string): Promise<SigningKeyView[]> {
+    const target = mockSigningKeys.find((k) => k.key_id === keyId);
+    // 🔴 THE SAME ENVELOPE THE WIRE RETURNS, not a plain Error. A mock that
+    // throws bare prose makes `e.message` carry the reason, so a caller reading
+    // the wrong field looks correct in mock mode and shows `http 409 for POST …`
+    // against the real server. That is exactly what happened here, and
+    // frontend/.claude/rules/data-layer.md requires this envelope for the reason
+    // this comment exists.
+    if (!target) {
+      throw mockApiError(
+        `http 404 for POST /api/auth/signing-keys/${keyId}/remove`,
+        404,
+        `no signing key '${keyId}'`,
+      );
+    }
+    if (target.is_signing) {
+      throw mockApiError(
+        `http 409 for POST /api/auth/signing-keys/${keyId}/remove`,
+        409,
+        `key '${keyId}' is the one currently signing and cannot be removed — rotate first, then remove it`,
+      );
+    }
+    mockSigningKeys = mockSigningKeys.filter((k) => k.key_id !== keyId);
+    return toSigningKeys({ keys: mockSigningKeys });
   },
 
   async getAuthStatus(): Promise<AuthStatusView> {
@@ -5968,6 +6107,10 @@ export const mockApi: Api = {
 
 // Reset hook for tests / hot-reload determinism (not used by the UI).
 export function __resetMock(): void {
+  // The ring is MUTATED by rotate/remove, so it belongs here: without this a
+  // test that rotates leaves a two-key ring for whatever runs next, and the
+  // failure lands on the innocent test.
+  mockSigningKeys = structuredClone(MOCK_WIRE_SIGNING_KEYS);
   wireMembers = structuredClone(MOCK_WIRE_MEMBERS);
   wireMonitoring = structuredClone(MOCK_WIRE_MONITORING);
   mockBinStatus.clear();
@@ -6034,8 +6177,14 @@ export function __injectMockReplyCard(card: ReplyCard): void {
 // create_task would arrive server-side. The mock UI itself never fabricates a
 // task (see the tasks note) — this exists so tests can exercise the tasks
 // page's list / filter / terminate / priority / message seams.
-export function __injectMockTask(task: TaskView): void {
-  tasks.push(task);
+export function __injectMockTask(task: TaskView | MockTaskRow): void {
+  // A plain `TaskView` is accepted because most callers only care about the
+  // list / filter / terminate seams and pass no artifacts at all. The cast is
+  // the one place the two artifact shapes meet: a caller that DOES pass rows is
+  // passing STORE rows (whole deliverables), which is what `listTaskArtifacts`
+  // hands back — pass index-only rows here and that read answers index-only
+  // rows, which is the honest consequence of what was put in.
+  tasks.push(task as MockTaskRow);
   emitTopic("task");
 }
 

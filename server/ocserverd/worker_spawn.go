@@ -215,7 +215,7 @@ func (s *apiServer) resolveWorkerPlacement(w OutsourceWorker, preferred string, 
 		return "", placementReasonUnavailable + ": machine '" + preferred + "' " + detail +
 			"; no other machine is substituted"
 	}
-	members, err := s.dal.ListMembersIncludingOutsource()
+	members, err := s.dal.ListMembers()
 	if err != nil {
 		return unavailable("could not be looked up (server error)")
 	}
@@ -781,7 +781,7 @@ func (s *apiServer) notifyWorkerSpawn(w OutsourceWorker, now float64) bool {
 			": could not assemble the worker's boot context: "+err.Error(), now)
 		return false
 	}
-	if len(s.secret) == 0 {
+	if len(s.keys.signingSecret()) == 0 {
 		s.stampWorkerPlacementBlocked(&w, spawnReasonNoSecret+
 			": the server has no JWT signing secret, so no worker token can be minted", now)
 		return false
@@ -1557,9 +1557,33 @@ func (s *apiServer) relocateWorkerNow(w OutsourceWorker) ownerOpOutcome {
 // Callers hold s.outsourceMu.
 func (s *apiServer) respawnWorkerForOwnerOp(w OutsourceWorker, op string) ownerOpOutcome {
 	if w.DesiredState == DesiredStateOffline {
+		// 下線 → 重啟 (T-65 包②, owner 2026-08-30 rc-bc1b029a3aa2). The held-down
+		// arm no longer merely records a refusal: on a worker that HAS been asked
+		// to stop, the owner's verb is queued behind the stop and spent when it
+		// converges. Nothing is dispatched here either way — 「沿用強硬下線規則」 —
+		// so the branch this sits in is unchanged; only what it writes is.
+		//
+		// 🔴 重啟 CANNOT REACH THIS ARM, which is what keeps the queue from
+		// re-arming itself: its handler sets DesiredState = online on the row it
+		// passes here BY VALUE (the argument this line reads), so the only two ops
+		// that can queue an intent are 改機器 and 換 model — both 重啟 verbs.
+		//
+		// ⚠️ 換 model REACHES THIS ARM ONLY WHILE THE SESSION IS STILL UP. Its
+		// handler gates the call on `Status == active && hub.IsOnline`, so a
+		// CONVERGED stop skips the funnel entirely and queues through its own
+		// branch in api_outsource.go. Both are needed; neither covers the other.
+		now := nowSecs()
+		if s.queueWorkerRestartAfterStop(&w, op, now) {
+			if err := s.persistWorkerRestartIntent(w); err != nil {
+				outsourceLog("spawn %s: queued restart-after-stop persist failed: %v",
+					w.ID, err)
+			}
+			s.publishOutsourceWorker(w, triggerServer)
+			return ownerOpOutcome{HeldDown: true}
+		}
 		s.stampWorkerPlacementBlocked(&w, spawnReasonHeldDown+": the "+op+" was saved, "+
 			"but nothing was started — this worker is stopped; 重啟 it when you want it "+
-			"to run", nowSecs())
+			"to run", now)
 		return ownerOpOutcome{HeldDown: true}
 	}
 	// T-98f4 rule 2 — 「我建議所有換手都可以給他機會收尾」. All three verbs used to
@@ -2552,7 +2576,7 @@ func (s *apiServer) reclaimWorkerSession(w OutsourceWorker) {
 	targets := []string{}
 	if t := s.workerSpawnTarget[w.ID]; t != "" && s.hub.IsOnline(t) {
 		targets = append(targets, t)
-	} else if members, err := s.dal.ListMembersIncludingOutsource(); err == nil {
+	} else if members, err := s.dal.ListMembers(); err == nil {
 		for _, m := range members {
 			if m.Kind == KindWarden && m.RosterStatus == RosterStatusActive &&
 				s.hub.IsOnline(m.ID) {

@@ -4,10 +4,17 @@ package main
 // set of columns:
 //
 //	a column that has been migrated to a single-column writer must never
-//	reappear in PutMember's ON CONFLICT DO UPDATE SET list.
+//	become writable again by a whole-row write of the member row.
+//
+// The MECHANISM behind that sentence changed in T-63; the invariant did not.
+// There is no hand-written ON CONFLICT DO UPDATE SET list any more — which
+// columns a whole-row write lands on an EXISTING row is derived from each
+// column's insertOnly flag on its constructor in dal_member_patch.go. Every
+// assertion below asks the database what happened rather than reading the text
+// of the SQL, which is exactly why this file survived that refactor untouched.
 //
 // The migration is only half a fix. Writing SetMemberX / AddMemberX and leaving
-// the column in the whole-row SET list changes nothing at all: every stale
+// the column writable by a whole-row write changes nothing at all: every stale
 // snapshot still lands on it, and the suite stays green either way — which is
 // exactly how the handover claim nearly shipped broken (T-ffdf). Until this
 // file existed, the ONLY thing holding the second half in place was a comment
@@ -255,16 +262,16 @@ var singleColumnOwnedFields = []struct {
 
 // TestPutMemberNeverOverwritesSingleColumnOwnedFields is the automatic guard.
 //
-// Mutant for any row: put `<column> = excluded.<column>` back into PutMember's
-// DO UPDATE SET and this test goes red NAMING that column.
+// Mutant for any row: clear `insertOnly` on that column's constructor in
+// dal_member_patch.go and this test goes red NAMING that column.
 func TestPutMemberNeverOverwritesSingleColumnOwnedFields(t *testing.T) {
 	// A deleted row is the one mutation the loop below cannot see: the guard
 	// would pass by iterating less. Bump this deliberately when the registry
 	// grows.
 	if len(singleColumnOwnedFields) != 17 {
 		t.Fatalf("singleColumnOwnedFields has %d entries, expected 17. Adding a "+
-			"column? Bump this number. REMOVING one? That means a column went "+
-			"BACK into PutMember's DO UPDATE SET — say why in the commit",
+			"column? Bump this number. REMOVING one? That means a column became "+
+			"writable by a whole-row write again — say why in the commit",
 			len(singleColumnOwnedFields))
 	}
 
@@ -302,10 +309,11 @@ func TestPutMemberNeverOverwritesSingleColumnOwnedFields(t *testing.T) {
 				// as `any` is STRICTER than the float64 it replaced, never
 				// looser — verified by seeding both of those pairs.
 				t.Fatalf("member.%s was clobbered by a whole-row upsert: %#v (%T) → %#v (%T).\n"+
-					"%s is the SOLE writer of this column; it must stay OUT of "+
-					"PutMember's ON CONFLICT DO UPDATE SET list (dal.go). If you "+
-					"just added `%s = excluded.%s` back, that is the line to remove.",
-					f.column, f.want, f.want, got, got, f.writer, f.column, f.column)
+					"%s is the SOLE writer of this column; a whole-row write must "+
+					"never land it on an existing row. If you just cleared "+
+					"`insertOnly` on this column's constructor in "+
+					"dal_member_patch.go, that is the line to restore.",
+					f.column, f.want, f.want, got, got, f.writer)
 			}
 			// Positive control: the upsert really ran, so the assertion above
 			// is not passing because nothing was written at all.
@@ -359,10 +367,10 @@ func TestAddMemberBankedCostAccumulatesAndIsRowScoped(t *testing.T) {
 	}
 }
 
-// notInTheSetListExceptions names the columns that are absent from — or exempt
-// within — PutMember's DO UPDATE SET for reasons that are NOT "a single-column
-// writer owns this", so the completeness guard below must not demand a registry
-// entry for them. Each one is a claim about the statement, so each one says why.
+// notInTheSetListExceptions names the columns a whole-row write leaves alone —
+// or handles specially — for reasons that are NOT "a single-column writer owns
+// this", so the completeness guard below must not demand a registry entry for
+// them. Each one is a claim about the write, so each one says why.
 var notInTheSetListExceptions = map[string]string{
 	// The conflict key. It is what the upsert matches ON; a SET list carrying
 	// it would be meaningless rather than dangerous.
@@ -379,12 +387,16 @@ var notInTheSetListExceptions = map[string]string{
 	// so max() keeps the sentinel and the column reads as "absent". The blind
 	// spot comes from a collation accident, not from the column's own design.
 	//
-	// ② SO NOTHING HERE WOULD STOP SOMEONE MIGRATING IT. dal.go warns that the
-	// single-column writer already on the tree, SetMemberForcedStopAt, is a
-	// plain assignment with NO max() — swap the upsert for it and the
-	// forward-only property is gone, silently, and this test stays green.
-	// Whoever proposes that migration has to argue it on the code; this guard
-	// will not argue back.
+	// ② SO NOTHING HERE WOULD STOP SOMEONE MIGRATING IT — but the REASON changed
+	// in T-63, and the reason this note used to give is now the opposite of the
+	// truth. It warned that the single-column writer already on the tree,
+	// SetMemberForcedStopAt, was a plain assignment with NO max(), so migrating
+	// the column to it would silently lose the forward-only property. That setter
+	// now goes through PatchMember and picks up the column's own forwardOnly
+	// declaration, so BOTH paths write max() and the property survives such a
+	// migration. What is still uncovered is only ①: this guard cannot see which
+	// side of the line the column is on. Whoever proposes that migration has to
+	// argue it on the code; this guard will not argue back.
 	"forced_stop_at": "carried under max(), forward-only — UNCOVERED by this guard, see above",
 }
 
@@ -442,7 +454,7 @@ func TestEveryColumnOutOfTheSetListIsRegistered(t *testing.T) {
 	sort.Strings(stale)
 
 	if len(unguarded) > 0 {
-		t.Fatalf("these columns are NOT in PutMember's DO UPDATE SET, so a stale "+
+		t.Fatalf("these columns are NOT landed by a whole-row write, so a stale "+
 			"whole-row upsert can no longer move them — but singleColumnOwnedFields "+
 			"has no entry for them, so nothing would notice if they went back in: %v.\n"+
 			"Add an entry (and bump the count in the guard above), or, if the column "+
