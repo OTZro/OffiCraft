@@ -72,11 +72,6 @@ vi.mock("../api", () => ({
 import { useChat } from "./useChat";
 import type { JumpOutcome } from "./useChat";
 import { ApiError } from "../api/errors";
-import {
-  getCachedReplyCard,
-  resetReplyCardCache,
-} from "../lib/replyCardCache";
-
 /** A promise the test resolves by hand — the only way to hold a request in
  * flight and land something else on top of it, which is what every race below
  * is about. */
@@ -113,21 +108,6 @@ function mkCardMsg(id: string, cardId: string, ts: number): ChatMessage {
   };
 }
 
-/** Renders `useChat` and records, IN ORDER, when the carrying row first reached
- * the caller and when its card arrived in the prefill cache. The whole claim is
- * that the card is there FIRST; the order is the assertion. */
-function renderWatchingCard(rowId: string, cardId: string) {
-  const seen: string[] = [];
-  const hook = renderHook(() => {
-    const v = useChat("b");
-    if (getCachedReplyCard(cardId) && !seen.includes("card")) seen.push("card");
-    if (v.messages.some((m) => m.id === rowId) && !seen.includes("row"))
-      seen.push("row");
-    return v;
-  });
-  return { ...hook, seen };
-}
-
 /** `count` messages b↔owner with ids `${prefix}0..` and ascending ts from
  * `tsStart` — a full server page when count === 30. */
 function page(prefix: string, tsStart: number, count: number): ChatMessage[] {
@@ -144,7 +124,6 @@ beforeEach(() => {
   h.listChatReads.mockClear();
   h.markChatRead.mockClear();
   h.getReplyCard.mockClear();
-  resetReplyCardCache();
   h.sseHandler = null;
   hasFocusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(true);
 });
@@ -233,77 +212,17 @@ describe("useChat scrollback (loadOlder / hasMore)", () => {
     ).toEqual(nowShowing);
   });
 
-  it("那一頁還沒上畫面時,別的 commit 觸發的 render 不准把戳記清掉", async () => {
-    // 🔴 戳記存的是「那一列」而不是布林,而這條是它唯一的紅(獨立審查 #23 F-3
-    // 判「做不出鑑別」,那是因為押的窗口被 `loadingNewer` 那把鎖蓋掉了)。
-    //
-    // 能分出勝負的窗口有兩段,要**同時**用上:
-    //   ① 欠條寫在 `await view.commit(...)` **之前**,而 commit 會 await
-    //      `prefillWaitingCards` —— 一張掛住的請示卡就把 commit 停在那裡,欠條
-    //      已經寫下、什麼都還沒 render。這段裡 `loadOlder`(不拿世代票、也不碰
-    //      `loadingNewer`)commit 完會觸發 render ⇒ layout effect 被叫到,而欠
-    //      的那一列不在 `thread.messages` 裡。存布林 ⇒ 當場清掉、提早開閘。
-    //   ② `loadNewer` 收尾時鎖是**同步**放掉的,React 晚一步才畫 —— 所以放掉鎖
-    //      之後、那一頁上畫面之前有一格,而人為手勢在那一格裡不再被鎖擋住。
-    // 兩段接起來:①提早開的閘 ＋ ②沒有鎖的那一格 ⇒ 同一次手勢買到第二頁。
-    h.listChat.mockResolvedValueOnce(page("n", 1000, 30));
-    const { result } = renderHook(() => useChat("b"));
-    await waitFor(() => expect(result.current.messages).toHaveLength(30));
-    await act(async () => {
-      h.listChatWindow.mockResolvedValueOnce(page("w", 100, 30));
-      h.listChatWindow.mockResolvedValueOnce(page("w", 129, 30));
-      await result.current.loadAround("w0");
-      await settle();
-    });
-    // 讓 400ms 的節流窗口過去,最後那一次手勢擋不擋得住只剩下閘決定。
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 500));
-    });
-
-    // 往下那一頁的最後一列帶一張還在等的請示卡,而卡掛住 ⇒ commit 停在 prefill。
-    const card = deferred<unknown>();
-    h.getReplyCard.mockReturnValueOnce(card.promise as never);
-    h.listChatWindow.mockResolvedValueOnce([
-      ...page("f", 9000, 29),
-      mkCardMsg("fcard", "card1", 9029),
-    ]);
-    let forward!: Promise<void>;
-    act(() => {
-      forward = result.current.loadNewer();
-    });
-    await act(async () => {
-      await settle();
-    });
-    expect(
-      result.current.messages,
-      "前提:那一頁停在 prefill 上,欠條已經寫下、一列都還沒上畫面",
-    ).toHaveLength(30);
-
-    // 別的 commit 落地並且畫出來 —— 這一次 render 跟欠的那一列毫無關係。
-    h.listChat.mockResolvedValueOnce(page("o", 1, 30));
-    await act(async () => {
-      await result.current.loadOlder();
-      await settle();
-    });
-    expect(
-      result.current.messages,
-      "前提:那次 render 真的發生了(歷史頁接在前面),而且欠的那一列還是不在",
-    ).toHaveLength(60);
-
-    const before = h.listChatWindow.mock.calls.length;
-    h.listChatWindow.mockResolvedValueOnce(page("g", 9100, 30));
-    await act(async () => {
-      card.resolve({ id: "card1" });
-      await forward;
-      // 這一行就是那一格:鎖放掉了,列還沒被畫出來。
-      await result.current.loadNewer({ human: true });
-      await settle();
-    });
-    expect(
-      h.listChatWindow.mock.calls.length - before,
-      "別的 commit 觸發的 render 把戳記清掉了 —— 那一頁還沒上畫面,同一次手勢卻買到了第二頁",
-    ).toBe(0);
-  });
+  // 🔴 REMOVED WITH THE PREFILL (T-48, owner 2026-09-04): 「那一頁還沒上畫面
+  // 時,別的 commit 觸發的 render 不准把戳記清掉」. That test built its window
+  // out of a HUNG reply-card prefill inside `commit` — the debt was written,
+  // `commit` stopped on the card, and `loadOlder` rendered in the gap. Cards
+  // are no longer fetched at commit time, so `pageUnseenIdRef` is written and
+  // `setThread` is called back-to-back with NO await between them: every render
+  // after the debt already carries the owed row, and the 「called for something
+  // else」 direction has no window left to be measured in. `pageUnseenIdRef`
+  // still holds the ROW rather than a boolean in `useChat.ts` (strictly the
+  // safer of the two), but that choice is now unmeasured — see the two
+  // 「補送的戳記由 render 回寫」 tests below, which still measure 「called twice」.
 
   it("被 supersede 的那一頁不准把往下走訪永久鎖死 —— 欠條掛在一列永遠不會出現的訊息上", async () => {
     // 🔴 順序就是這條測試的全部。`loadNewer` 在 commit **之前**記下欠條,而被
@@ -632,15 +551,14 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     expect(h.listChat.mock.calls.length).toBe(before + 1);
   });
 
-  // 🔴 GUARD B'S OTHER TWO COMMIT PATHS (T-48, independent review F8). The
-  // shared `afterEach` in ChatArea.anchor-entry.test.tsx asserts this shape,
-  // but only ONE test in that file seeds a waiting card, so for the other
-  // commit paths the invariant is vacuously true there. `loadNewer` and
-  // `resetToLatest` are the two paths that REPLACE or EXTEND the thread without
-  // going through an entry anchor, and they get their own denominators here.
-  it("loadNewer's page has its waiting card in hand BEFORE the row reaches the caller", async () => {
+  // 🔴 THE TWO COMMIT PATHS THAT REPLACE OR EXTEND THE THREAD (T-48). They
+  // used to have to hold a waiting card in hand before the carrying row could
+  // reach the caller. The inverse is now the rule and is the STRONGER claim:
+  // cards render collapsed, so no loader may read one at all — a chat history
+  // of dozens of cards fires zero `getReplyCard`s, waiting ones included.
+  it("loadNewer's page carrying a WAITING card lands without reading the card", async () => {
     h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
-    const { result, seen } = renderWatchingCard("t-card", "rc-fwd");
+    const { result } = renderHook(() => useChat("b"));
     await waitFor(() => expect(result.current.messages).toHaveLength(30));
 
     h.listChatWindow
@@ -660,15 +578,18 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
       await result.current.loadNewer();
     });
 
-    // The denominator: the row really did arrive, and its card really was read.
+    // The denominator: the row really did arrive — so "nothing was fetched" is
+    // not "nothing happened".
     expect(result.current.messages.map((m) => m.id)).toContain("t-card");
-    expect(h.getReplyCard).toHaveBeenCalledWith("rc-fwd");
-    expect(seen).toEqual(["card", "row"]);
+    expect(
+      h.getReplyCard,
+      "a forward page read its waiting card — the loader is prefetching again",
+    ).not.toHaveBeenCalled();
   });
 
-  it("resetToLatest's replacement page has its waiting card in hand BEFORE the row reaches the caller", async () => {
+  it("resetToLatest's replacement page carrying a WAITING card lands without reading the card", async () => {
     h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
-    const { result, seen } = renderWatchingCard("z-card", "rc-latest");
+    const { result } = renderHook(() => useChat("b"));
     await waitFor(() => expect(result.current.messages).toHaveLength(30));
 
     h.listChatWindow
@@ -687,8 +608,10 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     });
 
     expect(result.current.messages.map((m) => m.id)).toContain("z-card");
-    expect(h.getReplyCard).toHaveBeenCalledWith("rc-latest");
-    expect(seen).toEqual(["card", "row"]);
+    expect(
+      h.getReplyCard,
+      "the replacement page read its waiting card — the loader is prefetching again",
+    ).not.toHaveBeenCalled();
   });
 
   it("a walk that stopped on a page carrying nothing new is restarted by the reader scrolling again", async () => {

@@ -216,12 +216,21 @@ test.describe('B9 · unread — badge, entry divider anchor, 進房 mark-read, f
     //
     //   ① 圖片 —— `.chat__msg-image` 有固定的 220px 框(commit aea7182),
     //      那一列在 bytes 到之前就是最終高度。
-    //   ② 還在等待回覆的請示卡 —— `lib/threadCommit` 每個提交點都先 await
-    //      `lib/replyCardCache` 的 `prefillWaitingCards`,卡片在它那一列被畫出來的
-    //      **第一幀**就已經在手上。
+    //   ② 請示卡 —— 一律**收合成一列**(T-48,owner 2026-09-04 `c-6f054c1cb481`),
+    //      那一列要顯示的東西訊息本身就帶著,所以它**一次 GET 都不發**,也就沒有
+    //      任何東西可以晚到。這比原本的做法(先 await 撈回來再上畫面)更強:不是
+    //      「等到了」,是「沒有東西要等」。
     //
-    // 兩種燃料都在這裡,而且都被**扣住到落地之後**才放行:圖片扣在
-    // `/api/chat/attachment/**`,請示卡扣在 `/api/reply-cards/rc-*`。
+    // 🔴 **所以這個 fixture 今天沒有燃料了,這件事必須講在前面。** 兩種被 owner
+    // 點名的位移來源都在源頭關掉之後,護欄 ②(落點待得住)在這個 fixture 上是
+    // 一條**沒有燃料的斷言** —— 它仍然會在有人把任一個源頭修法拿掉時變紅(兩顆
+    // mutant 都驗過),但它不再由「這一輪真的有東西在動」撐著。要補的是另一種
+    // 今天還會晚到的內容(markdown 重排實測 0px、卡片與圖片都關了),還沒有人
+    // 找到,列為已知缺口。
+    //
+    // 兩種內容都被**扣住到落地之後**才放行:圖片扣在
+    // `/api/chat/attachment/**`,請示卡扣在 `/api/reply-cards/rc-*` —— 後者今天
+    // 是一個**陰性對照**:那條路一次都不該被走到,`cardFetches` 就是在數它。
     // 視窗**下方**長高對讀者是 0px 位移(實測),推不動任何東西,所以兩者都在上方。
     let releaseImages;
 
@@ -238,35 +247,29 @@ test.describe('B9 · unread — badge, entry divider anchor, 進房 mark-read, f
       ]);
     }
 
-    // 請示卡的 GET 被延遲 CARD_FETCH_DELAY_MS —— 這個延遲**就是**判別器。
+    // 請示卡的 GET 被延遲 CARD_FETCH_DELAY_MS —— 這條路今天**一次都不該被走到**。
     //
-    //   · 修好的碼:每個提交點都 await 這次 GET,所以整串訊息(浮條也在內)要等
-    //     600ms 才上畫面;讀者按下「跳到最新」時卡片已經是最終高度,之後沒有東西
-    //     再長高。實測 strip 822ms、落地當下卡片 303px。
-    //   · 拿掉 prefill 的 mutant:訊息立刻上畫面、卡片先畫成 49px 的空殼,GET 在
-    //     600ms 後才回來 —— 也就是**跳轉之後**才長高。實測 strip 199ms、按下
-    //     221ms、卡片 49→303px、最新那一列被推走 195.77px。
+    //   · 今天的碼:卡片收合,`ChatReplyCard` 在展開之前不 fetch ⇒ `cardFetches`
+    //     必須是 0,而那一列從落地到靜止高度一格都不動。
+    //   · 把「一律收合」拿掉的 mutant:訊息立刻上畫面、卡片先畫成 49px 的空殼,
+    //     GET 在 600ms 後才回來 —— 也就是**跳轉之後**才長高。歷史實測 strip
+    //     199ms、按下 221ms、卡片 49→303px、最新那一列被推走 195.77px。
     //
-    // 600ms 兩邊都留了餘裕:它小於 `REPLY_CARD_PREFILL_DEADLINE_MS`(1500ms)
-    // 900ms,所以修好的碼是真的「等到了」而不是「等到放棄」;它又大於 mutant 上
-    // 從落地到按下的實測 221ms 約 380ms,所以晚填必定落在跳轉之後。
-    //
-    // ⚠️ 但那個 221ms 是**一次本機量測**(獨立審查 F-H)。CI 上一台慢的 runner 把
-    // 「落地 → 按下」拖過 600ms,`route` 的延遲就會在按下之前先回來 —— 卡片在跳轉
-    // **之前**就長高,mutant 於是**假綠**。要說清楚這削弱的是什麼:削弱的是
-    // **mutant 示範**,不是出貨的護欄。護欄 ①②③ 量的是修好的碼上「落地當下卡片
-    // 已是最終高度」,那件事不看這個延遲的死線。所以下次有人在 CI 上重跑這個
-    // mutant 而它綠了,先量「落地 → 按下」花了多久,再決定要不要加大這個常數 ——
-    // 不要當成 regression 沒了。
+    // ⚠️ 那個 221ms 是**一次本機量測**(獨立審查 F-H)。CI 上一台慢的 runner 把
+    // 「落地 → 按下」拖過 600ms,延遲就會在按下之前先回來 ⇒ **mutant 示範**會
+    // 假綠。它削弱的是示範,不是出貨的護欄:`cardFetches === 0` 那一格不看這個
+    // 延遲的死線,它問的是那通請求到底有沒有發出去。
     // 只攔 `rc-*`:`/api/reply-cards/count`(等我回覆徽章的輪詢)不在其中。
     const CARD_FETCH_DELAY_MS = 600;
+    let cardFetches = 0;
     await page.route('**/api/reply-cards/rc-*', async (route) => {
+      cardFetches += 1;
       await new Promise((r) => setTimeout(r, CARD_FETCH_DELAY_MS));
       await route.continue();
     });
-    // 一張 waiting 卡。已回覆／已過期的卡是**沒有用的燃料**:它們掛載時就是收合
-    // 的最終高度,而且一次 getReplyCard 都不發(ChatReplyCard 的 `initialStatus`
-    // /owner 規則 已回覆卡預設不載)—— 只有 waiting 卡會在內容落地時長高。
+    // 一張 waiting 卡 —— 今天它是**陰性對照**,不是燃料:每一種狀態的卡都收合成
+    // 一列、都不發 getReplyCard。挑 waiting 是因為它是最後一種還會長高的,拿它
+    // 當對照才問得到「連它都不動了嗎」。
     // 伺服器會自己把一則同串的伴生訊息貼進來,所以它就落在最新那一列的上方。
     const cardRes = await request.post(`${BASE}/api/reply-cards`, {
       headers: authHeaders(tokM),
@@ -285,7 +288,7 @@ test.describe('B9 · unread — badge, entry divider anchor, 進房 mark-read, f
     expect(cardRes.status(), 'seeding the waiting reply card must succeed').toBe(200);
     expect(
       (await cardRes.json()).status,
-      'only a WAITING card is fuel — an answered one mounts collapsed and never fetches',
+      'the control must really be a WAITING card — the last kind that used to grow',
     ).toBe('waiting');
 
     const lateBody = `late-breaking message ${PAD}`;
@@ -332,8 +335,9 @@ test.describe('B9 · unread — badge, entry divider anchor, 進房 mark-read, f
     //
     //   · 拿掉 `.chat__msg-image` 的 `height: 220px`,跑**當時那個只有圖片的
     //     fixture**:圖片把最新那一列推走 178.17px,箭頭回來了 → 選言綠。
-    //   · 拿掉 `prefillWaitingCards`,跑**現在這個 fixture**:請示卡 51→325px
-    //     晚長高、把最新那一列推走 215.78px(1280 寬:49→303、195.77px),
+    //   · 讓待回覆卡回到「掛載就展開」(T-48 之前的樣子),跑**現在這個
+    //     fixture**:請示卡 51→325px 晚長高、把最新那一列推走 215.78px
+    //     (1280 寬:49→303、195.77px),
     //     箭頭同樣回來了 → 選言綠。
     //
     // 原因是機械性的:上方的內容長高時瀏覽器的 scroll anchoring 會補 `scrollTop`,
@@ -344,7 +348,7 @@ test.describe('B9 · unread — badge, entry divider anchor, 進房 mark-read, f
     //
     // ⇒ 選言拿掉,改成直說**今天真正的合約**。owner 在 rc-6c27f486ef9d 簽的是
     // 「拿掉那兩個落點修正迴圈,位移我接受」,而他點名的兩個位移來源後來都在
-    // **源頭**關掉了(固定 220px 框 + 請示卡先握在手上)—— 所以這兩種燃料的位移
+    // **源頭**關掉了(固定 220px 框 + 請示卡一律收合、不發請求)—— 所以這兩種的位移
     // 今天是 0,而那正是可以被斷言、也會在修正被拿掉時變紅的東西。
     //
     // 「介面不可以無聲說謊」那一半沒有不見:它在本測試上面那條自己被測 ——
@@ -363,7 +367,7 @@ test.describe('B9 · unread — badge, entry divider anchor, 進房 mark-read, f
         imagesDecoded: imgs.filter((i) => i.naturalHeight > 0).length,
         imageHeights: imgs.map((i) => Math.round(i.getBoundingClientRect().height)),
         cardHeight: c ? Math.round(c.getBoundingClientRect().height) : null,
-        cardIsWaiting: !!c?.querySelector('[data-testid="reply-option"]'),
+        cardCollapsed: !!c?.classList.contains('reply-card--collapsed'),
       };
     });
     // 前提誠實 ①:圖片真的解碼了。沒有這一行,下面整段可能只是「圖沒載到,所以
@@ -391,27 +395,25 @@ test.describe('B9 · unread — badge, entry divider anchor, 進房 mark-read, f
       landed.imageHeights.length,
       'the three held thumbnails must be on screen at landing',
     ).toBe(3);
-    // 前提誠實 ②:那張卡真的展開成一張 waiting 卡了 —— 有選項、而且高度是三位數。
-    // 一張沒撈到內容的空殼只有 ~49px,它不是燃料,它是空綠。
+    // 陰性對照 ①:那通 GET 一次都沒發出去。這是「卡片不可能晚到」今天最強的
+    // 說法 —— 不是「長高被吸收掉了」,是「沒有東西要長」。
     expect(
-      settled.cardIsWaiting,
-      `請示卡必須真的長成一張 waiting 卡(要有選項),否則它不是燃料` +
-        `(量到 ${JSON.stringify(settled)})`,
-    ).toBe(true);
-    expect(
-      settled.cardHeight,
-      `一張填好的 waiting 卡有三位數的高度,量到 ${settled.cardHeight}px —— ` +
-        `這條護欄的燃料等於不存在`,
-    ).toBeGreaterThanOrEqual(200);
-    // 護欄 ①:卡片在它那一列被畫出來的**第一幀**就是最終高度。這是
-    // `threadCommit` → `prefillWaitingCards` 的合約本身;拿掉 prefill 之後這裡
-    // 量到 51px 的空殼(而 3 秒後是 325px)。
+      cardFetches,
+      `收合的請示卡不可以去撈卡片(量到 ${cardFetches} 通)—— 那一列要顯示的字` +
+        `訊息本身就帶著`,
+    ).toBe(0);
+    // 陰性對照 ②:那一列從落地到靜止,高度一格都沒動。
     expect(
       landed.cardHeight,
-      `跳轉落地的那一刻,上方的 waiting 卡就必須已經是最終高度(量到 ` +
-        `${landed.cardHeight}px,靜止後 ${settled.cardHeight}px)—— 差在這裡就表示 ` +
-        `訊息在卡片到手之前就上了畫面,落點會被它推走`,
-    ).toBeGreaterThanOrEqual(200);
+      `請示卡那一列在落地當下(${landed.cardHeight}px)與版面靜止後` +
+        `(${settled.cardHeight}px)必須一模一樣 —— 不一樣就表示有東西晚到並把` +
+        `下面的內容推走了`,
+    ).toBe(settled.cardHeight);
+    // …而且它真的是收合的那一列,不是「卡片根本沒出現」的空綠。
+    expect(
+      settled.cardCollapsed,
+      `畫面上必須真的有一列收合的請示卡(量到 ${JSON.stringify(settled)})`,
+    ).toBe(true);
     // 護欄 ②:所以落點待得住。無條件,沒有箭頭那個出口。
     //
     // ⚠️ 而它是**單邊的**,這件事要寫下來(獨立審查 F-H)。`lastRowBottomGap` 是

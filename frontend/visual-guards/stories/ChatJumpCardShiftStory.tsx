@@ -3,13 +3,16 @@
 // 請示卡 sitting above it.
 //
 // 🔴 WHY THE WHOLE COMPONENT AND NOT A HAND-WRITTEN SHELL. What is being
-// measured is a SHIFT — the jump target's y before and after the card's own
-// fetch lands — and the thing that decides whether there is one is the ORDER in
-// which useChat commits the messages and replyCardCache holds the card. A shell
-// would have to fake that order, i.e. fake the answer. jsdom cannot measure it
-// at all (no layout engine, every rect is 0), which is why this is a CT guard
-// and not a vitest one; the ordering half is pinned in jsdom by
-// ChatArea.anchor-entry.test.tsx.
+// measured is a SHIFT — the jump target's y before and after the window in
+// which the card's own fetch would have landed — and what decides whether there
+// is one is that `ChatReplyCard` renders COLLAPSED and therefore never asks
+// (T-48, owner 2026-09-04). A shell would have to fake that, i.e. fake the
+// answer. jsdom cannot measure it at all (no layout engine, every rect is 0),
+// which is why this is a CT guard and not a vitest one.
+//
+// The story counts every `getReplyCard` the page makes (`window.__cardFetches`)
+// so the spec can assert the STRONGEST form of the fix: not "the growth was
+// absorbed" but "nothing was ever fetched to grow into".
 //
 // The api seam is patched in place (the house pattern — see
 // ScheduledMessagesClampStory / SoftwareUpdateStory): `api` IS `mockApi` under
@@ -105,7 +108,14 @@ api.listChatWindow = async (
     ? log.slice(Math.max(0, at - limit + 1), at + 1)
     : log.slice(at, at + limit);
 };
+declare global {
+  interface Window {
+    __cardFetches?: number;
+  }
+}
+window.__cardFetches = 0;
 api.getReplyCard = async (id: string): Promise<ReplyCard> => {
+  window.__cardFetches = (window.__cardFetches ?? 0) + 1;
   await sleep(CARD_LATENCY_MS);
   return { ...CARD, id };
 };

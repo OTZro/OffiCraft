@@ -1,24 +1,25 @@
 // lib/threadCommit.ts — THE ONLY DOOR ONTO THE CHAT THREAD (T-48).
 //
 // 🔴 WHY THIS IS A MODULE AND NOT ONE CAREFUL CALL SITE PER COMMIT POINT.
-// The reply cards a thread carries are fetched SEPARATELY and LATER than the messages, so a
-// waiting card above a scroll target grows after the fact and pushes the target
-// down (measured +254px at 1280 wide — and NOT 0 at 390, which this line used to
-// claim: `visual-guards/chat-jump-card-shift.ct.spec.tsx` measures +200px there
-// and `08_unread_jump` +215.78px in the browser. What absorbs the growth is a
-// card ABOVE THE FOLD, a placement, not a narrow viewport). The fix is that every
-// commit must have those cards in hand BEFORE the messages reach the view — and
-// the way that fix has failed
-// before, four times in one night with a green suite, is a hand-written
-// `await prefetch(...)` at each of N commit points that the next reader has to
-// remember to write.
+// Every write onto the thread has to answer the same two questions — is this
+// page still the newest one (the generation ticket), and does the mirror every
+// loader reads agree with what React is about to render — and the way that has
+// failed before, four times in one night with a green suite, is a hand-written
+// copy of the answer at each of N commit points that the next reader has to
+// remember to write. So the raw `useState<Thread>` setter does not leave this
+// module. `useChat` gets three doors and no fourth: `commit` (a ticketed thread
+// write), `mergeHistory` (loadOlder's un-ticketed prepend) and `clear` — which
+// takes NO PARAMETERS and therefore cannot express a message.
 //
-// So the raw `useState<Thread>` setter does not leave this module. `useChat`
-// gets three doors and no fourth: `commit` (a ticketed thread write),
-// `mergeHistory` (loadOlder's un-ticketed prepend) and `clear` — which takes NO
-// PARAMETERS and therefore cannot express a message. "Commit messages to the
-// view without awaiting their cards" is not a rule anybody has to keep; it is a
-// sentence that cannot be typed.
+// 🔴 WHAT THIS MODULE USED TO DO AND NO LONGER DOES (T-48, owner 2026-09-04).
+// It also used to AWAIT the thread's reply cards before letting the messages
+// reach the view — because a waiting card mounted expanded and empty, then grew
+// once its fetch landed, pushing a scroll target down after it had landed
+// (+254px at 1280, +200px at 390). Cards render COLLAPSED now, at their final
+// height, from what the carrying message already says: there is nothing to
+// wait for, so the await, the prefill cache behind it and the 1500ms deadline
+// that bounded it are gone. The two doors stayed — they were always carrying
+// the generation ticket too, and that half was never about cards.
 //
 // 🔴 THE HOUSE PRECEDENT IS `lib/conversationLatches.ts`, AND THIS RHYMES WITH
 // IT DELIBERATELY. That file made the same call for the same reason: the
@@ -41,7 +42,6 @@
 
 import { useCallback, useRef, useState } from "react";
 import type { ChatMessage } from "../api/adapter";
-import { prefillWaitingCards } from "./replyCardCache";
 
 // 🔴 IT USED TO CARRY A `peer` FIELD (T-48, R13-3). The hook was mounted once
 // and swapped between rooms, so there was a committed frame holding the new
@@ -188,14 +188,13 @@ export function useThreadCommit(): ThreadCommit {
   const commit = useCallback(
     async (seq: number, next: (prev: Thread) => Thread): Promise<boolean> => {
       const candidate = next(mirror.current);
-      await prefillWaitingCards(candidate.messages);
-      // 🔴 THE GENERATION IS TAKEN AFTER THE AWAIT, NEVER BEFORE IT. Taking it
-      // first would mark this load as the newest while it is still waiting on a
-      // card, so a load that started later, finished sooner and committed would
-      // be judged superseded by a page it PRECEDES — the out-of-order commit
-      // measured on the unguarded backfill (75 rows, newest five at the top of
-      // the conversation). Every commit point in `useChat` used to spell this
-      // out for itself; there is one copy now, and it is here.
+      // 🔴 THE GENERATION IS COMPARED HERE, AT THE COMMIT, NOT AT THE CALL SITE.
+      // The caller's own await window (its fetch) is what puts pages out of
+      // order — a load that started later and finished sooner must not be
+      // judged superseded by a page it PRECEDES (measured on the unguarded
+      // backfill: 75 rows, newest five at the top of the conversation). Every
+      // commit point in `useChat` used to spell this out for itself; there is
+      // one copy now, and it is here.
       if (seq < committed.current) return false;
       committed.current = seq;
       // Advance the mirror NOW rather than at the next render: every consumer
@@ -217,7 +216,6 @@ export function useThreadCommit(): ThreadCommit {
 
   const mergeHistory = useCallback(
     async (next: (prev: Thread) => Thread): Promise<void> => {
-      await prefillWaitingCards(next(mirror.current).messages);
       // No ticket, and no mirror write: `loadOlder` never had either. A page
       // that only prepends — which is what its one caller does, not something
       // checked here — cannot supersede anything, and writing the mirror from a

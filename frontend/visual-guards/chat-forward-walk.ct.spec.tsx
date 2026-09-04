@@ -412,7 +412,7 @@ test("那一頁還沒被寫進箱子時,同一次手勢的下一個事件不准�
 // was carrying it alone, on geometry faked with `Object.defineProperty` — and
 // this ticket's whole lesson is that jsdom's lengths all read 0.
 //
-// What a browser does, measured here (900px pinned column, no CPU throttle):
+// What a browser does, measured here (no CPU throttle):
 //   entry state, reader parked on the jump target, `hasNewer` true, no gesture
 //   ever made:                       scrollTop 4984, box 10491, distance 4964
 //   30 rows below the fold collapse: box 5346 ⇒ the LIMIT is now 4803, below
@@ -440,10 +440,18 @@ test("版面自己縮矮把讀的人夾回極限的那個事件,不准買到一�
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
-  // Pinned column: the default story's shrink-to-fit reflow makes the box
-  // change size on its own (fix3 §2.4), and a guard about what a SHRINK does
-  // cannot have a second uninvited shrink in it.
-  const cmp = await mount(<ChatForwardWalkStory widthPx={900} />);
+  // 🔴 THE SECOND, UNINVITED SHRINK IS RULED OUT BY MEASUREMENT, NOT BY A KNOB
+  // (T-48, fix5). This used to mount with `widthPx={900}` and a comment saying
+  // that pinned the column so the story's shrink-to-fit reflow could not put a
+  // second shrink in this guard's answer. The knob was inert — `.chat` is a
+  // flex item at its own max-content whatever the wrapper is, measured 273px of
+  // message column at every wrapper width tried — so this guard was never
+  // protected by it and did not need to be: the reflow's trigger is the
+  // 「有新訊息」 chip arming when a FORWARD PAGE LANDS, and no page lands here
+  // (the closing assertion is that the forward count did not move). The column
+  // width is asserted below to have held still, so if that ever stops being
+  // true this guard says so instead of quietly measuring two shrinks.
+  const cmp = await mount(<ChatForwardWalkStory />);
   await expect(cmp.locator(`[data-msg-id="${TARGET_ID}"]`)).toBeVisible();
   const box = cmp.locator(".chat__messages");
   const forwardCalls = () =>
@@ -456,6 +464,13 @@ test("版面自己縮矮把讀的人夾回極限的那個事件,不准買到一�
   await page.waitForTimeout(900);
   const entry = await forwardCalls();
   expect(entry, "the anchor entry's own forward window").toBe(1);
+
+  const colWidthBefore = await page.evaluate(() =>
+    Math.round(
+      (document.querySelector(".chat") as HTMLElement).getBoundingClientRect()
+        .width,
+    ),
+  );
 
   const probe = await box.evaluate(async (el) => {
     const rec: number[][] = [];
@@ -511,6 +526,15 @@ test("版面自己縮矮把讀的人夾回極限的那個事件,不准買到一�
     (await forwardCalls()) - entry,
     "版面自己縮回去就買到了一頁 —— 沒有人碰過那個箱子",
   ).toBe(0);
+  expect(
+    await page.evaluate(() =>
+      Math.round(
+        (document.querySelector(".chat") as HTMLElement).getBoundingClientRect()
+          .width,
+      ),
+    ),
+    "欄寬自己動了 —— 這條護欄裡多了一個沒有人請的重排,量到的縮矮不只是它自己造的那一個",
+  ).toBe(colWidthBefore);
 
   // 🟠 THE PRICE OF SWALLOWING IT, MEASURED AND PINNED (review #23 F-4).
   // Swallowing the clamp is right — nobody asked — but it leaves the reader
@@ -548,16 +572,72 @@ test("版面自己縮矮把讀的人夾回極限的那個事件,不准買到一�
 //
 // Measured here (1280×720, no CPU throttle): one momentum flick of decreasing
 // wheel deltas ⇒ 29 real `scroll` events over 442ms, ONE forward page, and the
-// box grew 10491 → 15631px MID-FLICK while `scrollTop` finished at 9948 — i.e.
-// the reader was left 5140px above the new bottom and the remaining wheel
-// deltas did NOT carry them down to it. That is the budget model's prediction
-// and not the re-measuring one's, from an input the guard does not author.
+// page landed MID-FLICK (rows 59 → 88 at event 17 of 29) while `scrollTop`
+// finished at 9948 — i.e. the reader was left 5140px above the new bottom and
+// the remaining wheel deltas did NOT carry them down to it. That is the budget
+// model's prediction and not the re-measuring one's, from an input the guard
+// does not author.
+//
+// 🔴 THE PRECONDITION IS A WAIT, AND IT IS COUNTED IN ROWS, NOT IN PIXELS
+// (T-48, fix5 — this guard was intermittently red on CI and green 40/40 here).
+// Both halves of that sentence are repairs of a real red:
+//
+//   ① NOT PIXELS. The first version asserted `scrollHeight` had GROWN as its
+//      proof that the page landed mid-flick. That proxy is confounded: the
+//      forward page's rows are inbound messages arriving while the reader is
+//      NOT at the bottom, which arms the composer's 「有新訊息」 strip, and the
+//      strip carries a whole message line as its label. This story's column is
+//      shrink-to-fit (`.chat` is a flex item at max-content inside an unbounded
+//      mount point), so the strip's `.chat__new-msg` at 438px WIDENS `.chat`
+//      321 → 454 and the message column 273 → 406, every row rewraps SHORTER,
+//      and the box lands at 10110px — BELOW the 10491 it started at, while
+//      carrying 29 rows MORE.
+//      MEASURED on the pre-fix guard, real wheel, `T48_THROTTLE=20` (see the
+//      knob at the top of the test), 3 workers, 24 runs: 8 red / 24, and every
+//      red is the same number CI reported — `Expected > 10491, Received 10110`.
+//      The two arms differ ONLY in whether the strip armed:
+//        strip down: h 15631, scrollTop 9948, distance 5140, `.chat` 321
+//        strip up  : h 10110, scrollTop 6483, distance 3142, `.chat` 454
+//      Unthrottled and at x6 it is 0 red / 12, which is why CI saw it and this
+//      machine did not until the throttle was turned up.
+//      Row COUNT cannot be rewrapped, so that is what the precondition counts.
+//      Everything else asserted below is reflow-immune too: 3142 is still a
+//      screenful (543) clear of the bottom, in the arm that used to red.
+//   ② A WAIT, NOT A GUESS. The momentum budget is now split: the head is
+//      delivered, then the guard WAITS for the rows to be in the box, then the
+//      TAIL of the same budget is delivered. So 「the page landed while the
+//      gesture was still going」 is true by construction instead of by luck.
+//      The head alone carries the reader to distance ≈ 12px, i.e. well inside
+//      the 80px band, so the ask has certainly already gone out; if the page
+//      nevertheless never lands, the poll reds on its own line saying so —
+//      loudly, which is the property this precondition was always for.
+//
+// 🔴 DO NOT 「FIX」 THIS BY PINNING THE STORY'S COLUMN WIDTH. A wrapper width
+// cannot do it: `.chat` is a flex ITEM with no `flex-grow`, so it sits at its
+// own max-content whatever the parent is — MEASURED, `.chat__messages` came
+// back 273px at wrapper widths of 321, 406, 454, 520 and 900 alike. The story
+// used to expose that as a `widthPx` knob and the clamp guard below used to
+// mount with it; both are gone, because the knob changed nothing while its doc
+// comment claimed it changed the one thing two guards leant on.
 //
 // ⚠️ WHAT THIS DOES NOT SETTLE: it is still a synthesised wheel, not a finger on
 // a trackpad, and it has no overscroll bounce. It settles the question of
 // whether the guard's own hand was on the box, which is the one that was open.
 test("同一個手勢用真的滾輪做一次 —— 仍然只買一頁", async ({ mount, page }) => {
+  test.setTimeout(120000);
   await page.setViewportSize({ width: 1280, height: 720 });
+  // 🔴 THE ONLY WAY TO SEE CI'S RED ON A DEVELOPER MACHINE. Off by default and
+  // never set in CI; `T48_THROTTLE=20 npx playwright test …` slows the renderer
+  // enough that the reflow described above actually happens here. Without it
+  // this guard is green on the broken version too, which is how the flake
+  // reached CI in the first place — so keep it, and reach for it before
+  // believing any 「it is green on my machine」 about this file.
+  if (process.env.T48_THROTTLE) {
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Emulation.setCPUThrottlingRate", {
+      rate: Number(process.env.T48_THROTTLE),
+    });
+  }
   const cmp = await mount(<ChatForwardWalkStory />);
   await expect(cmp.locator(`[data-msg-id="${TARGET_ID}"]`)).toBeVisible();
   const box = cmp.locator(".chat__messages");
@@ -577,20 +657,51 @@ test("同一個手勢用真的滾輪做一次 —— 仍然只買一頁", async 
     w.__t48wheelEvents = rec;
     el.addEventListener("scroll", () => rec.push(el.scrollTop));
   });
+  const rows = () =>
+    box.evaluate((el) => el.querySelectorAll(".chat__msg").length);
   const before = await box.evaluate((el) => ({
     h: el.scrollHeight,
     ch: el.clientHeight,
+    rows: el.querySelectorAll(".chat__msg").length,
   }));
 
   // ONE flick: momentum, i.e. decreasing deltas, and the total travel is
   // decided before the first one — but by the LOOP, not by re-reading the box,
   // because a real fingertip cannot re-read it either.
-  let budget = await box.evaluate(
+  const budget0 = await box.evaluate(
     (el) => el.scrollHeight - el.clientHeight - el.scrollTop,
   );
-  for (let i = 0; i < 60 && budget > 0; i += 1) {
+  const steps: number[] = [];
+  for (let i = 0, budget = budget0; i < 60 && budget > 0; i += 1) {
     const step = Math.max(1, budget * 0.25);
     budget -= step;
+    steps.push(step);
+  }
+  // The split. The head is everything but the last TAIL_STEPS deltas — measured,
+  // that leaves ~12px of travel, so the reader is already inside the 80px band
+  // and the forward ask has gone out. The tail is the part of the SAME momentum
+  // that the product has to survive with the page already in the box.
+  const TAIL_STEPS = 8;
+  expect(
+    steps.length,
+    "動量分不出頭尾 —— 這道護欄看不見「那一頁落地之後同一個手勢還剩下的事件」",
+  ).toBeGreaterThan(TAIL_STEPS + 4);
+  for (const step of steps.slice(0, steps.length - TAIL_STEPS)) {
+    await page.mouse.wheel(0, step);
+  }
+
+  // 🔴 THE PRECONDITION, AS A WAIT. Counted in rows because a reflow can make
+  // the box SHORTER than it started while carrying a whole extra page (see the
+  // header). If it never lands this reds here, saying so.
+  await expect
+    .poll(rows, {
+      message:
+        "前提:那一頁在同一個手勢還沒走完之前沒有落地 —— 否則這條測的不是同一件事",
+      timeout: 5000,
+    })
+    .toBeGreaterThan(before.rows);
+
+  for (const step of steps.slice(steps.length - TAIL_STEPS)) {
     await page.mouse.wheel(0, step);
   }
 
@@ -610,12 +721,13 @@ test("同一個手勢用真的滾輪做一次 —— 仍然只買一頁", async 
 
   const settled = await box.evaluate((el) => ({
     h: el.scrollHeight,
+    rows: el.querySelectorAll(".chat__msg").length,
     distance: el.scrollHeight - el.scrollTop - el.clientHeight,
   }));
   expect(
-    settled.h,
-    "前提:那一頁是在 flick 還在走的時候落地的,箱子當場長高 —— 否則這條測的不是同一件事",
-  ).toBeGreaterThan(before.h);
+    settled.rows,
+    "那一頁又從箱子裡不見了 —— 這條護欄後半段測的不是同一件事",
+  ).toBeGreaterThan(before.rows);
   expect(
     settled.distance,
     "貼上來的那一頁必須留在視野下方 —— 讀的人沒有被自己的動量帶下去",

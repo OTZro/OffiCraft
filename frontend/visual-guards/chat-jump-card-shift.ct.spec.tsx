@@ -1,22 +1,25 @@
 // HOTSPOT — 跳過去之後,目標自己又被擠下去 (T-48).
 //
 // 請示卡 ride the chat stream as ordinary messages carrying only a card id; the
-// CARD is a second, later fetch. A WAITING card is the one that GROWS when it
-// lands (summary, body, option chips, the composer) — an answered/expired one
-// mounts collapsed and never fetches at all. So a waiting card sitting ABOVE a
-// jump target pushes that target down AFTER the jump has already landed on it,
-// and the reader watches the line they asked for slide out from under them.
+// CARD is a second, later fetch. That fetch used to be the thing that GREW —
+// summary, body, option chips, composer — so a 待回覆 card sitting ABOVE a jump
+// target pushed that target down AFTER the jump had landed on it, and the
+// reader watched the line they asked for slide out from under them.
 //
-// jsdom cannot reach any of this: no layout engine, every rect is 0. The
-// ORDERING half of the same fix (the card is fetched BEFORE the commit, never
-// after it) is pinned in jsdom by ChatArea.anchor-entry.test.tsx's shared
-// afterEach; this file is the half that measures what the reader sees.
+// 🔴 WHAT THIS GUARD PINS SINCE 2026-09-04 (owner `c-6f054c1cb481`). The fix is
+// no longer "fetch the card before committing the messages" — it is that EVERY
+// card, waiting ones included, renders COLLAPSED: one row built from what the
+// carrying message already carries (the summary IS the message body, the status
+// IS its hint), so there is no fetch to be late with and no interior to grow
+// into. This spec therefore asserts the STRONGER thing: the target does not
+// move AND the page never asked for the card at all.
 //
-// 🔴 WHAT MAKES OR UNMAKES THIS GUARD IS **WHERE THE CARD IS**, NOT THE WIDTH —
-// and that corrects the brief this was written from, which said the shift is
-// +254px at 1280 and 0 at 390 "because browser scroll anchoring absorbs it".
-// Measured here, in this story, on the pre-fix code (card 70px on the first
-// frame → 591px once it lands):
+// jsdom cannot reach any of this: no layout engine, every rect is 0.
+//
+// 🔴 WHERE THE CARD IS MATTERS, AND THAT CORRECTS THE BRIEF THIS WAS WRITTEN
+// FROM (which said the shift is +254px at 1280 and 0 at 390 "because browser
+// scroll anchoring absorbs it"). Measured in this story on the pre-fix code
+// (card 70px on the first frame → 591px once it landed):
 //
 //   · card IN VIEW above the target, 1280×800 : target y 282.4 → 803.8  (+521px)
 //   · card IN VIEW above the target,  390×844 : target y 303.4 → 503.5  (+200px)
@@ -43,7 +46,7 @@ for (const [label, width, height] of [
   ["1280", 1280, 800],
   ["390", 390, 844],
 ] as const) {
-  test(`${label}px: the jump target does not move once the waiting card fills in`, async ({
+  test(`${label}px: the jump target does not move, and the waiting card is never fetched`, async ({
     mount,
     page,
   }) => {
@@ -55,11 +58,7 @@ for (const [label, width, height] of [
     const first = (await target.boundingBox())!;
 
     // The card's ROW is on screen and sits ABOVE the target — the only position
-    // from which it can push it. Asserted on the FIRST frame, and deliberately
-    // WITHOUT any claim about its height: on the broken code the card is still
-    // empty at this moment (measured 70px at 1280, 51px at 390), so a height
-    // assertion here would fail BEFORE the shift assertion below and the guard
-    // would be reporting the wrong thing.
+    // from which it could push it.
     const card = cmp.locator('[data-testid="chat-reply-card"]');
     await expect(card).toBeVisible();
     const cardFirst = (await card.boundingBox())!;
@@ -67,13 +66,12 @@ for (const [label, width, height] of [
       cardFirst.y,
       "the card must sit ABOVE the jump target, or it cannot push it",
     ).toBeLessThan(first.y);
-    // …and its BOTTOM EDGE — the seam that everything below it rides on — must
-    // be IN VIEW. A card whose growth happens entirely above the fold is
-    // compensated EXACTLY by Chrome's scroll anchoring (measured: +873px of
-    // growth, scrollTop 4910 → 5783, target unmoved), which is a real behaviour
-    // and a useless fixture — the mutant passes there. This spec's first cut put
-    // the card five rows higher and did exactly that. Measured, so it is a fact
-    // and not a caution.
+    // …and its BOTTOM EDGE — the seam everything below it rides on — must be IN
+    // VIEW. A card whose growth happens entirely above the fold is compensated
+    // EXACTLY by Chrome's scroll anchoring (measured: +873px of growth,
+    // scrollTop 4910 → 5783, target unmoved), which is a real behaviour and a
+    // useless fixture — the mutant passes there. Measured, so it is a fact and
+    // not a caution.
     const port = (await cmp.locator(".chat__messages").boundingBox())!;
     const cardBottom = cardFirst.y + cardFirst.height;
     expect(
@@ -82,34 +80,44 @@ for (const [label, width, height] of [
     ).toBeGreaterThanOrEqual(port.y);
     expect(cardBottom).toBeLessThanOrEqual(port.y + port.height);
 
-    // The card's own fetch is 120ms behind the thread in this story; 500ms
-    // leaves it no excuse.
+    // The card's fetch would have been 120ms behind the thread in this story;
+    // 500ms leaves it no excuse.
     await page.waitForTimeout(500);
 
-    const after = (await target.boundingBox())!;
     // (1) CORE red→green.
+    const after = (await target.boundingBox())!;
     expect(
       Math.abs(after.y - first.y),
-      `the jump target moved ${(after.y - first.y).toFixed(1)}px after the reply card filled in — the reader watched the line they jumped to slide away`,
+      `the jump target moved ${(after.y - first.y).toFixed(1)}px — the reader watched the line they jumped to slide away`,
     ).toBeLessThanOrEqual(SUBPIXEL_PX);
 
-    // The DENOMINATOR, taken at the END, where it is true in BOTH worlds — so it
-    // can only ever explain a failure of (1), never pre-empt one. Without it this
-    // test would pass on a story that never drew a waiting card at all. Both
-    // halves: the card is EXPANDED (a collapsed 已回覆 stub is already its final
-    // height and could never produce this shift), and it is a TALL surface — i.e.
-    // there really was growth available to push the target with.
-    await expect(
-      cmp.locator(".reply-card--collapsed"),
-      "the card under test must be the expanded WAITING interior",
-    ).toHaveCount(0);
-    expect(
-      (await card.boundingBox())!.height,
-      "a waiting card is a tall surface — a short one would make the shift unmeasurable",
-    ).toBeGreaterThan(150);
-
-    // (2) …and the target did not merely stay still by being off screen.
+    // (2) …and it did not merely stay still by being off screen.
     expect(after.y).toBeGreaterThanOrEqual(port.y - 1);
     expect(after.y).toBeLessThanOrEqual(port.y + port.height + 1);
+
+    // (3) THE STRONGER FORM: nothing was fetched, so nothing could arrive late.
+    // This is the assertion that would survive somebody re-introducing a
+    // compensator: a fix that absorbs the growth still fetches, this one does
+    // not ask at all.
+    expect(
+      await page.evaluate(() => window.__cardFetches ?? -1),
+      "a collapsed card must not fetch — the row is built from what the message already carries",
+    ).toBe(0);
+    expect(
+      (await card.boundingBox())!.height,
+      "the collapsed row must not have changed height either",
+    ).toBeCloseTo(cardFirst.height, 0);
+
+    // THE DENOMINATOR, taken at the END so it can only ever explain a failure of
+    // (1)-(3) and never pre-empt one. Without it this test would pass on a story
+    // whose card had nothing to grow into — i.e. on a fixture that measures
+    // nothing. Expanding it on purpose proves the growth was real and that what
+    // (1) pinned is the WITHHOLDING of it, not its absence.
+    await expect(cmp.locator(".reply-card--collapsed")).toHaveCount(1);
+    await cmp.locator('[data-testid="chat-reply-card-expand"]').click();
+    await expect(cmp.locator(".reply-card--collapsed")).toHaveCount(0);
+    await expect
+      .poll(async () => (await card.boundingBox())!.height, { timeout: 5000 })
+      .toBeGreaterThan(150);
   });
 }

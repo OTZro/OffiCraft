@@ -251,6 +251,7 @@ export const en: Dict = {
     replyInChat: "Reply in chat",
     gateMark: "Approval",
     replyAnsweredTag: "Answered",
+    replyWaitingTag: "Pending",
     expandReply: "Expand reply card",
     collapseReply: "Collapse reply card",
     // Artifact set (T-3dc5): the deliverables (file/image/link) pinned onto a

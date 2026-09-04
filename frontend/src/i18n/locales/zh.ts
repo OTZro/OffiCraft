@@ -283,8 +283,9 @@ export const zh = {
     // 審批持久標記:曾經開過卡/標過 gate 的 step,做完後仍看得出(owner
     // 2026-07-14:不消失的標記)
     gateMark: "審批",
-    // 已回覆卡收合成一行摘要(可展開)
+    // 卡片一律收合成一行摘要(可展開),標籤說明它現在的狀態
     replyAnsweredTag: "已回覆",
+    replyWaitingTag: "待回覆",
     expandReply: "展開回覆卡",
     collapseReply: "收合回覆卡",
     // 產物集(T-3dc5):任務卡上釘的交付物(檔案/圖片/連結)。徽章「產物 N」

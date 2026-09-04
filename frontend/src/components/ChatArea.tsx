@@ -661,21 +661,6 @@ export function ChatArea({
   // landing points inside `MarkdownPreviewOverlay` structurally safe: the
   // overlay cannot outlive the conversation, so none of its writers can either.
   const [mdPreview, setMdPreview] = useState<
-    | {
-        kind: "attachment";
-        title: string;
-        url: string;
-        attachmentId: string;
-        // Carried even though NOTHING constructs this variant today (no setter
-        // in this file builds kind:"attachment"; the two that exist build
-        // "message" and "staged-image"). It is here so that reviving the branch
-        // cannot silently lose the attachment's TYPE: without a mime the
-        // overlay falls back to markdown, and a file whose type matters would
-        // be drawn as the wrong thing — with nothing going red. Keeping the
-        // field costs one line; discovering the
-        // omission costs a reader believing a wrong screen.
-        mime?: string;
-      }
     | { kind: "message"; title: string; source: string }
     | { kind: "staged-image"; title: string; imageSrc: string }
     | null
@@ -1258,8 +1243,9 @@ export function ChatArea({
     // The owner named that cost and took it.
     // ⚠️ BUT THE TWO SOURCES THAT RULING NAMES ARE BOTH CLOSED AT SOURCE NOW,
     // not compensated for here: a thumbnail has a fixed 220px box (office.css
-    // `.chat__msg-image`) and a WAITING reply card is in hand before its rows
-    // are committed (`lib/threadCommit` → `lib/replyCardCache`). What is still
+    // `.chat__msg-image`) and a reply card renders COLLAPSED, at its final
+    // height, from what the carrying message already says — so it has nothing
+    // to fetch and nothing to grow into (T-48, owner 2026-09-04). What is still
     // accepted is late content of every OTHER kind.
     // Do not add a compensator.
   }, [jumpToMsgId, messages, loadAround, resetToLatest, jumpRetry]);
@@ -2588,15 +2574,7 @@ export function ChatArea({
        * composer image rides its data: URI. A STORED attachment is not here:
        * its chip is rendered by `AttachmentStrip`, which owns that overlay. */}
       {mdPreview &&
-        (mdPreview.kind === "attachment" ? (
-          <MarkdownPreviewOverlay
-            title={mdPreview.title}
-            url={mdPreview.url}
-            attachmentId={mdPreview.attachmentId}
-            mime={mdPreview.mime}
-            onClose={() => setMdPreview(null)}
-          />
-        ) : mdPreview.kind === "staged-image" ? (
+        (mdPreview.kind === "staged-image" ? (
           <MarkdownPreviewOverlay
             title={mdPreview.title}
             imageSrc={mdPreview.imageSrc}

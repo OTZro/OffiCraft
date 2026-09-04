@@ -289,49 +289,38 @@ beforeEach(() => {
 /** 🔴 THE INVARIANT THIS WHOLE GROUP IS HELD TO (T-48, guard B).
  *
  * 請示卡 ride the chat stream as ordinary messages carrying only a card id; the
- * card itself is a SEPARATE fetch. A WAITING card is the one that grows when it
- * lands (options, chips, composer) — an answered/expired one mounts collapsed
- * and never fetches at all. So a waiting card sitting ABOVE a scroll target
- * pushes that target down AFTER the jump has landed on it: measured +254px at
- * 1280 wide.
+ * card itself is a SEPARATE fetch, and a card that fetched after its row was
+ * painted GREW under everything below it — a waiting card above a scroll target
+ * pushed that target down after the jump had landed on it (+254px at 1280).
  *
- * The rule, therefore: if a render put a `replyCardStatus: "waiting"` row on
- * screen, that row's `getReplyCard` must ALREADY HAVE HAPPENED — never after the
- * commit that painted it. It is asserted here rather than inside one test
- * because it must hold of every commit path this file drives, and the way this
- * machinery has failed before is one path nobody remembered to check.
- *
- * ⚠️ BUT SAY WHAT THE DENOMINATOR ACTUALLY IS (independent review F8). Exactly
- * ONE test in this file seeds a waiting card, so for the other tests here this
- * afterEach is vacuously true — it is a live assertion over the ANCHOR-ENTRY
- * path and a standing net over the rest, not evidence about them. The other two
- * commit paths carry their own denominators in
- * `useChat.scrollback.test.ts` ("loadNewer's page has its waiting card in hand
- * BEFORE the row reaches the caller", and the same for `resetToLatest`).
+ * The fix used to be "commit must hold the card first". It is now "the row does
+ * not need the card at all": EVERY card mounts COLLAPSED, at its final height,
+ * from what the carrying message already says (owner 2026-09-04). So the rule
+ * this group is held to is the STRONGER one, and it needs no ordering to state:
+ * rendering a thread — waiting cards included — must fire NO `getReplyCard` at
+ * all. Nothing can grow late if nothing is ever read.
  *
  * ⚠️ It carries its own DENOMINATOR. An invariant over an empty set is green for
  * the wrong reason, and most tests in this file seed no cards at all — so a test
- * that DID seed a waiting card must be seen to have painted it, or the guard
- * says so instead of passing. */
+ * that DID seed a waiting card must be seen to have painted it, collapsed, or
+ * the guard says so instead of passing. */
 afterEach(() => {
-  const late = cardReads.filter((r) => r.rowPainted > 0);
   expect(
-    late,
-    "a WAITING card was fetched while its row was already on screen — the row will now grow under the reader, which is exactly the +254px shift. The thread must not be committed until lib/replyCardCache has the card.",
+    cardReads,
+    "a card was fetched just by rendering the thread — the row can now grow under the reader, which is exactly the +254px shift. Every card renders COLLAPSED and reads nothing until it is expanded.",
   ).toEqual([]);
-  if (seededWaitingCards.length > 0) {
+  for (const id of seededWaitingCards) {
     // The denominator: this test really did drive a waiting card onto the
     // screen, so the emptiness above is a result and not an absence.
+    const rows = document.querySelectorAll(`[data-reply-card-id="${id}"]`);
     expect(
-      cardReads.map((r) => r.id).sort(),
-      "the seeded waiting card was never read at all — the invariant above would then be vacuous",
-    ).toEqual([...seededWaitingCards].sort());
-    for (const id of seededWaitingCards) {
-      expect(
-        document.querySelectorAll(`[data-reply-card-id="${id}"]`).length,
-        `the seeded waiting card ${id} never reached the screen`,
-      ).toBeGreaterThan(0);
-    }
+      rows.length,
+      `the seeded waiting card ${id} never reached the screen`,
+    ).toBeGreaterThan(0);
+    expect(
+      rows[0].classList.contains("reply-card--collapsed"),
+      `the seeded waiting card ${id} was painted EXPANDED — an expanded card is one that has to fetch, and the fetch is what grows the row`,
+    ).toBe(true);
   }
 });
 
@@ -366,17 +355,18 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
     expect(bubbles(container)).not.toContain("a79");
   });
 
-  it("跳轉目標上方的等待中請示卡,在那一則落地之前就已經握在手上", async () => {
-    // 🔴 GUARD B 的分母,也是整包東西的理由(T-48)。訊息串跟請示卡是**兩次**
+  it("跳轉目標上方的等待中請示卡是收合的,一次都不去撈它", async () => {
+    // 🔴 GUARD B 的分母,也是整包東西的理由(T-48)。訊息串跟請示卡本來是**兩次**
     // 抓取:卡片晚到,而「等待中」的卡片一到就長高(選項、chips、輸入框)。
     // 只要它坐在跳轉目標的**上面**,目標就會在跳轉已經落地之後被往下推 ——
     // 1280 寬實測 +254px。
     //
-    // 這一條把那個形狀擺出來:錨點在 a40,卡片在 a35(目標上方),然後交給上面
-    // 那個共用的 afterEach 去問唯一重要的問題 —— 這張卡是在它那一列**被畫出來
-    // 之前**讀的,還是之後?jsdom 量不到 254px(它沒有版面),但它量得到順序,
-    // 而順序就是因;像素那一半由 chat-jump-card-shift.ct.spec.tsx 在真的
-    // Chromium、1280 寬上量。
+    // owner 2026-09-04 之後,待回覆的卡跟已回覆的一樣先收合:第一格畫出來就是
+    // 最終高度,而且沒有第二次抓取可以讓它長高。這一條把那個形狀擺出來 ——
+    // 錨點在 a40,卡片在 a35(目標上方)—— 然後交給上面那個共用的 afterEach 去
+    // 問唯一重要的問題:整段 render 有沒有讀過任何一張卡?jsdom 量不到 254px
+    // (它沒有版面),但它量得到「有沒有去抓」,而那就是因;像素那一半由
+    // chat-jump-card-shift.ct.spec.tsx 在真的 Chromium、1280 寬上量。
     seed(A, "a", 80, 100);
     seedWaitingCard(A, "a35-card", "rc-1", 135.5);
     log.sort((x, y) => x.ts - y.ts);
@@ -391,12 +381,13 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
     ).map((n) => n.getAttribute("data-msg-id"));
     expect(rows.indexOf("a35-card")).toBeGreaterThanOrEqual(0);
     expect(rows.indexOf("a35-card")).toBeLessThan(rows.indexOf("a40"));
-    // 而且它是**展開的**等待中卡片 —— 收合的已回覆卡不會長高,拿它當分母等於
-    // 沒有分母。
-    expect(
-      container.querySelector(".reply-card--collapsed"),
-      "等待中的卡片不該是收合的 stub",
-    ).toBeNull();
+    // 而且它是**收合的待回覆**卡:標籤說待回覆(不是已回覆),但沒有選項、沒有
+    // 輸入框 —— 也就是沒有東西在等著長出來。
+    const card = container.querySelector('[data-reply-card-id="rc-1"]')!;
+    expect(card.getAttribute("data-reply-card-status")).toBe("waiting");
+    expect(card.textContent).toContain("待回覆");
+    expect(card.querySelectorAll(".reply-option")).toHaveLength(0);
+    expect(card.querySelector(".reply-composer")).toBeNull();
   });
 
   it("捲到底只撈一頁,而且那一頁不把畫面拉到底 —— 下一頁要讀的人再捲一次", async () => {

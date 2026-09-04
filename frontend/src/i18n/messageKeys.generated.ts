@@ -1147,6 +1147,7 @@ export const MESSAGE_KEYS: readonly string[] = [
   "tasks.replyBadge",
   "tasks.replyHeader",
   "tasks.replyInChat",
+  "tasks.replyWaitingTag",
   "tasks.send",
   "tasks.status.done",
   "tasks.status.duplicated",

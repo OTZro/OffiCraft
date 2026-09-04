@@ -3,11 +3,12 @@
 // (meta.reply_card_id), so this component fetches the SINGLE card for its full
 // shape (options / status / answer). Two things have since carved exceptions
 // out of that "always fetches on mount", and both are load-bearing:
-//   · a terminal-hinted card mounts COLLAPSED and fetches only on expand
-//     (owner 已回覆卡預設不載 — see `initialStatus`);
-//   · a card the prefill cache already holds AT THE HINTED STATUS skips the
-//     mount fetch (see `skipEagerFetchRef`), because the prefill just paid for
-//     that exact GET.
+//   · EVERY card mounts COLLAPSED and fetches only on expand (owner
+//     2026-09-04 `c-6f054c1cb481`: 待回覆的卡也跟已回覆一樣先不展開). The stub
+//     needs nothing this component has to go and get — the summary is the
+//     carrying message's own body and the status is its hint — so the row's
+//     first painted frame is already its final height, for every card, and a
+//     chat history of dozens of cards fires zero `getReplyCard`s.
 // Every `reply_card` SSE delta still refetches a non-terminal card, and that
 // refetch IS the two-way sync: answering on the 等我回覆 page (or another
 // window) flips this card to answered in place, and answering here fans the
@@ -27,7 +28,6 @@ import { useI18n } from "../i18n";
 import type { ReplyCard, ReplyCardAnswerInput } from "../api/adapter";
 import { api } from "../api";
 import { useHashRoute } from "../lib/hashRoute";
-import { getCachedReplyCard, putReplyCard } from "../lib/replyCardCache";
 import { Markdown } from "./Markdown";
 import {
   ReplyCardAnsweredBody,
@@ -50,69 +50,35 @@ export function ChatReplyCard({
    * fails, so the ask is never a blank bubble; also the collapsed-stub label
    * for a not-yet-expanded answered card (no card fetched yet). */
   fallbackSummary: string;
-  /** The carrying message's read-time `reply_card_status` hint. When it says
-   * ANSWERED or EXPIRED (both terminal) the card mounts COLLAPSED and does NOT
-   * fetch — owner rule 已回覆卡預設不載: the full card loads only when the
-   * owner expands it, so a chat history of dozens of settled cards no longer
-   * fires one getReplyCard each. A waiting hint (or null/undefined — unknown)
-   * mounts EXPANDED; it used to fetch on mount unconditionally, and since T-48
-   * it skips that fetch when the prefill cache holds a seed AGREEING with this
-   * hint — which on `useChat`'s commit paths it does (the prefill fetched it
-   * because this very message said `waiting`). A seed that DISAGREES is stale
-   * and is refetched; see the seed note below. */
+  /** The carrying message's read-time `reply_card_status` hint — what the
+   * collapsed stub labels itself with (待回覆 / 已回覆 / 已過期) before any card
+   * has been fetched. Null/undefined (unknown) is treated as 待回覆; the first
+   * expand replaces it with the card's own status. */
   initialStatus?: ReplyCard["status"] | null;
 }) {
   const { t } = useI18n();
   const [, setRoute] = useHashRoute();
-  // 🔴 SEEDED FROM THE PREFILL CACHE, AND THAT IS HALF OF THE ANTI-SHIFT FIX
-  // (T-48). Without a seed this card mounts empty, paints at its collapsed
-  // height, fetches, and then GROWS — pushing everything below it down after the
-  // scroll has already landed (measured +254px at 1280 wide). `useChat` cannot
-  // commit a thread carrying a WAITING card until that card is in this cache
-  // (lib/threadCommit → lib/replyCardCache), so on every commit path the seed is
-  // there and the row's first painted frame is already its final height.
-  //
-  // ⚠️ Read ONCE, at mount, on purpose: this is an initial value, not a
-  // subscription. Everything after mount comes from this component's own reads
-  // and writes, which are the newer truth (see `readGenRef`).
-  const seed = useState(() => getCachedReplyCard(replyCardId) ?? null)[0];
-  // 🔴 …BUT A SEED THE STREAM HAS ALREADY OVERTAKEN IS NOT PAINTED (T-48,
-  // independent review F-G). The note below explains why a DISAGREEING seed is
-  // refetched — and it used to read as though "refetched" meant "not painted".
-  // It did not: `skipEagerFetchRef` consulted the agreement, `useState` did not,
-  // so the first frame still came from the stale seed. In one direction that
-  // matters: a seed saying `waiting` under a message hint that says the card is
-  // SETTLED paints option chips and a composer over an already-answered card,
-  // one click from POSTing to it, for the frames until the refetch lands.
-  //
-  // ONLY that direction. The other one — a settled seed under a `waiting` hint —
-  // is this session's own newer write, invites no action, and is still painted,
-  // because refusing to paint it would put the row back into the "mounts small,
-  // then grows" shape (+254px) that seeding exists to remove. A waiting-under-
-  // terminal seed costs nothing to withhold: that hint also mounts the card
-  // COLLAPSED, so there is no body to hold a height open in the first place.
-  const seedOvertaken =
-    seed !== null &&
-    seed.status === "waiting" &&
-    (initialStatus === "answered" || initialStatus === "expired");
-  const [card, setCard] = useState<ReplyCard | null>(
-    seedOvertaken ? null : seed,
-  );
+  const [card, setCard] = useState<ReplyCard | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  // Lazy-load gate: a terminal-hinted card (answered/expired) starts COLLAPSED
-  // (no fetch) and loads its full shape only on expand; every other case
-  // starts expanded, and fetches unless the seed above already answered it.
-  const lazyTerminal =
-    initialStatus === "answered" || initialStatus === "expired";
-  const [expanded, setExpanded] = useState(!lazyTerminal);
-  // Latest card status, read inside the SSE callback WITHOUT re-subscribing.
-  // SEEDED from the hint so a collapsed terminal card (not yet fetched) also
+  // 🔴 EVERY CARD MOUNTS COLLAPSED, AND THAT IS WHAT REMOVED THE SHIFT (T-48,
+  // owner 2026-09-04). It used to be only the terminal-hinted ones: a waiting
+  // card mounted EXPANDED and empty, painted at its collapsed height, fetched,
+  // and then GREW — pushing everything below it down after the scroll had
+  // already landed (measured +254px at 1280 wide, +200px at 390). The fix used
+  // to be a prefill cache the thread had to await before any message could
+  // reach the view; collapsing the row instead makes the first painted frame
+  // its final height WITHOUT fetching anything, so the cache, the await and the
+  // module that enforced the await are all gone.
+  const [expanded, setExpanded] = useState(false);
+  // Latest known status, read inside the SSE callback WITHOUT re-subscribing.
+  // SEEDED from the message hint so a collapsed, never-fetched TERMINAL card
   // satisfies the T-cdf4 guard below — an unrelated reply_card fan-out must NOT
-  // wake it into a fetch, or lazy-load is defeated on the first SSE delta.
-  const statusRef = useRef<ReplyCard["status"] | null>(
-    lazyTerminal ? initialStatus : null
-  );
+  // wake it into a fetch, or lazy-load is defeated on the first SSE delta. A
+  // collapsed WAITING card deliberately does not carry that immunity: it still
+  // refetches on a delta, which is how its stub flips 待回覆 → 已回覆 in place
+  // when the card is answered from another surface.
+  const statusRef = useRef<ReplyCard["status"] | null>(initialStatus ?? null);
 
   // 🔴 READ GENERATION. Every read of this card takes a ticket and only commits
   // if the ticket is still current; adopting a write takes one too (`adopt`
@@ -136,13 +102,6 @@ export function ChatReplyCard({
   const commitCard = useCallback((fresh: ReplyCard) => {
     ++readGenRef.current;
     statusRef.current = fresh.status;
-    // 🔴 THE WRITE PATHS FEED THE CACHE TOO, NOT ONLY THE READS. A remount — a
-    // jump, a conversation revisit, any commit that rebuilds this row — seeds
-    // itself from the cache, so a cache holding the PRE-ANSWER copy would put
-    // the option chips back over a card this owner has already answered. That is
-    // the same defect `readGenRef` closes one layer down, and it needs closing
-    // on this layer as well.
-    putReplyCard(fresh);
     setCard(fresh);
     setLoadError(false);
   }, []);
@@ -154,41 +113,15 @@ export function ChatReplyCard({
     // adopted response) → drop this now-stale card rather than un-answer it.
     if (gen !== readGenRef.current) return;
     statusRef.current = fresh.status;
-    putReplyCard(fresh);
     setCard(fresh);
     setLoadError(false);
   }, [replyCardId]);
 
-  // 🔴 A SEEDED CARD DOES NOT RE-FETCH ON MOUNT (T-48). The prefill has already
-  // paid for this exact GET one await earlier; firing it again would double
-  // every waiting card's cost and — worse — would put the row back in the
-  // "renders small, then grows" shape for the frames between mount and the
-  // second response, which is the whole defect. Exactly ONE run of the effect is
-  // skipped: everything after it (an expand, an SSE delta, a re-answer) still
-  // reads through `refetch`.
-  //
-  // 🔴 …AND ONLY WHILE THE SEED AGREES WITH THE MESSAGE STREAM. The seed is
-  // whatever this session last saw for this card, which is NOT necessarily
-  // whatever it is now: a card can be seeded while it is still `waiting` (the
-  // row was on screen then), be answered somewhere this component cannot hear —
-  // the 等我回覆 page, another room, with no `ChatReplyCard` mounted to receive
-  // the `reply_card` delta — and be expanded again from a message whose hint
-  // says ANSWERED. Skipping the fetch on `seed !== null` alone painted that
-  // pre-answer body: option chips and a composer over an already-answered card,
-  // one click from POSTing to it, and nothing would ever refresh it (the cache
-  // never invalidates and `pendingWaitingCardIds` skips ids already held).
-  //
-  // So the seed is only trusted when it says what the stream says. A terminal
-  // hint is never a prefill target, so an agreeing seed there can only have come
-  // from this session's own write (commitCard) — newer than the stream, not
-  // older. Any disagreement refetches.
-  const skipEagerFetchRef = useRef(seed !== null && seed.status === initialStatus);
   useEffect(() => {
+    // The card is fetched on EXPAND and only on expand — a collapsed row shows
+    // what the carrying message already said, so there is nothing to load until
+    // somebody opens it.
     if (!expanded) return;
-    if (skipEagerFetchRef.current) {
-      skipEagerFetchRef.current = false;
-      return;
-    }
     let alive = true;
     refetch().catch((e) => {
       console.warn("ChatReplyCard: card load failed", e);
@@ -289,17 +222,29 @@ export function ChatReplyCard({
     }
   }
 
-  // Collapsed stub for a not-yet-expanded terminal card (owner 已回覆卡預設
-  // 不載): the ask's summary (the carrying message body — no card fetched yet)
-  // + the 已回覆/已過期 tag on one clickable row; expanding fetches the full
-  // card and renders the shared terminal interior below.
+  // Collapsed stub — what EVERY card shows until it is opened (owner
+  // 2026-09-04): the ask's summary (the carrying message's own body) + a
+  // 待回覆／已回覆／已過期 tag on one clickable row. Nothing here is fetched, so
+  // the row is its final height on the first frame. A waiting card that gets
+  // answered elsewhere refetches on the SSE delta, which is why the tag reads
+  // `card` first and the message hint only until then.
   if (!expanded) {
-    const expiredStub = statusRef.current === "expired";
+    const stubStatus = card?.status ?? initialStatus ?? "waiting";
+    const stubTag =
+      stubStatus === "expired"
+        ? { cls: "reply-tag reply-tag--expired", label: t.replies.expiredTag }
+        : stubStatus === "answered"
+          ? {
+              cls: "reply-tag reply-tag--answered",
+              label: t.tasks.replyAnsweredTag,
+            }
+          : { cls: "reply-tag reply-tag--waiting", label: t.tasks.replyWaitingTag };
     return (
       <div
         className="reply-card reply-card--chat reply-card--collapsed"
         data-testid="chat-reply-card"
         data-reply-card-id={replyCardId}
+        data-reply-card-status={stubStatus}
       >
         <button
           type="button"
@@ -311,15 +256,7 @@ export function ChatReplyCard({
           onClick={() => setExpanded(true)}
         >
           <ChevronRightIcon size={12} className="reply-card__caret" />
-          <span
-            className={
-              expiredStub
-                ? "reply-tag reply-tag--expired"
-                : "reply-tag reply-tag--answered"
-            }
-          >
-            {expiredStub ? t.replies.expiredTag : t.tasks.replyAnsweredTag}
-          </span>
+          <span className={stubTag.cls}>{stubTag.label}</span>
           <span className="reply-card__collapsed-summary">
             {fallbackSummary}
           </span>

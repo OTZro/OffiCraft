@@ -286,41 +286,6 @@ const REGISTRY = [
       "one hook instance per room (R13-3), so a commit from a room the owner has left lands in a discarded component; the generation clock is what orders the commits WITHIN a room. 🔴 17 → 23 (T-48): every one of the six thread-writing paths now goes through `lib/threadCommit`, which awaits the page's WAITING reply cards before the rows reach the view — resetToLatest / refetch / load() / loadNewer / loadAround each traded a bare setter for `await commit(seq, …)`, and loadOlder for `await mergeHistory(…)`. The re-signed verdict is the same one: the extra awaits widen the window a newer load can commit inside, and `commit` is where the ticket is re-asked AFTER its own await",
   },
   {
-    file: "lib/threadCommit.ts",
-    kind: "await",
-    count: 2,
-    verdict:
-      "commit() and mergeHistory() each await the page's waiting reply cards before writing. commit re-asks the generation ticket AFTER that await and drops a superseded page; mergeHistory takes no ticket and does NOT check that what it is handed is history — that is a property of its ONE caller, `useChat.loadOlder`, which prepends a page fetched strictly before `messages[0]` and keeps every other field from `prev`, so it can neither supersede nor be superseded; it writes through an updater so a commit landing inside its await window survives in React's `prev`. A second caller re-opens that question. Neither knows the caller's effect liveness — `alive` stays in load()'s own closure, asked on both sides",
-  },
-  {
-    file: "lib/replyCardCache.ts",
-    kind: "await",
-    count: 2,
-    verdict:
-      "prefillWaitingCards' own await on the settle/deadline race and the LAZY `await import(\"../api\")` (the per-card GET is a `.then` chain since review F4, so it can be registered in `inFlight` synchronously — an `await` there would let a second commit slip in before the entry existed and issue a duplicate GET) — static there would pull the api layer into the module registry from src/test/setup.ts, before any test file's own vi.mock, and silently un-mock the prefill (measured: the real mock backend answered 404). Keyed by globally-unique card id and it only ever WRITES a card into the shared table, so a fetch that lands after the screen has moved on can at worst warm the cache for a card nobody is showing — never overwrite one room's value with another's",
-  },
-  {
-    file: "lib/replyCardCache.ts",
-    kind: ".then/.catch/.finally",
-    count: 4,
-    verdict:
-      "the allSettled arm feeding the deadline race (it resolves a value nobody stores), plus the per-card read's own three arms: `.then` writes the card into the shared table, `.catch` records the id as abandoned and re-throws so allSettled still settles, `.finally` drops it from `inFlight`. All three are keyed by the globally-unique card id and none reads a conversation, so landing after the screen has moved on can at worst warm — or give up on — a card nobody is showing",
-  },
-  {
-    file: "lib/replyCardCache.ts",
-    kind: "setTimeout/setInterval",
-    count: 1,
-    verdict:
-      "🔴 THE LIVENESS DEADLINE, and it is the one landing point here that MUST fire late to be doing its job. Every commit point awaits this function, so a getReplyCard that never answers would hold the whole thread off the screen — an empty room. The timer aborts the WAIT (not the requests: getReplyCard takes no signal) after REPLY_CARD_PREFILL_DEADLINE_MS and is cleared in a finally either way; a fire after the screen moved on resolves a promise nobody is awaiting",
-  },
-  {
-    file: "lib/replyCardCache.ts",
-    kind: "addEventListener",
-    count: 1,
-    verdict:
-      "the AbortSignal listener that ends that wait, `{ once: true }` on a controller created and dropped inside one call; nothing outlives the call and no room's state is written from it",
-  },
-  {
     file: "hooks/useChat.ts",
     kind: ".then/.catch/.finally",
     count: 2,
@@ -686,24 +651,6 @@ const MODULE_STATE = [
     name: "BARE_URL_RE",
     verdict:
       "🔴 A `g`-FLAGGED REGEX, so it really does carry mutable state across calls — `lastIndex` — and that is why it is here rather than filed as a constant (clause 2 sees it: `BARE_URL_RE.lastIndex = 0`). What keys it: NOTHING, and it needs no key, because the value it can carry between calls is an offset into a string, not a room's content — there is no conversation in a scan cursor, and the pattern itself is the same in every room. Nor can the offset survive one call: `autolinkBareUrls` is its ONE reader (measured: `BARE_URL_RE` appears in no other file and in no other function) and it resets `lastIndex = 0` as its first statement, so a residue left by an earlier scan — or by a `return`/throw out of the middle of the loop — is overwritten before the next `exec`. The scan is synchronous and non-reentrant: the loop body calls only `trimUrlTail` (pure) and `createElement`, never back into itself, so no second string can interleave with a first",
-  },
-  {
-    file: "lib/replyCardCache.ts",
-    name: "cards",
-    verdict:
-      "keyed by the globally-unique reply-card id (`rc-…`), which names the same card in every room — the same property that makes useWorkerCodenames' cache safe. It holds one card's own server-rendered value and nothing derived from a conversation, so there is no room's value in it to cross over; `ChatReplyCard` writes back on both its read and its write paths so a remount cannot seed a pre-answer copy",
-  },
-  {
-    file: "lib/replyCardCache.ts",
-    name: "inFlight",
-    verdict:
-      "one in-flight read per card id, same global key as `cards` — it exists so a second commit naming an id already in the air attaches to that promise instead of leaving another un-cancelled GET behind (the deadline bounds the wait, not the request). Entries are deleted in the read's own `finally`, so nothing outlives the request and no room's value is in it",
-  },
-  {
-    file: "lib/replyCardCache.ts",
-    name: "abandoned",
-    verdict:
-      "card ids whose read FAILED, same global key again — the negative memory that stops every later commit re-asking for a 404 and paying the full deadline again. A deadline is not a failure and never lands here. It holds ids, not conversation state, and an id names the same card in every room",
   },
   {
     file: "lib/chatDraftStore.ts",

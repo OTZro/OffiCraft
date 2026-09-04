@@ -471,12 +471,12 @@ export function useChat(
   // IS screen order: a late commit is not a cosmetic race.
   //
   // 🔴 THE CLOCK ITSELF NOW LIVES IN `lib/threadCommit` (T-48), because the
-  // re-check has to happen AFTER the card prefill and there must be exactly one
-  // copy of that ordering. `view.takeTicket()` mints; `view.commit(seq, …)` is
-  // the only thing that can advance the committed watermark, and it does so
-  // after its await, never before — assigning first would mark a load as newest
-  // while it is still waiting on a card, and a load that started later and
-  // finished sooner would then be judged superseded by a page it precedes.
+  // re-check has to happen at the COMMIT rather than at each call site and there
+  // must be exactly one copy of that ordering. `view.takeTicket()` mints;
+  // `view.commit(seq, …)` is the only thing that can advance the committed
+  // watermark, and it re-asks the ticket at the moment it writes — a load that
+  // started later and finished sooner must not be judged superseded by a page
+  // it precedes.
   // 🔴 THE FORWARD WALK'S ONLY STOP THAT IS NOT `hasNewer` (T-48). Holds the
   // anchor id whose forward page came back carrying nothing this thread did not
   // already have — the shape a DUPLICATE anchor request produces (measured: two
@@ -567,15 +567,19 @@ export function useChat(
   //   · 「called twice」 — 「補送的戳記由 render 回寫」 in
   //     `useChat.scrollback.test.ts` counts it: 2 debts against 5 bare / 6
   //     StrictMode calls, and every extra one a no-op.
-  //   · 「called for something else」 — 「那一頁還沒上畫面時,別的 commit 觸發的
-  //     render 不准把戳記清掉」, same file. A BOOLEAN LOSES THIS ONE. A hung
-  //     reply card holds `commit` inside `prefillWaitingCards` with the debt
-  //     already written; `loadOlder` (no ticket, no `loadingNewer`) commits and
-  //     RENDERS in that window; a boolean is cleared by a render carrying none
-  //     of the owed rows. The gesture that then arrives in the gap between this
-  //     function releasing its lock and React writing the rows buys a SECOND
-  //     page for one gesture. Deterministic: boolean mutant red 15 in 15, the
-  //     row green 15 in 15.
+  //   · 「called for something else」 — 🔴 NO LONGER MEASURED, AND THE TEST
+  //     THAT MEASURED IT IS GONE (T-48, 2026-09-04). Its premise was the reply
+  //     card prefill: a hung card held `commit` past the point where the debt
+  //     was already written, `loadOlder` (no ticket, no `loadingNewer`)
+  //     committed and RENDERED inside that window, and a BOOLEAN was cleared by
+  //     a render carrying none of the owed rows (boolean mutant red 15 in 15,
+  //     the row green 15 in 15). Cards render collapsed now, so `commit` awaits
+  //     nothing and there is no window between writing this ref and `setThread`
+  //     to interleave with — the test could no longer construct its own premise
+  //     and was deleted rather than rewritten into something that passes for a
+  //     reason it does not state. The ROW is still the right shape (it names
+  //     WHICH page is owed, a boolean cannot), it is simply no longer the
+  //     narrower claim of the two that is under measurement.
   //   · 「not called at all」 — still NOT measured, and `owedAbsent = 0` cannot
   //     stand in for it: a 0 there is what 「no test walks this path」 and 「the
   //     check is right」 both look like.
@@ -880,10 +884,10 @@ export function useChat(
     // room now, so a refresh started before the switch commits into a component
     // React has already discarded.
     //
-    // This path already tolerated a long await window — backfillSeam puts up to
-    // MAX_BACKFILL_PAGES round trips right here — so the card prefill inside
-    // `commit` is one more of the same kind, asked in the one place that also
-    // re-checks the ticket after it.
+    // This path tolerates a long await window — backfillSeam puts up to
+    // MAX_BACKFILL_PAGES round trips right here — and `commit` re-checks the
+    // ticket at the moment it writes, which is the one place that ordering is
+    // decided.
     const ok = await view.commit(seq, (prev) =>
       mergeLatestPage(prev, next, fill, gap),
     );
@@ -1039,12 +1043,12 @@ export function useChat(
             if (!r.joined) gap = true;
           }
           // 🔴 THE ORDERING GUARD (review B2) NOW LIVES INSIDE `commit`. The
-          // backfill above is up to 6 round-trips long and the card prefill adds
-          // one more await; a load that started AFTER this one can have fetched,
+          // backfill above is up to 6 round-trips long; a load that started
+          // AFTER this one can have fetched,
           // backfilled and committed inside that window. Committing then would
           // splice an older newest-page on top of a newer thread — nothing lost,
           // nothing duplicated, and the newest messages moved to the top of the
-          // screen. `commit` re-asks after ITS await and drops instead.
+          // screen. `commit` re-asks at the moment it writes and drops instead.
           //
           // ⚠️ `alive` is asked on BOTH sides of the commit and stays out of
           // `commit` itself: whether this effect is still mounted is the

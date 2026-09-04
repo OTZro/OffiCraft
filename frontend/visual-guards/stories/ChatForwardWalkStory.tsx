@@ -130,19 +130,27 @@ const peer: Member = {
   unreadCount: 0,
 };
 
+// 🔴 THERE IS NO COLUMN-WIDTH KNOB, AND ADDING ONE BACK WILL NOT WORK (T-48,
+// fix5). This used to take a `widthPx` that set the wrapper's width, on the
+// theory that it pinned the column and took the reflow out of a guard's answer.
+// It did neither: `.chat` is a flex ITEM with no `flex-grow`, so it sits at its
+// own max-content whatever the wrapper is — MEASURED, `.chat__messages` came
+// back 273px at wrapper widths 321, 406, 454, 520 and 900 alike, i.e. the knob
+// changed nothing at all while its doc comment claimed it changed the one thing
+// two guards were relying on.
+//
+// The reflow itself is real and is left ON deliberately (it is what exposed the
+// guard's own momentum bug, fix3 §2.4). Its trigger is now known: when a
+// forward page lands, the composer's 「有新訊息」 chip arms carrying a whole
+// message line as its label, and that 438px label widens the column 321 → 454,
+// rewraps every row shorter and takes the box 15631 → 10110px. A guard that
+// must not have that in its answer has to be written so the reflow cannot
+// change its answer (count rows, not pixels), not by asking for a pin that the
+// layout cannot give it.
 export function ChatForwardWalkStory({
   pageLatencyMs,
-  widthPx,
 }: {
   pageLatencyMs?: number;
-  /** 🔴 PIN THE COLUMN WIDTH — for the guards that must NOT have the reflow in
-   * the answer (T-48, independent review #23). `.chat` is shrink-to-fit inside
-   * the unbounded mount point, so the column oscillates 273 ↔ 406px and row
-   * heights 165 ↔ 102 as content lands (fix3 §2.4). That instability is left on
-   * by DEFAULT and deliberately — it is what exposed the guard's own momentum
-   * bug — but a guard measuring what a CLAMP does needs the box to change size
-   * only when it is told to. */
-  widthPx?: number;
 } = {}) {
   pageLatency = pageLatencyMs ?? PAGE_LATENCY_MS;
   return (
@@ -153,7 +161,6 @@ export function ChatForwardWalkStory({
       <div
         style={{
           height: 720,
-          width: widthPx,
           display: "flex",
           background: "var(--color-main-bg)",
         }}

@@ -1148,6 +1148,7 @@ var messageKeys = map[string]bool{
 	"tasks.replyBadge":                                 true,
 	"tasks.replyHeader":                                true,
 	"tasks.replyInChat":                                true,
+	"tasks.replyWaitingTag":                            true,
 	"tasks.send":                                       true,
 	"tasks.status.done":                                true,
 	"tasks.status.duplicated":                          true,
