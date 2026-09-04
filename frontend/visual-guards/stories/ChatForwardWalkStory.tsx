@@ -1,14 +1,21 @@
 // CT story (T-48): the REAL <ChatArea> + the REAL useChat, entered at an ANCHOR
 // so the thread is a window from the middle of the history with `hasNewer` true.
 //
-// 🔴 WHY THIS ONE CANNOT BE A JSDOM TEST. The rule being guarded is 「one
-// gesture, one page」, and the single mechanism that can break it is invisible
-// to jsdom: in a real browser `scrollIntoView` FIRES A SCROLL EVENT of its own.
-// So an auto-follow on a landed forward page re-enters `onMessagesScroll` at
+// 🔴 WHY THIS ONE IS NOT JUST A JSDOM TEST. The rule being guarded is 「one
+// gesture, one page」, and the mechanism that breaks it is invisible to jsdom:
+// in a real browser `scrollIntoView` FIRES A SCROLL EVENT of its own, so an
+// auto-follow on a landed forward page re-enters `onMessagesScroll` at
 // `distance: 0` and asks for the next page with nobody having touched anything
 // — the level-triggered corridor this ticket removed, running under a different
-// name. jsdom's `scrollIntoView` is a no-op with no event and every length is 0,
-// so the jsdom suite is green either way (measured: it is).
+// name.
+//
+// jsdom is NOT blind to the cause: with the follow's `if (!hasNewer)` deleted,
+// `ChatArea.anchor-entry.test.tsx` goes 14 passed / 1 FAILED, because it asserts
+// on which element was scrolled to and jsdom records the call. What jsdom cannot
+// produce is the CONSEQUENCE — its `scrollIntoView` emits no event and every
+// length reads 0, so the request count stays 1 there while Chromium walks the
+// thread to the live tail. Both assertions are load-bearing; neither replaces
+// the other.
 //
 // The api seam is patched in place (house pattern — see ChatJumpCardShiftStory):
 // `api` IS `mockApi` under CT's default VITE_USE_MOCK.

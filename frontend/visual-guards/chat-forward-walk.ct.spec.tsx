@@ -1,22 +1,32 @@
 // HOTSPOT — 一次手勢就是一頁,而讓它為真的是「不 auto-follow」(T-48,owner
 // rc-d2e1b69edc66 ①).
 //
-// 🔴 THIS IS THE ONE ASSERTION jsdom STRUCTURALLY CANNOT MAKE. The forward walk
-// used to be level-triggered: a scroll started it and a landed page re-asked by
-// itself, all the way to the live tail. Deleting that effect is not enough,
-// because a real browser's `scrollIntoView` FIRES A SCROLL EVENT. So if the
-// scroll-position reactor still auto-follows a forward page, the follow re-
-// enters `onMessagesScroll` at `distance: 0`, the `nowNearBottom && hasNewer`
-// branch fires, and the corridor runs on with the reader's hands in their lap —
-// same behaviour, different name. jsdom's `scrollIntoView` is a no-op that emits
-// no event and reports every length as 0, so the vitest suite is green against
-// BOTH products (measured: ChatArea.anchor-entry.test.tsx passes 14/14 with the
-// follow restored).
+// 🔴 WHAT THIS MEASURES THAT jsdom CANNOT. The forward walk used to be
+// level-triggered: a scroll started it and a landed page re-asked by itself, all
+// the way to the live tail. Deleting that effect is not enough, because a real
+// browser's `scrollIntoView` FIRES A SCROLL EVENT. So if the scroll-position
+// reactor still auto-follows a forward page, the follow re-enters
+// `onMessagesScroll` at `distance: 0`, the `nowNearBottom && hasNewer` branch
+// fires, and the corridor runs on with the reader's hands in their lap — same
+// behaviour, different name.
+//
+// The two suites catch DIFFERENT halves of that, and both are load-bearing
+// (measured with `if (!hasNewer)` deleted from the follow in ChatArea.tsx):
+//   · jsdom catches the PROXIMATE CAUSE. `ChatArea.anchor-entry.test.tsx` goes
+//     14 passed / 1 FAILED — 「捲到底只撈一頁,而且那一頁不把畫面拉到底」 asserts
+//     on WHICH element was scrolled to, and jsdom records that call even though
+//     its `scrollIntoView` moves nothing. Do not delete that assertion on the
+//     theory that only CT can see this.
+//   · CT catches the CONSEQUENCE, which jsdom structurally cannot: jsdom's
+//     `scrollIntoView` emits no scroll event and every length reads 0, so the
+//     re-entry never happens there and the request COUNT stays 1 either way.
+//     Only a real browser turns one gesture into three pages.
 //
 // Measured here, Chromium 1280×720, anchor a100 of 200:
 //   · fixed product   : one gesture → 1 forward request, scrollTop unchanged,
 //                       reader left a screenful above the new bottom
 //   · follow restored : one gesture → the walk runs itself to the live tail
+//                       (jsdom, same mutant: request count still 1)
 import { test, expect } from "@playwright/experimental-ct-react";
 import { ChatForwardWalkStory } from "./stories/ChatForwardWalkStory";
 import { TARGET_ID, FORWARD_COUNT_KEY } from "./stories/chatForwardWalkFixtures";

@@ -191,9 +191,12 @@ interface UseChat {
   // no-op unless `hasNewer`. A page shorter than one window means the live tail
   // has been reached → `hasNewer` flips false and the ordinary newest-window
   // refresh takes over again.
-  // `human: true` means a reader gesture, which clears the walk's no-progress
-  // bound — see the note where it is read. The automatic continuation passes
-  // nothing and stays bounded.
+  // `human: true` means a reader gesture: it clears the walk's no-progress
+  // bound, rate-limited to one attempt per HUMAN_RETRY_MIN_MS whatever that
+  // attempt returns — see the note where it is read. Every product caller
+  // passes it; there is no automatic continuation any more (owner
+  // rc-d2e1b69edc66 ①: one gesture, one page), so a call without it is a test
+  // asking for one unthrottled page.
   loadNewer: (opts?: { human?: boolean }) => Promise<void>;
   // Fetch the window AROUND one message id and make it the thread, so a jump
   // can land on a message that was never loaded. Two requests — the page
@@ -496,7 +499,8 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   // the other side of the door. This is a RATE LIMIT on the retry and nothing
   // else: it is not a claim about how long anything takes, and no behaviour
   // reads it as a threshold. One wheel still retries instantly; the same wheel
-  // held down retries at most twice a second.
+  // held down retries at most twice a second — and that holds on the FAILING
+  // path too, which is what review #19 F-1 found it did not (see the gate).
   const HUMAN_RETRY_MIN_MS = 400;
   const humanRetryAtRef = useRef(-Infinity);
   // The entry anchor, mirrored for the subscription effect below. Read in the
@@ -1151,7 +1155,30 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     // wheel flick, roughly 60 scroll events a second against a box that did not
     // grow, from becoming 60 requests (measured at 20/s unthrottled, review #18
     // A-2). A single flick still retries immediately.
-    if (opts?.human && Date.now() - humanRetryAtRef.current >= HUMAN_RETRY_MIN_MS) {
+    // 🔴 THE BOUND IS TIME, AND IT USED NOT TO BE ON THE FAILING PATH AT ALL
+    // (independent review #19, F-1). What actually refuses a repeat ask is
+    // `forwardExhaustedRef` below, and only the SUCCESS path ever writes it —
+    // a rejected `listChatWindow` leaves it null, so every subsequent scroll
+    // event walked straight past both doors. Measured on that code: 10 human
+    // asks under a rejecting server ⇒ 10 requests. A reader parked in the
+    // bottom 80px band while the server 5xxs (trackpad inertia and the bottom
+    // bounce both keep scroll events coming) re-hit the server at the rate of
+    // the scroll events themselves — the busy loop of "a wheel is not 60
+    // retries", on its uncovered twin path.
+    //
+    // So the gate is the CLOCK, asked before anything else and stamped
+    // whatever the outcome: at most ONE forward attempt per HUMAN_RETRY_MIN_MS,
+    // success or failure. That is the one criterion that satisfies both halves
+    // of what the reader is owed:
+    //   • one wheel (~60 events/s) cannot become 60 requests — 59 of them fall
+    //     inside the window and return here;
+    //   • 「請求失敗不走這個界…失敗之後下一次手勢就是重試」 still holds — a
+    //     gesture arriving after a quiet window retries immediately, because
+    //     nothing durable was written to remember the failure.
+    // An outcome flag ("only remember it when it worked") cannot do the first
+    // half: failure writes nothing, so it bounds nothing.
+    if (opts?.human) {
+      if (Date.now() - humanRetryAtRef.current < HUMAN_RETRY_MIN_MS) return;
       humanRetryAtRef.current = Date.now();
       forwardExhaustedRef.current = null;
     }

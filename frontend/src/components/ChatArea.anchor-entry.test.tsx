@@ -608,8 +608,11 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
   });
 
   it("往新那一頁失敗時不忙著重打,但人再捲一次就是重試", async () => {
-    // 失敗只是沒有東西落地,沒有 re-render、沒有人再問。而重試就是下一次手勢
-    // —— 它走的是同一道 400ms 的門,不是一道「這個錨點問過了」的閂。
+    // 失敗只是沒有東西落地,沒有 re-render;而重試就是下一次手勢。
+    // 🔴 那道界必須是 400ms 的時鐘,不是「這個錨點問過了」的閂 —— 閂只有成功
+    // 那條路會寫,所以在失敗路上它擋不到任何東西(獨立審查 #19 F-1:失敗中連送
+    // 10 個手勢,量到 10 通請求)。這條同時釘住兩件事:失敗中的一次滾輪只准打
+    // 一通,而安靜過一個窗口之後的下一次手勢立刻重試。
     seed(A, "a", 80, 100);
     const { container } = render(view(alice, "a3"));
     await waitFor(() =>
@@ -620,10 +623,19 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
     const boxEl = container.querySelector(".chat__messages")!;
     fireEvent.scroll(boxEl);
     await waitFor(() => expect(windowCalls.length).toBe(entry + 1));
+    // 同一次滾輪的其餘事件,照真實速率鋪在時間上(約每 16ms 一個),全部落在
+    // 同一個 400ms 的窗口裡 —— 同步連發會被 `loadingNewer` 那把鎖擋掉,量到的
+    // 就不是這道界。
     await act(async () => {
-      await new Promise((r) => setTimeout(r, 200));
+      for (let i = 0; i < 20; i++) {
+        fireEvent.scroll(boxEl);
+        await new Promise((r) => setTimeout(r, 15));
+      }
     });
-    expect(windowCalls.length).toBe(entry + 1);
+    expect(
+      windowCalls.length,
+      "伺服器在 5xx,而一次滾輪照著捲動事件的速率連續重打了它",
+    ).toBe(entry + 1);
     expect(bubbles(container)).not.toContain("a79");
 
     // 人再捲一次(節流過後)—— 這一次伺服器好了,那一頁就該進得來。

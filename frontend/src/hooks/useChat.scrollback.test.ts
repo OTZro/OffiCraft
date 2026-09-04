@@ -633,6 +633,23 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
       for (let i = 0; i < 10; i++) await result.current.loadNewer({ human: true });
     });
     expect(h.listChatWindow.mock.calls.length).toBe(afterStop + 1);
+
+    // 🔴 And the same wheel against a REJECTING server (independent review #19,
+    // F-1). Nothing durable records a failure — the exhausted marker is only
+    // ever written by a page that landed — so the clock is the only thing that
+    // can bound this side. Measured before the gate moved: 10 asks, 10 requests.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 450));
+    });
+    const afterWheel = h.listChatWindow.mock.calls.length;
+    h.listChatWindow.mockRejectedValue(new Error("500"));
+    await act(async () => {
+      for (let i = 0; i < 10; i++) await result.current.loadNewer({ human: true });
+    });
+    expect(
+      h.listChatWindow.mock.calls.length,
+      "失敗路徑上一次滾輪打了不只一通",
+    ).toBe(afterWheel + 1);
   });
 
   it("a history page that lands while a forward page is in the air is not thrown away by it", async () => {

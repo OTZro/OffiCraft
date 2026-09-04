@@ -11,7 +11,8 @@
 // 修完是這樣：以訊息 id 開窗（GET /api/chat?end_id= 往舊、?start_id= 往新，
 // 兩端都含），兩頁撈回來就停在那一則上。**不是把整條歷史拉下來** —— owner 的
 // 另一半交辦是「要注意 performance issue…向上向下滑再另打 API 去撈」，所以這支
-// 也量「載進來的列數遠少於整條線」，以及往下捲會再撈一頁。
+// 也量「載進來的列數遠少於整條線」，以及往下捲一次會再撈**一頁**（一次手勢一頁，
+// 不是一路走回最新 —— f995f507 拿掉了那條走廊）。
 //
 // 真瀏覽器才量得到的部分：落點是不是真的在視窗裡（jsdom 沒有版面，
 // scrollIntoView 只能記錄有沒有被呼叫），以及窄寬兩寬下都要成立。
@@ -30,6 +31,8 @@ const {
 const TOTAL = 80; // ≫ 一頁 30，目標挑第 3 則:往舊往新都還有東西
 const TARGET_INDEX = 3;
 const PAD = '— 墊長一點，讓每一列都有高度，整條線真的會溢出視窗';
+// 「撈完一頁就停住了」的觀察期。理由寫在用到它的那一支裡。
+const STOP_SETTLE_MS = 3000;
 
 const WIDTHS = [
   { name: '窄 (390)', size: { width: 390, height: 780 } },
@@ -98,12 +101,17 @@ for (const w of WIDTHS) {
       await expect(newest).toBeInViewport();
     });
 
-    test('捲到錨點視窗底部會往新再撈一頁，一路走回最新那一則', async ({
+    test('捲到錨點視窗底部只往新撈一頁就停 —— 最新那一則仍然不在 DOM,再捲一次才再多一頁', async ({
       page,
     }) => {
       // owner 逐字：「向上向下滑再另打 API 去撈，就像聊天室的向上卷一樣」。
       // 往舊那條路 16_chat_scrollback 已經釘住；這裡釘的是**往新**那條，
       // 那是舊 API 根本表達不出來的方向（before_ts/before_id 只會往回走）。
+      //
+      // 🔴 這支釘的是 f995f507 的那個反轉。在那之前，一次手勢會把「你站的地方到
+      // 最新之間的全部」一路撈完（實測 8,000 則約兩分鐘、2.6 GB），所以這支原本
+      // 斷言的是「一路走回最新那一則」。owner 圈 B 之後改成**一次手勢一頁**：
+      // 捲到底撈一頁就停，停在半路不裝作結束 —— 由箭頭（⑤）承擔那句話。
       await page.setViewportSize(w.size);
       const request = page.request;
       const token = await ownerToken(request);
@@ -125,26 +133,66 @@ for (const w of WIDTHS) {
       );
 
       const thread = page.locator('.chat__messages');
+      const rows = thread.locator('.chat__msg');
+      const newest = thread.locator(`[data-msg-id="${ids[TOTAL - 1]}"]`);
       await expect(
         thread.locator(`[data-msg-id="${ids[TARGET_INDEX - 1]}"]`),
       ).toBeAttached();
-      const before = await thread.locator('.chat__msg').count();
+      const before = await rows.count();
       expect(before).toBeLessThan(TOTAL);
 
-      await thread.evaluate((el) => {
-        el.scrollTop = el.scrollHeight;
-        el.dispatchEvent(new Event('scroll'));
-      });
+      const gesture = () =>
+        thread.evaluate((el) => {
+          el.scrollTop = el.scrollHeight;
+          el.dispatchEvent(new Event('scroll'));
+        });
 
+      // ① 一次手勢 ⇒ 列數變多（那一頁真的撈回來了）。
+      await gesture();
       await expect
-        .poll(async () => thread.locator('.chat__msg').count(), {
+        .poll(async () => rows.count(), {
           message: '捲到視窗底部要往新再撈一頁',
         })
         .toBeGreaterThan(before);
-      // 走到底就是真的最新那一則 —— 到這裡整條線才接回活的尾巴。
+      const afterOne = await rows.count();
+
+      // ② …但**最新那一則仍然不在 DOM**。B 之前它會在 —— 這一格就是那個反轉。
       await expect(
-        thread.locator(`[data-msg-id="${ids[TOTAL - 1]}"]`),
-      ).toBeAttached();
+        newest,
+        '一次手勢只該撈一頁：最新那一則不該被順帶撈進來',
+      ).toHaveCount(0);
+
+      // ③ 而且「停下來」是穩定的，不是量到一個還在跑的走廊的中途快照。
+      //    STOP_SETTLE_MS 的理由：這一站實測一頁的往返（手勢 → 列數變多）是
+      //    22ms／24ms（窄／寬，隔離站量的），走廊每多一頁就是一次同樣的往返。
+      //    3 秒 ≈ 一百多次往返，而 TOTAL=80 從這裡到最新只剩一頁多 —— 走廊若
+      //    還活著，這段時間內早就撈到最新了。只量一瞬間的話，一個慢半拍的第二頁
+      //    會被當成「停住了」，這一格就綠在錯的東西上。
+      await page.waitForTimeout(STOP_SETTLE_MS);
+      expect(
+        await rows.count(),
+        '停下來要是穩定的：沒有手勢就不該再自己多撈一頁',
+      ).toBe(afterOne);
+      await expect(
+        newest,
+        '停下來要是穩定的：最新那一則不該自己冒出來',
+      ).toHaveCount(0);
+
+      // ④ 箭頭仍在。B 之後「你不在最新」只剩它在講，它現在是承重的。
+      await expect(
+        page.getByTestId('chat-jump-latest'),
+        '停在半路時，只剩箭頭在說「你不在最新」',
+      ).toBeVisible();
+
+      // ⑤ 再一次手勢才會再多一頁 —— 手勢與頁是一對一，不是永遠停住。
+      await gesture();
+      await expect
+        .poll(async () => rows.count(), {
+          message: '第二次手勢要再撈一頁 —— 停住的是走廊，不是分頁',
+        })
+        .toBeGreaterThan(afterOne);
+
+      // 按箭頭落在最新那一則，由本檔第一支（⑥）釘住，這裡不重造一份。
     });
   });
 }
