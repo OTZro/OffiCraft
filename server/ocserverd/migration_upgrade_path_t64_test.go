@@ -461,10 +461,18 @@ func TestAStationAtTheReleasedVersionCanUpgradeToThisTree(t *testing.T) {
 				mechanical = "\nThis is a Go file, so a repo-wide rename or a formatting pass " +
 					"can reach it WITHOUT changing what the migration does. This check cannot " +
 					"tell that apart from a real edit, and does not try to. If that is what " +
-					"happened, do NOT open a new migration — an empty one fixes nothing. Keep " +
-					"the shipped file byte-for-byte as it shipped (alias the identifier, or " +
-					"leave the old name standing in this file) so that what stations ran and " +
-					"what this tree says they ran remain the same text."
+					"happened, do NOT open a new migration — an empty one fixes nothing. The " +
+					"two cases part ways here, and only one of them has an out.\n" +
+					"  RENAME: keep the shipped file byte-for-byte as it shipped (alias the " +
+					"identifier, or leave the old name standing in this file) so that what " +
+					"stations ran and what this tree says they ran remain the same text.\n" +
+					"  FORMATTING: there is no such out. lint-go-fmt is a required check and " +
+					"it demands the formatted text; this check demands the shipped text. Both " +
+					"cannot hold at once, so no edit you make here clears them both — it is a " +
+					"real deadlock and a human has to break it. Decide deliberately whether " +
+					"to exempt this file from the formatter or to accept the reformat and " +
+					"re-baseline this check, and say which in the PR. Do not pick one " +
+					"silently, and do not reach for a new migration to escape it."
 			}
 			t.Errorf("%s for version %d (%s) has ALREADY SHIPPED and this tree changes its "+
 				"body. goose records one row per version and never revisits it, so whatever "+
