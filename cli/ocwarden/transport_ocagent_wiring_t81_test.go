@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -37,32 +39,81 @@ func TestBuildSpawnDeps_WiresTheOcAgentResolver(t *testing.T) {
 	}
 }
 
-// TestBuildCommandDeps_SpawnRefusesRatherThanPublishingADanglingLink walks the REAL
-// production path — buildCommandDeps → its Spawn closure → start() — on a machine where
-// ocagent is (almost certainly) not resolvable, and asserts the refusal reaches the
-// caller. It is deliberately not asserting a specific path: what matters is that the
-// production wiring cannot produce OK:true with nothing to link to.
-func TestBuildCommandDeps_SpawnRefusesRatherThanPublishingADanglingLink(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // no ocagent anywhere under it
-	env := func(k string) string {
-		if k == "HOME" {
-			return t.TempDir()
-		}
-		return ""
+// TestFileExists_AnswersTheFilesystem and TestNewOcAgentResolver_PassesTheVerdictThrough
+// are the second review round's finding, and it was sharper than the first. The wiring
+// line used to carry the existence probe written out inline. Changing that one word —
+// `func(p string) bool { return true }` — makes the resolver claim every path is there,
+// which IS T-81 (a symlink published to nothing), and the whole package stayed green.
+//
+// Worse, the guard that should have caught it was the one that stepped aside: the old
+// t.Skipf fired `if present`, so "always claim present" was exactly the condition that
+// silenced it. A guard whose give-up condition points the same way as the defect is not
+// a guard.
+//
+// So behaviour moved off the wiring line into two named functions, and here is one test
+// per function.
+func TestFileExists_AnswersTheFilesystem(t *testing.T) {
+	dir := t.TempDir()
+	present := filepath.Join(dir, "here")
+	if err := os.WriteFile(present, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
 	}
+	if !fileExists(present) {
+		t.Errorf("fileExists(%q) = false for a file that is right there", present)
+	}
+	missing := filepath.Join(dir, "not-here")
+	if fileExists(missing) {
+		t.Errorf("fileExists(%q) = true for a path that does not exist — this is the "+
+			"one-word change that reinstates T-81: the resolver then vouches for a "+
+			"binary that is not on disk and the spawn publishes a link to nothing", missing)
+	}
+}
+
+func TestNewOcAgentResolver_PassesTheVerdictThrough(t *testing.T) {
+	exe := func() (string, error) { return "/home/oc/.officraft/warden/ocwarden", nil }
+
+	if path, present := newOcAgentResolver(exe, func(string) bool { return false })(); present {
+		t.Errorf("resolver reported present=true at %q while the probe said nothing is there", path)
+	}
+	if path, present := newOcAgentResolver(exe, func(string) bool { return true })(); !present {
+		t.Errorf("resolver reported present=false at %q while the probe said it is there", path)
+	}
+
+	// And it is a LIVE question: this is the download landing between two spawns. The
+	// probe's answer flips because the world changed, and the resolver must go and look
+	// again rather than repeat what it said last time.
+	onDisk := false
+	r := newOcAgentResolver(exe, func(string) bool { return onDisk })
+	if _, first := r(); first {
+		t.Error("before the download: probe says nothing is there, resolver said present")
+	}
+	onDisk = true
+	if _, second := r(); !second {
+		t.Error("after the download: probe says it is there, resolver still said absent — " +
+			"the answer was cached, which is the exact shape of the bug this ticket exists for")
+	}
+}
+
+// TestBuildSpawnDeps_ResolverVerdictMatchesTheFilesystem asserts the production
+// resolver's verdict against an INDEPENDENT stat of the path it just named. It replaces
+// an earlier version that called t.Skipf when the binary happened to be present — which
+// meant the guard excused itself under exactly the condition a broken probe creates.
+// This one asserts in both worlds and never skips.
+func TestBuildSpawnDeps_ResolverVerdictMatchesTheFilesystem(t *testing.T) {
+	env := func(string) string { return "" }
 	deps := buildSpawnDeps(Config{Base: fxBase}, env, &recRunner{}, fxSocket, "")
 	if deps.ResolveOcAgentBin == nil {
 		t.Fatal("no resolver wired — see TestBuildSpawnDeps_WiresTheOcAgentResolver")
 	}
 	path, present := deps.ResolveOcAgentBin()
-	if present {
-		// The sibling really is there (a developer machine with the warden installed).
-		// That is a legitimate state, not a failure — skip rather than assert a lie.
-		t.Skipf("ocagent is genuinely present at %s on this machine; the missing-binary "+
-			"branch is covered deterministically by TestStart_RefusesWhenOcAgentMissing", path)
+	_, err := os.Stat(path)
+	if onDisk := err == nil; present != onDisk {
+		t.Errorf("resolver said present=%v for %q, but the filesystem says present=%v (%v). "+
+			"A resolver that disagrees with the disk is how a spawn publishes a symlink "+
+			"to nothing and the member is deaf with no error anywhere.", present, path, onDisk, err)
 	}
 	if path == "" {
-		t.Errorf("resolver reported absent with no path to report; the refusal message would " +
-			"have nothing to point the reader at")
+		t.Error("resolver named no path at all; the refusal message would have nothing to " +
+			"point the reader at")
 	}
 }

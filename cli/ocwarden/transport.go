@@ -539,6 +539,20 @@ func resolveRepoRoot(executable func() (string, error)) string {
 // $HOME/cli/ocagent/ocagent — a path that has never existed on any machine — and the
 // caller symlinked to it without asking. Returning the existence bit is what lets the
 // spawn path tell "here it is" apart from "I had to guess and the guess is not there".
+// fileExists is the production existence probe. It is a named function, not a closure
+// written at the wiring site, precisely so a mutant that guts it (`return true`) has a
+// test standing on it — see TestFileExists_AnswersTheFilesystem.
+func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
+
+// newOcAgentResolver builds the per-spawn seam SpawnDeps carries. It exists so the
+// production wiring line contains a REFERENCE and no behaviour: everything it does is
+// in resolveOcAgentBin and in the probe, each of which is tested directly.
+func newOcAgentResolver(executable func() (string, error), exists func(string) bool) func() (string, bool) {
+	return func() (string, bool) {
+		return resolveOcAgentBin(executable, exists, resolveRepoRoot(executable))
+	}
+}
+
 func resolveOcAgentBin(executable func() (string, error), exists func(string) bool, repoRoot string) (string, bool) {
 	if exe, err := executable(); err == nil {
 		if sibling := filepath.Join(filepath.Dir(exe), "ocagent"); exists(sibling) {
@@ -623,11 +637,17 @@ func buildSpawnDeps(cfg Config, env func(string) string, runner CmdRunner, socke
 		// spawned got a dangling symlink and stayed silently offline. Passing the
 		// closure moves the question to spawn time, so the first spawn after the
 		// download finds the binary with no warden restart.
-		ResolveOcAgentBin: func() (string, bool) {
-			return resolveOcAgentBin(os.Executable, func(p string) bool { _, err := os.Stat(p); return err == nil }, resolveRepoRoot(os.Executable))
-		},
-		WriteFile: osWriteFile,
-		MkdirAll:  os.MkdirAll,
+		//
+		// 🔴 There is deliberately NO inline closure here any more. The second review
+		// round showed why: while the existence probe was written out on this line, a
+		// one-word edit to it (`return true`) reinstated T-81 in full — the resolver
+		// says "it is there" about a path that is not — and the whole package stayed
+		// green, because nothing testable owned that line. Both halves now live in
+		// named functions that have tests of their own, so the wiring is a reference
+		// and not a place where behaviour can be written.
+		ResolveOcAgentBin: newOcAgentResolver(os.Executable, fileExists),
+		WriteFile:         osWriteFile,
+		MkdirAll:          os.MkdirAll,
 		// Symlink / Remove publish the workdir `ocagent` as a symlink to OcAgentBin.
 		Symlink: os.Symlink,
 		Remove:  os.Remove,
@@ -642,9 +662,6 @@ func buildSpawnDeps(cfg Config, env func(string) string, runner CmdRunner, socke
 }
 
 func buildCommandDeps(cfg Config, env func(string) string, runner CmdRunner) CommandDeps {
-	// Resolve claude ROBUSTLY: a launchd daemon inherits a MINIMAL PATH (no
-	// ~/.local/bin), so a bare exec.LookPath("claude") returns "" and start()
-	// silently refuses every spawn (the Phase-4-flip boot-death root cause).
 	// The instance namespace keys the tmux socket + agent home (validated at
 	// process entry — realMain refuses an invalid OC_NAMESPACE before any
 	// transport is built, so the error case here is unreachable).
