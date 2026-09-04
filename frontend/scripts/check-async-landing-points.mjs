@@ -460,6 +460,37 @@ const REGISTRY = [
   // That has now cost one live bug, so it is a demonstrated limit rather than a
   // theoretical one.
 
+  // ─── The comparison screen, reached from that same overlay (T-59). Both files
+  //     enter this walk through `MarkdownPreviewOverlay`, which ChatArea mounts
+  //     three times from `mdPreview` — so the exemption the ⚠️ note above
+  //     demolishes (a fixed overlay means the peer cannot change) is NOT
+  //     available to them either, and neither verdict below leans on it. What
+  //     they lean on instead is that a comparison is addressed by `params`, not
+  //     by a conversation: the same link opened from any room reads the same
+  //     pair, so there is no room's value here for a late commit to carry
+  //     across. ───
+  {
+    file: "components/DiffScreen.tsx",
+    kind: ".then/.catch/.finally",
+    count: 2,
+    verdict:
+      "the one `GET /api/diff` read's two arms. The screen CAN move on inside it — the hash route can change the peer under the open overlay — and what stops the write landing wrong is the effect's own `alive` flag, set false by the cleanup and re-asked at the top of BOTH arms (the `.catch` also logs unconditionally, which writes nothing). The deps are the five address fields, so a re-addressed comparison tears the old read down rather than racing it, and the only state either arm writes is this mount's own `pair`/`failed`, derived from those deps and from nothing about the conversation",
+  },
+  {
+    file: "components/DiffShareLinkButton.tsx",
+    kind: "await",
+    count: 1,
+    verdict:
+      "`copyDiffShareLink(params)` under the click. The link is minted by the server, so the screen can move on inside this await; the button writes only its OWN two booleans (`copied`/`copyFailed`), and `params` was captured by the click — the clipboard therefore gets the link for the comparison the reader clicked on, which is the gesture's own subject and not a room's state. A commit after the host closed lands in a component React has discarded",
+  },
+  {
+    file: "components/DiffShareLinkButton.tsx",
+    kind: "setTimeout/setInterval",
+    count: 1,
+    verdict:
+      "the 2s feedback flash clearing those same two booleans. ⚠️ Said exactly rather than flatteringly: the unmount effect clears `timer.current`, and each `onCopy` clears the previous one, but this timer is ARMED AFTER the await — so an unmount that happens inside the await leaves it running and it fires unguarded. That is harmless for the reason above and only for that reason (it sets two booleans on a discarded mount, carrying no room's value), NOT because it is cleared — it is not",
+  },
+
   // ─── Global / conversation-independent ───
   {
     file: "hooks/sharedServerSettings.ts",
@@ -521,9 +552,9 @@ const REGISTRY = [
   {
     file: "lib/shareLink.ts",
     kind: "await",
-    count: 3,
+    count: 6,
     verdict:
-      "returns a value to its caller; commits nothing itself. The count was 2 while this census counted LINES — one line here holds two awaits (R10-5 B5)",
+      "returns a value to its caller; commits nothing itself. The count was 2 while this census counted LINES — one line here holds two awaits (R10-5 B5). 🔴 3 → 6 (T-59): the comparison pair `copyDiffShareLink`/`diffShareLinkUrl` was added beside the attachment pair, and it is the SAME shape twice over — `…ShareLinkUrl` awaits the server's mint and absolutizes it (1 each), `copy…` awaits `clipboard.writeText(await …ShareLinkUrl(…))` (2 each). Same verdict for the same reason: every one of the six is in a function that RETURNS or throws, none holds React state or a module table, so a resolve after the screen moved on can only hand a value back to a caller that is itself registered here (MarkdownPreviewOverlay, DiffShareLinkButton)",
   },
   {
     file: "lib/sharedSnapshot.ts",
@@ -649,6 +680,12 @@ const MODULE_STATE = [
     name: "listeners",
     verdict:
       "repaint callbacks for that global cache; each unsubscribes on unmount",
+  },
+  {
+    file: "components/Markdown.tsx",
+    name: "BARE_URL_RE",
+    verdict:
+      "🔴 A `g`-FLAGGED REGEX, so it really does carry mutable state across calls — `lastIndex` — and that is why it is here rather than filed as a constant (clause 2 sees it: `BARE_URL_RE.lastIndex = 0`). What keys it: NOTHING, and it needs no key, because the value it can carry between calls is an offset into a string, not a room's content — there is no conversation in a scan cursor, and the pattern itself is the same in every room. Nor can the offset survive one call: `autolinkBareUrls` is its ONE reader (measured: `BARE_URL_RE` appears in no other file and in no other function) and it resets `lastIndex = 0` as its first statement, so a residue left by an earlier scan — or by a `return`/throw out of the middle of the loop — is overwritten before the next `exec`. The scan is synchronous and non-reentrant: the loop body calls only `trimUrlTail` (pure) and `createElement`, never back into itself, so no second string can interleave with a first",
   },
   {
     file: "lib/replyCardCache.ts",
@@ -1309,8 +1346,11 @@ const containerArgs = (init) => {
  * WHAT STILL GETS THROUGH, said plainly rather than discovered later: a table
  * obtained from a factory and never touched syntactically here
  * (`const t = makeStore();` then `t` handed to something that fills it), a class
- * static field, a module-level regex's `lastIndex`, and state stashed on an
- * imported object. Those are not closed by adding a fourth clause of the same
+ * static field, and state stashed on an imported object. A module-level regex's
+ * `lastIndex` used to be named here too and it is only HALF out of reach: the
+ * one in the walk (`Markdown.tsx`'s `BARE_URL_RE`) assigns `lastIndex`
+ * explicitly, which is clause 2 and is why it carries a row — a `g` regex that
+ * only ever calls `.exec` would still walk past. Those are not closed by adding a fourth clause of the same
  * kind — the honest boundary is "declared here, or written through here", and
  * anything outside it is a REVIEW's job, not this script's.
  *
