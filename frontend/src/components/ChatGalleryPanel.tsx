@@ -517,7 +517,16 @@ export function ChatGalleryPanel({
                      * read, so an eager row costs a DB round trip. Deferring
                      * cuts that to what the browser decides it needs — which is
                      * more than the visible rows (it prefetches ahead), not
-                     * only them. It does NOT reduce how many rows render. */
+                     * only them. It does NOT reduce how many rows render.
+                     *
+                     * How much it prefetches is the browser's call, so the
+                     * number is not portable: measured twice at 54 requests on
+                     * open (1440x900, 1,200 image rows, no scrolling), and an
+                     * independent reviewer got 57. #405's commit message says
+                     * 300 — that one could not be reproduced under any stated
+                     * conditions; treat it as wrong, not as a third data point.
+                     * Scrolling the whole list to the bottom does fetch all
+                     * 1,200, one request each, with none dropped. */
                     loading="lazy"
                   />
                 ) : (
