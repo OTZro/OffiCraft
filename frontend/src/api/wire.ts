@@ -219,6 +219,18 @@ export type WireTaskArtifactList = components["schemas"]["TaskArtifactListDTO"];
  * (get_task); the light list carries only `artifact_count`. */
 export type WireTaskArtifact = components["schemas"]["TaskArtifactDTO"];
 
+/** Mirrors `TaskArtifactVersionDTO` (T-60): ONE retained PREVIOUS version of a
+ * pinned deliverable, as `GET /api/tasks/{task_id}/artifact/{artifact_id}/history`
+ * lists them (newest first). The version carries the pointer WHOLE — a blob id
+ * or a url plus a label — so unlike a document revision there is no second read
+ * to fetch its content. It DOES carry `mime`/`filename`/`is_image` alongside the
+ * pointer (resolved read-time from the blob store, like the live artifact's own
+ * row): `filename` is load-bearing — `TaskArtifactVersionsModal` reads its
+ * extension to decide whether two versions can be diffed at all, so dropping the
+ * field would silently take text diffing away. */
+export type WireTaskArtifactVersion =
+  components["schemas"]["TaskArtifactVersionDTO"];
+
 /** Mirrors `TaskCountDTO` (`GET /api/tasks/count`): the open (non-terminal)
  * task count behind the tasks nav badge. */
 export type WireTaskCount = components["schemas"]["TaskCountDTO"];

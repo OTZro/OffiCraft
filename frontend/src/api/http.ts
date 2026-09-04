@@ -105,6 +105,7 @@ import type {
   SseConnectionState,
   AccountCostResetReceipt,
   CostResetReceipt,
+  TaskArtifactVersionView,
 } from "./adapter";
 import {
   toMember,
@@ -120,6 +121,7 @@ import {
   toGlobalContext,
   toBootDoc,
   toDocumentHistory,
+  toTaskArtifactVersion,
   toDocumentHistoryEntry,
   toDocumentRevision,
   toDocumentSeed,
@@ -1803,12 +1805,33 @@ export const httpApi: Api = {
     // TaskArtifactReceiptDTO. The owner/admin un-pin (T-3dc5); unknown
     // task/artifact → 404, wrong-task → 400 (both throw via the client
     // middleware). The write answers with a bounded receipt (T-a98d), not the
-    // task; the caller refetches. The blob itself is left intact.
+    // task; the caller refetches. The live blob is left intact, but the artifact's
+    // retained versions (and the blobs only they referenced) are deleted with it.
     unwrap(
       await client.DELETE("/api/tasks/{task_id}/artifact/{artifact_id}", {
         params: { path: { task_id: taskId, artifact_id: artifactId } },
       }),
     );
+  },
+
+  async listTaskArtifactVersions(
+    taskId: string,
+    artifactId: string,
+  ): Promise<TaskArtifactVersionView[]> {
+    // GET /api/tasks/{task_id}/artifact/{artifact_id}/history ->
+    // TaskArtifactVersionDTO[], newest first, at most the retained depth (the
+    // server trims). Cockpit-only (T-60): the agent that just replaced a
+    // deliverable already knows what it replaced. Read-only — there is no
+    // restore verb to pair with it. An artifact that was never replaced answers
+    // [] rather than 404; unknown task/artifact → 404, wrong-task → 400 (all
+    // throw through the client middleware).
+    const wire = unwrap(
+      await client.GET(
+        "/api/tasks/{task_id}/artifact/{artifact_id}/history",
+        { params: { path: { task_id: taskId, artifact_id: artifactId } } },
+      ),
+    );
+    return wire.map(toTaskArtifactVersion);
   },
 
   async postTaskMessage(id: string, msg: TaskMessageInput): Promise<void> {

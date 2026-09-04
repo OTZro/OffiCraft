@@ -49,6 +49,11 @@ export interface Messages {
   taskMarkDuplicateBody: (taskNo: string) => string;
   taskDuplicateOf: (taskNo: string) => string;
   taskReassignTitle: (taskNo: string) => string;
+  // ── task artifact versions (T-60) ──
+  taskArtifactVersionCount: (n: number) => string;
+  taskArtifactVersionLabel: (when: string) => string;
+  taskArtifactVersionBy: (actorId: string) => string;
+  taskArtifactOpaque: (mime: string) => string;
   // ── login / the credential-attempt brake ──
   loginThrottled: (secs: number) => string;
   // ── replies ──
@@ -204,6 +209,24 @@ export function makeMessages(t: Dict, language: Lang): Messages {
     // (「量於 3d 前」, with spaces). Caught in independent review.
     monitorMeasuredAgo: (age) =>
       `${mon.measuredAgoLead} ${age} ${mon.measuredAgoTail}`,
+    // 「3版」/「3 versions」 — the artifact row's versions entry (T-60). Only
+    // ever printed for n > 1 (one version is not a history), so the tail needs
+    // no singular twin.
+    taskArtifactVersionCount: (n) =>
+      `${n}${sp}${tasks.artifacts.versionsCountTail}`,
+    // Which version the `-` side of a comparison IS. Same reason the document
+    // reader names its own: two unlabelled columns do not say which is which.
+    taskArtifactVersionLabel: (when) =>
+      `${tasks.artifacts.versionsVersionLabel} ${when}`,
+    // The raw actor id, never a resolved display name — this panel holds no
+    // roster, and inventing a name for an id it cannot resolve would misname
+    // whoever replaced the deliverable.
+    taskArtifactVersionBy: (actorId) =>
+      `${tasks.artifacts.versionsByLabel} ${actorId}`,
+    // A file this panel can neither render nor compare. It names the mime the
+    // SERVER reported rather than calling the version empty.
+    taskArtifactOpaque: (mime) =>
+      `${tasks.artifacts.versionsOpaqueLead}${mime}${tasks.artifacts.versionsOpaqueTail}`,
     taskProgress: (done, total) =>
       `${tasks.progressLabel} ${done}/${total}`,
     // 「步驟 N/M · 已歷時 X」 is ONE visible string. Leaving elapsed as a template

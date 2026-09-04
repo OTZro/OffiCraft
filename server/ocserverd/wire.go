@@ -1473,6 +1473,18 @@ type taskArtifactReceiptDTO struct {
 	ArtifactCount int    `json:"artifact_count"`
 }
 
+// taskArtifactReplaceReceiptDTO is the replace verb's receipt: the add/remove
+// receipt's three fields plus how many versions the artifact now has. A
+// separate type rather than an optional field on the shared one, because
+// version_count is only ever meaningful for the write that MAKES a version —
+// remove's answer names an artifact that no longer has any.
+type taskArtifactReplaceReceiptDTO struct {
+	TaskID        string `json:"task_id"`
+	ArtifactID    string `json:"artifact_id"`
+	ArtifactCount int    `json:"artifact_count"`
+	VersionCount  int    `json:"version_count"`
+}
+
 // taskPlanReceiptDTO is the bounded confirmation returned after submit_plan.
 // The caller just SENT the plan, so echoing it back is the least useful payload
 // on the wire; what it cannot know is where the stored plan landed, which is
@@ -1679,6 +1691,59 @@ type taskArtifactDTO struct {
 	AttachmentID string  `json:"attachment_id"`
 	CreatedTS    float64 `json:"created_ts"`
 	CreatedBy    string  `json:"created_by"`
+	// VersionCount counts the versions of this deliverable WITH the live one
+	// (T-60), so a never-replaced artifact reads 1 rather than 0 — the reader
+	// asks "how many versions are there", and there is always this one.
+	VersionCount int `json:"version_count"`
+}
+
+// taskArtifactVersionDTO is one RETAINED previous version of an artifact. It
+// carries the version whole rather than a size summary the way
+// DocumentHistoryDTO does: an artifact version is a pointer plus a label, so
+// there is no prose a listing would have to hold back.
+type taskArtifactVersionDTO struct {
+	ID           int64   `json:"id"`
+	Kind         string  `json:"kind"`
+	URL          string  `json:"url"`
+	Label        string  `json:"label"`
+	Filename     string  `json:"filename"`
+	Mime         string  `json:"mime"`
+	IsImage      bool    `json:"is_image"`
+	AttachmentID string  `json:"attachment_id"`
+	CreatedTS    float64 `json:"created_ts"`
+	CreatedBy    string  `json:"created_by"`
+}
+
+// newTaskArtifactVersionDTO projects one retained version onto the wire. att is
+// the resolved chat_attachment for a file/image version (nil for a link, or
+// when the blob is gone) — its url/mime/filename/is_image ride along through
+// artifactBlobFacts, the SAME resolution the live projection does, honest-empty
+// when absent and never fabricated.
+//
+// 🔴 The url has to be rewritten here, not copied. `task_artifact.url` is the
+// external link for a link kind and the EMPTY STRING for a file/image, so a
+// version that carried the row's url handed the cockpit nothing to fetch and
+// every file version read as gone.
+//
+// 🔴 The filename is here because a reader deciding whether a version's bytes
+// are TEXT asks the name when the mime cannot say, and `application/octet-stream`
+// is what the agent upload path says about the .md reports this journal mostly
+// holds. Without it a version whose label is empty has no name at all, and that
+// deliverable class could never reach the diff.
+func newTaskArtifactVersionDTO(h TaskArtifactHistory, att *ChatAttachment) taskArtifactVersionDTO {
+	dto := taskArtifactVersionDTO{
+		ID:           h.ID,
+		Kind:         h.Kind,
+		URL:          h.URL,
+		Label:        h.Label,
+		AttachmentID: h.AttachmentID,
+		CreatedTS:    h.CreatedTS,
+		CreatedBy:    h.CreatedBy,
+	}
+	if b, ok := artifactBlobFacts(att); ok && h.Kind != ArtifactKindLink {
+		dto.URL, dto.Mime, dto.Filename, dto.IsImage = b.url, b.mime, b.filename, b.isImage
+	}
+	return dto
 }
 
 // taskArtifactRefDTO is ONE artifact reduced to the two things a caller needs
@@ -2333,8 +2398,12 @@ func newTaskDTO(t Task, steps []TaskStep, deps []string, cardStatus map[string]s
 // referenced blob is gone) — its mime/filename/is_image ride along honest-empty
 // when absent, never fabricated. A link's url is the row's own external url; a
 // file/image's url is the blob serve path (the chatAttachmentDTO convention).
-func newTaskArtifactDTO(a TaskArtifact, att *ChatAttachment) taskArtifactDTO {
+// versionCount is the retained-version count of THIS artifact plus the live
+// row (the caller counts the history rows; the +1 is here so no caller can
+// forget it).
+func newTaskArtifactDTO(a TaskArtifact, att *ChatAttachment, retained int) taskArtifactDTO {
 	dto := taskArtifactDTO{
+		VersionCount: retained + 1,
 		ID:           a.ID,
 		Kind:         a.Kind,
 		URL:          a.URL,
@@ -2343,15 +2412,53 @@ func newTaskArtifactDTO(a TaskArtifact, att *ChatAttachment) taskArtifactDTO {
 		CreatedTS:    a.CreatedTS,
 		CreatedBy:    a.CreatedBy,
 	}
-	if a.Kind != ArtifactKindLink && att != nil {
-		dto.URL = "/api/chat/attachment/" + att.ID
-		dto.Mime = att.Mime
-		if att.Filename != nil {
-			dto.Filename = *att.Filename
-		}
-		dto.IsImage = len(att.Mime) >= 6 && att.Mime[:6] == "image/"
+	if b, ok := artifactBlobFacts(att); ok && a.Kind != ArtifactKindLink {
+		dto.URL, dto.Mime, dto.Filename, dto.IsImage = b.url, b.mime, b.filename, b.isImage
 	}
 	return dto
+}
+
+// artifactBlobFields is the half of an artifact projection that comes from the
+// referenced blob rather than from the row.
+type artifactBlobFields struct {
+	url      string
+	mime     string
+	filename string
+	isImage  bool
+}
+
+// artifactBlobFacts resolves that half: the serve path, the mime, the blob's
+// own name and whether it is an image. ok is false for a link kind and for a
+// file/image whose blob is gone, and the caller then keeps the row's own values
+// — honest-empty, never fabricated.
+//
+// 🔴 IT IS SHARED BECAUSE THE TWO PROJECTIONS ARE ONE FACT. The live artifact
+// and a retained version of it are the same deliverable read at two moments; a
+// reader that can open one must be able to open the other. When the version
+// side had its own (shorter) answer it served the ROW's url, which for a
+// file/image is the empty string by construction — so every file version was
+// unreachable and unreadable on the real wire, while both sides' tests passed
+// against fixtures that carried a url of their own.
+// The artifact-kind test deliberately lives at each CALL SITE rather than in
+// here. The identity scanners (authz_surface_gate_test's mentionsIdentity and
+// lifecycle_identity_gate_t170e) recognise a `.Kind` SELECTOR inside a
+// comparison and are blind to a bare `kind` ident, so folding the predicate
+// into this helper deleted it from both ledgers with nothing going red — the
+// exact reshape this package's own gate header forbids. Visibility to the
+// scanners beats saving the repeated line.
+func artifactBlobFacts(att *ChatAttachment) (artifactBlobFields, bool) {
+	if att == nil {
+		return artifactBlobFields{}, false
+	}
+	b := artifactBlobFields{
+		url:     "/api/chat/attachment/" + att.ID,
+		mime:    att.Mime,
+		isImage: len(att.Mime) >= 6 && att.Mime[:6] == "image/",
+	}
+	if att.Filename != nil {
+		b.filename = *att.Filename
+	}
+	return b, true
 }
 
 // newTaskArtifactRefDTO projects one artifact row onto the INDEX wire (T-66):

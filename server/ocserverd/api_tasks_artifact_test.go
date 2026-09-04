@@ -79,7 +79,7 @@ func listItemFor(t *testing.T, api *apiServer, taskID string) taskListItemDTO {
 }
 
 func TestArtifactRouteRowsGatingAndMCP(t *testing.T) {
-	var add, rm *RouteSpec
+	var add, rm, replace, history *RouteSpec
 	for i := range defaultRouteSpecs() {
 		spec := defaultRouteSpecs()[i]
 		switch spec.Path {
@@ -89,6 +89,12 @@ func TestArtifactRouteRowsGatingAndMCP(t *testing.T) {
 		case "/api/tasks/{task_id}/artifact/{artifact_id}":
 			s := spec
 			rm = &s
+		case "/api/tasks/{task_id}/artifact/{artifact_id}/replace":
+			s := spec
+			replace = &s
+		case "/api/tasks/{task_id}/artifact/{artifact_id}/history":
+			s := spec
+			history = &s
 		}
 	}
 	if add == nil || add.Method != "POST" || add.Requires != principalAgent ||
@@ -99,6 +105,16 @@ func TestArtifactRouteRowsGatingAndMCP(t *testing.T) {
 	if rm == nil || rm.Method != "DELETE" || rm.Requires != principalAgent ||
 		rm.MCPExclude || rm.MCPTool != "remove_task_artifact" {
 		t.Fatalf("remove row must be DELETE + agent + MCP remove_task_artifact: %+v", rm)
+	}
+	// T-60 replace — the third verb, same model, same MCP surface.
+	if replace == nil || replace.Method != "POST" || replace.Requires != principalAgent ||
+		replace.MCPExclude || replace.MCPTool != "replace_task_artifact" {
+		t.Fatalf("replace row must be POST + agent + MCP replace_task_artifact: %+v", replace)
+	}
+	// The version list is cockpit-only by decision: same floor, off MCP.
+	if history == nil || history.Method != "GET" || history.Requires != principalAgent ||
+		!history.MCPExclude || history.MCPTool != "" {
+		t.Fatalf("history row must be GET + agent + MCPExclude: %+v", history)
 	}
 }
 
@@ -238,7 +254,7 @@ func TestAddArtifactOnTerminalTaskIs409(t *testing.T) {
 
 // TestRemoveArtifactOnTerminalTaskIs409 is the symmetric twin of
 // TestAddArtifactOnTerminalTaskIs409 (owner ruling 2026-07-25, T-2654): a closed
-// task's deliverable set is frozen in BOTH directions. The add-only freeze made
+// task's deliverable set is frozen in EVERY direction. The add-only freeze made
 // un-pin an unrecoverable loss — a deliverable could be taken off a closed card
 // and never put back. The open-task remove below is the positive control, so a
 // mutant that freezes un-pin unconditionally reddens too.
