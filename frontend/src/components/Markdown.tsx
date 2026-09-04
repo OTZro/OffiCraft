@@ -29,7 +29,11 @@
 //               target="_blank" rel="noopener noreferrer"). A SECOND, opt-in
 //               link class exists for the 使用說明 doc page only: repo-relative
 //               `*.md` targets resolved through `resolveDocLink` into IN-APP
-//               navigation (T-68f1) — see the prop's doc comment.
+//               navigation (T-68f1) — see the prop's doc comment. Bare
+//               http/https URLs are ALSO autolinked, everywhere, with no flag
+//               and no per-surface opt-in (T-59) — the rule runs after the
+//               tokenizer, so it only ever sees leftover plain text; see the
+//               block comment above `renderInline`.
 
 import { Fragment, useLayoutEffect, useRef, type ReactNode } from "react";
 
@@ -129,6 +133,114 @@ interface InlineOpts {
   tableSizing?: "content-aware";
 }
 
+// ── Bare-URL autolinking (T-59) ─────────────────────────────────────────────
+// A pasted URL is the most common reference in a chat message, and it used to
+// render as dead text: only `[text](url)` ever became an <a>. Owner ruling
+// 2026-09-03: turn it on everywhere — no flag, no per-surface opt-in.
+//
+// ORDER IS THE MECHANISM. This runs LAST, on the text left over AFTER
+// renderInline has split out `code` spans, **bold** runs and [text](url) links,
+// so by construction it can only ever see plain prose. That — not a second
+// allowlist — is what keeps a URL inside a code span literal and an
+// already-written markdown link untouched. (renderInline recurses INTO a bold
+// run, so a bare URL inside **…** IS autolinked. That is intended: 552 of the
+// 4,829 URLs on the live system are bold-wrapped, and a bold URL is still a
+// URL.)
+//
+// It is NOT a loosening of SAFE_URL_RE: the pattern only matches http:// and
+// https://, so "javascript:", "data:", "vbscript:" and protocol-relative
+// "//evil.com" cannot spell themselves with it and stay plain text as before.
+//
+// WHERE THE URL STOPS. Two mechanisms, and the split between them is
+// deliberate — measured against 2,552 real bare URLs scanned out of chat
+// messages, task descriptions and reply cards on 2026-09-04:
+//
+//   1. Characters that can never be INSIDE a URL are excluded from the match
+//      itself, so the URL simply ends there. That is whitespace, "<" / ">",
+//      the double quote (illegal unencoded in a URL, and the thing that closes
+//      a pasted JSON string: `{"url":"https://…"}`), the backtick, and
+//      FULL-WIDTH punctuation and brackets. The full-width half matters because
+//      a Chinese sentence CONTINUES after its punctuation — trimming only the
+//      tail of `https://…/1247（已釘到任務卡）。` leaves "（已釘到任務卡" inside
+//      the href, which is what a tail-only rule actually produces.
+//   2. Characters that ARE legal in a URL but are usually the sentence's, not
+//      the URL's, are trimmed from the tail — repeatedly, because real tails
+//      are multi-character: `",` (pasted JSON, 197 cases), `"}]}`, `");`,
+//      `')`, `...`, `)。`. Trailing ":" is trimmed too (`改成 http://127.0.0.1:`)
+//      while a port's ":" is untouched, because a port colon is never last.
+//
+// The one exception inside (2): a closing bracket the URL ITSELF opened stays
+// — the Wikipedia `…/Foo_(bar)` shape. Quotes are NOT balance-checked: a
+// wrapping `curl 'https://…'` (719 cases, the single biggest tail group) must
+// lose its trailing quote whether or not an opener was captured.
+
+// Legal-in-a-URL characters that a sentence, a shell paste or a JSON blob puts
+// after the link. `"` is also excluded from the match pattern above, which is
+// what actually stops it in the JSON shape; it stays listed here so this line
+// is the single readable statement of the family.
+const URL_TAIL_PUNCT = ")]}.,!?;:'\"";
+// The subset of that family a URL may legitimately CONTAIN, and their openers.
+// Only stripped when the URL holds no matching opener. Full-width brackets are
+// absent on purpose: they never enter a URL at all (mechanism 1).
+const URL_TAIL_BRACKETS: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
+const BARE_URL_RE = /https?:\/\/[^\s<>"`（）「」『』【】。，、；：！？…]+/gi;
+// A URL still needs a non-empty authority after trimming: "https://." trims
+// down to "https://", which is not a link.
+const URL_HAS_HOST_RE = /^https?:\/\/[^/?#]/i;
+
+function countChar(s: string, ch: string): number {
+  let n = 0;
+  for (const c of s) if (c === ch) n++;
+  return n;
+}
+
+/** Trim the trailing sentence/shell/JSON punctuation a link is followed by,
+ * keeping closing brackets the URL itself opened. Loops, because real tails
+ * are several characters long. */
+function trimUrlTail(url: string): string {
+  let end = url.length;
+  while (end > 0) {
+    const ch = url[end - 1];
+    if (!URL_TAIL_PUNCT.includes(ch)) break;
+    const opener = URL_TAIL_BRACKETS[ch];
+    if (opener !== undefined) {
+      const body = url.slice(0, end);
+      // Balanced (or opener-heavy) ⇒ this bracket belongs to the URL.
+      if (countChar(body, ch) <= countChar(body, opener)) break;
+    }
+    end--;
+  }
+  return url.slice(0, end);
+}
+
+/** Turn bare http(s) URLs inside one run of plain text into anchors. */
+function autolinkBareUrls(text: string): ReactNode[] {
+  BARE_URL_RE.lastIndex = 0;
+  const out: ReactNode[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  let key = 0;
+  while ((m = BARE_URL_RE.exec(text)) !== null) {
+    const url = trimUrlTail(m[0]);
+    // Re-scan whatever the tail trim gave back, so nothing is skipped.
+    BARE_URL_RE.lastIndex = m.index + url.length;
+    if (!URL_HAS_HOST_RE.test(url)) {
+      if (BARE_URL_RE.lastIndex <= m.index) BARE_URL_RE.lastIndex = m.index + 1;
+      continue;
+    }
+    if (m.index > last) out.push(text.slice(last, m.index));
+    out.push(
+      <a key={key++} href={url} target="_blank" rel="noopener noreferrer">
+        {url}
+      </a>
+    );
+    last = BARE_URL_RE.lastIndex;
+  }
+  if (out.length === 0) return [text];
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
 // Split one line of text into inline nodes: `code` spans, **bold** runs, and
 // [text](url) links, everything else literal. Code takes precedence (its
 // content is not re-parsed).
@@ -186,7 +298,9 @@ function renderInline(text: string, opts?: InlineOpts): ReactNode[] {
           </a>
         );
       }
-      return <Fragment key={i}>{part}</Fragment>;
+      // Nothing structural matched: plain prose. This is the ONLY branch bare
+      // URLs are autolinked in — see the block comment above renderInline.
+      return <Fragment key={i}>{autolinkBareUrls(part)}</Fragment>;
     });
 }
 
