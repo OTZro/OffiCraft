@@ -551,6 +551,93 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
     expect(windowCalls).toEqual([]);
   });
 
+  it("轉圈是一個狀態,三條路都要有:一般進房、第一次跳到原訊息、房間開著時的第二次跳轉", async () => {
+    // 🔴 owner 逐字要的東西(c-de666642e77b「做個轉圈圈的動畫,不管是進聊天室,
+    // 或點選原訊息都是這樣」),而第三條路曾經完全拿不到它(review25 F2)。
+    //
+    // `OfficePage` 用 `key={peerId}` 掛 ChatArea,所以「房間已經開著、只換
+    // `route.msgId`」**不會 remount**:同一位成員的第二次跳到原訊息、瀏覽器上一
+    // 頁、使用者留存的舊連結,都是這一條。舊的 `initialLoading` 答的是「這條對話
+    // 的第一次載入」,那時 `messages.length > 0` ⇒ 它恆為 false ⇒ 整段走訪畫面停
+    // 在舊內容、零指示 —— 而走訪正是這個功能最長的一段等待。
+    //
+    // 🔴 三條路共用一個狀態、一處 render(owner c-d24ebd7f8d78「照理說應該只有
+    // 改一個地方吧?」)。把 ChatArea 那一處的 `initialLoading` 拿掉,下面三個
+    // expect **同時**紅;只紅一個就表示轉圈又被做成了兩份。三個轉圈斷言用
+    // `expect.soft` 正是為了這個:第一個紅了之後後面兩條還要繼續量,否則
+    // 「三條路都紅」與「只有第一條紅」在輸出上長得一模一樣。
+    seed(A, "a", 300, 100);
+    seed(B, "b", 300, 9000);
+
+    // ① 一般進房 —— 最新那一頁還在飛。
+    holdPlain = () => {};
+    const { container, rerender } = render(view(alice));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 200));
+    });
+    expect.soft(
+      container.querySelector(".chat__loading"),
+      "① 一般進房:最新那一頁還沒回來,畫面上要有轉圈",
+    ).not.toBeNull();
+    await act(async () => {
+      const release = holdPlain;
+      holdPlain = null;
+      release?.();
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(
+      container.querySelector(".chat__loading"),
+      "內容一到就要收掉",
+    ).toBeNull();
+
+    // ③ 房間**已經開著**,只換 jumpToMsgId —— 這一格的前提是畫面上本來就有東西。
+    expect(bubbles(container), "前提:③ 起跳時房間已經有內容").toContain("a299");
+    holdWindows = () => {};
+    await act(async () => {
+      rerender(view(alice, "a3"));
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 300));
+    });
+    expect.soft(
+      container.querySelector(".chat__loading"),
+      "③ 同一間房的第二次跳轉:走訪期間畫面不能停在舊內容、一個指示都沒有",
+    ).not.toBeNull();
+    await act(async () => {
+      const release = holdWindows;
+      holdWindows = null;
+      release?.();
+      await new Promise((r) => setTimeout(r, 60));
+    });
+    await waitFor(() =>
+      expect(container.querySelector('[data-msg-id="a3"]')).not.toBeNull(),
+    );
+    expect(container.querySelector(".chat__loading")).toBeNull();
+
+    // ② 帶著跳轉目標進房(第一次),走訪還在飛。
+    holdWindows = () => {};
+    const second = render(view(bruno, "b3"));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 200));
+    });
+    expect.soft(
+      second.container.querySelector(".chat__loading"),
+      "② 帶著跳轉目標進房:錨點窗＋走訪都還沒回來,畫面上要有轉圈",
+    ).not.toBeNull();
+    await act(async () => {
+      const release = holdWindows;
+      holdWindows = null;
+      release?.();
+      await new Promise((r) => setTimeout(r, 60));
+    });
+    await waitFor(() =>
+      expect(
+        second.container.querySelector('[data-msg-id="b3"]'),
+      ).not.toBeNull(),
+    );
+    expect(second.container.querySelector(".chat__loading")).toBeNull();
+  });
+
   it("上一條對話的錨點還在飛的時候切過去,新的那一間照樣載得起來", async () => {
     // 🔴 R3-1 的護欄(hook 層在 useChat.scrollback.test.ts,這裡量的是真的手勢:
     // ChatArea 換 member prop)。A 的錨點是兩個平行 GET,伺服器一忙就是數百毫秒

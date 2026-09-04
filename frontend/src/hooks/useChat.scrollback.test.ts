@@ -443,6 +443,112 @@ describe("useChat anchor window (loadAround / resetToLatest)", () => {
     expect(result.current.hasNewer).toBe(true);
   });
 
+  it("走訪途中離開房間:迴圈就地停下,一頁都不再買", async () => {
+    // 🔴 review25 F1 的一半。`fetchToLatest` 是一個對著網路跑的 `for(;;)`,而在
+    // 這之前它的閉包裡沒有任何東西停得下它:讀的人離開房間之後,那個迴圈照樣一頁
+    // 一頁打到走完為止,而且結果會落到一個已經不存在的畫面上。
+    //
+    // ⚠️ 這條量的是**取消**,不是**界**。走訪要不要走到 N 則就停是另一張還沒裁的
+    // 卡(rc-e6b1d822def1);不要把這條測試改成在數頁數。
+    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
+    const { result, unmount } = renderHook(() => useChat("b"));
+    await waitFor(() => expect(result.current.messages).toHaveLength(30));
+
+    const held = deferred<ChatMessage[]>();
+    h.listChatWindow
+      .mockResolvedValueOnce(page("hist", 100, 30)) // end_id
+      .mockResolvedValueOnce(page("w", 200, 100)) // start_id,滿 ⇒ 要走訪
+      .mockReturnValueOnce(held.promise) // 走訪第一頁 —— 卡在半空中
+      // 之後還有得走:沒有取消的話,離開房間之後這兩頁照樣會被買下來。
+      .mockResolvedValueOnce([
+        mkMsg("x99", "b", "owner", 399),
+        ...page("y", 400, 99),
+      ])
+      .mockResolvedValueOnce(page("z", 500, 20));
+
+    let pending!: Promise<JumpOutcome>;
+    await act(async () => {
+      pending = result.current.loadAround("w0");
+      await settle();
+    });
+    const forward = () =>
+      h.listChatWindow.mock.calls.filter(
+        (c) => (c[1] as { startId?: string }).startId !== undefined,
+      ).length;
+    expect(forward(), "前提:走訪的第一頁真的在飛").toBe(2);
+
+    await act(async () => {
+      unmount();
+      held.resolve(page("x", 300, 100)); // 滿頁 ⇒ 沒有取消就會續買下一頁
+      await settle();
+    });
+
+    expect(
+      await pending,
+      "房間都不在了,這一趟只能是 cancelled —— 不是 found,也不是 missing",
+    ).toBe("cancelled");
+    expect(
+      forward(),
+      "讀的人已經離開,走訪不准再買任何一頁",
+    ).toBe(2);
+  });
+
+  it("新的跳轉取代舊的:舊的走訪就地停下,而且它的結果不准落地", async () => {
+    // 🔴 review25 F1 的另一半,也是同一間房裡真的會發生的那一種。第二次「跳到原
+    // 訊息」不會 remount(`OfficePage` 的 key 是 peerId),所以舊的那一趟就在同一
+    // 個 hook 實例裡繼續跑 —— 停不下來的話,兩趟走訪同時對著網路買頁,而先回來的
+    // 那一趟還會把讀的人已經放棄的那一段貼上去。
+    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
+    const { result } = renderHook(() => useChat("b"));
+    await waitFor(() => expect(result.current.messages).toHaveLength(30));
+
+    const held = deferred<ChatMessage[]>();
+    /** 舊那一趟在被取消之後**還想再買**的頁 —— 必須永遠是空的。 */
+    const afterCancel: string[] = [];
+    h.listChatWindow.mockImplementation(
+      async (_withId, anchor: { startId?: string; endId?: string }) => {
+        if (anchor.endId === "w0") return page("hist", 100, 30);
+        if (anchor.startId === "w0") return page("w", 200, 100); // 滿 ⇒ 要走訪
+        if (anchor.startId === "w99") return held.promise; // 舊那一趟卡在這裡
+        if (anchor.endId === "q0") return page("qhist", 5000, 30);
+        if (anchor.startId === "q0") return page("q", 5100, 10); // 短頁 ⇒ 到尾巴
+        afterCancel.push(anchor.startId ?? anchor.endId ?? "?");
+        return page("later", 6000, 100);
+      },
+    );
+
+    let first!: Promise<JumpOutcome>;
+    await act(async () => {
+      first = result.current.loadAround("w0");
+      await settle();
+    });
+
+    // 讀的人改主意,跳去別的一則 —— 房間沒換,只換了目標。
+    let second: JumpOutcome | undefined;
+    await act(async () => {
+      second = await result.current.loadAround("q0");
+    });
+    expect(second, "前提:新的那一趟自己要成功").toBe("found");
+
+    await act(async () => {
+      held.resolve([mkMsg("w99", "b", "owner", 299), ...page("x", 300, 99)]);
+      await settle();
+    });
+
+    expect(
+      await first,
+      "舊的那一趟被新的取代 —— 這不是 superseded(那會叫 caller 再排一次)",
+    ).toBe("cancelled");
+    expect(
+      afterCancel,
+      "被取代之後,舊的走訪不准再買任何一頁",
+    ).toEqual([]);
+    // 🔴 而且它手上那半條線一列都不准落地:畫面上是新的那一趟的窗。
+    const ids = result.current.messages.map((m) => m.id);
+    expect(ids, "落地的必須是新的那一趟").toContain("q0");
+    expect(ids, "舊的那一趟的結果不准 commit").not.toContain("w0");
+  });
+
   it("a full page below means the live tail is BEYOND the window — and the newest-page refresh is suppressed while it is", async () => {
     // Without the suppression an SSE burst fetches the newest 30 rows and
     // merges them onto a window from the distant past: the unfetched range

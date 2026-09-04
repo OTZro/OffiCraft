@@ -176,23 +176,29 @@ interface UseChat {
   // 理說應該只有改一個地方吧?就會都有作用?」— he is right, and this is that
   // one place).
   //
-  // TRUE from the moment a conversation is entered until the FIRST load of it
-  // settles, whichever door it came through:
+  // TRUE while EITHER of two things is true — 「這條對話的內容還沒到」 or
+  // 「正在走訪」 — so it covers the TRIP, not just the room:
   //   · an ordinary entry, whose first content is `load()`'s newest page;
   //   · an anchor entry (跳到原訊息 / a kept link), whose first content is
   //     `loadAround`'s window — and since fix12 that window is not shown until
-  //     everything from it to the live tail has been fetched, which is exactly
-  //     the wait this state exists to make visible.
+  //     everything from it to the live tail has been fetched;
+  //   · 跳到原訊息 AGAIN in a room that is ALREADY OPEN — a second jump on the
+  //     same member, the back button, a link the owner kept. `OfficePage` keys
+  //     `ChatArea` by `peerId`, so only `route.msgId` changes and nothing
+  //     remounts: the room-level 「載過了沒有」 answer is long since yes, and
+  //     before fix14 this — the longest wait the feature has, a walk of many
+  //     round trips — drew nothing at all (review25 F2).
   //
-  // ⚠️ IT IS DELIBERATELY NOT PER-ENTRY. Both doors settle the SAME flag, so a
+  // ⚠️ IT IS DELIBERATELY NOT PER-ENTRY. Every door writes the SAME flag, so a
   // third entry added later needs no new wiring to get the same treatment — and
   // a view that reads it needs no knowledge of which door was used. Writing it
   // per-door is the mistake this shape exists to prevent: two flags that have to
   // agree are two flags that can disagree, and the disagreement is invisible
   // (a spinner that never stops looks exactly like a slow network).
   //
-  // It says nothing about LATER loads. A refresh over a thread that already has
-  // content is not a wait the reader is looking at.
+  // It says nothing about ordinary LATER loads. A background refresh over a
+  // thread that already has content is not a wait the reader is looking at; a
+  // walk the reader asked for by name is.
   initialLoading: boolean;
   // Whether older history MAY still exist above the loaded window (T-bf82).
   // Starts true; flips false once a page (initial or older) comes back
@@ -303,11 +309,20 @@ function mergePeerRead(prev: number, next: number): number {
 //                    about a message that exists, with no retry and no button —
 //                    a lie with a dead end behind it. The caller must retry or
 //                    re-schedule, never accuse.
+//   • "cancelled"  — THIS TRIP WAS CALLED OFF, and by the only two things that
+//                    can call one off: the room was left (or swapped) while the
+//                    walk to the live tail was in flight, or a NEWER jump
+//                    replaced it. Nothing was committed and nothing should be:
+//                    unlike "superseded" there is no re-schedule to make, because
+//                    whatever cancelled this is already doing the work. Telling
+//                    the caller to retry here would resurrect a jump the reader
+//                    has moved on from, on top of the one they are waiting for.
 export type JumpOutcome =
   | "found"
   | "missing"
   | "unreachable"
-  | "superseded";
+  | "superseded"
+  | "cancelled";
 
 // Topics that mutate the chat thread → trigger a refetch. "chat_read" advances a
 // participant's last-read watermark (the peer read our messages).
@@ -493,6 +508,39 @@ export function useChat(
   // whichever door it came.
   const [firstLoadSettled, setFirstLoadSettled] = useState(false);
   const settleFirstLoad = useCallback(() => setFirstLoadSettled(true), []);
+  // 🔴 THE OTHER HALF OF THE SAME WAIT (T-48 fix14, review25 F2). `firstLoadSettled`
+  // answers 「這條對話載過了沒有」, which is a fact about the ROOM. The wait the
+  // reader is looking at is a fact about the TRIP: 跳到原訊息 into a room that is
+  // ALREADY OPEN (a second jump on the same member, the browser's back button, a
+  // kept link) changes only `route.msgId` — `OfficePage` keys `ChatArea` by
+  // `peerId`, so nothing remounts, the thread is non-empty and the room-level
+  // flag is long since true. Without this the whole walk — which is the LONGEST
+  // wait this feature has, many round trips — drew nothing at all.
+  //
+  // ⚠️ IT IS STILL ONE STATE AND ONE RENDER (owner c-de666642e77b「不管是進聊天
+  // 室,或點選原訊息都是這樣」; c-d24ebd7f8d78「照理說應該只有改一個地方吧?」).
+  // This is not a second flag the view reads — the view reads `initialLoading`
+  // and only that, and `initialLoading` is where the two facts are OR'd, once.
+  const [anchorWalking, setAnchorWalking] = useState(false);
+  // 🔴 THE WALK'S CANCELLATION, IN THE TWO SHAPES `load()` ALREADY USES (T-48
+  // fix14, review25 F1). `fetchToLatest` is an unbounded `for(;;)` over the
+  // network; before this it closed over nothing that could stop it, so leaving
+  // the room or asking for a different message left the old walk paging away and
+  // able to commit onto a screen that had moved on.
+  //   · `walkAliveRef` — this instance / this conversation is gone (`alive`).
+  //   · `walkGenRef`   — a NEWER jump has replaced this one (the generation).
+  // A walk that fails either stops asking for pages AND commits nothing.
+  // ⚠️ This is cancellation ONLY. Whether the walk should also stop after N rows
+  // is a separate open question (rc-e6b1d822def1) and deliberately not answered
+  // here — do not turn either of these into a bound.
+  const walkAliveRef = useRef(true);
+  const walkGenRef = useRef(0);
+  useEffect(() => {
+    walkAliveRef.current = true;
+    return () => {
+      walkAliveRef.current = false;
+    };
+  }, [withId]);
   // 🔴 LOAD GENERATIONS (T-b0bb, review B2). Before the backfill, a load was
   // "fetch → commit" with ZERO awaits in between, so two overlapping loads
   // could only interleave if the network answered out of order. The backfill
@@ -1176,20 +1224,41 @@ export function useChat(
   // `reachedTail: false`, because the caller's alternative to committing a short
   // thread is committing NOTHING — a blank room where the reader asked to see a
   // message. See `loadAround`'s commit.
+  //
+  // 🔴 IT CAN BE CALLED OFF (T-48 fix14, review25 F1). `isCurrent` is the
+  // caller's answer to 「這一趟還是現在這一趟嗎」 — see `loadAround`, which builds
+  // it out of the mount's `alive` flag and the walk generation. It is asked
+  // BEFORE every page (so a cancelled walk buys no further round trips) and
+  // AGAIN after each one lands (so the very last page in flight cannot smuggle a
+  // result past the caller's commit guard). A cancelled walk returns what it
+  // happens to hold with `cancelled: true`, and its caller commits NOTHING —
+  // the screen it was fetching for is not there any more.
   const fetchToLatest = useCallback(
     async (
       seed: ChatMessage[],
-    ): Promise<{ messages: ChatMessage[]; reachedTail: boolean }> => {
+      isCurrent: () => boolean,
+    ): Promise<{
+      messages: ChatMessage[];
+      reachedTail: boolean;
+      cancelled: boolean;
+    }> => {
       const out = [...seed];
       const have = new Set(out.map((m) => m.id));
+      const stop = () => ({
+        messages: out,
+        reachedTail: false,
+        cancelled: true,
+      });
       try {
         for (;;) {
+          if (!isCurrent()) return stop();
           const newest = out[out.length - 1];
           const page = await api.listChatWindow(
             withId,
             { startId: newest.id },
             CHAT_WALK_PAGE_SIZE,
           );
+          if (!isCurrent()) return stop();
           let added = 0;
           for (const m of page) {
             if (have.has(m.id)) continue;
@@ -1199,7 +1268,7 @@ export function useChat(
           }
           // Short page ⇒ this window reached the live tail.
           if (page.length < CHAT_WALK_PAGE_SIZE) {
-            return { messages: out, reachedTail: true };
+            return { messages: out, reachedTail: true, cancelled: false };
           }
           // 🔴 A FULL PAGE THAT ADDED NOTHING IS THE ONLY WAY THIS LOOP CAN FAIL
           // TO TERMINATE, and it is a server contradicting itself rather than an
@@ -1212,7 +1281,7 @@ export function useChat(
                 "nothing new; stopping rather than asking the same question " +
                 "again — the thread will be marked as not-the-tail",
             );
-            return { messages: out, reachedTail: false };
+            return { messages: out, reachedTail: false, cancelled: false };
           }
         }
       } catch (e) {
@@ -1221,7 +1290,7 @@ export function useChat(
         // says they are not at the latest — an affordance that is always there,
         // unlike the scroll event a pinned scroller cannot emit.
         console.warn("useChat: fetch to the live tail failed part-way", e);
-        return { messages: out, reachedTail: false };
+        return { messages: out, reachedTail: false, cancelled: false };
       }
     },
     [withId],
@@ -1287,6 +1356,18 @@ export function useChat(
 
   const loadAround = useCallback(
     async (msgId: string): Promise<JumpOutcome> => {
+      // 🔴 THE TRIP'S OWN GENERATION, TAKEN BEFORE THE FIRST REQUEST (T-48
+      // fix14, review25 F1). `view.takeTicket()` orders COMMITS; this orders
+      // TRIPS, which is a different question and asked earlier: a jump that has
+      // been replaced must stop buying pages long before it has anything to
+      // commit. `walkAliveRef` covers the other ending — the room is gone.
+      const gen = ++walkGenRef.current;
+      const isCurrent = () => walkAliveRef.current && walkGenRef.current === gen;
+      // 🔴 AND THE WAIT GOES UP HERE, NOT AT THE MOUNT. This is the only line
+      // that makes 「第二次跳到原訊息」 draw anything at all (review25 F2): the
+      // room is already open, so nothing else in this hook is in a waiting
+      // state. See `anchorWalking`.
+      setAnchorWalking(true);
       // 🔴 EVERY ENDING SETTLES THE FIRST LOAD, INCLUDING THE ONES THAT THROW.
       // This is the anchor door's half of `initialLoading`; the ordinary door's
       // half is in `load()`. There are exactly two, they write the same flag,
@@ -1352,10 +1433,31 @@ export function useChat(
         let all = window;
         let reachedTail = newer.length < CHAT_WALK_PAGE_SIZE;
         if (!reachedTail) {
-          const r = await fetchToLatest(window);
+          const r = await fetchToLatest(window, isCurrent);
+          // 🔴 A CALLED-OFF WALK COMMITS NOTHING (T-48 fix14, review25 F1). The
+          // reader has left the room or asked for a different message; the
+          // half-thread in hand belongs to a screen that no longer wants it,
+          // and the trip that replaced this one is the one that gets to paint.
+          if (r.cancelled) return "cancelled";
           all = r.messages;
           reachedTail = r.reachedTail;
         }
+        // …and the same question once more at the door, for the trip whose
+        // forward half was short enough never to enter the walk at all.
+        if (!isCurrent()) return "cancelled";
+        // 🔴 THE WAIT COMES DOWN BEFORE THE COMMIT, NEVER AFTER IT (T-48
+        // fix14). The spinner REPLACES the thread body, so the frame that
+        // paints the fetched rows must not still be under it: `ChatArea`'s jump
+        // reactor locates its target by querying the painted DOM, and a commit
+        // that lands while the pane is still a spinner is a commit whose target
+        // is never found — the reader ends up on a thread nobody scrolled.
+        // Measured, not theorised: with this line in the `finally` instead,
+        // `ChatArea.anchor-entry.test.tsx` loses the row and paints the
+        // new-message strip in place of the 回到最新 arrow. React batches the
+        // two into one frame when it can; this makes the ORDER not matter when
+        // it cannot. The `finally` below still covers every ending that never
+        // reaches a commit.
+        setAnchorWalking(false);
         // 🔴 THE CARD PREFILL LANDS INSIDE THE `withAnchorFetch` LEASE, AND THAT
         // IS DELIBERATE (T-48). This is the one commit point where the extra
         // round trip is not merely tolerable but WANTED: while the lease is held
@@ -1385,6 +1487,9 @@ export function useChat(
         });
       } finally {
         settleFirstLoad();
+        // Only the CURRENT trip takes the wait down. A superseded one ending
+        // later must not clear the spinner its replacement is still under.
+        if (walkGenRef.current === gen) setAnchorWalking(false);
       }
     },
     [withId, withAnchorFetch, view, fetchToLatest, settleFirstLoad],
@@ -1407,7 +1512,14 @@ export function useChat(
     peerLastReadTs,
     // 🔴 DERIVED, NOT STORED — so it cannot get out of step with the thread.
     // Content on screen ends the wait no matter which door delivered it.
-    initialLoading: !firstLoadSettled && thread.messages.length === 0,
+    // 🔴 ONE STATE, TWO FACTS, OR'D EXACTLY HERE (T-48 fix14, review25 F2).
+    // 「這條對話的內容還沒到」 (the room has never been filled) OR 「正在走訪」
+    // (a jump is fetching from its anchor to the live tail). The second is not a
+    // special case of the first: 跳到原訊息 into a room that is already open has
+    // content on screen and a settled first load, and it is the LONGEST wait
+    // this feature has.
+    initialLoading:
+      anchorWalking || (!firstLoadSettled && thread.messages.length === 0),
     send,
     markRead,
     hasMore: thread.hasMore,

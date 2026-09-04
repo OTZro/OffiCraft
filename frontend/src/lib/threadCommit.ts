@@ -33,12 +33,13 @@
 // brand while it reaches nothing here. `conversationLatches` declined the same
 // ornament; the guarantee is structural or it is nothing.
 //
-// 🔴 WHAT IS NOT IN HERE, AND WHY. `forwardExhaustedRef` — the forward walk's
-// own stop sign — stays in `useChat`. It answers "did that ask actually go
-// out", which is knowledge the loader has and this module does not (see its
-// note there). And the effect's `alive` flag stays in the effect: `commit` does
-// not know whether the caller's effect is still mounted and must not pretend
-// to, so `load()` asks before AND after.
+// 🔴 WHAT IS NOT IN HERE, AND WHY. The walk's own stops — the short page, the
+// full page that added nothing, and (since fix14) the `alive`/generation pair
+// that lets a jump be called off — stay in `useChat`. They answer "is this trip
+// still the trip, and did it reach the end", which is knowledge the loader has
+// and this module does not. The effect's `alive` flag stays in the effect for
+// the same reason: `commit` does not know whether the caller's effect is still
+// mounted and must not pretend to, so `load()` asks before AND after.
 
 import { useCallback, useRef, useState } from "react";
 import type { ChatMessage } from "../api/adapter";
@@ -89,9 +90,11 @@ export interface Thread {
   // Nothing in this file gives up quietly.
   gapSuspected: boolean;
   // 🔴 THIS THREAD IS AN ANCHOR WINDOW, NOT THE LIVE TAIL (T-48 ③). Set when
-  // `loadAround` lands a window whose newer half came back FULL (so the stream
-  // continues below it), cleared the moment a forward page comes back short or
-  // `resetToLatest` replaces the thread.
+  // `loadAround` commits without having reached the tail — i.e. its walk to the
+  // live tail gave up part-way (a failed page, or a full page that carried
+  // nothing new). Since fix12 a walk that finishes clears it in the same
+  // commit; `resetToLatest` clears it by replacing the thread. It is therefore
+  // an EXCEPTIONAL state now rather than the usual one after a jump.
   //
   // ⚠️ IT ALSO GATES `load()`. A newest-window page cannot be merged into a
   // historical window: the range between the two is unloaded, `pageJoinsThread`
@@ -99,8 +102,10 @@ export interface Thread {
   // MAX_BACKFILL_PAGES round-trips failing to close a seam that is not a defect
   // at all — and end by raising `gapSuspected`, i.e. telling the owner messages
   // were LOST when in truth they were merely not fetched yet. So while this is
-  // true the periodic/SSE load is skipped, and the forward walk (`loadNewer`)
-  // or the arrow (`resetToLatest`) is what brings the thread back to the tail.
+  // true the periodic/SSE load is skipped, and the arrow (`resetToLatest`) is
+  // the ONE way back to the tail — the reader-driven forward walk that used to
+  // be the other way is gone (T-48 fix12), and with it every handle a caller
+  // had for asking for one more page toward the tail.
   hasNewer: boolean;
 }
 
@@ -127,11 +132,17 @@ export interface ThreadCommit {
   clear(): void;
   /** Commit a thread write under generation `seq`.
    *
-   * Four steps, fixed:
+   * Three steps, fixed:
    *   ① run `next` against the mirror to get the candidate;
-   *   ② await every WAITING card the candidate carries;
-   *   ③ re-check the ticket — return false if a newer commit landed;
-   *   ④ take the generation, advance the mirror, hand `next` to React.
+   *   ② re-check the ticket — return false if a newer commit landed;
+   *   ③ take the generation, advance the mirror, hand `next` to React.
+   *
+   * ⚠️ THERE IS NO AWAIT LEFT IN HERE (see the header). It used to await the
+   * candidate's WAITING cards between ① and ②, and that await was the reason
+   * the ticket had to be re-asked at the write rather than at the call site.
+   * The re-ask survives the await's removal because the CALLER's fetch is the
+   * out-of-order window that ever mattered; it is still `async` only so its
+   * six call sites did not all have to change at once.
    *
    * Resolves TRUE when the write landed, FALSE when it was superseded. The
    * caller must branch on it: "superseded" and "committed" are different
@@ -151,9 +162,9 @@ export interface ThreadCommit {
    * formality. It is written through an updater precisely so a commit landing
    * inside its await window is present in React's `prev` and survives.
    *
-   * Same card guarantee as `commit`; expect it to fetch nothing in practice,
-   * since history pages are almost entirely answered/expired cards, which are
-   * never prefetched. */
+   * It fetches nothing, and neither does `commit`: every 請示卡 renders
+   * COLLAPSED at its final height from what the carrying message already says,
+   * so there is no card read for either door to hold. */
   mergeHistory(next: (prev: Thread) => Thread): Promise<void>;
 }
 

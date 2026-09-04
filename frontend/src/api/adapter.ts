@@ -67,9 +67,16 @@ export interface ChatMessage {
   replyCardId: string | null;
   /** Read-time join of the carried card's CURRENT status (`reply_card_status`):
    * `"waiting"` | `"answered"` | `"expired"`, or null when the message carries no card. Lets
-   * the inline ChatReplyCard decide AT MOUNT whether to load eagerly (waiting)
-   * or lazily (answered — collapse, fetch only on expand) WITHOUT a per-card
-   * GET. OPTIONAL so hand-built test fixtures stay valid (same precedent as
+   * the inline ChatReplyCard label its COLLAPSED row (待回覆 / 已回覆 / 已過期)
+   * WITHOUT a per-card GET.
+   *
+   * ⚠️ It used to say this field decides AT MOUNT whether to load eagerly
+   * (waiting) or lazily (answered). It does not any more: since T-48
+   * (`rc-d8844e709f42`) EVERY chat card mounts collapsed regardless of status
+   * and fetches only on expand, so what this field decides is what the row SAYS
+   * while nothing has been fetched. `TaskReplyCard` is unchanged.
+   *
+   * OPTIONAL so hand-built test fixtures stay valid (same precedent as
    * `ReplyCard.task`); the mapper always sets it (null when the wire carries
    * ""). */
   replyCardStatus?: "waiting" | "answered" | "expired" | null;

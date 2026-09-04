@@ -904,9 +904,10 @@ export function ChatArea({
     // the newest message read (monotonic server-side; safe to fire repeatedly).
     //
     // 🔴 `mayMarkRead` because in an ANCHOR WINDOW the bottom of the BOX is not
-    // the bottom of the THREAD — see where it is derived. The forward walk
-    // above (`loadNewer`) is what eventually reaches the live tail, and this
-    // resumes there.
+    // the bottom of the THREAD — see where it is derived. There is no forward
+    // walk to resume from any more (T-48: `loadAround` fetches through to the
+    // live tail before it commits), so the case this guards is the one where
+    // that fetch could NOT finish and the thread was committed short anyway.
     if (nowNearBottom && !session.nearBottom && newestTs > 0 && mayMarkRead) {
       void markRead(newestTs);
     }
@@ -1133,7 +1134,12 @@ export function ChatArea({
           // ⚠️ THAT IS A PROPERTY OF THE MOUNT, NOT OF THIS FILE. Rendering
           // `ChatArea` without a key puts every one of these back, silently.
           // `lint-chat-area-key` is what keeps it from happening.
-          if (outcome === "found") return;
+          // 🔴 「cancelled」 IS THE ONE ENDING THAT WANTS NOTHING DONE (T-48
+          // fix14, review25 F1). The room was left, or a NEWER jump replaced
+          // this one — and that newer jump is already fetching. Treating it as
+          // 「superseded」 (re-arm and go round again) would put a second walk
+          // in the air for a target the reader has moved on from.
+          if (outcome === "found" || outcome === "cancelled") return;
           if (
             outcome === "superseded" &&
             session.autoJumpRetries < MAX_JUMP_RETRIES
@@ -2156,7 +2162,28 @@ export function ChatArea({
       )}
 
       <div className="chat__body">
-        {messages.length > 0 ? (
+        {/* 🔴 THE ONE PLACE THE SPINNER IS RENDERED, AND THE ONE INPUT IT
+         * READS (T-48 fix12, owner c-d24ebd7f8d78). `initialLoading` is
+         * `useChat`'s single answer to 「這條對話的內容還沒到,或正在走訪」 for
+         * EVERY entrance — an ordinary entry waiting on `load()`, a 跳到原訊息
+         * entry waiting on `loadAround` (which since fix12 does not commit until
+         * it has fetched through to the live tail), and 跳到原訊息 AGAIN in a
+         * room that is already open. A further entrance needs no line here.
+         *
+         * 🔴 IT IS ASKED BEFORE `messages.length` ON PURPOSE (fix14, review25
+         * F2). Asked after, this branch is unreachable for every wait that
+         * starts with content already on screen — which is exactly the second
+         * jump, and exactly the longest wait there is. The reader then sits in
+         * front of the OLD thread for the whole walk with nothing saying so.
+         *
+         * ⚠️ IT ALSO SITS ABOVE THE OFFLINE CARD ON PURPOSE. 「離線」 is a fact
+         * about the member and 「還沒載完」 is a fact about this pane; while
+         * the second is true we do not yet know whether the thread is empty,
+         * and painting the offline card first would mean flashing 「還沒有訊
+         * 息」 at a conversation that is about to have some. */}
+        {initialLoading ? (
+          <ChatThreadLoading />
+        ) : messages.length > 0 ? (
           <>
             <div
               className="chat__messages"
@@ -2230,22 +2257,6 @@ export function ChatArea({
               <ChatJumpLatestButton onClick={jumpToLatest} />
             )}
           </>
-        ) : initialLoading ? (
-          /* 🔴 THE ONE PLACE THE SPINNER IS RENDERED, AND THE ONE INPUT IT
-           * READS (T-48 fix12, owner c-d24ebd7f8d78). `initialLoading` is
-           * `useChat`'s single answer to 「這條對話的內容還沒到」 for BOTH
-           * entrances — an ordinary entry waiting on `load()`, and a 跳到原訊息
-           * entry waiting on `loadAround` (which since fix12 does not commit
-           * until it has fetched through to the live tail, so that wait is now
-           * long enough to be worth drawing). A third entrance needs no line
-           * here.
-           *
-           * ⚠️ IT SITS ABOVE THE OFFLINE CARD ON PURPOSE. 「離線」 is a fact
-           * about the member and 「還沒載完」 is a fact about this pane; while
-           * the second is true we do not yet know whether the thread is empty,
-           * and painting the offline card first would mean flashing 「還沒有訊
-           * 息」 at a conversation that is about to have some. */
-          <ChatThreadLoading />
         ) : isOffline ? (
           <div className="chat__offline">
             <span className="chat__offline-icon">
