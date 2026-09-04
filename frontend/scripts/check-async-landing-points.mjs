@@ -265,6 +265,13 @@ const REGISTRY = [
       "highlight clear; cleared in the effect cleanup, and the state it writes dies with the room. The centring settle timer that used to be the second one was deleted with the jump's re-center loop (T-48, owner rc-6c27f486ef9d)",
   },
   {
+    file: "components/ChatThreadLoading.tsx",
+    kind: "setTimeout/setInterval",
+    count: 1,
+    verdict:
+      "\u{1F534} THE SPINNER'S SHOW-AFTER DELAY (T-48 fix12). It writes ONE boolean, `shown`, into this component's own state, and this component is mounted only while `useChat.initialLoading` is true \u2014 i.e. only while the pane it belongs to is still empty. Every way the wait can end unmounts it, and the effect's cleanup clears the timer on that same unmount, so the callback cannot run after the content it was covering has arrived. There is no room identity to get wrong either: it is rendered under `ChatArea`, which is mounted under `key={peerId}`, so a conversation switch destroys the timer with the component. \u26a0\ufe0f It is a DELAY, not a minimum display time \u2014 nothing here keeps the spinner up once the thread has landed",
+  },
+  {
     file: "components/ChatArea.tsx",
     kind: "Observer",
     count: 1,
@@ -281,9 +288,9 @@ const REGISTRY = [
   {
     file: "hooks/useChat.ts",
     kind: "await",
-    count: 23,
+    count: 24,
     verdict:
-      "one hook instance per room (R13-3), so a commit from a room the owner has left lands in a discarded component; the generation clock is what orders the commits WITHIN a room. 🔴 17 → 23 (T-48): every one of the six thread-writing paths now goes through `lib/threadCommit`, which awaits the page's WAITING reply cards before the rows reach the view — resetToLatest / refetch / load() / loadNewer / loadAround each traded a bare setter for `await commit(seq, …)`, and loadOlder for `await mergeHistory(…)`. The re-signed verdict is the same one: the extra awaits widen the window a newer load can commit inside, and `commit` is where the ticket is re-asked AFTER its own await",
+      "one hook instance per room (R13-3), so a commit from a room the owner has left lands in a discarded component; the generation clock is what orders the commits WITHIN a room. 🔴 17 → 23 (T-48): every one of the six thread-writing paths now goes through `lib/threadCommit`, which awaits the page's WAITING reply cards before the rows reach the view — resetToLatest / refetch / load() / loadAround each traded a bare setter for `await commit(seq, …)`, and loadOlder for `await mergeHistory(…)`. The re-signed verdict is the same one: the extra awaits widen the window a newer load can commit inside, and `commit` is where the ticket is re-asked AFTER its own await. 🔴 23 → 24 (T-48 fix12): the forward PAGER is gone and `fetchToLatest` is here instead — a loop that awaits `listChatWindow` once per 100 rows, from the jump anchor to the live tail. It is by far the longest await window in this file (79 round trips at 8,000 rows, measured) and it is also the only one that CANNOT land in the wrong place, because it commits nothing: it accumulates into a local array and hands the finished thread to `loadAround`, which makes the single ticketed commit. A load that lands inside that window is not raced by it — it is judged by `commit` in the ordinary way, once, at the end",
   },
   {
     file: "hooks/useChat.ts",
@@ -291,13 +298,6 @@ const REGISTRY = [
     count: 2,
     verdict:
       "load()'s arms; the effect's own `alive` flag, re-asked after every await",
-  },
-  {
-    file: "hooks/useChat.ts",
-    kind: "setTimeout/setInterval",
-    count: 1,
-    verdict:
-      "\u{1F534} THE REPLAYED HUMAN GESTURE (T-48, independent reviews #20 and #21). A gesture the forward loader refused is not always dropped and not always replayed \u2014 both extremes shipped a defect. It is replayed when the reader is asking about a row they were actually SHOWN (a newest row different from the last served ask, at least PAGE_SEEN_MIN_MS after that page was committed), and when a gesture the `loadingNewer` mutex turned away is followed by that page FAILING. It has to exist because the refused reader is already pinned AT THE SCROLL LIMIT, and a browser only fires `scroll` when the box actually moves: measured in real Chromium, further downward pushes produced ZERO events, so a dropped gesture was a silent stall with no spinner and no end marker. What stops it landing in the wrong place: it re-enters `loadNewer`, which re-asks `hasNewer`, the anchor latch and the generation ticket on the CURRENT room; and `dropPendingGesture` disarms it on unmount, on a conversation switch, and \u2014 the radius `withId` alone was missing (#21 F-3) \u2014 on `loadAround` and `resetToLatest`, which replace what \"forward\" means without changing `withId`. \u26a0\ufe0f Only a REFUSED `human` call may arm it, and arming it on EVERY refusal is the measured way back to the corridor: one real flick is dozens of scroll events, and the blanket version bought a second page with nobody touching the box (CT `chat-forward-walk`, e2e spec 20). Its interaction with SSE is reasoned from those same re-asks, NOT covered by a test of its own",
   },
   {
     file: "hooks/useChat.ts",

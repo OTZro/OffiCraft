@@ -835,6 +835,7 @@ export const zh = {
     wakeButton: "喚醒",
     wakePending: "喚醒中…",
     emptyRange: "這個範圍還沒有訊息",
+    threadLoading: "正在載入對話…",
     inputPlaceholder: (name: string) => `回覆 ${name}…`,
     // M2-4 composer lock: shown IN PLACE OF the reply input while the member
     // is not online (offline / stopped / waking / stopping).

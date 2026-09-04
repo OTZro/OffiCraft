@@ -34,7 +34,7 @@
 // existing thread by id (older messages kept in front) instead of replacing
 // the whole array — a replace would silently eat the loaded history.
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatMessage, ChatAttachmentInput } from "../api/adapter";
 import { api } from "../api";
 import { ApiError } from "../api/errors";
@@ -109,6 +109,20 @@ import type { Thread } from "../lib/threadCommit";
 // returning fewer than this means the history is exhausted (hasMore=false).
 const CHAT_PAGE_SIZE = 30;
 
+// 🔴 ONE PAGE OF THE FETCH-TO-THE-LIVE-TAIL (T-48 fix12, owner rc-e1fb80065f8f:
+// 「一次撈100則撈完」). The window path (`?start_id=` / `?end_id=`) has always
+// taken a `limit`, capped at `chatWindowMaxLimit = 200` server-side
+// (api_chat.go) — 100 is well inside it, so nothing on the server or in `spec/`
+// moves for this.
+//
+// Why not the cap itself: the cap is a ROW count and explicitly NOT a payload
+// bound — that constant's own note records 200 rows MEASURED at 687 KB. 100
+// halves the worst single response for double the request count, and the
+// request count is not what hurts: measured (fix11), the cost is dominated by
+// ONE React render of the finished thread, which is blind to how the rows
+// arrived.
+const CHAT_WALK_PAGE_SIZE = 100;
+
 // How many backfill pages one seam may consume before we stop and admit it.
 // The hole has NO upper bound (it is "burst size − 30"), so a bound is
 // unavoidable; what is NOT acceptable is a bound that gives up quietly. At
@@ -157,6 +171,29 @@ interface UseChat {
   // Mark this conversation read up to `lastReadTs` (the owner's own watermark) —
   // called when the owner enters / scrolls to the bottom of the thread.
   markRead: (lastReadTs: number) => Promise<void>;
+  // 🔴 THE ONE STATE BEHIND 「這條對話的內容還沒到」 (T-48 fix12, owner
+  // c-de666642e77b「不管是進聊天室,或點選元訊息都是這樣」＋ c-d24ebd7f8d78「照
+  // 理說應該只有改一個地方吧?就會都有作用?」— he is right, and this is that
+  // one place).
+  //
+  // TRUE from the moment a conversation is entered until the FIRST load of it
+  // settles, whichever door it came through:
+  //   · an ordinary entry, whose first content is `load()`'s newest page;
+  //   · an anchor entry (跳到原訊息 / a kept link), whose first content is
+  //     `loadAround`'s window — and since fix12 that window is not shown until
+  //     everything from it to the live tail has been fetched, which is exactly
+  //     the wait this state exists to make visible.
+  //
+  // ⚠️ IT IS DELIBERATELY NOT PER-ENTRY. Both doors settle the SAME flag, so a
+  // third entry added later needs no new wiring to get the same treatment — and
+  // a view that reads it needs no knowledge of which door was used. Writing it
+  // per-door is the mistake this shape exists to prevent: two flags that have to
+  // agree are two flags that can disagree, and the disagreement is invisible
+  // (a spinner that never stops looks exactly like a slow network).
+  //
+  // It says nothing about LATER loads. A refresh over a thread that already has
+  // content is not a wait the reader is looking at.
+  initialLoading: boolean;
   // Whether older history MAY still exist above the loaded window (T-bf82).
   // Starts true; flips false once a page (initial or older) comes back
   // shorter than the page size. Drives the "已到最早訊息" marker and stops
@@ -181,23 +218,32 @@ interface UseChat {
   // claim of completeness that is false.
   gapSuspected: boolean;
   // 🔴 THE LOADED WINDOW IS NOT THE LIVE TAIL (T-48 ③). True while the thread
-  // holds an ANCHOR window fetched around some older message — there is more
+  // holds a window that does NOT reach the newest message — there is more
   // stream BELOW what is loaded. Everything that means "the newest message is
   // on screen" must consult this: the viewport can be scrolled to the very
   // bottom of a historical window and still be nowhere near the newest row.
+  //
+  // 🔴 SINCE fix12 THIS IS AN EXCEPTION STATE, NOT THE NORMAL OUTCOME OF A JUMP.
+  // `loadAround` fetches through to the live tail before committing, so a
+  // successful jump lands with this FALSE. It is true only when that fetch could
+  // not finish — a page failed, or the server kept answering with rows we
+  // already hold — in which case the thread is committed anyway (the reader gets
+  // their message rather than a blank room) and this flag is what tells the
+  // truth about it: the 回到最新 arrow stays up, `load()` stands down, and the
+  // watermark is not stamped. It must NOT be deleted on the theory that it is
+  // always false now.
   hasNewer: boolean;
-  // Load ONE page FORWARDS from the newest loaded row (`?start_id=`, the
-  // mirror image of loadOlder) and APPEND it. Concurrency-locked, read-only,
-  // no-op unless `hasNewer`. A page shorter than one window means the live tail
-  // has been reached → `hasNewer` flips false and the ordinary newest-window
-  // refresh takes over again.
-  // `human: true` means a reader gesture: it clears the walk's no-progress
-  // bound, rate-limited to one attempt per HUMAN_RETRY_MIN_MS whatever that
-  // attempt returns — see the note where it is read. Every product caller
-  // passes it; there is no automatic continuation any more (owner
-  // rc-d2e1b69edc66 ①: one gesture, one page), so a call without it is a test
-  // asking for one unthrottled page.
-  loadNewer: (opts?: { human?: boolean }) => Promise<void>;
+  // 🔴 THERE IS NO FORWARD PAGER ON THIS INTERFACE ANY MORE (T-48 fix12, owner
+  // rc-e1fb80065f8f「一次撈100則撈完」＋ c-6a973512ed77「我是指整個訊息撈完才
+  // render」). A jump used to land in the middle of the history and leave the
+  // reader to walk home one page per scroll gesture; `loadAround` now fetches
+  // everything from the anchor to the live tail BEFORE it commits anything, so
+  // 「往新的方向一頁一頁走」 is not a thing any caller can ask for — and the
+  // entire gesture apparatus that served it (the 400ms retry clock, the
+  // trailing replay for a swallowed gesture, the sight gate, the served-anchor
+  // marker, the in-flight-blocked marker, the reader-at-bottom probe, the
+  // no-progress marker) is gone with it, because none of its questions can be
+  // asked any more.
   // Fetch the window AROUND one message id and make it the thread, so a jump
   // can land on a message that was never loaded. Two requests — the page
   // ending at the target (context above) and the page starting at it (context
@@ -436,20 +482,17 @@ type ConversationSlot = {
 export function useChat(
   withId: string,
   entryAnchorMsgId?: string,
-  /** 🔴 IS THE READER STILL AT THE BOTTOM WHEN THE REPLAY COMES DUE (T-48,
-   * independent review #22 F-6)? A swallowed gesture is replayed up to 400ms
-   * after it was made, and until now nothing asked whether the reader was
-   * still there — they could have scrolled up to read history in between and
-   * the replay landed a page anyway, which is this ticket's own 「零手勢就
-   * 撈」 in slow motion. The viewport belongs to `ChatArea`, so the question
-   * is asked of it. Omitted (the hook suite) = unanswerable = not asked. */
-  readerAtBottom?: () => boolean,
 ): UseChat {
   // The thread, its mirror and its generation clock — all three behind
   // `lib/threadCommit`, which is the only thing that can write them.
   const view = useThreadCommit();
   const thread = view.thread;
   const [peerLastReadTs, setPeerLastReadTs] = useState(0);
+  // See `UseChat.initialLoading`. FALSE until the first load of this
+  // conversation has settled — succeeded, failed, or been refused — through
+  // whichever door it came.
+  const [firstLoadSettled, setFirstLoadSettled] = useState(false);
+  const settleFirstLoad = useCallback(() => setFirstLoadSettled(true), []);
   // 🔴 LOAD GENERATIONS (T-b0bb, review B2). Before the backfill, a load was
   // "fetch → commit" with ZERO awaits in between, so two overlapping loads
   // could only interleave if the network answered out of order. The backfill
@@ -477,154 +520,6 @@ export function useChat(
   // watermark, and it re-asks the ticket at the moment it writes — a load that
   // started later and finished sooner must not be judged superseded by a page
   // it precedes.
-  // 🔴 THE FORWARD WALK'S ONLY STOP THAT IS NOT `hasNewer` (T-48). Holds the
-  // anchor id whose forward page came back carrying nothing this thread did not
-  // already have — the shape a DUPLICATE anchor request produces (measured: two
-  // `?start_id=` requests 8ms apart on the same id, back when the mirror only
-  // caught up on the next render). That CAUSE is gone: the forward loader now
-  // advances the mirror the moment a page commits, and the duplicate went with
-  // it (measured on the fix: 0 repeats in 1000 walks against 5 in 400 without
-  // it, p=0.0019). This bound is what remains — refusing a question already
-  // answered — and it should now be nearly unreachable rather than load-bearing.
-  //
-  // Why it lives HERE and not in the caller that drives the walk: "did that ask
-  // actually go out" is knowledge this function has and nobody else does. A
-  // caller-side "I already asked from this row" bound looks identical but is
-  // WRONG, and measured wrong — an ask dropped by the same-direction mutex below
-  // never reached the network, yet marked that row as asked, so when the
-  // in-flight page landed with nothing new the walk stopped for good at 61 of 80
-  // rows. Refusing HERE cannot make that mistake: a refused ask is one that this
-  // function itself already answered.
-  //
-  // It is cleared by every commit that changes what "forward" means — a page
-  // that appends rows, and each of the paths that replace the thread — and, on
-  // top of those, by a reader who scrolls (see the rate limit below). Count the
-  // assignments rather than trusting this sentence: it has been wrong before.
-  const forwardExhaustedRef = useRef<string | null>(null);
-
-  // 🔴 A GESTURE IS NOT ONE EVENT, and the first cut of the retry above said it
-  // was ("a gesture cannot loop" — measured false: independent review #18, A-2).
-  // A wheel produces ~60 scroll events a second, every one of them clearing the
-  // bound and asking again, so a reader resting at the bottom of a stalled walk
-  // sent 20 requests a second — the loop the bound exists to prevent, moved to
-  // the other side of the door. This is a RATE LIMIT on the retry and nothing
-  // else: it is not a claim about how long anything takes, and no behaviour
-  // reads it as a threshold. One wheel still retries instantly; the same wheel
-  // held down retries at most twice a second — and that holds on the FAILING
-  // path too, which is what review #19 F-1 found it did not (see the gate).
-  const HUMAN_RETRY_MIN_MS = 400;
-  const humanRetryAtRef = useRef(-Infinity);
-  // The one gesture the open window swallowed, held until the window closes —
-  // see the trailing edge in `loadNewer`. Non-null = a REAL gesture is waiting;
-  // it is never armed by anything but a refused `human` call.
-  const humanTrailingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // 🔴 THE ROW THE LAST SERVED ASK PAGED FROM — the unit that tells a SECOND
-  // gesture apart from the SAME gesture's 2nd…nth scroll event, and the reason
-  // 「捲動位置有沒有真的動」 could not (measured, see the gate).
-  const lastServedAnchorRef = useRef<string | null>(null);
-  // A real gesture that arrived while a forward page was ALREADY IN THE AIR and
-  // was turned away by the mutex rather than by the clock. It is only worth
-  // replaying if that page comes back EMPTY-HANDED — see the `finally`.
-  const blockedInFlightRef = useRef(false);
-  // 🔴 THE READER CANNOT REACT TO A PAGE THEY HAVE NOT BEEN SHOWN — AND THAT
-  // IS MEASURED NOW, NOT TIMED (T-48, independent review #22 F-1).
-  //
-  // `commit` advances the mirror SYNCHRONOUSLY and the browser lays the rows
-  // out later, so there is a window in which the newest row has already moved
-  // while the BOX on screen is still the old, short one. A scroll event landing
-  // in that window is the tail of the gesture that BOUGHT the page, not
-  // somebody reacting to it — and by the anchor test alone it looks exactly
-  // like a second gesture.
-  //
-  // This used to be a clock: `Date.now()` at commit plus a fixed 64ms. A clock
-  // is a PROXY for the render, and the proxy had no safe setting — the jsdom
-  // suite pinned it to [48, 100] and a slow machine's single React commit can
-  // outlast the whole band (review #22 F-1, F-4). The render itself is not a
-  // proxy, and it is available: React tells us when it has written the rows.
-  //
-  // So the question is asked of the RENDER, not of a clock: a page is unseen
-  // from the moment its rows are merged until the layout effect for the commit
-  // that carries them has run — which is exactly when React has written those
-  // rows into the box. That boundary is an event, it costs no constant, and it
-  // is the same boundary on a fast machine and on a slow one.
-  //
-  // 🔴 IT HOLDS THE ROW, NOT A BOOLEAN, BECAUSE 「the framework called us」 IS
-  // NOT THE SAME FACT AS 「the page is on screen」. A flag cleared by any
-  // messages-effect trusts the call; an id cleared only when THAT ROW is in the
-  // thread checks it. Both failure directions are then closed by construction:
-  //   · called for something else (a history page committing inside the forward
-  //     page's await window — a real interleave, `loadOlder` takes no ticket)
-  //     ⇒ the owed row is not there ⇒ still owed;
-  //   · called twice for the same commit (`<StrictMode>` double-invokes every
-  //     effect in development, and `main.tsx` wraps the whole app in it) ⇒ the
-  //     second call finds nothing owed ⇒ no-op;
-  //   · not called at all ⇒ impossible for a commit that carries the row, which
-  //     is the only commit that may clear it.
-  //
-  // 📏 WHICH OF THOSE THREE IS MEASURED, AND BY WHAT (T-48, independent review
-  // #23 F-3 — which judged the row 「indistinguishable from a boolean」, and
-  // rightly refused to read `owedAbsent = 0` as evidence for it).
-  //   · 「called twice」 — 「補送的戳記由 render 回寫」 in
-  //     `useChat.scrollback.test.ts` counts it: 2 debts against 5 bare / 6
-  //     StrictMode calls, and every extra one a no-op.
-  //   · 「called for something else」 — 🔴 NO LONGER MEASURED, AND THE TEST
-  //     THAT MEASURED IT IS GONE (T-48, 2026-09-04). Its premise was the reply
-  //     card prefill: a hung card held `commit` past the point where the debt
-  //     was already written, `loadOlder` (no ticket, no `loadingNewer`)
-  //     committed and RENDERED inside that window, and a BOOLEAN was cleared by
-  //     a render carrying none of the owed rows (boolean mutant red 15 in 15,
-  //     the row green 15 in 15). Cards render collapsed now, so `commit` awaits
-  //     nothing and there is no window between writing this ref and `setThread`
-  //     to interleave with — the test could no longer construct its own premise
-  //     and was deleted rather than rewritten into something that passes for a
-  //     reason it does not state. The ROW is still the right shape (it names
-  //     WHICH page is owed, a boolean cannot), it is simply no longer the
-  //     narrower claim of the two that is under measurement.
-  //   · 「not called at all」 — still NOT measured, and `owedAbsent = 0` cannot
-  //     stand in for it: a 0 there is what 「no test walks this path」 and 「the
-  //     check is right」 both look like.
-  const pageUnseenIdRef = useRef<string | null>(null);
-  // 🔴 A PENDING GESTURE BELONGS TO THE THREAD IT WAS MADE AGAINST, AND
-  // `withId` IS THE WRONG RADIUS FOR THAT (independent review #21, F-3). A jump
-  // to a different message in the SAME conversation replaces the window without
-  // changing `withId`, so a replay armed against the old window survived it and
-  // bought a page on the new one with nobody having touched the box — the very
-  // 「零手勢就撈」 this ticket exists to stop. So every path that replaces what
-  // 「forward」 means drops it, alongside the exhausted marker it sits next to.
-  const dropPendingGesture = useCallback(() => {
-    if (humanTrailingRef.current !== null) {
-      clearTimeout(humanTrailingRef.current);
-      humanTrailingRef.current = null;
-    }
-    blockedInFlightRef.current = false;
-    lastServedAnchorRef.current = null;
-    // A page owed to a window that no longer exists is not a page anybody is
-    // waiting to be shown.
-    pageUnseenIdRef.current = null;
-  }, []);
-
-  // 🔴 THE PAGE IS ON SCREEN NOW (see `pageUnseenIdRef`). A layout effect runs
-  // after React has written this render's rows into the DOM and before the
-  // browser paints, so it is the earliest moment at which 「the reader has been
-  // shown it」 is TRUE rather than estimated — and the row is looked for rather
-  // than assumed, so an extra call clears nothing and a call about some other
-  // commit clears nothing either.
-  useLayoutEffect(() => {
-    const owed = pageUnseenIdRef.current;
-    if (owed === null) return;
-    if (thread.messages.some((m) => m.id === owed)) pageUnseenIdRef.current = null;
-  }, [thread.messages]);
-
-  // Mirrored so the trailing replay reads the CURRENT probe rather than the one
-  // captured when `loadNewer` was last rebuilt.
-  const readerAtBottomRef = useRef(readerAtBottom);
-  readerAtBottomRef.current = readerAtBottom;
-
-  // `loadNewer` calling itself: a self-reference inside its own `useCallback`
-  // is a circular type, and the identity would go stale anyway.
-  const loadNewerRef = useRef<(opts?: { human?: boolean }) => Promise<void>>(
-    async () => {},
-  );
   // The entry anchor, mirrored for the subscription effect below. Read in the
   // effect's SETUP body only — never a dependency, or a route that keeps the
   // msgId in the hash (it does) would re-subscribe the whole SSE sink.
@@ -833,21 +728,18 @@ export function useChat(
         gapSuspected: prev.gapSuspected,
         hasNewer: false,
       }));
-      // A new window (or a merged newest page) changes what "forward" means —
-      // whatever anchor was marked exhausted no longer describes this thread.
-      // 🔴 GATED ON THE COMMIT LANDING, and that is not a tidy-up: this line used
-      // to sit behind the pre-await `seq < committed` bail, which `commit` has
-      // absorbed. Clearing unconditionally would let a SUPERSEDED page erase the
-      // stop sign belonging to the thread that actually won, and the forward
-      // walk would ask again from a row it has already been answered about.
-      if (ok) {
-        forwardExhaustedRef.current = null;
-        dropPendingGesture();
-      }
+      // 🔴 NOTHING IS CLEARED HERE ANY MORE, AND THAT IS A DELETION RATHER
+      // THAN AN OVERSIGHT (T-48 fix12). Two lines used to hang off `ok`: the
+      // forward walk's no-progress marker and the pending-gesture drop. Both
+      // belonged to a forward pager driven by reader gestures, and there is no
+      // such pager — `loadAround` fetches through to the tail before it
+      // commits, so nothing outlives a thread replacement that would have to be
+      // told about it.
+      void ok;
     } catch (e) {
       console.warn("useChat: resetToLatest failed", e);
     }
-  }, [withId, conv, view, dropPendingGesture]);
+  }, [withId, conv, view]);
 
   const refetch = useCallback(async () => {
     // Post-send refetch. MERGE the newest page (id-dedupe, history kept in
@@ -898,9 +790,6 @@ export function useChat(
       await refetchReads();
       return;
     }
-    // A new window (or a merged newest page) changes what "forward" means —
-    // whatever anchor was marked exhausted no longer describes this thread.
-    forwardExhaustedRef.current = null;
     // ⚠️ THIS PULL NO LONGER HAS A CAUSE, AND SAYING SO IS THE POINT (T-48).
     // It used to read: "listChat itself marks the owner's read watermark
     // server-side; pull the peer's watermark alongside so the badges
@@ -966,6 +855,8 @@ export function useChat(
     // owner has just left — the R11-1 frame, put back by hand.
     view.clear();
     setPeerLastReadTs(0);
+    // A new conversation has not loaded yet, whichever door is about to load it.
+    setFirstLoadSettled(false);
 
     // ONE load path (initial + SSE + refocus), and since T-48 ONE door: the
     // load never marks anything read, so a backgrounded window loads exactly
@@ -1021,6 +912,12 @@ export function useChat(
       api
         .listChat(withId)
         .then(async (next) => {
+          // 🔴 SETTLED BEFORE THE `alive` GUARD, AND BEFORE THE BACKFILL. This
+          // says 「the first load of this conversation has come back」, which is
+          // true whatever we then decide to do with the page; putting it after
+          // the guard would leave a torn-down-and-remounted room spinning on a
+          // load it will never see the end of.
+          settleFirstLoad();
           if (!alive) return;
           // Landed ⇒ whatever we owed is paid off. The handle was kept by the
           // load that failed; calling it settles THAT record's debt, which is
@@ -1060,9 +957,6 @@ export function useChat(
             mergeLatestPage(prev, next, fill, gap),
           );
           if (!alive || !ok) return;
-          // A new window (or a merged newest page) changes what "forward" means —
-          // whatever anchor was marked exhausted no longer describes this thread.
-          forwardExhaustedRef.current = null;
         })
         .catch((e) => {
           // Same guard as the .then arm, and for a sharper reason: a load
@@ -1072,6 +966,7 @@ export function useChat(
           // rejection writes its debt into that one and never onto the new
           // conversation ("any debt the PREVIOUS peer left behind is not this
           // conversation's to pay").
+          settleFirstLoad();
           if (!alive) return;
           // Do NOT retry here (T-929f). Record the debt only; the SSE sink
           // below pays it on the next relevant burst.
@@ -1168,7 +1063,7 @@ export function useChat(
       window.removeEventListener("focus", onMaybeActive);
       document.removeEventListener("visibilitychange", onMaybeActive);
     };
-  }, [withId, refetchReads, conv]);
+  }, [withId, refetchReads, conv, settleFirstLoad]);
 
   const send = useCallback(
     async (
@@ -1243,247 +1138,94 @@ export function useChat(
     }
   }, [withId, conv, view]);
 
-  // The MIRROR IMAGE of loadOlder, and the direction the old API could not
-  // express at all: page FORWARDS from the newest loaded row with `?start_id=`.
-  // The anchor is inclusive, so a full page carries CHAT_PAGE_SIZE-1 new rows
-  // plus the row we already hold; the duplicate is dropped on merge and the
+  // 🔴 FETCH FORWARD TO THE LIVE TAIL, IN MEMORY, COMMITTING NOTHING (T-48
+  // fix12; owner rc-e1fb80065f8f 「一次撈100則撈完」 ＋ c-6a973512ed77 「我是指
+  // 整個訊息撈完才 render」).
+  //
+  // The mirror image of `loadOlder`, and the direction the old API could not
+  // express at all: page FORWARDS from the newest row we hold with `?start_id=`.
+  // The anchor is inclusive, so a full page carries CHAT_WALK_PAGE_SIZE-1 new
+  // rows plus the row we already hold; the duplicate is dropped on merge and the
   // page LENGTH (not the merged count) is what decides whether more remains.
-  const loadNewer = useCallback(async (opts?: { human?: boolean }) => {
-    const cur = view.current();
-    if (cur.messages.length === 0 || !cur.hasNewer)
-      return;
-    // 🔴 AN ANCHOR WINDOW IN THE AIR OUTRANKS THIS WALK (T-48). `loadAround`
-    // takes its generation ticket first and commits last, so a forward page
-    // fired while it is still fetching commits a LATER ticket and the anchor
-    // window comes back "superseded" — which ChatArea paints as 「跳轉被打斷」
-    // over a message that is sitting right there in the database. `load()`
-    // already refuses to run against these two latches; this is the same gate
-    // on the one loader that was missing it, not a new mechanism.
-    if (
-      conv.latches.isHeld("entryAnchor") ||
-      conv.latches.isHeld("anchorFetch")
-    ) {
-      return;
-    }
-    // 🔴 A SCROLL IS A RETRY, AND UNTIL THIS PARAMETER EXISTED THAT SENTENCE
-    // WAS FALSE (independent review #17, F-1). The bound below was written for
-    // a LEVEL-TRIGGERED continuation that no longer exists (T-48, owner
-    // rc-d2e1b69edc66 ①: one gesture, one page) — it was never meant to bind
-    // the reader, but the scroll handler reaches this same door, so once a page
-    // came back carrying nothing new, scrolling did nothing at all: `hasNewer`
-    // still true, no spinner, no end marker, no arrow (that one measures the
-    // newest LOADED row), and only switching conversations cleared it.
-    //
-    // ⚠️ NOW THAT EVERY CALLER IS A GESTURE, THE PAIR IS A RATE LIMIT AND THAT
-    // IS ITS WHOLE JOB. `forwardExhaustedRef` plus this 400ms window mean 「the
-    // same anchor is asked at most once per 400ms」 — which is what keeps ONE
-    // wheel flick, roughly 60 scroll events a second against a box that did not
-    // grow, from becoming 60 requests (measured at 20/s unthrottled, review #18
-    // A-2). A single flick still retries immediately.
-    // 🔴 THE BOUND IS TIME, AND IT USED NOT TO BE ON THE FAILING PATH AT ALL
-    // (independent review #19, F-1). What actually refuses a repeat ask is
-    // `forwardExhaustedRef` below, and only the SUCCESS path ever writes it —
-    // a rejected `listChatWindow` leaves it null, so every subsequent scroll
-    // event walked straight past both doors. Measured on that code: 10 human
-    // asks under a rejecting server ⇒ 10 requests. A reader parked in the
-    // bottom 80px band while the server 5xxs (trackpad inertia and the bottom
-    // bounce both keep scroll events coming) re-hit the server at the rate of
-    // the scroll events themselves — the busy loop of "a wheel is not 60
-    // retries", on its uncovered twin path.
-    //
-    // So the gate is the CLOCK, asked before anything else and stamped
-    // whatever the outcome: at most ONE forward attempt per HUMAN_RETRY_MIN_MS,
-    // success or failure. That is the one criterion that satisfies both halves
-    // of what the reader is owed:
-    //   • one wheel (~60 events/s) cannot become 60 requests — 59 of them fall
-    //     inside the window and return here;
-    //   • 「請求失敗不走這個界…失敗之後下一次手勢就是重試」 still holds — a
-    //     gesture arriving after a quiet window retries immediately, because
-    //     nothing durable was written to remember the failure.
-    // An outcome flag ("only remember it when it worked") cannot do the first
-    // half: failure writes nothing, so it bounds nothing.
-    //
-    // 🔴 BUT A DROPPED GESTURE IS NOT A GESTURE THE READER CAN REPEAT
-    // (independent review #20). `return` alone was measured to strand the
-    // reader for good: gesture ② landing 150ms after ① was swallowed, and by
-    // then `scrollTop` was already pinned at the scroll limit — and a browser
-    // only emits `scroll` WHEN THE BOX ACTUALLY MOVES. So the five further
-    // downward scrolls that crossed the window produced ZERO events, and three
-    // seconds later the thread still held one page, `hasNewer` true, no
-    // spinner, no end marker. Measured in Chromium (chat-forward-walk CT,
-    // 「窗口內被吞掉的那次手勢…」): 1 page before, 2 after. jsdom cannot see
-    // it — every length there reads 0, so the swallowed gesture is always
-    // repeatable and this walked straight through review #19.
-    //
-    // So a swallowed gesture is COALESCED, not discarded: the window remembers
-    // that somebody asked, and replays exactly ONE ask when it closes (trailing
-    // edge). Per window that is at most first + trailing, so the 5xx bound
-    // above survives — a held wheel settles at one request per window instead
-    // of one per scroll event.
-    //
-    // ⚠️ THE TRAILING ASK IS STILL GESTURE-DRIVEN, AND THAT LINE IS THE WHOLE
-    // POINT. It is armed ONLY by a real `human` call that this window refused;
-    // nothing a landed page does can arm it (a forward page is deliberately not
-    // auto-followed, so it emits no scroll event of its own). With nobody
-    // touching the box the timer is never scheduled and never re-schedules
-    // itself — which is what keeps this from being the level-triggered corridor
-    // the owner removed (rc-d2e1b69edc66 ①) wearing a timer for a hat.
-    const anchorNow = cur.messages[cur.messages.length - 1].id;
-    const armTrailing = (delay: number) => {
-      if (humanTrailingRef.current !== null) return;
-      humanTrailingRef.current = setTimeout(() => {
-        humanTrailingRef.current = null;
-        // The gesture being replayed was made against the bottom of this
-        // window. A reader who has scrolled away from it since is not asking
-        // for anything, and a page appended under them is the corridor.
-        if (readerAtBottomRef.current && !readerAtBottomRef.current()) return;
-        void loadNewerRef.current({ human: true });
-      }, Math.max(0, delay));
-    };
-    if (opts?.human) {
-      // THE SIGHT GATE (see `pageUnseenIdRef`). While the page the reader just
-      // bought is not on their screen there is nothing for this gesture to be
-      // about — the rows it would be asking past are not there to be asked
-      // past. No trailing replay either: this is the tail of the gesture that
-      // bought the page, and replaying it is the second page it must not buy.
-      if (pageUnseenIdRef.current !== null) return;
-      const since = Date.now() - humanRetryAtRef.current;
-      if (since < HUMAN_RETRY_MIN_MS) {
-        if (anchorNow !== lastServedAnchorRef.current) {
-          armTrailing(HUMAN_RETRY_MIN_MS - since);
+  //
+  // 🔴 IT TAKES NO TICKET AND WRITES NOTHING. It is a pure function of the
+  // network plus its seed — the whole point of「撈完才 render」is that the view
+  // sees ONE commit, made by its caller, with the finished thread. That also
+  // means it cannot be superseded halfway and leave a half-thread on screen:
+  // there is nothing on screen to leave.
+  //
+  // WHAT THIS REPLACES, AND WHY THE REPLACEMENT IS SMALLER. It used to be one
+  // page per reader gesture, and「一次手勢一頁」needed a machine to be true: a
+  // 400ms retry clock, a trailing replay for the gesture that clock swallowed (a
+  // scroller pinned at its limit emits no further `scroll`, measured in
+  // Chromium), a sight gate so a reader could not buy a page they had not been
+  // shown, a served-anchor marker to tell one flick's 60 events from two flicks,
+  // an in-flight-blocked marker, and a reader-at-bottom probe reaching out of
+  // this hook into the viewport. None of those questions exist once nobody is
+  // asking for pages.
+  //
+  // 📏 MEASURED (fix11, real Chromium, visual-guards/chat-render-cost.ct.spec.tsx,
+  // zero network latency): rendering the finished thread costs 79ms at 1,000
+  // rows, 236ms at 3,000, 581ms at 8,000 (heap 49 MB, 156k DOM nodes at 8,000).
+  // Committing page-by-page instead cost 0.23s / 1.79s / 12.4s for the same
+  // three — quadratic, because `ChatArea` has no virtualization and re-renders
+  // the whole thread per commit. That measurement is why ONE commit is not
+  // merely a preference here.
+  //
+  // 🔴 IT NEVER REJECTS. A failed page returns what it has plus
+  // `reachedTail: false`, because the caller's alternative to committing a short
+  // thread is committing NOTHING — a blank room where the reader asked to see a
+  // message. See `loadAround`'s commit.
+  const fetchToLatest = useCallback(
+    async (
+      seed: ChatMessage[],
+    ): Promise<{ messages: ChatMessage[]; reachedTail: boolean }> => {
+      const out = [...seed];
+      const have = new Set(out.map((m) => m.id));
+      try {
+        for (;;) {
+          const newest = out[out.length - 1];
+          const page = await api.listChatWindow(
+            withId,
+            { startId: newest.id },
+            CHAT_WALK_PAGE_SIZE,
+          );
+          let added = 0;
+          for (const m of page) {
+            if (have.has(m.id)) continue;
+            have.add(m.id);
+            out.push(m);
+            added += 1;
+          }
+          // Short page ⇒ this window reached the live tail.
+          if (page.length < CHAT_WALK_PAGE_SIZE) {
+            return { messages: out, reachedTail: true };
+          }
+          // 🔴 A FULL PAGE THAT ADDED NOTHING IS THE ONLY WAY THIS LOOP CAN FAIL
+          // TO TERMINATE, and it is a server contradicting itself rather than an
+          // ending — so it stops AND SAYS SO, with `reachedTail: false`. The
+          // thread is then committed with `hasNewer` true: the 回到最新 arrow
+          // stays up and the watermark is not stamped, which is the truth.
+          if (added === 0) {
+            console.warn(
+              "useChat: the fetch to the live tail got a FULL page carrying " +
+                "nothing new; stopping rather than asking the same question " +
+                "again — the thread will be marked as not-the-tail",
+            );
+            return { messages: out, reachedTail: false };
+          }
         }
-        return;
+      } catch (e) {
+        // No retry and no replay. What we have is committed with `hasNewer`
+        // true, so the reader gets the message they jumped to AND an arrow that
+        // says they are not at the latest — an affordance that is always there,
+        // unlike the scroll event a pinned scroller cannot emit.
+        console.warn("useChat: fetch to the live tail failed part-way", e);
+        return { messages: out, reachedTail: false };
       }
-      humanRetryAtRef.current = Date.now();
-      forwardExhaustedRef.current = null;
-    }
-    // Already answered for this row: the page from here held nothing new, and
-    // nothing has changed since. Asking again is the busy loop.
-    if (forwardExhaustedRef.current === anchorNow) return;
-    const release = conv.latches.acquire("loadingNewer");
-    if (!release) {
-      // Turned away by the MUTEX, not the clock: this reader asked about ground
-      // the in-flight page has not answered for yet. Whether that is worth
-      // replaying depends on how that page ends, so the decision waits for it.
-      if (opts?.human) blockedInFlightRef.current = true;
-      return;
-    }
-    lastServedAnchorRef.current = anchorNow;
-    // 🔴 THE GENERATION TICKET THIS WALK WENT WITHOUT (T-48, F2). `loadingNewer`
-    // is a SAME-DIRECTION mutex and nothing more: it stops two forward pages
-    // stacking, and says nothing about a load in the OTHER direction landing
-    // in between. Measured on the unguarded code — forward page in flight, owner
-    // presses 回到最新, `resetToLatest` replaces the thread with the live tail,
-    // then the forward page returns and appends onto it:
-    //
-    //   len 60 head ['z0','z1','z2'] tail ['mid27','mid28','mid29']
-    //   hasNewer true gapSuspected false
-    //
-    // 30 history rows (ts 158…) drawn BELOW the newest messages (ts 9000+), no
-    // gap notice, and `hasNewer` flipped back to true — which re-arms `load()`'s
-    // anchor gate and pins `mayMarkRead` false, so that conversation stops
-    // marking itself read for good, silently. Every other loader in this file
-    // already takes a ticket; this one now does too.
-    const seq = view.takeTicket();
-    let landed = false;
-    try {
-      const newest = cur.messages[cur.messages.length - 1];
-      const page = await api.listChatWindow(
-        withId,
-        { startId: newest.id },
-        CHAT_PAGE_SIZE,
-      );
-      // ANSWERED — which is the fact the stranded-gesture decision below turns
-      // on, and it is deliberately not 「the commit won」: a SUPERSEDED page
-      // belongs to a thread that no longer exists, and a gesture made against
-      // that thread must die with it rather than be replayed onto the new one.
-      landed = true;
-      // ⚠️ ASKED HERE, NOT INSIDE THE UPDATER. React does not run an updater
-      // when the state setter is called — it runs it during the next render,
-      // which is AFTER this function has finished. A first cut of this read its
-      // answer out of the updater and always got "nothing landed yet", so the
-      // marker below was cleared instead of set and the walk asked from the
-      // same anchor twice (measured, in the guard for exactly this). The live
-      // thread mirror gives the same answer, now. The merge is then computed a
-      // SECOND time against React's own `prev`, on purpose — see below.
-      const held = new Set(view.current().messages.map((m) => m.id));
-      const addsNothing = page.every((m) => held.has(m.id));
-      // Rows are about to be merged that the reader has not been shown — see
-      // `pageUnseenIdRef`. Written BEFORE the commit, because the commit is what
-      // schedules the render that clears it, and a page that adds nothing puts
-      // no new row on any screen and so hides nothing. The debt is the LAST row
-      // of the page: the one whose arrival on screen means the whole page did.
-      if (!addsNothing) pageUnseenIdRef.current = page[page.length - 1].id;
-      // 🔴 THE STATE WRITE STAYS AN UPDATER, AND THAT IS NOT A STYLE CHOICE.
-      // A first cut of this committed the merged OBJECT — the same one written
-      // to the mirror — and that quietly threw away any OTHER load that had
-      // committed while this page was in the air. `loadOlder` takes no
-      // generation ticket and writes through an updater, so a history page
-      // landing inside this function's await window is present in `prev` and
-      // absent from `merged`: measured, 30 rows of loaded history vanished
-      // (`len 90 head h0` became `len 60 hasH false`) with nothing to see it
-      // happen. The mirror wants the value NOW; React wants the merge computed
-      // against whatever it actually holds.
-      //
-      // 🔴 ADVANCE THE MIRROR NOW, NOT AT THE NEXT RENDER — this is the CAUSE
-      // the exhausted bound below was only ever a bandage for (the duplicate
-      // `?start_id=` pair measured 8ms apart is one walk asking twice from the
-      // SAME anchor because the mirror had not caught up). BOTH halves are now
-      // `commit`'s job, for every commit point rather than only this one: it
-      // runs the updater against the mirror, waits for the candidate's cards,
-      // writes the mirror, and hands React the updater.
-      //
-      // A later load committing while we were paging forwards ⇒ the thread this
-      // page continues no longer exists, and `commit` drops it whole.
-      const ok = await view.commit(seq, (prev) => {
-        const havePrev = new Set(prev.messages.map((m) => m.id));
-        return {
-          ...prev,
-          messages: [...prev.messages, ...page.filter((m) => !havePrev.has(m.id))],
-          // A SHORT page means this window reached the live tail — the thread
-          // is the newest window again and the ordinary refresh may resume.
-          hasNewer: page.length >= CHAT_PAGE_SIZE,
-        };
-      });
-      if (!ok) {
-        // Superseded: this page never joined any thread, so nobody is owed a
-        // sight of it — and leaving the debt standing would block the walk on a
-        // row that is never going to appear. (`loadAround`/`resetToLatest`, the
-        // only two paths that can supersede, drop the pending gesture when they
-        // START; a forward page still in the air lands after that.)
-        pageUnseenIdRef.current = null;
-        return;
-      }
-      // The walk's own stop sign, decided by the page that just landed: the
-      // anchor we asked from is exhausted when its page held nothing new; a
-      // page that did carry rows clears whatever was marked before.
-      forwardExhaustedRef.current = addsNothing ? newest.id : null;
-    } catch (e) {
-      console.warn("useChat: loadNewer failed", e);
-    } finally {
-      release();
-      // 🔴 A GESTURE THE MUTEX ATE IS ONLY STRANDED IF THE PAGE CAME BACK WITH
-      // NOTHING. Landed ⇒ the reader now HOLDS what they were asking about and
-      // the ask was a duplicate — replaying it would be a second page for one
-      // gesture. Failed ⇒ they asked, got nothing, and (pinned at the scroll
-      // limit) cannot ask again; that one is replayed, once, on the far side of
-      // the retry window.
-      const stranded = blockedInFlightRef.current;
-      blockedInFlightRef.current = false;
-      if (!landed && stranded) {
-        armTrailing(HUMAN_RETRY_MIN_MS - (Date.now() - humanRetryAtRef.current));
-      }
-    }
-  }, [withId, conv, view]);
-  loadNewerRef.current = loadNewer;
-
-  // Leaving the room (or unmounting) drops it too — every other latch in this
-  // hook is a lease on one conversation and this timer is no different.
-  useEffect(() => {
-    return () => {
-      dropPendingGesture();
-    };
-  }, [withId, dropPendingGesture]);
+    },
+    [withId],
+  );
 
   // 🔴 THE JUMP THAT CANNOT MISS SILENTLY (T-48 ③). Two windows around one
   // message id — `end_id` for the context ABOVE it, `start_id` for the context
@@ -1544,15 +1286,22 @@ export function useChat(
   );
 
   const loadAround = useCallback(
-    (msgId: string): Promise<JumpOutcome> =>
-      withAnchorFetch(async () => {
+    async (msgId: string): Promise<JumpOutcome> => {
+      // 🔴 EVERY ENDING SETTLES THE FIRST LOAD, INCLUDING THE ONES THAT THROW.
+      // This is the anchor door's half of `initialLoading`; the ordinary door's
+      // half is in `load()`. There are exactly two, they write the same flag,
+      // and neither can end without writing it.
+      try {
+        return await withAnchorFetch(async () => {
         const seq = view.takeTicket();
         let older: ChatMessage[];
         let newer: ChatMessage[];
         try {
           [older, newer] = await Promise.all([
             api.listChatWindow(withId, { endId: msgId }, CHAT_PAGE_SIZE),
-            api.listChatWindow(withId, { startId: msgId }, CHAT_PAGE_SIZE),
+            // The forward half is the FIRST PAGE OF THE FETCH TO THE TAIL, so
+            // it is asked at the walk's page size rather than the history one.
+            api.listChatWindow(withId, { startId: msgId }, CHAT_WALK_PAGE_SIZE),
           ]);
         } catch (e) {
           // An unknown id is a 404 here, NOT an empty page — the server refuses
@@ -1587,34 +1336,58 @@ export function useChat(
         // goes blank, the miss notice does not light, and nothing is logged.
         // Refusing turns it into the ordinary miss, which is what it is.
         if (!window.some((m) => m.id === msgId)) return "missing";
+        // 🔴 EVERYTHING FROM THE ANCHOR TO THE LIVE TAIL, BEFORE ANYTHING IS
+        // COMMITTED (T-48 fix12, owner c-6a973512ed77 逐字:「我是指整個訊息撈完
+        // 才 render」). A full forward half means the stream continues below the
+        // window; the rest of it is collected in memory here and lands in the
+        // SAME commit as the anchor window.
+        //
+        // Why it is not a page-by-page commit with a spinner off the side:
+        // measured (fix11), committing per page costs 12.4s of main-thread work
+        // at 8,000 rows against 0.58s for one commit, because there is no
+        // virtualization and every commit re-renders the whole thread. It is
+        // also what makes the un-read watermark safe by construction — see
+        // ChatArea's `tailSeen`: with one commit there is never a moment where
+        // the thread holds the tail while the reader is still being moved.
+        let all = window;
+        let reachedTail = newer.length < CHAT_WALK_PAGE_SIZE;
+        if (!reachedTail) {
+          const r = await fetchToLatest(window);
+          all = r.messages;
+          reachedTail = r.reachedTail;
+        }
         // 🔴 THE CARD PREFILL LANDS INSIDE THE `withAnchorFetch` LEASE, AND THAT
         // IS DELIBERATE (T-48). This is the one commit point where the extra
         // round trip is not merely tolerable but WANTED: while the lease is held
-        // `load()` and `loadNewer` both stand down, so the interval spent
-        // waiting for the jump target's cards is also an interval in which the
-        // live tail cannot flash onto the screen underneath the jump. The lease
-        // still releases in the same `finally` — do not move this out of it.
+        // `load()` stands down, so the interval spent waiting for the jump
+        // target's cards is also an interval in which the live tail cannot flash
+        // onto the screen underneath the jump. The lease still releases in the
+        // same `finally` — do not move this out of it.
         const ok = await view.commit(seq, (prev) => ({
-          messages: window,
-          // A full older page means history may continue above it; a full newer
-          // page means the live tail is below it (see Thread.hasNewer). Both are
-          // self-correcting: the next page each way says otherwise by coming
-          // back short.
+          messages: all,
+          // A full older page means history may continue above it; the tail
+          // question is answered by the fetch above rather than by one page's
+          // length now.
           hasMore: older.length >= CHAT_PAGE_SIZE,
           gapSuspected: prev.gapSuspected,
-          hasNewer: newer.length >= CHAT_PAGE_SIZE,
+          // 🔴 COMMIT WHAT WE HAVE EVEN WHEN THE FETCH GAVE UP, AND SAY SO.
+          // The alternative — refusing to commit — is a blank room for a reader
+          // who asked to see a specific message. So the short thread lands and
+          // this flag carries the truth: the 回到最新 arrow stays up, `load()`
+          // stands down, and the watermark is not stamped.
+          hasNewer: !reachedTail,
         }));
         // Overtaken, NOT missing — and the difference is the whole of F3. The
         // caller re-schedules; the latch is NOT what carries that decision
         // across the gap (see the finally below).
         if (!ok) return "superseded";
-        // A new window (or a merged newest page) changes what "forward" means —
-        // whatever anchor was marked exhausted no longer describes this thread.
-        forwardExhaustedRef.current = null;
-        dropPendingGesture();
         return "found";
-      }),
-    [withId, withAnchorFetch, conv, view, dropPendingGesture],
+        });
+      } finally {
+        settleFirstLoad();
+      }
+    },
+    [withId, withAnchorFetch, view, fetchToLatest, settleFirstLoad],
   );
 
   const markRead = useCallback(
@@ -1632,13 +1405,15 @@ export function useChat(
   return {
     messages: thread.messages,
     peerLastReadTs,
+    // 🔴 DERIVED, NOT STORED — so it cannot get out of step with the thread.
+    // Content on screen ends the wait no matter which door delivered it.
+    initialLoading: !firstLoadSettled && thread.messages.length === 0,
     send,
     markRead,
     hasMore: thread.hasMore,
     loadOlder,
     gapSuspected: thread.gapSuspected,
     hasNewer: thread.hasNewer,
-    loadNewer,
     loadAround,
     resetToLatest,
   };

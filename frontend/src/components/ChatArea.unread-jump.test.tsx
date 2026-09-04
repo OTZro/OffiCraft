@@ -52,7 +52,6 @@ let loadAroundResult: JumpOutcome = "found";
 // `hasNewer`), and the way back to the tail.
 let hasNewer = false;
 const resetToLatest = vi.fn(async () => {});
-const loadNewer = vi.fn(async () => {});
 vi.mock("../hooks/useChat", () => ({
   useChat: () => ({
     messages,
@@ -62,7 +61,6 @@ vi.mock("../hooks/useChat", () => ({
     loadAround,
     hasNewer,
     resetToLatest,
-    loadNewer,
   }),
 }));
 
@@ -199,7 +197,6 @@ beforeEach(() => {
   loadAround.mockImplementation(async () => loadAroundResult);
   loadAroundResult = "found";
   resetToLatest.mockClear();
-  loadNewer.mockClear();
   hasNewer = false;
   scrollCalls = [];
   rowTrailingGap = TRAILING_LAYOUT_PX;
@@ -808,9 +805,13 @@ describe("③ jump-to-origin (跳到原訊息, B3)", () => {
     ).toBe(false);
   });
 
-  it("scrolling to the bottom of an anchor window pages FORWARDS — the mirror of the top-of-thread pull", () => {
-    // 「向上向下滑再另打 API 去撈」: the jump fetches two pages and no more, and
-    // the owner walks out of the window in whichever direction they scroll.
+  it("捲到底不再往新撈一頁 —— 走訪拿掉之後,捲動只是捲動", async () => {
+    // 🔴 刪除的分母(T-48 fix12)。以前捲到錨點窗底部會買一頁往新的;`loadAround`
+    // 現在自己撈到活尾巴,所以那一支整個不存在。這條釘的是**它真的不見了**:
+    // 「一次手勢一頁」那一整套(400ms 節流、被吞手勢的補送、視覺閘、served
+    // anchor)全部是為它養的,任何一塊活著回來都會先在這裡顯形。
+    //
+    // 走訪停在半路(hasNewer 仍為 true)是最會誘人把它加回來的地形,所以就用它。
     hasNewer = true;
     messages = [mkMsg("a1", "b", "owner", 100), mkMsg("a2", "b", "owner", 101)];
     const { container } = renderChat(0);
@@ -822,13 +823,11 @@ describe("③ jump-to-origin (跳到原訊息, B3)", () => {
     });
     fireEvent.scroll(list);
 
-    expect(loadNewer).toHaveBeenCalled();
-    // 🔴 AND IT MUST SAY IT IS THE READER. Independent review #18 (A-3) deleted
-    // this one argument — the entire wiring of the F-1 fix — and all 71 tests
-    // stayed green: the hook-level guard proves the retry works when asked for,
-    // and nothing proved this caller asks. Without it a walk that once came back
-    // empty cannot be restarted by scrolling at all.
-    expect(loadNewer).toHaveBeenCalledWith({ human: true });
+    // 出口是箭頭,不是手勢 —— 而箭頭在(下一條釘它按下去做什麼)。
+    expect(
+      container.querySelector('[data-testid="chat-jump-latest"]'),
+      "走訪停在半路時,唯一的出口是箭頭",
+    ).not.toBeNull();
   });
 
   it("the arrow is still there at the BOTTOM of an anchor window, and clicking it FETCHES the live tail", () => {

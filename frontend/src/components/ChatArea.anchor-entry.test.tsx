@@ -31,6 +31,8 @@ const B = "m-bbbbbbbbbbbb";
  * a PLAIN newest page (`?with=` and nothing else — the request anchor-first
  * entry exists to not make) or an anchor WINDOW (`?end_id=` / `?start_id=`). */
 let plainCalls: string[] = [];
+/** Every `lastReadTs` this room marked read — see the api mock. */
+let markReads: number[] = [];
 let windowCalls: { withId: string; anchor: { startId?: string; endId?: string } }[] =
   [];
 
@@ -41,6 +43,9 @@ let holdWindows: null | (() => void) = null;
 /** Makes the held pair end in a REJECTION rather than a page, i.e. the
  * `"unreachable"` ending of `loadAround` (a 502, a dropped connection). */
 let windowsFail = false;
+/** 讓第 N 通(1-based)之後的每一通 window 請求都失敗 —— 用來造「走訪撈到一半
+ * 沒撈完」這個 fix12 之後唯一會留下 `hasNewer` 的狀態。0 = 不啟用。 */
+let windowFailAfter = 0;
 /** 讓「往新」那一頁回一整頁**已經握在手上的列**(滿頁 ⇒ `hasNewer` 仍為 true,
  * 但一列都沒有新的)。這就是重複錨點請求真的會拿回來的東西,也是自動連鎖唯一
  * 可能空轉的形狀。 */
@@ -145,6 +150,9 @@ vi.mock("../api", () => ({
         });
       }
       if (windowsFail) throw new Error("listChatWindow: 502");
+      if (windowFailAfter > 0 && windowCalls.length > windowFailAfter) {
+        throw new Error("listChatWindow: 502 (walk page)");
+      }
       const all = threadOf(withId);
       const at = all.findIndex(
         (m) => m.id === (anchor.endId ?? anchor.startId),
@@ -185,7 +193,12 @@ vi.mock("../api", () => ({
       return { ...CARD, id };
     },
     listChatReads: async () => [],
-    markChatRead: async () => {},
+    /** Every mark-read this room sent, with the watermark it claimed. This is
+     * the ONE thing a front-end flag cannot fake: the server's unread count is
+     * whatever the newest of these says. */
+    markChatRead: async (b: { peer: string; lastReadTs: number }) => {
+      markReads.push(b.lastReadTs);
+    },
     postChat: async () => ({}),
     subscribeEvents: () => () => {},
     getOutsourceWorker: async () => ({}),
@@ -267,6 +280,8 @@ beforeEach(() => {
   holdWindows = null;
   holdPlain = null;
   windowsFail = false;
+  windowFailAfter = 0;
+  markReads = [];
   windowStale = false;
   scrolls = [];
   cardReads = [];
@@ -350,9 +365,71 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
       { endId: targetId },
       { startId: targetId },
     ]);
-    // 落點也對:只撈了那一則附近的一個視窗,不是整條線。
+    // 落點對:目標在畫面上。
     expect(bubbles(container)).toContain(targetId);
-    expect(bubbles(container)).not.toContain("a79");
+    // 🔴 而且這一趟**一路撈到了活尾巴**(T-48 fix12,owner rc-e1fb80065f8f)。
+    // 這一行以前是它的反面(「最新那一則不准在 DOM 裡」),那是「一次手勢一頁」
+    // 的字面斷言;走訪拿掉之後最新那一則必須在,否則讀的人得自己走回去,而那條
+    // 路已經沒有了。
+    expect(bubbles(container)).toContain("a79");
+    // 往新的那幾通都問 100 —— 80 則一趟就撈完,所以只有一通。
+    const forward = windowCalls.filter((c) => c.anchor.startId !== undefined);
+    expect(forward.length, "80 則的距離,一通 100 就撈完了").toBe(1);
+  });
+
+  it("🔴 走訪把中間幾百則載進來,一則都不准被標成已讀 —— 按下回到最新才標", async () => {
+    // 🔴 這張票最容易靜默做錯的一格,而且它是 fix12 **自己造出來**的風險。
+    //
+    // 以前:跳轉停在錨點窗,`hasNewer` 為 true 一路擋著 mark-read,而讓 hasNewer
+    // 變 false 的每一步都是讀的人親手捲出來的 —— 所以「握得到活尾巴」和「看過活
+    // 尾巴」是同一件事,`hasNewer` 一個旗標同時代表兩者。
+    //
+    // 現在:`loadAround` 自己撈到活尾巴,`hasNewer` 在落地那一瞬間就是 false,而
+    // 讀的人還停在半年前那一則上。進房那支 mark-read effect **完全不看視窗位置**
+    // (ChatArea 的 `newestTs` effect),所以它會立刻把水位蓋到最新那一則 ——
+    // 中間幾百則一眼都沒看過,未讀歸零,「以下是未讀」分隔線失效。
+    // owner 裁定逐字:mark-read 表達的意圖是「我看過了」,不是「我跳過來過」。
+    //
+    // 守它的是 `tailSeen`。把 `mayMarkRead` 的 `&& tailSeen` 拿掉(或把
+    // `setTailSeen(false)` 那一行拿掉),紅的就是下面第一個 expect。
+    seed(A, "a", 300, 100);
+    const { container } = render(view(alice, "a3"));
+    await waitFor(() =>
+      expect(container.querySelector('[data-msg-id="a3"]')).not.toBeNull(),
+    );
+    // 給它時間去做錯事 —— mark-read 是 fire-and-forget,不等就等於沒量到。
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 60));
+    });
+
+    // 前提①:走訪真的把整條線撈進來了(否則擋 mark-read 的是 hasNewer,
+    // 這一格就綠在舊的那個守衛上,而不是在 tailSeen 上)。
+    expect(bubbles(container), "前提:走訪真的一路撈到最新").toContain("a299");
+    // 前提②:讀的人真的還停在錨點那一則,不是被捲到底。
+    expect(scrolls.map((x) => x.on)).toContain("a3");
+
+    // 🔴 心臟。整條線都在記憶體裡、hasNewer 已經是 false,而未讀水位一步都不准動。
+    expect(
+      markReads,
+      "跳過去不等於看過 —— 走訪載進來的幾百則不准被標成已讀",
+    ).toEqual([]);
+
+    // 🔴 另一個方向,而且不能省:只釘上面那一半的話,「mark-read 整條路壞掉、
+    // 永遠不標」也會過,那本身就是另一個靜默失敗。按下回到最新 → 才標,
+    // 而且標在**真正最新**那一則的 ts 上。
+    const arrow = container.querySelector<HTMLButtonElement>(
+      '[data-testid="chat-jump-latest"]',
+    );
+    expect(arrow, "前提:停在錨點上時箭頭要在").not.toBeNull();
+    await act(async () => {
+      fireEvent.click(arrow!);
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(
+      markReads.at(-1),
+      "回到最新之後要標,而且要標在最新那一則上",
+      // seed 的 ts 從 100 起算,第 300 則是 399。
+    ).toBe(399);
   });
 
   it("跳轉目標上方的等待中請示卡是收合的,一次都不去撈它", async () => {
@@ -390,117 +467,32 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
     expect(card.querySelector(".reply-composer")).toBeNull();
   });
 
-  it("捲到底只撈一頁,而且那一頁不把畫面拉到底 —— 下一頁要讀的人再捲一次", async () => {
-    // 🔴 B 方案的本體(T-48,owner rc-d2e1b69edc66 ①)。往新的那條鏈曾經是
-    // level-triggered:捲動只是起頭,之後每一頁落地由一個 effect 重新評估,一路
-    // 走到活尾巴。現在一次手勢就是一頁。
+
+  it("走訪撈到一半失敗、停在半路時,回到最新的箭頭仍然在", async () => {
+    // 🔴 fix12 之後這條的地形換了,但它守的東西沒換,而且更承重了。
     //
-    // 而讓「一頁」為真的不是拿掉那個 effect,是**不 auto-follow**:錨點視窗
-    // (`hasNewer`)裡貼上來的那一頁不准把畫面拉到底。真瀏覽器裡 `scrollIntoView`
-    // 自己會送一個捲動事件,落回同一支 `nowNearBottom && hasNewer` ⇒ 走廊會用另
-    // 一個名字繼續跑(那一格由 visual-guards/chat-forward-walk.ct.spec.tsx 在真
-    // Chromium 量)。這裡量得到的是它的前提:那一頁落地之後,`scrollIntoView`
-    // 一次都沒有被呼叫在哨兵上,`scrollTop` 原地不動,而原地再捲一次撈不到東西。
-    seed(A, "a", 80, 100);
-    const { container } = render(view(alice, "a3"));
-    await waitFor(() =>
-      expect(container.querySelector('[data-msg-id="a3"]')).not.toBeNull(),
-    );
-    const box = container.querySelector(".chat__messages")! as HTMLElement;
-    const ROW = 81;
-    const CH = 369;
-    Object.defineProperty(box, "clientHeight", { get: () => CH });
-    Object.defineProperty(box, "scrollHeight", {
-      get: () => box.querySelectorAll(".chat__msg").length * ROW,
-    });
-    const rows0 = box.querySelectorAll(".chat__msg").length;
-    box.scrollTop = box.scrollHeight - CH;
-    const entry = windowCalls.length;
-    scrolls = [];
-    fireEvent.scroll(box);
-    await waitFor(() =>
-      expect(box.querySelectorAll(".chat__msg").length).toBeGreaterThan(rows0),
-    );
-    const landedAt = box.scrollTop;
-
-    // ① 一頁,不是一路。等久一點:自動連鎖如果還在,它就是在這段時間裡跑完的。
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 600));
-    });
-    expect(
-      windowCalls.length - entry,
-      "一次手勢只准一頁 —— 多出來的每一通都是自動連鎖",
-    ).toBe(1);
-    expect(bubbles(container)).not.toContain("a79");
-
-    // ② 而且畫面沒有被拉到底:哨兵沒被捲過,`scrollTop` 就是人捲到的那一格。
-    expect(
-      scrolls.map((s) => s.on),
-      "錨點視窗裡貼上來的那一頁不准 auto-follow —— 真瀏覽器裡那一捲會自己送出下一個事件",
-    ).not.toContain("chat__scroll-anchor");
-    expect(box.scrollTop).toBe(landedAt);
-    expect(
-      box.scrollHeight - box.scrollTop - box.clientHeight,
-      "讀的人現在離底部一整頁 —— 那一頁正是他要往下讀的東西",
-    ).toBeGreaterThan(CH);
-
-    // ③ 原地再送一次捲動事件:什麼都不會發生(不是節流,是他根本不在底部)。
-    fireEvent.scroll(box);
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 500));
-    });
-    expect(windowCalls.length - entry).toBe(1);
-
-    // ④ 真的往下捲完那一頁,第二頁才來。
-    box.scrollTop = box.scrollHeight - CH;
-    fireEvent.scroll(box);
-    await waitFor(() => expect(windowCalls.length - entry).toBe(2));
-    const forward = windowCalls
-      .filter((c) => c.anchor.startId)
-      .map((c) => c.anchor.startId);
-    expect(new Set(forward).size, "每一頁都從上一頁的最後一列接下去").toBe(
-      forward.length,
-    );
-  });
-
-  it("停在錨點視窗的底部、下面還有更多時,回到最新的箭頭仍然在", async () => {
-    // 🔴 B 之後這條變成承重的(T-48,owner rc-d2e1b69edc66 ①)。自動走完拿掉之後,
-    // 「你不在最新那一則」這件事**只剩箭頭在講** —— 箭頭沒出現,讀的人就以為自己
-    // 在最新,而下面還壓著上百則。
+    // 以前:跳轉一定停在錨點窗,箭頭天天都在。現在:跳轉會一路撈到活尾巴,所以
+    // 「還沒到最新」變成**例外狀態** —— 走訪撈到一半沒撈完。例外狀態最容易被
+    // 順手刪掉(「hasNewer 現在不是永遠 false 嗎?」),而刪掉的代價是:讀的人
+    // 停在半路,畫面上**沒有任何東西**告訴他下面還壓著幾十則。
     //
     // 風險不在 `chatBottomAffordance` 那個純函式(它有自己的測試),在 **ChatArea
-    // 有沒有繼續把 `hasNewer` 餵給它**:那條線斷掉,函式照樣全綠。
-    //
-    // 佈景就是 B 的新常態:捲到底 → 撈一頁 → 停住 → 人停在那個位置。jsdom 的每
-    // 一個 rect 都是 0,所以 `isLatestRowInView` 答**真** —— 也就是說這一格
-    // `latestInView` 為真而 `hasNewer` 也為真,撐著箭頭的只有 `windowHasNewer`
-    // 那一條線。分母:把它改成 `false`,這條會紅(實測),而
-    // `chatBottomAffordance.test.ts` 一條都不紅。
-    seed(A, "a", 80, 100);
+    // 有沒有繼續把 `hasNewer` 餵給它**:那條線斷掉,函式照樣全綠。jsdom 的每一個
+    // rect 都是 0,所以 `isLatestRowInView` 答**真** —— 撐著箭頭的只有
+    // `windowHasNewer` 那一條線。
+    seed(A, "a", 300, 100);
+    // 錨點在最前面 ⇒ 往新那一頁一定滿 100 ⇒ 走訪要繼續;讓走訪的下一通失敗。
+    windowFailAfter = 2;
     const { container } = render(view(alice, "a3"));
     await waitFor(() =>
       expect(container.querySelector('[data-msg-id="a3"]')).not.toBeNull(),
     );
-    const box = container.querySelector(".chat__messages")! as HTMLElement;
-    const ROW = 81;
-    const CH = 369;
-    Object.defineProperty(box, "clientHeight", { get: () => CH });
-    Object.defineProperty(box, "scrollHeight", {
-      get: () => box.querySelectorAll(".chat__msg").length * ROW,
-    });
-    const rows0 = box.querySelectorAll(".chat__msg").length;
-    box.scrollTop = box.scrollHeight - CH;
-    fireEvent.scroll(box);
-    await waitFor(() =>
-      expect(box.querySelectorAll(".chat__msg").length).toBeGreaterThan(rows0),
-    );
     await act(async () => {
-      await new Promise((r) => setTimeout(r, 300));
+      await new Promise((r) => setTimeout(r, 50));
     });
 
-    // 前提:走廊真的停了,而且活尾巴真的還沒到 —— 否則 `hasNewer` 會是 false,
-    // 這條就變成在量一件不存在的事。
-    expect(bubbles(container)).not.toContain("a79");
+    // 前提:走訪真的沒走完 —— 否則 `hasNewer` 是 false,這條就在量一件不存在的事。
+    expect(bubbles(container)).not.toContain("a299");
     // 而且畫面上沒有預覽列 —— 兩者互斥,預覽列在的話箭頭本來就該讓位,
     // 那樣這條斷言會綠在錯的東西上。
     expect(
@@ -509,7 +501,7 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
 
     expect(
       container.querySelector('[data-testid="chat-jump-latest"]'),
-      "停在錨點視窗底部、下面還有幾十則沒載 —— 箭頭是唯一還在說這件事的東西",
+      "走訪停在半路、下面還有幾百則沒載 —— 箭頭是唯一還在說這件事的東西",
     ).not.toBeNull();
   });
 
@@ -542,218 +534,10 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
     ).toContain("chat__scroll-anchor");
   });
 
-  it("人往回捲不撈往新的那一頁", async () => {
-    // 判準只有一個:當下在不在底部。往回捲一整個螢幕之後,任何捲動事件都不該
-    // 換來一通 `?start_id=`。
-    seed(A, "a", 80, 100);
-    const { container } = render(view(alice, "a3"));
-    await waitFor(() =>
-      expect(container.querySelector('[data-msg-id="a3"]')).not.toBeNull(),
-    );
-    const box = container.querySelector(".chat__messages")! as HTMLElement;
-    const ROW = 81;
-    const CH = 369;
-    Object.defineProperty(box, "clientHeight", { get: () => CH });
-    Object.defineProperty(box, "scrollHeight", {
-      get: () => box.querySelectorAll(".chat__msg").length * ROW,
-    });
-    const entry = windowCalls.length;
-    box.scrollTop = 0;
-    fireEvent.scroll(box);
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 200));
-    });
-    expect(windowCalls.length).toBe(entry);
-    expect(bubbles(container)).not.toContain("a79");
-  });
 
-  it("被窗口吞掉的手勢補送到期時,問的是這個箱子還在不在底部帶", async () => {
-    // 🔴 這條量的是**接線**:補送那條路上「讀的人還在不在底部帶」是誰回答的
-    // (獨立審查 #22 F-6)。規則本身釘在 `useChat.scrollback.test.ts`,那裡的探
-    // 針是測試自己給的;這裡用的是 ChatArea 真的那一支,量它問的是不是這個箱子。
-    seed(A, "a", 80, 100);
-    const { container } = render(view(alice, "a3"));
-    await waitFor(() =>
-      expect(container.querySelector('[data-msg-id="a3"]')).not.toBeNull(),
-    );
-    const box = container.querySelector(".chat__messages")! as HTMLElement;
-    const CH = 369;
-    let H = 3000;
-    Object.defineProperty(box, "clientHeight", { get: () => CH });
-    Object.defineProperty(box, "scrollHeight", { get: () => H });
-    const entry = windowCalls.length;
 
-    // 手勢① 買到一頁,箱子隨之長高;手勢② 在同一個 400ms 窗口內被時鐘吞掉。
-    box.scrollTop = H - CH;
-    fireEvent.scroll(box);
-    await waitFor(() => expect(windowCalls.length).toBe(entry + 1));
-    H = 6000;
-    box.scrollTop = H - CH;
-    fireEvent.scroll(box);
-    expect(windowCalls.length).toBe(entry + 1);
 
-    // 窗口結束 —— 人還壓在底部帶上,補送要落地。
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 450));
-    });
-    expect(
-      windowCalls.length,
-      "人還在底部帶,被吞掉的那次手勢卻沒有補送 —— 讀的人壓在極限上就靜默停住了",
-    ).toBe(entry + 2);
-  });
 
-  it("版面縮回去把捲動位置往回夾的那個事件,不准買到一頁", async () => {
-    // 🔴 一個 `scroll` 事件不等於一個手勢(獨立審查 #22 F-1 的機制)。內容變矮
-    // ——回覆卡解析成比較短的東西、視窗縮放、任何重排 —— 瀏覽器會把 `scrollTop`
-    // 夾回新的極限,並且為了那一夾送出一個 `scroll` 事件。那個事件天生落在底部
-    // 帶裡,於是「沒有人碰過箱子」卻買到了一頁。
-    // 夾回去只會讓 `scrollTop` 變小;讀的人往下要更多只會讓它變大 —— 方向就是
-    // 分界線,不需要任何門檻值。實測(chat-forward-walk 的「版面自己縮矮把讀的
-    // 人夾回極限的那個事件,不准買到一頁」,900px 釘死欄寬、不節流):讀的人停在
-    // 錨點 scrollTop 4984、箱子 10491,底下 30 列縮掉之後箱子 5346 ⇒ Chromium
-    // 送出剛好一個 scroll 事件,scrollTop 4984 → 4803(往回),落在 distance 0。
-    // 📏 這裡原本寫「箱子 15631 → 10110px,scrollTop 9932 → 9600,就是那一夾買
-    // 下了第二頁」——三句都不對(獨立審查 #23 F-5)。它引的那份 trace 裡那一夾
-    // 是 9941 → 7344,而且落在 distance 2281,離底部帶遠得很,什麼都沒買到;
-    // 買下第二頁的是 87ms 之後一個**往前**的事件(+116,distance 24),來源是
-    // 護欄自己重讀箱子的 flick 迴圈把已經走過的路又走了一遍。
-    seed(A, "a", 80, 100);
-    const { container } = render(view(alice, "a3"));
-    await waitFor(() =>
-      expect(container.querySelector('[data-msg-id="a3"]')).not.toBeNull(),
-    );
-    const box = container.querySelector(".chat__messages")! as HTMLElement;
-    const CH = 369;
-    let H = 3000;
-    Object.defineProperty(box, "clientHeight", { get: () => CH });
-    Object.defineProperty(box, "scrollHeight", { get: () => H });
-    const entry = windowCalls.length;
-
-    // 手勢① —— 讀的人把箱子往下推到底部帶,買到一頁。那一頁畫出來之後箱子長
-    // 高,而讀的人停在原地(這正是「一次手勢一頁」的樣子:新的那一頁在視野下
-    // 方,他要自己捲過去)。
-    box.scrollTop = H - CH;
-    fireEvent.scroll(box);
-    await waitFor(() => expect(windowCalls.length).toBe(entry + 1));
-    H = 6000;
-
-    // 然後版面縮回去,而且縮到比讀的人現在的位置還矮 —— 沒有人碰那個箱子。瀏覽
-    // 器把 `scrollTop` 夾回新的極限,並且為了那一夾送出事件,而它當然落在底部
-    // 帶裡。
-    H = 2500;
-    box.scrollTop = H - CH;
-    fireEvent.scroll(box);
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 1300));
-    });
-    expect(
-      windowCalls.length,
-      "版面自己縮回去就買到了一頁 —— 沒有人碰過那個箱子",
-    ).toBe(entry + 1);
-
-    // 陽性對照:同一個箱子,這次是讀的人真的把它往下推 —— 那就要買到一頁。
-    H = 6000;
-    box.scrollTop = H - CH;
-    fireEvent.scroll(box);
-    await waitFor(() => expect(windowCalls.length).toBe(entry + 2));
-  });
-
-  it("那一頁一列新的都沒有時,同一個錨點不會在同一次滾輪裡被打第二次", async () => {
-    // ⚠️ 一次滾輪是每秒約 60 個捲動事件,而讀的人如果停在底部(那一頁整頁都是
-    // 已經握著的列 ⇒ 版面一格都沒長),每一個事件都會落回 `nowNearBottom &&
-    // hasNewer`。界是 `useChat` 的 `forwardExhaustedRef` ＋ 400ms 的
-    // `HUMAN_RETRY_MIN_MS`:**往新的請求**在 400ms 內只准一通(不分錨點)。
-    // 「同一個錨點只准問一次」是另一道界(`forwardExhaustedRef`),而且它只有成
-    // 功那條路會寫 —— 兩句話講的不是同一件事,這裡量的是時鐘那一道。
-    seed(A, "a", 80, 100);
-    const { container } = render(view(alice, "a3"));
-    await waitFor(() =>
-      expect(container.querySelector('[data-msg-id="a3"]')).not.toBeNull(),
-    );
-    windowStale = true;
-    const entry = windowCalls.length;
-    const boxEl = container.querySelector(".chat__messages")!;
-    fireEvent.scroll(boxEl);
-    await waitFor(() => expect(windowCalls.length).toBe(entry + 1));
-    // 同一次滾輪的其餘事件 —— jsdom 的長度全是 0,所以每一個都仍然「在底部」。
-    for (let i = 0; i < 20; i++) fireEvent.scroll(boxEl);
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 200));
-    });
-    expect(
-      windowCalls.length,
-      "400ms 內送出了第二通往新的請求 —— 那是每秒 20 個請求的第一圈",
-    ).toBe(entry + 1);
-    expect(
-      windowCalls[windowCalls.length - 1].anchor.startId,
-      "而且那一次問的就是上一頁的最後一列",
-    ).toBe("a32");
-    expect(bubbles(container)).not.toContain("a79");
-  });
-
-  it("往新那一頁失敗時不忙著重打,而且那一次滾輪的其餘事件不准自己買到第二通", async () => {
-    // 失敗只是沒有東西落地,沒有 re-render;而重試就是下一次手勢。
-    // 🔴 那道界必須是 400ms 的時鐘,不是「這個錨點問過了」的閂 —— 閂只有成功
-    // 那條路會寫,所以在失敗路上它擋不到任何東西(獨立審查 #19 F-1:失敗中連送
-    // 10 個手勢,量到 10 通請求)。
-    // 🔴 被那道界擋下的手勢不能就這樣消失(獨立審查 #20)—— 但**這裡不是那一
-    // 格**,而上一版把兩件事混成一件,一次滾輪因此自己買到第二頁(#21 F-1)。
-    // 失敗什麼都沒落地 ⇒ 最新那一列沒有動 ⇒ 這 20 個事件問的是上一通已經在問
-    // 的同一塊地,是同一次手勢的餘波。真正會補送的是「一頁落地之後的第二次手
-    // 勢」與「被鎖擋下、而那一通失敗了」,兩格都釘在
-    // `src/hooks/useChat.scrollback.test.ts`;真滾輪的形狀則由
-    // `visual-guards/chat-forward-walk.ct.spec.tsx` 的 flick 看著。
-    seed(A, "a", 80, 100);
-    const { container } = render(view(alice, "a3"));
-    await waitFor(() =>
-      expect(container.querySelector('[data-msg-id="a3"]')).not.toBeNull(),
-    );
-    windowsFail = true;
-    const entry = windowCalls.length;
-    const boxEl = container.querySelector(".chat__messages")!;
-    fireEvent.scroll(boxEl);
-    await waitFor(() => expect(windowCalls.length).toBe(entry + 1));
-    // 同一次滾輪的其餘事件,鋪在時間上而不是同步連發 —— 同步連發會被
-    // `loadingNewer` 那把鎖擋掉,量到的就不是這道界。間隔取 8ms(比真實滾輪的
-    // 約 16ms 更密,對這道界更嚴),整段 160ms 收在 400ms 窗口裡還剩一半餘裕;
-    // 鋪太滿會讓慢機器上最後幾個事件掉到窗口外而假紅。
-    await act(async () => {
-      for (let i = 0; i < 20; i++) {
-        fireEvent.scroll(boxEl);
-        await new Promise((r) => setTimeout(r, 8));
-      }
-    });
-    expect(
-      windowCalls.length,
-      "伺服器在 5xx,而一次滾輪照著捲動事件的速率連續重打了它",
-    ).toBe(entry + 1);
-    expect(bubbles(container)).not.toContain("a79");
-
-    // 窗口結束,而且伺服器好了 —— 還是不准有第二通:**沒有人再碰過那個箱子**。
-    windowsFail = false;
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 450));
-    });
-    expect(
-      windowCalls.length,
-      "一次滾輪在 5xx 上自己買到了第二通 —— 沒有人再碰它",
-    ).toBe(entry + 1);
-    expect(bubbles(container)).not.toContain("a33");
-
-    // 再放三個窗口過去也一樣。
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 1300));
-    });
-    expect(
-      windowCalls.length,
-      "沒有人碰它卻繼續往下撈 —— 那是 owner 裁掉的自動走廊換了個名字",
-    ).toBe(entry + 1);
-
-    // 而重試仍然是下一次手勢:窗口早就過了,一個真的捲動事件立刻買到那一頁。
-    fireEvent.scroll(boxEl);
-    await waitFor(() => expect(windowCalls.length).toBe(entry + 2));
-    await waitFor(() => expect(bubbles(container)).toContain("a33"));
-  });
 
   it("沒有跳轉目標的一般進房,照舊只打一頁最新的,一個視窗請求都沒有", async () => {
     // 另一半:錨點優先只能從跳轉進得去。把它變成無條件的,每一次進房都會多兩個
@@ -902,18 +686,26 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
     // 🔴 第五輪 R5-3 的護欄。`pendingLatestScroll` 這一輪從跨 peer 的 ref 改判
     // 進紀錄,但當時**一條會紅的測試都沒有** —— 把它改回跨 peer,src/components/
     // 1472 支全綠。這條把它釘住。
-    // 形狀:A 按下「回到最新」而且必須先抓活尾巴(錨點窗 ⇒ hasNewer) → 那一頁還
-    // 在空中就切到 B,而 B 正是**帶著錨點**進來的 → B 的錨點窗落地時,A 留下的
-    // 待辦會把 B 捲到活尾巴,也就是這張票要拿掉的那格中間畫面。
-    seed(A, "a", 80, 100);
+    // 形狀:A 按下「回到最新」而且必須先抓活尾巴(走訪沒走完 ⇒ hasNewer) → 那一
+    // 頁還在空中就切到 B,而 B 正是**帶著錨點**進來的 → B 的錨點窗落地時,A 留下
+    // 的待辦會把 B 捲到活尾巴,也就是這張票要拿掉的那格中間畫面。
+    //
+    // fix12 之後「A 是一個沒接上尾巴的窗」只有一種造法:走訪撈到一半失敗。
+    seed(A, "a", 300, 100);
     seed(B, "b", 80, 9000);
+    windowFailAfter = 2;
 
     const { container, rerender } = render(view(alice, "a3"));
     await waitFor(() =>
       expect(container.querySelector('[data-msg-id="a3"]')).not.toBeNull(),
     );
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    // B 的錨點窗不准被 A 的失敗設定波及。
+    windowFailAfter = 0;
 
-    // A 的房間是一個歷史窗 ⇒ 圓形箭頭在,而且按下去必須先抓活尾巴。
+    // A 的房間停在半路 ⇒ 圓形箭頭在,而且按下去必須先抓活尾巴。
     holdPlain = () => {};
     const arrow = container.querySelector<HTMLButtonElement>(
       '[data-testid="chat-jump-latest"]',

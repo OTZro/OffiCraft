@@ -843,6 +843,52 @@
   font-size: 13.5px;
 }
 
+/* 🔴 「這條對話的內容還沒到」 (T-48 fix12). Same silhouette as `.chat__empty`
+   deliberately: they occupy the same slot in the body and one replaces the
+   other, so a difference in placement would read as the pane jumping.
+
+   Every colour is a THEME TOKEN. The ring is drawn from `--color-border` with
+   one quadrant in `--color-accent`, so it inherits each theme's own contrast
+   instead of carrying a hard-coded grey that goes invisible on half of them. */
+.chat__loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text-muted);
+  font-size: 13.5px;
+}
+.chat__loading-spinner {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  animation: chat-loading-spin 0.7s linear infinite;
+}
+/* Motion is the whole affordance here, so the reduced-motion fallback is not
+   「no animation」 (that leaves a static ring that says nothing) — it is a
+   pulse, which carries 「still working」 without rotation. */
+@media (prefers-reduced-motion: reduce) {
+  .chat__loading-spinner {
+    animation: chat-loading-pulse 1.4s ease-in-out infinite;
+  }
+}
+@keyframes chat-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes chat-loading-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 /* Message thread (rendered when the conversation has ≥1 message). Overrides the
    body's place-items:center so the list fills the pane and scrolls. */
 .chat__messages {

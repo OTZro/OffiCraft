@@ -40,6 +40,7 @@ import { Avatar } from "./Avatar";
 import { avatarKindForMember } from "../lib/avatarKind";
 import { ChatGalleryPanel } from "./ChatGalleryPanel";
 import { ChatJumpLatestButton } from "./ChatJumpLatestButton";
+import { ChatThreadLoading } from "./ChatThreadLoading";
 import { ChatNewMsgPreview } from "./ChatNewMsgPreview";
 import { ChatReplyCard } from "./ChatReplyCard";
 import { ComposerAttachmentPreview } from "./ComposerAttachmentPreview";
@@ -172,46 +173,6 @@ type ChatSession = {
    * pull the view down when it is — if the owner scrolled UP to read history,
    * an arrival must NOT yank them back. */
   nearBottom: boolean;
-  /** `scrollTop` as of the previous scroll event on this conversation's
-   * viewport — the only thing that tells 「the reader pushed the box down」
-   * apart from 「the box moved under the reader」.
-   *
-   * 🔴 A `scroll` EVENT IS NOT A GESTURE, AND THE FORWARD WALK USED TO ASSUME
-   * IT WAS (T-48, independent review #22 F-1). When content SHRINKS — a
-   * reflow, a reply card resolving to something shorter, a window resize — the
-   * browser CLAMPS `scrollTop` to the new limit and fires a `scroll` event for
-   * the clamp. That event arrives with the viewport sitting in the bottom
-   * band, so 「near the bottom」 is true and a forward page is bought with
-   * nobody having touched anything.
-   *
-   * Measured in Chromium, `chat-forward-walk` 「版面自己縮矮把讀的人夾回極限的
-   * 那個事件,不准買到一頁」 (900px pinned column, no CPU throttle): the reader
-   * parked on the jump target at `scrollTop` 4984 in a 10491px box, 30 rows
-   * below the fold collapse, the box becomes 5346 — and Chromium fires exactly
-   * ONE `scroll` event, `scrollTop` 4984 → 4803, i.e. BACKWARDS, landing at
-   * distance 0. A clamp can only ever move `scrollTop` DOWN in value; a reader
-   * asking for more below moves it UP. So the direction is the discriminator,
-   * and it needs no threshold to be read.
-   *
-   * 📏 THE NUMBERS THAT USED TO BE HERE WERE WRONG, AND SO WAS THE STORY THEY
-   * TOLD (T-48, independent review #23 F-5). This note read 「the box went
-   * 15631 → 10110px and `scrollTop` 9932 → 9600 … and that clamp bought the
-   * second page — 31 reds in 40 runs」. In the trace it cites (fix3 §2.4) the
-   * clamp is `scrollTop` 9941 → 7344, and it landed at DISTANCE 2281 — nowhere
-   * near the 80px band, so it bought nothing. The page that ran was bought
-   * 87ms later by a FORWARD event (+116px, distance 24) that the guard's own
-   * re-measuring flick loop produced by re-walking travel it had already
-   * delivered. Those 31 reds belong to the guard's momentum bug, not to this
-   * rule. The rule stands on the measurement above, which is its own.
-   *
-   * 🟠 AND THE PRICE, ALSO MEASURED (review #23 F-4): swallowing the clamp
-   * leaves the reader ON the scroll limit, where further downward pushes move
-   * nothing and therefore fire NOTHING (measured: 5 pushes, 0 events). The next
-   * page then costs them TWO gestures — up, then down — instead of one. That is
-   * the right trade: a clamp is not a gesture and must not buy a page, and this
-   * cost is recoverable where a free page is not. Pinned in the guard above so
-   * that changing it is loud. */
-  lastScrollTop: number;
   /** Ids seen on the previous messages render — the diff basis for "which
    * messages are NEW" (a refetch replaces the whole array, so append detection
    * must go through ids, not length). */
@@ -277,7 +238,6 @@ function freshChatSession(unreadCount: number): ChatSession {
   return {
     initialUnread: unreadCount,
     nearBottom: true,
-    lastScrollTop: 0,
     prevIds: new Set(),
     prependAnchor: null,
     loadingOlder: false,
@@ -454,26 +414,26 @@ export function ChatArea({
   // auto-follow and the read watermark.
   const NEAR_BOTTOM_PX = 80;
 
-  // The scroll viewport. Declared here rather than beside `endRef` below
-  // because `useChat` is handed a probe that reads it (F-6).
+  // 🔴 HAS THE READER LOOKED AT THE LIVE TAIL OF THIS THREAD? See `mayMarkRead`
+  // for why this exists and why `hasNewer` cannot answer it any more. React
+  // state rather than a `session` field on purpose: `mayMarkRead` is computed
+  // during render and the read-receipt effect depends on it, so a change has to
+  // re-render to be seen.
+  const [tailSeen, setTailSeen] = useState(true);
+
+  // The scroll viewport.
   const messagesRef = useRef<HTMLDivElement>(null);
-  const readerAtBottom = useCallback(() => {
-    const el = messagesRef.current;
-    if (!el) return false;
-    // Same band as `onMessagesScroll` — and the same reason it is 80px there.
-    return el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
-  }, []);
 
   const {
     messages,
     peerLastReadTs,
     send,
     markRead,
+    initialLoading,
     hasMore,
     loadOlder,
     gapSuspected,
     hasNewer,
-    loadNewer,
     loadAround,
     resetToLatest,
     // 🔴 ANCHOR-FIRST ENTRY (T-48, owner ruling). The target is named at
@@ -481,10 +441,7 @@ export function ChatArea({
     // loads the live tail first and then throws it away — see useChat's note.
     // The fetch itself still happens below, in the jump reactor, because the
     // viewport, the highlight and the miss notice are this component's business.
-    // 🔴 F-6 (review #22): a swallowed gesture is replayed up to 400ms later,
-    // and the reader may have left the bottom band in between. The viewport is
-    // this component's, so the answer is too.
-  } = useChat(member.id, jumpToMsgId, readerAtBottom);
+  } = useChat(member.id, jumpToMsgId);
 
 
   // Released-worker codenames: an ow- participant that is NOT in the live
@@ -919,45 +876,21 @@ export function ChatArea({
     }
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
     const nowNearBottom = distance <= NEAR_BOTTOM_PX;
-    // Did the READER move the box down, or did the box move under them? See
-    // `lastScrollTop` — a shrink CLAMPS `scrollTop` and fires a scroll event
-    // for the clamp, and only the direction tells the two apart.
+    // 🔴 THERE IS NO 「捲到底再撈一頁」 BRANCH HERE ANY MORE (T-48 fix12). The
+    // mirror of the top branch used to live at this exact spot: near the bottom
+    // of an anchor window, buy ONE forward page, one page per gesture. The jump
+    // now arrives already joined to the live tail (`loadAround` fetches through
+    // before it commits), so there is no window to walk out of — and the whole
+    // apparatus that made 「一次手勢一頁」 true (a clamp-direction test on
+    // `session.lastScrollTop`, and in `useChat` a retry clock, a trailing
+    // replay, a sight gate, a served-anchor marker) went with it.
     //
-    // ⚠️ NOT MOVED IS NOT THE SAME AS MOVED BACKWARDS, and this asks only about
-    // backwards. A clamp can only ever lower `scrollTop`; an equal reading is a
-    // box that did not move (a synthetic event, and every length in jsdom),
-    // which this branch has always served and which this rule is not about.
-    const notClampedBack = el.scrollTop >= session.lastScrollTop;
-    session.lastScrollTop = el.scrollTop;
-    // Near the BOTTOM of an ANCHOR WINDOW → pull ONE page FORWARDS, and then
-    // stop (T-48 ③, owner rc-d2e1b69edc66 ①). The exact mirror of the top
-    // branch above, and the reason the jump can afford to fetch only two pages:
-    // the owner walks out of the window in the direction they are already
-    // scrolling, one page per gesture, instead of the jump having to guess how
-    // much history to drag along.
-    //
-    // 🔴 ONE GESTURE IS ONE PAGE, AND NOTHING CONTINUES IT. There used to be a
-    // level-triggered effect here that re-asked after every landed page until
-    // the thread reached the live tail; the reader scrolled once and the room
-    // walked itself home. What makes 「one gesture, one page」 hold is the
-    // companion rule in the scroll-position reactor: while `hasNewer` is true
-    // the appended page is NOT auto-followed, so the viewport stays where the
-    // reader left it, a screenful above the new bottom. They have to scroll
-    // through the page they just asked for to ask for the next one — measured
-    // in jsdom at 81/369: `scrollTop` frozen at 2304 while `scrollHeight` went
-    // 2673 → 5022, so a scroll event fired in place asks for nothing.
-    // ⚠️ AUTO-FOLLOW IS NOT A COSMETIC DIFFERENCE HERE: in a real browser
-    // `scrollIntoView` emits a scroll event of its own, which lands right back
-    // in this branch at `distance: 0` — deleting the effect while leaving the
-    // follow in place would keep the corridor running under a different name.
-    // `visual-guards/chat-forward-walk.ct.spec.tsx` measures that in Chromium.
-    //
-    // `human: true` — every call now comes from the reader moving the box, so
-    // it clears the loader's no-progress bound (at most once per 400ms, which
-    // is what keeps a 60-events-per-second wheel from becoming 60 requests).
-    if (nowNearBottom && hasNewer && notClampedBack) {
-      void loadNewer({ human: true });
-    }
+    // ⚠️ WHEN THE THREAD *IS* STILL SHORT OF THE TAIL — the fetch above gave up
+    // part-way — scrolling to the bottom does NOT buy a page any more. The way
+    // on is the 回到最新 arrow, which `hasNewer` keeps on screen for exactly
+    // that case. That is deliberate: an affordance that is always visible beats
+    // a gesture a scroller pinned at its limit cannot even emit (measured in
+    // Chromium, review #20).
     // ① The arrow's condition, and it is a DIFFERENT question from
     // `nowNearBottom`: auto-follow may forgive 80px, but the owner asked for
     // the arrow whenever the NEWEST MESSAGE is not in the viewport. So it is
@@ -983,6 +916,10 @@ export function ChatArea({
     if (nowNearBottom) {
       setNewMsgPreview(null);
       session.unreadRunOpen = false;
+      // 🔴 THE READER IS AT THE BOTTOM OF THE THREAD — the one thing that
+      // honestly ends a post-jump watermark block (see `mayMarkRead`). Guarded
+      // so a wheel resting in the band does not re-render on every event.
+      if (!tailSeen) setTailSeen(true);
     }
     session.nearBottom = nowNearBottom;
   }
@@ -999,6 +936,27 @@ export function ChatArea({
   //   • `hasNewer` — the thread is an ANCHOR WINDOW from the middle of the
   //     history. `newestTs` is that window's last row and everything between it
   //     and the live tail is unfetched, unseen material.
+  //   • 🔴 `tailSeen` — THE READER HAS NOT LOOKED AT THE LIVE TAIL (T-48
+  //     fix12). This is the half that used to be carried by `hasNewer` and can
+  //     no longer be: a jump used to leave the thread SHORT of the tail and
+  //     walk home one reader gesture at a time, so 「握得到活尾巴」 and 「看過活
+  //     尾巴」 were the same fact and `hasNewer` stood for both. `loadAround`
+  //     now fetches through to the tail before it commits, so the moment the
+  //     jump lands `hasNewer` is FALSE while the reader is parked hundreds of
+  //     rows above — and the effect below, which does not look at the viewport
+  //     at all, would stamp the watermark at the newest message. Every message
+  //     between the anchor and the tail would be marked 「我看過了」 by an owner
+  //     who has seen none of them (owner ruling: mark-read is 「我看過了」, not
+  //     「我跳過來過」).
+  //
+  //     So the guard asks the honest question directly instead of through a
+  //     proxy that used to correlate with it: has the reader been at the bottom
+  //     of this thread at all? It starts TRUE (an ordinary entry lands at the
+  //     tail and the existing behaviour is unchanged), goes FALSE when a jump
+  //     starts fetching, and comes back TRUE on each of the three things that
+  //     mean the reader really is at the latest — crossing into the bottom
+  //     band, pressing 回到最新 / the preview strip, and a jump that MISSED and
+  //     fell back to the tail.
   //   • a jump still PENDING — arriving through 跳到原訊息 / a kept link mounts
   //     the thread on the NEWEST window first, and the anchor fetch replaces it
   //     a moment later. That first window is on screen for no time at all and
@@ -1012,7 +970,7 @@ export function ChatArea({
   // looking at the latest.
   const jumpPending =
     jumpToMsgId !== undefined && session.jumpConsumed !== jumpToMsgId;
-  const mayMarkRead = !hasNewer && !jumpPending;
+  const mayMarkRead = !hasNewer && !jumpPending && tailSeen;
 
   // 🔴 THE RETRY THE READER CAN ACTUALLY PRESS (T-48). A failed read is the one
   // ending of a jump that is worth trying again, and an ending with no way to
@@ -1153,6 +1111,11 @@ export function ChatArea({
         session.initialPositioned = true;
         session.prevIds = new Set(messages.map((m) => m.id));
         session.nearBottom = false;
+        // 🔴 THE JUMP IS LEAVING THE TAIL, AND THE WATERMARK MUST GO WITH IT
+        // (see `mayMarkRead`). Set BEFORE the fetch, not after it lands: the
+        // whole window in which the anchor pair + the walk to the tail are in
+        // the air is a window in which nobody has looked at the newest message.
+        setTailSeen(false);
         void loadAround(jumpToMsgId).then((outcome) => {
           // 🔴 THE OWNER MAY HAVE LEFT WHILE THE PAIR WAS IN THE AIR (T-48,
           // R5-1), AND LEAVING NOW MEANS UNMOUNTING (R13-5). Two of the endings
@@ -1210,6 +1173,9 @@ export function ChatArea({
           );
           session.jumpConsumed = jumpToMsgId;
           session.nearBottom = true;
+          // The fallback lands on the live tail, so the reader IS at the latest
+          // and the watermark block ends with the jump that failed.
+          setTailSeen(true);
           // ⚠️ ANCHOR-FIRST ENTRY LEAVES THE ROOM EMPTY UNTIL SOMEBODY FILLS IT
           // (T-48). On this path nobody has: useChat skipped its entry load
           // because an anchor was named, and the anchor is not there. "Fall
@@ -1404,6 +1370,9 @@ export function ChatArea({
     // is now taken from the layout below, after the landing, and nowhere else.
     session.nearBottom = true;
     session.unreadRunOpen = false;
+    // 「帶我去最新」, said by the owner — which is also the end of the post-jump
+    // watermark block (see `mayMarkRead`).
+    setTailSeen(true);
     // 🔴 THE ARROW / THE PREVIEW STRIP ENDS AN IN-FLIGHT JUMP (T-48). Both mean
     // "take me to the newest message", said by the owner, and they are the one
     // thing allowed to overtake the anchor fetch. Spending the jump latch here
@@ -2261,6 +2230,22 @@ export function ChatArea({
               <ChatJumpLatestButton onClick={jumpToLatest} />
             )}
           </>
+        ) : initialLoading ? (
+          /* 🔴 THE ONE PLACE THE SPINNER IS RENDERED, AND THE ONE INPUT IT
+           * READS (T-48 fix12, owner c-d24ebd7f8d78). `initialLoading` is
+           * `useChat`'s single answer to 「這條對話的內容還沒到」 for BOTH
+           * entrances — an ordinary entry waiting on `load()`, and a 跳到原訊息
+           * entry waiting on `loadAround` (which since fix12 does not commit
+           * until it has fetched through to the live tail, so that wait is now
+           * long enough to be worth drawing). A third entrance needs no line
+           * here.
+           *
+           * ⚠️ IT SITS ABOVE THE OFFLINE CARD ON PURPOSE. 「離線」 is a fact
+           * about the member and 「還沒載完」 is a fact about this pane; while
+           * the second is true we do not yet know whether the thread is empty,
+           * and painting the offline card first would mean flashing 「還沒有訊
+           * 息」 at a conversation that is about to have some. */
+          <ChatThreadLoading />
         ) : isOffline ? (
           <div className="chat__offline">
             <span className="chat__offline-icon">

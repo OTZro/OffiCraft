@@ -96,6 +96,7 @@ export const MESSAGE_KEYS: readonly string[] = [
   "chat.shareLinkCopyFailed",
   "chat.systemSender",
   "chat.tasksLink",
+  "chat.threadLoading",
   "chat.unreadBelow",
   "chat.viewImageLabel",
   "chat.wakeButton",

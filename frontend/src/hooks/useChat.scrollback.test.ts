@@ -12,13 +12,12 @@
 //   5. T-48 ③ — the ANCHOR WINDOW, the same seam walked in the other
 //      direction: loadAround() opens a window around one message id
 //      (`?end_id=` for the context above, `?start_id=` for the context below),
-//      loadNewer() walks FORWARDS out of it a page at a time, and while the
+//      loadAround() then fetches FORWARD to the live tail before it commits, and while the
 //      thread is such a window the ordinary newest-page refresh is suppressed
 //      (merging the live tail onto a historical window would draw an unfetched
 //      range as contiguous). resetToLatest() is the way back.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { StrictMode } from "react";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import type { ChatCursor, ChatMessage } from "../api/adapter";
 
@@ -212,150 +211,7 @@ describe("useChat scrollback (loadOlder / hasMore)", () => {
     ).toEqual(nowShowing);
   });
 
-  // 🔴 REMOVED WITH THE PREFILL (T-48, owner 2026-09-04): 「那一頁還沒上畫面
-  // 時,別的 commit 觸發的 render 不准把戳記清掉」. That test built its window
-  // out of a HUNG reply-card prefill inside `commit` — the debt was written,
-  // `commit` stopped on the card, and `loadOlder` rendered in the gap. Cards
-  // are no longer fetched at commit time, so `pageUnseenIdRef` is written and
-  // `setThread` is called back-to-back with NO await between them: every render
-  // after the debt already carries the owed row, and the 「called for something
-  // else」 direction has no window left to be measured in. `pageUnseenIdRef`
-  // still holds the ROW rather than a boolean in `useChat.ts` (strictly the
-  // safer of the two), but that choice is now unmeasured — see the two
-  // 「補送的戳記由 render 回寫」 tests below, which still measure 「called twice」.
 
-  it("被 supersede 的那一頁不准把往下走訪永久鎖死 —— 欠條掛在一列永遠不會出現的訊息上", async () => {
-    // 🔴 順序就是這條測試的全部。`loadNewer` 在 commit **之前**記下欠條,而被
-    // supersede 的 commit 那一列永遠不會進 `thread.messages`,所以 layout effect
-    // 永遠清不掉它 ⇒ sight gate 永久關閘 ⇒ 往下走訪整條死掉。
-    // 既有測試看不見它,是因為它們都讓那一頁**先**落地、跳轉**後**完成,而
-    // `loadAround` 收尾時的 `dropPendingGesture()` 順手把欠條擦掉了。真實的順序
-    // 相反:跳轉很快完成,飛在空中的那一頁後到 —— 那時已經沒有人會清它。
-    h.listChat.mockResolvedValueOnce(page("n", 1000, 30));
-    const { result } = renderHook(() => useChat("b"));
-    await waitFor(() => expect(result.current.messages).toHaveLength(30));
-    await act(async () => {
-      h.listChatWindow.mockResolvedValueOnce(page("w", 100, 30));
-      h.listChatWindow.mockResolvedValueOnce(page("w", 129, 30));
-      await result.current.loadAround("w0");
-      await settle();
-    });
-
-    // 往下的那一頁飛出去,掛在空中。
-    const hungForward = deferred<ChatMessage[]>();
-    h.listChatWindow.mockReturnValueOnce(hungForward.promise);
-    let forward!: Promise<void>;
-    act(() => {
-      forward = result.current.loadNewer();
-    });
-
-    // 跳轉開跑,而且**先**完成 —— 它收尾時的 dropPendingGesture 因此清不到
-    // 那張還沒被寫下的欠條。
-    const above = deferred<ChatMessage[]>();
-    const below = deferred<ChatMessage[]>();
-    h.listChatWindow
-      .mockReturnValueOnce(above.promise)
-      .mockReturnValueOnce(below.promise);
-    let pending!: Promise<JumpOutcome>;
-    act(() => {
-      pending = result.current.loadAround("a0");
-    });
-    above.resolve(page("a", 100, 30));
-    below.resolve(page("a", 129, 30));
-    await act(async () => {
-      await pending;
-      await settle();
-    });
-
-    // 飛在空中的那一頁現在才落地,並且被 supersede。
-    await act(async () => {
-      hungForward.resolve(page("f", 9000, 30));
-      await forward;
-      await settle();
-    });
-
-    // 過 400ms 的節流窗口,讓下一次手勢是乾淨的一次。
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 500));
-    });
-    const before = h.listChatWindow.mock.calls.length;
-    h.listChatWindow.mockResolvedValueOnce(page("z", 5000, 30));
-    await act(async () => {
-      await result.current.loadNewer({ human: true });
-      await settle();
-    });
-    expect(
-      h.listChatWindow.mock.calls.length,
-      "supersede 之後往下走訪被鎖死了 —— 欠條掛在一列永遠不會出現的訊息上",
-    ).toBe(before + 1);
-  });
-
-  it("切走再切回同一個人,上一趟還在飛的往下捲頁不准接到這一趟的錨點窗上", async () => {
-    // 🔴 同上,`loadNewer` 那一側。它的錨是**上一趟**手上那條線的最新一則,接回來
-    // 的那一頁跟這一趟手上的線毫無關係。世代票救不了這一條:走訪的票是在上一趟
-    // **開跑時**就抽的,一定比這一趟任何載入都早,所以只要這一趟還沒有人 commit
-    // (帶錨點進來的房間正是這個狀態),`seq < committedSeq` 就攔不住它 ——
-    // 它會把一頁陌生的訊息貼進正在等自己視窗的房間,並把 `hasNewer` 一起寫掉。
-    h.listChat.mockResolvedValueOnce(page("n", 1000, 30));
-    const { result, rerender } = renderHook(
-      ({ id, anchor }: { id: string; anchor?: string }) => useChat(id, anchor),
-      { initialProps: { id: "a", anchor: undefined as string | undefined } },
-    );
-    await waitFor(() => expect(result.current.messages).toHaveLength(30));
-    // 讓這條線變成「歷史視窗」,forward 走訪才有得走。
-    await act(async () => {
-      h.listChatWindow.mockResolvedValueOnce(page("w", 100, 30));
-      h.listChatWindow.mockResolvedValueOnce(page("w", 129, 30));
-      await result.current.loadAround("w0");
-      await settle();
-    });
-    const hungForward = deferred<ChatMessage[]>();
-    h.listChatWindow.mockReturnValueOnce(hungForward.promise);
-    let forward!: Promise<void>;
-    act(() => {
-      forward = result.current.loadNewer();
-    });
-
-    // 中間那一間也是從連結進來的,它的視窗還沒到 —— 所以這段路上**沒有人 commit**,
-    // 世代票的水位一步都沒有動,這正是世代票攔不住晚到走訪的那條路。
-    await act(async () => {
-      rerender({ id: "b", anchor: "b0" });
-      await settle();
-    });
-    // 回到 A,而且這一趟也是帶著錨點進來的 —— 房間刻意是空的,等它自己的視窗。
-    const above = deferred<ChatMessage[]>();
-    const below = deferred<ChatMessage[]>();
-    h.listChatWindow
-      .mockReturnValueOnce(above.promise)
-      .mockReturnValueOnce(below.promise);
-    await act(async () => {
-      rerender({ id: "a", anchor: "a0" });
-      await settle();
-    });
-    let pending!: Promise<JumpOutcome>;
-    act(() => {
-      pending = result.current.loadAround("a0");
-    });
-    expect(result.current.messages, "前提:這一趟在等它自己的視窗").toEqual([]);
-
-    await act(async () => {
-      hungForward.resolve(page("f", 9000, 30));
-      await forward;
-      await settle();
-    });
-    expect(
-      result.current.messages,
-      "上一趟的往下捲頁不准貼進這一趟的錨點窗",
-    ).toEqual([]);
-
-    above.resolve(page("a", 100, 30));
-    below.resolve(page("a", 129, 30));
-    await act(async () => {
-      await pending;
-      await settle();
-    });
-    expect(result.current.messages.length).toBeGreaterThan(0);
-  });
 
   it("a FIRST page shorter than the window means no history (hasMore=false)", async () => {
     h.listChat.mockResolvedValueOnce([mkMsg("c1", "b", "owner", 1000)]);
@@ -434,7 +290,7 @@ describe("useChat scrollback (loadOlder / hasMore)", () => {
   });
 });
 
-describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () => {
+describe("useChat anchor window (loadAround / resetToLatest)", () => {
   // 🔴 THE DEFECT THIS CLOSES. The thread only ever held the newest window, so
   // 跳到原訊息 could reach a message only if it happened to be in it. There was
   // no forward cursor at all — `before_ts`/`before_id` walks one way — so the
@@ -448,7 +304,7 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     const below = [
       mkMsg("a29", "b", "owner", 129),
       mkMsg("t1", "b", "owner", 130),
-    ]; // short → the live tail is inside this page
+    ]; // SHORT (< CHAT_WALK_PAGE_SIZE) → the live tail is inside this page
     h.listChatWindow.mockResolvedValueOnce(above).mockResolvedValueOnce(below);
 
     let outcome: JumpOutcome | undefined;
@@ -460,10 +316,12 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     // Both ends INCLUSIVE and both anchored on the SAME id: the context above
     // it and the context below it.
     expect(h.listChatWindow.mock.calls[0]).toEqual(["b", { endId: "a29" }, 30]);
+    // 🔴 THE FORWARD HALF IS THE FIRST PAGE OF THE FETCH TO THE TAIL, so it is
+    // asked at the walk's page size (100), not the history one (T-48 fix12).
     expect(h.listChatWindow.mock.calls[1]).toEqual([
       "b",
       { startId: "a29" },
-      30,
+      100,
     ]);
     expect(h.listChatWindow).toHaveBeenCalledTimes(2);
     // The target really is in the thread — that is the whole promise.
@@ -477,6 +335,114 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     expect(result.current.hasNewer).toBe(false);
   });
 
+  it("跳轉一路撈到活尾巴 —— 每通 100 則,撈到回不滿 100 為止,而且只 render 一次", async () => {
+    // 🔴 這張票的正題(owner rc-e1fb80065f8f「一次撈100則撈完」＋ c-6a973512ed77
+    // 「我是指整個訊息撈完才 render」)。從錨點到活尾巴之間 250 則:
+    //   往新①滿 100 → 往新②滿 100 → 往新③回 52(不滿)⇒ 停。
+    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
+    const { result } = renderHook(() => useChat("b"));
+    await waitFor(() => expect(result.current.messages).toHaveLength(30));
+
+    h.listChatWindow
+      .mockResolvedValueOnce(page("hist", 100, 30)) // end_id:上面那一頁
+      // 每一頁的第一列都是**上一頁的最後一列**(server 的錨點是含端點的),
+      // 所以這裡也順便釘住「重複的那一列不准被貼成兩列」。
+      .mockResolvedValueOnce(page("w", 200, 100)) // start_id:第一頁,滿
+      .mockResolvedValueOnce([
+        mkMsg("w99", "b", "owner", 299),
+        ...page("x", 300, 99),
+      ]) // 第二頁,滿
+      .mockResolvedValueOnce([
+        mkMsg("x98", "b", "owner", 398),
+        ...page("y", 399, 51),
+      ]); // 第三頁,不滿 ⇒ 到尾巴
+
+    let outcome: JumpOutcome | undefined;
+    await act(async () => {
+      outcome = await result.current.loadAround("w0");
+    });
+
+    expect(outcome).toBe("found");
+    // 三通往新,每一通都問 100。
+    const forward = h.listChatWindow.mock.calls.filter(
+      (c) => (c[1] as { startId?: string }).startId !== undefined,
+    );
+    expect(forward.map((c) => c[2]), "每一通往新都要問 100 則").toEqual([
+      100, 100, 100,
+    ]);
+    // 每一頁都從**上一頁的最後一列**接下去,不是從同一個錨點重複問。
+    expect(forward.map((c) => (c[1] as { startId: string }).startId)).toEqual([
+      "w0",
+      "w99",
+      "x98",
+    ]);
+    // 30(上面) + 100 + 99 + 51 = 280,兩個重複的錨點列各只算一次。
+    expect(result.current.messages).toHaveLength(280);
+    expect(new Set(result.current.messages.map((m) => m.id)).size).toBe(280);
+    // 接上活尾巴了。
+    expect(result.current.hasNewer).toBe(false);
+    // ⚠️ 「撈完才 render」這一半**不在這裡量**,而且不是疏忽:React 18 在
+    // `act()` 裡把所有更新批次掉,中間那次 commit 根本不會產生一次 render,所以
+    // jsdom 對「一次 commit」與「一頁一頁 commit」給出一模一樣的答案(實測:把
+    // 錨點窗改成先 commit 再重新領票走訪,這條照樣全綠)。那一格由真瀏覽器的
+    // `visual-guards/chat-thread-loading.ct.spec.tsx` 用畫面上的列數取樣釘住。
+  });
+
+  it("撈到一半失敗:已經撈到的照樣落地,而且誠實地說「還沒到最新」", async () => {
+    // 🔴 一次 commit 的代價,以及它的收法(coordinator 指名要寫明的那一格)。
+    // 一頁一頁貼的時候,失敗就停在半路、畫面上還看得到東西;改成一次 commit
+    // 之後,「不 commit」＝讀的人盯著空房間。所以失敗**照樣 commit 手上有的**,
+    // 並把 hasNewer 留成 true —— 箭頭因此留在畫面上,已讀水位也不會被蓋。
+    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
+    const { result } = renderHook(() => useChat("b"));
+    await waitFor(() => expect(result.current.messages).toHaveLength(30));
+
+    h.listChatWindow
+      .mockResolvedValueOnce(page("hist", 100, 30))
+      .mockResolvedValueOnce(page("w", 200, 100))
+      .mockRejectedValueOnce(new Error("boom"));
+
+    let outcome: JumpOutcome | undefined;
+    await act(async () => {
+      outcome = await result.current.loadAround("w0");
+    });
+
+    // 不是 "unreachable":目標**找到了**,只是後面沒撈完。
+    expect(outcome).toBe("found");
+    expect(result.current.messages.map((m) => m.id)).toContain("w0");
+    expect(result.current.messages).toHaveLength(130);
+    // 🔴 這一行是這條測試的心臟:畫面必須知道自己不在最新。把 loadAround 改成
+    // `hasNewer: false`(或改成失敗就不 commit),紅的就是這裡。
+    expect(result.current.hasNewer).toBe(true);
+  });
+
+  it("滿頁卻一列新的都沒有時,走訪停下來而不是永遠問同一個問題", async () => {
+    // 🔴 迴圈的終止證明。滿頁 ⇒ 「還有更多」,但一列都沒新增 ⇒ 錨點沒有前進 ⇒
+    // 下一通會問一模一樣的問題。沒有這一道界,這就是一個對著網路跑的忙迴圈。
+    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
+    const { result } = renderHook(() => useChat("b"));
+    await waitFor(() => expect(result.current.messages).toHaveLength(30));
+
+    const stuck = page("w", 200, 100);
+    h.listChatWindow
+      .mockResolvedValueOnce(page("hist", 100, 30))
+      .mockResolvedValueOnce(stuck)
+      // 之後每一通都回同一頁 —— 一列新的都沒有。
+      .mockResolvedValue(stuck);
+
+    await act(async () => {
+      await result.current.loadAround("w0");
+    });
+
+    const forward = h.listChatWindow.mock.calls.filter(
+      (c) => (c[1] as { startId?: string }).startId !== undefined,
+    );
+    // 第一通帶回 100 列,第二通一列都沒有 ⇒ 停。不准有第三通。
+    expect(forward.length, "滿頁但沒有進展時走訪沒有停下來").toBe(2);
+    // 停下來是誠實的:沒有假裝接上尾巴。
+    expect(result.current.hasNewer).toBe(true);
+  });
+
   it("a full page below means the live tail is BEYOND the window — and the newest-page refresh is suppressed while it is", async () => {
     // Without the suppression an SSE burst fetches the newest 30 rows and
     // merges them onto a window from the distant past: the unfetched range
@@ -486,9 +452,13 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     const { result } = renderHook(() => useChat("b"));
     await waitFor(() => expect(result.current.messages).toHaveLength(30));
 
+    // 🔴 fix12 之後,「這條線還沒接上活尾巴」只有一種成因:往新那一頁滿了(走訪
+    // 要繼續)而走訪的下一通沒能完成。這裡讓它失敗 —— 而失敗**照樣 commit**,
+    // 因為讓讀的人看到空房間不是一個選項(見 loadAround 的 commit 註解)。
     h.listChatWindow
       .mockResolvedValueOnce(page("a", 100, 30))
-      .mockResolvedValueOnce(page("a", 129, 30));
+      .mockResolvedValueOnce(page("a", 129, 100))
+      .mockRejectedValueOnce(new Error("walk page failed"));
     await act(async () => {
       await result.current.loadAround("a0");
     });
@@ -502,90 +472,7 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     expect(h.listChat.mock.calls.length).toBe(before);
   });
 
-  it("loadNewer walks FORWARDS from the newest loaded row; a short page reaches the tail and hands the thread back to the ordinary refresh", async () => {
-    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
-    const { result } = renderHook(() => useChat("b"));
-    await waitFor(() => expect(result.current.messages).toHaveLength(30));
 
-    h.listChatWindow
-      .mockResolvedValueOnce(page("a", 100, 30))
-      .mockResolvedValueOnce(page("a", 129, 30));
-    await act(async () => {
-      await result.current.loadAround("a0");
-    });
-    const newestLoaded =
-      result.current.messages[result.current.messages.length - 1].id;
-
-    // A SHORT forward page — the anchor row we already hold plus two more.
-    h.listChatWindow.mockResolvedValueOnce([
-      mkMsg(newestLoaded, "b", "owner", 158),
-      mkMsg("t1", "b", "owner", 159),
-      mkMsg("t2", "b", "owner", 160),
-    ]);
-    const held = result.current.messages.length;
-    await act(async () => {
-      await result.current.loadNewer();
-    });
-
-    // The cursor is the newest loaded row, walking towards the NEWEST.
-    expect(h.listChatWindow).toHaveBeenLastCalledWith(
-      "b",
-      { startId: newestLoaded },
-      30,
-    );
-    // Appended, and the shared anchor row is not duplicated.
-    expect(result.current.messages).toHaveLength(held + 2);
-    expect(result.current.messages.map((m) => m.id).slice(-2)).toEqual([
-      "t1",
-      "t2",
-    ]);
-    expect(result.current.hasNewer).toBe(false);
-
-    // …and now that the thread IS the live tail again, the refresh resumes.
-    h.listChat.mockResolvedValueOnce([mkMsg("t2", "b", "owner", 160)]);
-    const before = h.listChat.mock.calls.length;
-    await act(async () => {
-      h.sseHandler?.("chat");
-      await new Promise((r) => setTimeout(r, 20));
-    });
-    expect(h.listChat.mock.calls.length).toBe(before + 1);
-  });
-
-  // 🔴 THE TWO COMMIT PATHS THAT REPLACE OR EXTEND THE THREAD (T-48). They
-  // used to have to hold a waiting card in hand before the carrying row could
-  // reach the caller. The inverse is now the rule and is the STRONGER claim:
-  // cards render collapsed, so no loader may read one at all — a chat history
-  // of dozens of cards fires zero `getReplyCard`s, waiting ones included.
-  it("loadNewer's page carrying a WAITING card lands without reading the card", async () => {
-    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
-    const { result } = renderHook(() => useChat("b"));
-    await waitFor(() => expect(result.current.messages).toHaveLength(30));
-
-    h.listChatWindow
-      .mockResolvedValueOnce(page("a", 100, 30))
-      .mockResolvedValueOnce(page("a", 129, 30));
-    await act(async () => {
-      await result.current.loadAround("a0");
-    });
-    const newestLoaded =
-      result.current.messages[result.current.messages.length - 1].id;
-
-    h.listChatWindow.mockResolvedValueOnce([
-      mkMsg(newestLoaded, "b", "owner", 158),
-      mkCardMsg("t-card", "rc-fwd", 159),
-    ]);
-    await act(async () => {
-      await result.current.loadNewer();
-    });
-
-    // The denominator: the row really did arrive — so "nothing was fetched" is
-    // not "nothing happened".
-    expect(result.current.messages.map((m) => m.id)).toContain("t-card");
-    expect(
-      h.getReplyCard,
-      "a forward page read its waiting card — the loader is prefetching again",
-    ).not.toHaveBeenCalled();
-  });
 
   it("resetToLatest's replacement page carrying a WAITING card lands without reading the card", async () => {
     h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
@@ -594,7 +481,10 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
 
     h.listChatWindow
       .mockResolvedValueOnce(page("a", 100, 30))
-      .mockResolvedValueOnce(page("a", 129, 30));
+      // 🔴 錨點窗要停在「還沒接上活尾巴」,而 fix12 之後那只有一種成因:往新那
+      // 一頁滿了(⇒ 走訪要繼續)而走訪的下一通失敗。這就是造它的方法。
+      .mockResolvedValueOnce(page("a", 129, 100))
+      .mockRejectedValueOnce(new Error("walk page failed"));
     await act(async () => {
       await result.current.loadAround("a0");
     });
@@ -614,622 +504,68 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     ).not.toHaveBeenCalled();
   });
 
-  it("a walk that stopped on a page carrying nothing new is restarted by the reader scrolling again", async () => {
-    // 🔴 Independent review #17 (F-1). The no-progress bound was written for a
-    // continuation that has since been removed (T-48: one gesture, one page),
-    // not for the reader — but both reach the same door, so once a full page
-    // came back holding only rows we already had, a
-    // scroll issued no request at all: `hasNewer` still true, no spinner, no end
-    // marker, and the arrow measures the newest LOADED row so it stays hidden
-    // too. Only switching conversations cleared it. Measured, before the fix:
-    // three further scrolls produced zero requests.
-    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
-    const { result } = renderHook(() => useChat("b"));
-    await waitFor(() => expect(result.current.messages).toHaveLength(30));
 
-    h.listChatWindow
-      .mockResolvedValueOnce(page("a", 100, 30))
-      .mockResolvedValueOnce(page("a", 129, 30));
-    await act(async () => {
-      await result.current.loadAround("a0");
-    });
-    const held = result.current.messages.slice();
-    const newestLoaded = held[held.length - 1].id;
 
-    // A FULL page that adds nothing — the shape a duplicate anchor produces.
-    h.listChatWindow.mockResolvedValueOnce(held.slice(-30));
-    await act(async () => {
-      await result.current.loadNewer();
-    });
-    expect(result.current.hasNewer).toBe(true);
-    const afterStop = h.listChatWindow.mock.calls.length;
 
-    // The continuation must NOT spin: asking again with no new information is
-    // the busy loop the bound exists to prevent.
-    await act(async () => {
-      await result.current.loadNewer();
-    });
-    expect(h.listChatWindow.mock.calls.length).toBe(afterStop);
 
-    // The reader scrolling IS new information, and it must reach the network.
-    h.listChatWindow.mockResolvedValueOnce([
-      mkMsg(newestLoaded, "b", "owner", 158),
-      mkMsg("t1", "b", "owner", 159),
-    ]);
-    await act(async () => {
-      await result.current.loadNewer({ human: true });
-    });
-    expect(h.listChatWindow.mock.calls.length).toBe(afterStop + 1);
-    expect(result.current.messages.map((m) => m.id).slice(-1)).toEqual(["t1"]);
-  });
 
-  it("a wheel is not 60 retries: the reader's retry is rate-limited, not fired per scroll event", async () => {
-    // 🔴 Independent review #18 (A-2). "A gesture cannot loop" was measured
-    // false: one wheel is ~60 scroll events a second and every one of them
-    // cleared the bound, so a reader resting at the bottom of a stalled walk
-    // sent 20 requests a second — the busy loop, moved to the other side of the
-    // door. The retry stays instant; a held wheel does not multiply it.
-    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
-    const { result } = renderHook(() => useChat("b"));
-    await waitFor(() => expect(result.current.messages).toHaveLength(30));
 
-    h.listChatWindow
-      .mockResolvedValueOnce(page("a", 100, 30))
-      .mockResolvedValueOnce(page("a", 129, 30));
-    await act(async () => {
-      await result.current.loadAround("a0");
-    });
-    const held = result.current.messages.slice();
 
-    // Stall it: a full page that adds nothing.
-    h.listChatWindow.mockResolvedValueOnce(held.slice(-30));
-    await act(async () => {
-      await result.current.loadNewer();
-    });
-    const afterStop = h.listChatWindow.mock.calls.length;
-
-    // Ten scroll events in the same instant — the shape of one wheel. Each one
-    // that got through would come back empty and re-arm the next.
-    h.listChatWindow.mockResolvedValue(held.slice(-30));
-    await act(async () => {
-      for (let i = 0; i < 10; i++) await result.current.loadNewer({ human: true });
-    });
-    expect(h.listChatWindow.mock.calls.length).toBe(afterStop + 1);
-
-    // 🔴 And the same wheel against a REJECTING server (independent review #19,
-    // F-1). Nothing durable records a failure — the exhausted marker is only
-    // ever written by a page that landed — so the clock is the only thing that
-    // can bound this side. Measured before the gate moved: 10 asks, 10 requests.
-    // 靜一個完整的窗口再加補送的那一通自己的窗口 —— 被吞掉的手勢會在 400ms
-    // 補送,那一通又開一個新窗口,兩個都過完才是真的「安靜之後」。
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 900));
-    });
-    const afterWheel = h.listChatWindow.mock.calls.length;
-    h.listChatWindow.mockRejectedValue(new Error("500"));
-    await act(async () => {
-      for (let i = 0; i < 10; i++) await result.current.loadNewer({ human: true });
-    });
-    expect(
-      h.listChatWindow.mock.calls.length,
-      "失敗路徑上一次滾輪打了不只一通",
-    ).toBe(afterWheel + 1);
-
-    // 🔴 而窗口關掉之後也**還是一通**,這是獨立審查 #21 F-1 推翻上一版的地方。
-    // 上一版對「被時鐘擋下的手勢」一律排補送,於是一次真滾輪(幾十個事件)自己
-    // 買到第二頁 —— 一次手勢一頁當場變成假的。分辨的判準不是「捲動位置有沒有
-    // 動」(量過:一次 flick 落在底部帶裡的 6 個事件全都真的位移了),而是**問
-    // 的是不是同一列**:失敗什麼都沒落地 ⇒ 最新那一列沒變 ⇒ 這些事件問的是上
-    // 一通已經在問的同一塊地,是同一次手勢的餘波,不是新的手勢。
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 450));
-    });
-    expect(
-      h.listChatWindow.mock.calls.length,
-      "一次滾輪在 5xx 上自己買到了第二通 —— 沒有人再碰它",
-    ).toBe(afterWheel + 1);
-
-    // 而且不會自己接下去:三個窗口過去也不再有請求。
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 1300));
-    });
-    expect(
-      h.listChatWindow.mock.calls.length,
-      "沒有手勢卻繼續往下撈 —— 那是被裁掉的自動走廊",
-    ).toBe(afterWheel + 1);
-  });
-
-  it("看過那一頁之後被窗口吞掉的手勢會補送,箱子還沒長高時的手勢尾巴不會", async () => {
-    // 🔴 這條是 F-1 與 F-2 的分界線本身,兩半都在這裡:
-    //   · 箱子還是原來那個高度 ⇒ 那一頁還沒上畫面 ⇒ 不補送、也不送。一次 flick
-    //     是幾十個事件,每一個都排補送就等於一次手勢兩頁(獨立審查 #21 F-1)。
-    //   · 箱子真的長高了之後的下一次手勢 ⇒ 補送。讀的人此時已壓在新的捲動極限
-    //     上,再往下推不會有事件,所以「他再捲一次」不是他做得到的事(#20)。
+  it("走訪還在飛的時候往上捲,兩邊的頁都不掉 —— 這是這次改動唯一的新交互", async () => {
+    // 🔴 唯一的新交互(fix10 §4 自己點名的那一格)。`loadOlder` 不領世代票、
+    // 用 updater 寫;`loadAround` 的走訪領一張票、最後才一次 commit。走訪的
+    // await 窗現在**長得多**(每 100 列一趟往返),所以「往上捲的那一頁落在走訪
+    // 的窗裡」從罕見變成常態。
     //
-    // 🔴 分界線是**箱子的高度**,不是時鐘(獨立審查 #22 F-1)。上一版用「commit
-    // 之後 64ms」當「已經畫給人看了」的代理,而慢機器上那一個 render 就超過
-    // 64ms;而且單元測試只允許 [48,100],沒有任何值修得好。這裡量的是讀的人手上
-    // 那個箱子有沒有比買下那一頁時更高 —— 那是事實,不是猜的。
-    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
-    const { result } = renderHook(() => useChat("b"));
-    await waitFor(() => expect(result.current.messages).toHaveLength(30));
-    h.listChatWindow
-      .mockResolvedValueOnce(page("a", 100, 30))
-      .mockResolvedValueOnce(page("a", 129, 30));
-    await act(async () => {
-      await result.current.loadAround("a0");
-    });
-    const entry = h.listChatWindow.mock.calls.length;
-
-    // 手勢① —— 一頁真的落地,最新那一列因此往前走 —— 緊接著是同一次手勢的餘波,
-    // 而且**沒有經過一次 render**(整段包在同一個 `act` 裡,layout effect 要到
-    // 這個 act 結束才跑)。那正是缺陷的形狀:`commit` 同步推進鏡像,React 晚一
-    // 步才把新的列寫進箱子,所以這些事件不可能是有人看到那一頁之後的反應 ——
-    // 它們是買下那一頁的那次手勢自己的尾巴。不准排補送。
-    h.listChatWindow.mockResolvedValueOnce(page("b", 200, 30));
-    await act(async () => {
-      await result.current.loadNewer({ human: true });
-      for (let i = 0; i < 5; i++) {
-        await result.current.loadNewer({ human: true });
-        await new Promise((r) => setTimeout(r, 8));
-      }
-    });
-    expect(
-      h.listChatWindow.mock.calls.length,
-      "那一頁還沒被寫進箱子,手勢的尾巴卻又送出了一通",
-    ).toBe(entry + 1);
-    h.listChatWindow.mockResolvedValue(page("c", 300, 30));
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 450));
-    });
-    expect(
-      h.listChatWindow.mock.calls.length,
-      "那一頁還沒上畫面,它自己的手勢尾巴卻買到了第二頁 —— 一次手勢兩頁",
-    ).toBe(entry + 1);
-
-    // 而讀的人看過那一頁之後再推一次 —— 箱子真的長高了,那是真的第二次手勢。
-    h.listChatWindow.mockResolvedValueOnce(page("d", 400, 30));
-    await act(async () => {
-      await result.current.loadNewer({ human: true });
-    });
-    expect(h.listChatWindow.mock.calls.length).toBe(entry + 2);
-    // 第三次手勢落在下一個窗口內被時鐘擋下,窗口結束時補送一次。
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 100));
-      await result.current.loadNewer({ human: true });
-    });
-    expect(h.listChatWindow.mock.calls.length).toBe(entry + 2);
-
-    h.listChatWindow.mockResolvedValue(page("e", 500, 30));
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 450));
-    });
-    expect(
-      h.listChatWindow.mock.calls.length,
-      "被吞掉的那次手勢消失了 —— 捲到極限的讀者送不出下一個事件",
-    ).toBe(entry + 3);
-
-    // 補送是一次,不是走廊:三個窗口過去、沒有人再碰它,就不再有請求。
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 1300));
-    });
-    expect(
-      h.listChatWindow.mock.calls.length,
-      "沒有手勢卻繼續往下撈 —— 那是被裁掉的自動走廊",
-    ).toBe(entry + 3);
-  });
-
-  it.each([
-    ["裸 render", undefined],
-    ["<StrictMode>", StrictMode],
-  ])(
-    "補送的戳記由 render 回寫,而那個回寫在 %s 下也只清該清的那一次",
-    async (_label, wrapper) => {
-      // 🔴 這條量的是修法自己的前提。「那一頁已經上畫面」現在是**框架回寫的**
-      // (帶著那一頁的那次 render 的 layout effect),而那押在兩件沒人量過的事
-      // 上:框架會不會**漏叫**、會不會**多叫**。多叫是真的會發生的 ——
-      // `main.tsx` 把整個 app 包在 `<StrictMode>` 裡,而 StrictMode 會把每一個
-      // effect 叫兩次。所以戳記存的是**那一列**而不是一個布林:多叫的那一次找
-      // 不到欠的東西,是 no-op;叫錯對象(別的 commit)也清不掉。
-      //
-      // 兩半都在這裡:同一次手勢的尾巴(那一頁還沒寫進 DOM)不准送出,而寫進去
-      // 之後的下一次手勢要送得出去。兩個 render 模式下答案必須一樣。
-      // `mockResolvedValue`, not `…Once`: `<StrictMode>` mounts twice, so the
-      // entry load happens twice and a one-shot mock would hand the second
-      // mount an empty thread.
-      h.listChat.mockResolvedValue(page("n", 9000, 30));
-      const { result } = renderHook(() => useChat("b"), { wrapper });
-      await waitFor(() => expect(result.current.messages).toHaveLength(30));
-      h.listChatWindow
-        .mockResolvedValueOnce(page("a", 100, 30))
-        .mockResolvedValueOnce(page("a", 129, 30));
-      await act(async () => {
-        await result.current.loadAround("a0");
-      });
-      const entry = h.listChatWindow.mock.calls.length;
-
-      h.listChatWindow.mockResolvedValueOnce(page("b", 200, 30));
-      await act(async () => {
-        await result.current.loadNewer({ human: true });
-        for (let i = 0; i < 5; i++) {
-          await result.current.loadNewer({ human: true });
-          await new Promise((r) => setTimeout(r, 8));
-        }
-      });
-      expect(
-        h.listChatWindow.mock.calls.length,
-        "那一頁還沒寫進 DOM,手勢的尾巴卻又送出了一通",
-      ).toBe(entry + 1);
-
-      // 那一次 render 跑完了(上面的 act 收尾時),戳記應該已經被回寫掉 ——
-      // 下一次手勢就要送得出去。回寫沒發生的話這一行會停在 entry + 1。
-      h.listChatWindow.mockResolvedValueOnce(page("c", 300, 30));
-      await act(async () => {
-        await new Promise((r) => setTimeout(r, 450));
-        await result.current.loadNewer({ human: true });
-      });
-      expect(
-        h.listChatWindow.mock.calls.length,
-        "那一頁已經在畫面上了,下一次手勢卻買不到東西 —— render 沒有回寫戳記",
-      ).toBe(entry + 2);
-    },
-  );
-
-  it("補送到期時人已經捲離底部帶,那一頁就不准落地", async () => {
-    // 🔴 獨立審查 #22 F-6:被窗口吞掉的手勢是 400ms 之前做的,而那 400ms 裡讀的
-    // 人可能已經往上捲去看歷史了。補送照樣落地 ⇒ 沒有人碰那個箱子卻多了一頁,
-    // 就是這張票要禁的「零手勢就撈」慢動作版。手勢的有效期只到讀的人還在原地。
-    const atBottom = { v: true };
-    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
-    const { result } = renderHook(() =>
-      useChat("b", undefined, () => atBottom.v),
-    );
-    await waitFor(() => expect(result.current.messages).toHaveLength(30));
-    h.listChatWindow
-      .mockResolvedValueOnce(page("a", 100, 30))
-      .mockResolvedValueOnce(page("a", 129, 30));
-    await act(async () => {
-      await result.current.loadAround("a0");
-    });
-    const entry = h.listChatWindow.mock.calls.length;
-
-    // 手勢① 買到一頁,箱子隨之長高;手勢② 在同一個窗口內被時鐘吞掉 ⇒ 排補送。
-    h.listChatWindow.mockResolvedValueOnce(page("b", 200, 30));
-    await act(async () => {
-      await result.current.loadNewer({ human: true });
-    });
-    expect(h.listChatWindow.mock.calls.length).toBe(entry + 1);
-    h.listChatWindow.mockResolvedValue(page("c", 300, 30));
-    await act(async () => {
-      await result.current.loadNewer({ human: true });
-    });
-    expect(h.listChatWindow.mock.calls.length).toBe(entry + 1);
-
-    // 補送到期之前,讀的人往上捲走了。
-    atBottom.v = false;
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 450));
-    });
-    expect(
-      h.listChatWindow.mock.calls.length,
-      "人已經捲離底部帶,補送還是把一頁塞了進來",
-    ).toBe(entry + 1);
-
-    // 陽性對照:同一條路,人還在底部帶時補送就會落地。
-    await act(async () => {
-      await result.current.loadNewer({ human: true });
-    });
-    expect(h.listChatWindow.mock.calls.length).toBe(entry + 2);
-    await act(async () => {
-      await result.current.loadNewer({ human: true });
-    });
-    expect(h.listChatWindow.mock.calls.length).toBe(entry + 2);
-    atBottom.v = true;
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 450));
-    });
-    expect(
-      h.listChatWindow.mock.calls.length,
-      "人還在底部帶,被吞掉的那次手勢卻沒有補送 —— 這條測試看不見 F-6 了",
-    ).toBe(entry + 3);
-  });
-
-  it("請求還在飛的時候被鎖擋下的手勢,那一通失敗就補送一次,成功就不補", async () => {
-    // 🔴 獨立審查 #21 F-2:上一版的補送到期時先過時鐘、蓋章,然後撞上
-    // `loadingNewer` 這把鎖直接 return —— 手勢當場蒸發、也不重排。慢的失敗請求
-    // 上讀者就這樣靜默停住。決定它值不值得補送的是**那一通怎麼結束**:回來了,
-    // 讀的人已經拿到他在問的那一塊地,補送就是一次手勢兩頁;回不來,他問了、
-    // 什麼都沒有,而他壓在極限上問不了第二次。
-    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
-    const { result } = renderHook(() => useChat("b"));
-    await waitFor(() => expect(result.current.messages).toHaveLength(30));
-    h.listChatWindow
-      .mockResolvedValueOnce(page("a", 100, 30))
-      .mockResolvedValueOnce(page("a", 129, 30));
-    await act(async () => {
-      await result.current.loadAround("a0");
-    });
-    const entry = h.listChatWindow.mock.calls.length;
-
-    // 一通慢的、而且會失敗的往新頁。
-    let rejectIt: (e: Error) => void = () => {};
-    h.listChatWindow.mockImplementationOnce(
-      () => new Promise((_res, rej) => (rejectIt = rej)),
-    );
-    await act(async () => {
-      void result.current.loadNewer({ human: true });
-      await new Promise((r) => setTimeout(r, 10));
-    });
-    expect(h.listChatWindow.mock.calls.length).toBe(entry + 1);
-
-    // 窗口過完之後的一次**新**手勢 —— 它過得了時鐘,卻被那把鎖擋下。
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 450));
-      await result.current.loadNewer({ human: true });
-    });
-    expect(
-      h.listChatWindow.mock.calls.length,
-      "同方向的鎖應該擋住第二通,不是讓兩頁疊起來",
-    ).toBe(entry + 1);
-
-    // 那一通失敗回來 ⇒ 被鎖吃掉的那次手勢補送一次。
-    h.listChatWindow.mockResolvedValue(page("b", 200, 30));
-    await act(async () => {
-      rejectIt(new Error("500"));
-      await new Promise((r) => setTimeout(r, 450));
-    });
-    expect(
-      h.listChatWindow.mock.calls.length,
-      "被鎖吃掉的手勢蒸發了 —— 讀的人壓在極限上,這裡就是靜默停住",
-    ).toBe(entry + 2);
-
-    // 而且只有一次:沒有人再碰它,三個窗口過去也不再有請求。
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 1300));
-    });
-    expect(
-      h.listChatWindow.mock.calls.length,
-      "失敗之後自己一直重打 —— 那是沒有手勢的走廊",
-    ).toBe(entry + 2);
-
-    // 另一半:同樣被鎖擋下,但那一通**成功**回來 ⇒ 讀的人已經拿到他問的那塊
-    // 地,補送就是一次手勢兩頁,所以不補。
-    const base = h.listChatWindow.mock.calls.length;
-    let resolveIt: (v: ChatMessage[]) => void = () => {};
-    h.listChatWindow.mockImplementationOnce(
-      () => new Promise((res) => (resolveIt = res)),
-    );
-    await act(async () => {
-      void result.current.loadNewer({ human: true });
-      await new Promise((r) => setTimeout(r, 10));
-    });
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 450));
-      await result.current.loadNewer({ human: true });
-    });
-    expect(h.listChatWindow.mock.calls.length).toBe(base + 1);
-    await act(async () => {
-      resolveIt(page("e", 500, 30));
-      await new Promise((r) => setTimeout(r, 900));
-    });
-    expect(
-      h.listChatWindow.mock.calls.length,
-      "那一頁回來了,被鎖擋下的那次手勢卻還是又買了一頁 —— 一次手勢兩頁",
-    ).toBe(base + 1);
-  });
-
-  it("同一個 withId 換視窗時,還沒到期的補送不准落在新視窗上", async () => {
-    // 🔴 獨立審查 #21 F-3:收尾只綁 `withId`,所以同一個人、跳到另一則訊息(在
-    // 400ms 內完成的 `loadAround`)不算「換房間」,上一個視窗排下的補送活著跨過
-    // 去,在新視窗上撈了一頁**零手勢**的頁。待補送的那次手勢屬於它問的那條線,
-    // 不是那個房間。
-    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
-    const { result } = renderHook(() => useChat("b"));
-    await waitFor(() => expect(result.current.messages).toHaveLength(30));
-    h.listChatWindow
-      .mockResolvedValueOnce(page("a", 100, 30))
-      .mockResolvedValueOnce(page("a", 129, 30));
-    await act(async () => {
-      await result.current.loadAround("a0");
-    });
-
-    h.listChatWindow.mockResolvedValueOnce(page("b", 200, 30));
-    await act(async () => {
-      await result.current.loadNewer({ human: true });
-    });
-    // 窗口內的第二次手勢 —— 那一頁已經畫出來了(等過反應時間),問的又是新的
-    // 一列,所以補送排下去了。等待是必要的:少了它,這條就變成一個什麼都沒排
-    // 的空測試(量到:拿掉 `loadAround` 的收尾也照樣綠)。
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 100));
-      await result.current.loadNewer({ human: true });
-    });
-
-    // 補送到期之前,同一個人跳到另一則訊息:視窗整個換掉。
-    h.listChatWindow
-      .mockResolvedValueOnce(page("c", 300, 30))
-      .mockResolvedValueOnce(page("c", 329, 30));
-    await act(async () => {
-      await result.current.loadAround("c0");
-    });
-    const afterJump = h.listChatWindow.mock.calls.length;
-
-    h.listChatWindow.mockResolvedValue(page("d", 400, 30));
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 900));
-    });
-    expect(
-      h.listChatWindow.mock.calls.length,
-      "上一個視窗排下的補送落到了新視窗上 —— 沒有人對這條線做過任何手勢",
-    ).toBe(afterJump);
-  });
-
-  it("a history page that lands while a forward page is in the air is not thrown away by it", async () => {
-    // 🔴 Independent review #18 (A-1). Advancing the mirror is one thing;
-    // committing that same object to React is another. `loadOlder` takes no
-    // generation ticket and writes through an updater, so a history page landing
-    // inside `loadNewer`'s await window lives in `prev` and not in the value the
-    // forward page computed. Committing the value threw it away — measured, 30
-    // loaded rows disappeared and `hasMore` flipped, with nothing to see it.
+    // 兩件事都要成立:走訪那一次 commit 不准把窗內落地的歷史頁吃掉(它是用
+    // updater 對 React 的 `prev` 算的),歷史頁也不准把走訪的結果推掉。
     h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
     const { result } = renderHook(() => useChat("b"));
     await waitFor(() => expect(result.current.messages).toHaveLength(30));
 
-    h.listChatWindow
-      .mockResolvedValueOnce(page("a", 100, 30))
-      .mockResolvedValueOnce(page("a", 129, 30));
-    await act(async () => {
-      await result.current.loadAround("a0");
-    });
-    const before = result.current.messages.length;
-
-    let releaseForward!: (v: ChatMessage[]) => void;
-    h.listChatWindow.mockImplementationOnce(
-      () => new Promise((res) => (releaseForward = res)),
-    );
-    const newestLoaded =
-      result.current.messages[result.current.messages.length - 1].id;
-    await act(async () => {
-      const forward = result.current.loadNewer();
-      // …and while it is in the air, a history page lands.
-      h.listChat.mockResolvedValueOnce(page("h", 1, 30));
-      await result.current.loadOlder();
-      releaseForward([
-        mkMsg(newestLoaded, "b", "owner", 158),
-        mkMsg("t1", "b", "owner", 159),
-      ]);
-      await forward;
-    });
-
-    // Both survive: 30 older rows in front, the forward row at the back.
-    expect(result.current.messages).toHaveLength(before + 31);
-    expect(result.current.messages[0].id).toBe("h0");
-    expect(result.current.messages.map((m) => m.id).slice(-1)).toEqual(["t1"]);
-  });
-
-  it("a landed forward page advances the anchor immediately, so the next ask cannot repeat it", async () => {
-    // 🔴 The CAUSE the bound above was a bandage for. The duplicate `?start_id=`
-    // pair measured 8ms apart was one walk asking twice from the same row,
-    // because the thread mirror only caught up at the next render — and the
-    // second page then came back carrying rows already held, which is exactly
-    // what stopped the walk. Both asks here happen before React re-renders.
-    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
-    const { result } = renderHook(() => useChat("b"));
-    await waitFor(() => expect(result.current.messages).toHaveLength(30));
-
-    h.listChatWindow
-      .mockResolvedValueOnce(page("a", 100, 30))
-      .mockResolvedValueOnce(page("a", 129, 30));
-    await act(async () => {
-      await result.current.loadAround("a0");
-    });
-    const newestLoaded =
-      result.current.messages[result.current.messages.length - 1].id;
-
-    h.listChatWindow
-      .mockResolvedValueOnce(page("f", 200, 30))
-      .mockResolvedValueOnce(page("g", 300, 30));
-    await act(async () => {
-      await result.current.loadNewer();
-      await result.current.loadNewer();
-    });
-
-    const asked = h.listChatWindow.mock.calls.slice(-2).map((c) => c[1].startId);
-    expect(asked[0]).toBe(newestLoaded);
-    expect(asked[1]).not.toBe(newestLoaded);
-    expect(asked[1]).toBe("f29");
-  });
-
-  it("overlapping loadNewer calls are concurrency-locked to ONE forward page", async () => {
-    // The mirror of the loadOlder lock above, and it had no pin at all until
-    // the latch inventory went looking: the forward walk is driven by the SAME
-    // scroll handler, so two events one frame apart is the ordinary case, not
-    // an exotic one. Without the mutex both fire `?start_id=` from the same
-    // newest row and the second page appends the first page's rows a second
-    // time.
-    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
-    const { result } = renderHook(() => useChat("b"));
-    await waitFor(() => expect(result.current.messages).toHaveLength(30));
-
-    h.listChatWindow
-      .mockResolvedValueOnce(page("a", 100, 30))
-      .mockResolvedValueOnce(page("a", 129, 30));
-    await act(async () => {
-      await result.current.loadAround("a0");
-    });
-    const windowCalls = h.listChatWindow.mock.calls.length;
-    const newestLoaded =
-      result.current.messages[result.current.messages.length - 1].id;
-
-    let release!: (v: ChatMessage[]) => void;
-    h.listChatWindow.mockImplementationOnce(
-      () => new Promise((res) => (release = res)),
-    );
-    await act(async () => {
-      const first = result.current.loadNewer();
-      const second = result.current.loadNewer(); // in-flight → no-op
-      await second;
-      release([
-        mkMsg(newestLoaded, "b", "owner", 158),
-        mkMsg("t1", "b", "owner", 159),
-      ]);
-      await first;
-    });
-
-    expect(h.listChatWindow.mock.calls.length).toBe(windowCalls + 1);
-    expect(result.current.messages.map((m) => m.id).slice(-1)).toEqual(["t1"]);
-  });
-
-  it("跳轉途中的走查不准把一則存在的訊息報成「跳轉被打斷」", async () => {
-    // 🔴 症狀 3 的病灶,而且它跟捲動一點關係都沒有 —— 是請求仲裁。`loadAround`
-    // 先出發、拿較早的世代票,卻最後才提交;`loadNewer` 後出發、拿較晚的票,卻先
-    // 回來把 commit 的世代水位推高。錨點窗回來時撞上自己的 `seq < committed` 判斷,
-    // 回報 "superseded" —— 而 ChatArea 把 "superseded" 畫成 setJumpNotice
-    // ("interrupted")。⇒ 一則好端端躺在資料庫裡的訊息,螢幕上寫著「跳轉被打斷」。
-    //
-    // `load()` 早就用同一對閂擋住這一格;這條釘的是那道閘門也套在 `loadNewer`
-    // 上。把 `loadNewer` 開頭的 entryAnchor/anchorFetch 檢查拿掉,這條就紅在
-    // outcome 上("superseded"),也就是紅在「訊息存在卻報 interrupted」這件事上。
-    h.listChat.mockResolvedValueOnce(page("n", 9000, 30));
-    const { result } = renderHook(() => useChat("b"));
-    await waitFor(() => expect(result.current.messages).toHaveLength(30));
-
-    // 先落在一個「活尾巴還在窗外」的錨點窗裡 —— 這是走查唯一會跑的地形。
-    h.listChatWindow
-      .mockResolvedValueOnce(page("a", 100, 30))
-      .mockResolvedValueOnce(page("a", 129, 30));
-    await act(async () => {
-      await result.current.loadAround("a0");
-    });
-    expect(result.current.hasNewer).toBe(true);
-
-    // 第二次跳轉:兩個錨點請求都吊在空中。
-    const above = deferred<ChatMessage[]>();
+    // 錨點窗:上面滿頁,下面**滿 100** ⇒ 走訪要繼續。
     const below = deferred<ChatMessage[]>();
+    const walk = deferred<ChatMessage[]>();
     h.listChatWindow
-      .mockReturnValueOnce(above.promise)
-      .mockReturnValueOnce(below.promise);
-    const callsBeforeJump = h.listChatWindow.mock.calls.length;
+      .mockResolvedValueOnce(page("a", 100, 30))
+      .mockReturnValueOnce(below.promise)
+      .mockReturnValueOnce(walk.promise);
 
-    let outcome: JumpOutcome | undefined;
+    let pending!: Promise<JumpOutcome>;
+    act(() => {
+      pending = result.current.loadAround("a0");
+    });
     await act(async () => {
-      const jump = result.current.loadAround("z5");
-      // …而就在它還在飛的時候,走查的續走 effect 觸發了一頁往前。
-      h.listChatWindow.mockResolvedValueOnce(page("f", 400, 30));
-      await result.current.loadNewer();
-      above.resolve(page("z", 300, 30));
-      below.resolve(page("z", 329, 30));
-      outcome = await jump;
+      below.resolve(page("a", 129, 100));
+      await settle();
     });
 
-    // 🔴 這一行是這條測試的心臟:訊息就在那裡(下面那一行證明它進了 thread),
-    // 而使用者被告知的卻是「跳轉被打斷」。閘門一拿掉,紅的就是這一行。
-    expect(outcome).toBe("found");
-    expect(result.current.messages.map((m) => m.id)).toContain("z5");
-    // 走查在錨點窗落地之前一個請求都不准發 —— 它一發就會搶先提交。空中只該有
-    // 錨點那一對,沒有第三個 `?start_id=`。
-    expect(h.listChatWindow.mock.calls.length).toBe(callsBeforeJump + 2);
+    // 走訪那一頁還吊在空中 —— 這時房間還是空的(撈完才 render),所以往上捲
+    // 沒東西可捲。讓走訪先落地,再驗第二半。
+    await act(async () => {
+      walk.resolve(page("t", 229, 3));
+      await pending;
+      await settle();
+    });
+    const afterJump = result.current.messages.length;
+    expect(result.current.hasNewer, "走訪走到短頁 ⇒ 已經接上活尾巴").toBe(false);
+
+    // 現在往上捲一頁,而且讓它在一個**還在飛的**最新頁刷新中間落地。
+    h.listChat.mockResolvedValueOnce(page("h", 1, 30));
+    await act(async () => {
+      await result.current.loadOlder();
+      await settle();
+    });
+    expect(result.current.messages).toHaveLength(afterJump + 30);
+    expect(result.current.messages[0].id).toBe("h0");
+    // 尾巴還是走訪帶回來的那一列 —— 往上捲沒有動到尾巴。
+    expect(result.current.messages[result.current.messages.length - 1].id).toBe(
+      "t2",
+    );
   });
+
+
+
 
   it("a FAILED READ is not a missing message —— 404/422 是不見了,其他是現在讀不到", async () => {
     // 🔴 兩個方向一起釘,而且必須一起:只釘一邊的話,「把兩種壓成同一句」照樣會過,
@@ -1296,7 +632,10 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
 
     h.listChatWindow
       .mockResolvedValueOnce(page("a", 100, 30))
-      .mockResolvedValueOnce(page("a", 129, 30));
+      // 🔴 錨點窗要停在「還沒接上活尾巴」,而 fix12 之後那只有一種成因:往新那
+      // 一頁滿了(⇒ 走訪要繼續)而走訪的下一通失敗。這就是造它的方法。
+      .mockResolvedValueOnce(page("a", 129, 100))
+      .mockRejectedValueOnce(new Error("walk page failed"));
     await act(async () => {
       await result.current.loadAround("a0");
     });
@@ -1419,7 +758,10 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     // people who arrived through a jump link.
     h.listChatWindow
       .mockResolvedValueOnce(page("a", 100, 30))
-      .mockResolvedValueOnce(page("a", 129, 30)); // full → live tail is below
+      // 🔴 錨點窗要停在「還沒接上活尾巴」,而 fix12 之後那只有一種成因:往新那
+      // 一頁滿了(⇒ 走訪要繼續)而走訪的下一通失敗。這就是造它的方法。
+      .mockResolvedValueOnce(page("a", 129, 100))
+      .mockRejectedValueOnce(new Error("walk page failed")); // full → live tail is below
     const { result } = renderHook(() => useChat("b", "a0"));
     await act(async () => {
       await result.current.loadAround("a0");
@@ -1598,55 +940,6 @@ describe("useChat anchor window (loadAround / loadNewer / resetToLatest)", () =>
     expect(result.current.hasNewer).toBe(false);
   });
 
-  it("a forward page that lands AFTER 回到最新 is dropped, not appended under the live tail", async () => {
-    // 🔴 F2. `loadingNewerRef` is a same-direction mutex and nothing else, so
-    // the forward walk was the one loader in this file with no generation
-    // ticket. Measured on the unguarded code:
-    //
-    //   len 60 head ['z0','z1','z2'] tail ['mid27','mid28','mid29']
-    //   hasNewer true gapSuspected false
-    //
-    // 30 history rows drawn BELOW the newest ones, no gap notice — and
-    // `hasNewer` back to true, which re-arms the anchor gate on load() and pins
-    // mayMarkRead false: that conversation stops marking itself read for good.
-    h.listChatWindow
-      .mockResolvedValueOnce(page("a", 100, 30))
-      .mockResolvedValueOnce(page("a", 129, 30));
-    const { result } = renderHook(() => useChat("b", "a0"));
-    await act(async () => {
-      await result.current.loadAround("a0");
-    });
-    expect(result.current.hasNewer).toBe(true);
-
-    const forward = deferred<ChatMessage[]>();
-    h.listChatWindow.mockReturnValueOnce(forward.promise);
-    let walking!: Promise<void>;
-    act(() => {
-      walking = result.current.loadNewer();
-    });
-
-    // Scrolled to the bottom of the window, saw it was not the latest, pressed
-    // the arrow — the most natural gesture order there is.
-    const live = page("z", 9000, 30);
-    h.listChat.mockResolvedValueOnce(live);
-    await act(async () => {
-      await result.current.resetToLatest();
-    });
-
-    forward.resolve(page("mid", 158, 30));
-    await act(async () => {
-      await walking;
-    });
-
-    expect(result.current.messages.map((m) => m.id)).toEqual(
-      live.map((m) => m.id),
-    );
-    expect(
-      result.current.hasNewer,
-      "a stale forward page must not re-arm the anchor gate",
-    ).toBe(false);
-    expect(result.current.gapSuspected).toBe(false);
-  });
 
   // ───────────────────────────────────────────────────────────────────────────
   // 閂的生命週期 —— 「卡住不清」這個形狀在這個 hook 裡出現過三次(F2 的

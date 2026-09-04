@@ -110,44 +110,23 @@ hash route #office/chat/<id>/msg/<msgId> 只做一次定位與 highlight。產�
 
 `loadAround` 回的是**三態**（`JumpOutcome`），不是 bool：`found` / `missing`（404、失敗、或**存在但屬於別條對話**——server 解析錨點不套 participant 過濾，那種 id 兩個請求都回 200＋空陣列，採用它會把聊天室寫成空白）/ `superseded`（被更晚的載入超車，**訊息還在**）。**不要把 superseded 併回 missing**：那會對著一則還在的訊息說「可能已經被清掉了」，而且跳轉閂已經用掉，沒有重試也沒有按鈕。三態各有自己的畫面語言（`chat.jumpTargetMissing` / `chat.jumpTargetInterrupted`），重排有上限。
 
-錨點視窗期間 `hasNewer=true`，這時**不標已讀**（`mayMarkRead`）、**不跑週期性/SSE 的最新頁載入**（把活尾巴併進歷史視窗會造出一段沒人撈過卻被畫成相鄰的縫）。往新的那條鏈是 **一次手勢一頁**（T-48，owner `rc-d2e1b69edc66` ①，取代原本的 level-triggered 走廊）：捲到底由捲動事件撈**一頁**，貼上去就停，下一頁要讀的人**再捲一次**。判準只有「當下在不在底部」（`onMessagesScroll` 的 `nowNearBottom && hasNewer`），沒有方向判準、沒有 armed、沒有落地後重新評估的 effect。
+🔴 **跳轉是一路撈到活尾巴，而且撈完才 render（T-48 fix12，owner `rc-e1fb80065f8f`「可以直接在這票做，並且一次撈100則撈完」＋ `c-6a973512ed77`「我是指整個訊息撈完才 render」）。** `loadAround` 開完錨點窗之後，如果往新那一頁**滿了**（`CHAT_WALK_PAGE_SIZE = 100`，window 路徑的 `limit` 上限是 server 的 `chatWindowMaxLimit = 200`），就用 `fetchToLatest` 在**記憶體裡**一頁一頁往前收，直到某頁回不滿 100 為止，然後**一次** `commit`。畫面上沒有任何中間狀態。
 
-⚠️ **讓「一頁」為真的不是「拿掉那個 effect」，是「錨點視窗裡不 auto-follow」**：`hasNewer` 為真時，捲動位置反應器**不呼叫** `endRef.scrollIntoView()`，畫面就停在讀的人捲到的地方，剛貼上的那一頁整頁落在視野下方（實測 81/369 假版面：`scrollTop` 凍在 2304、`scrollHeight` 2673 → 5022、離底部 2349px），所以原地再捲一次什麼都不會發生，得真的往下讀完那一頁才換得到下一頁。**只拿掉 effect、留著 auto-follow 是無效的**：真瀏覽器裡 `scrollIntoView` **自己會送出一個捲動事件**，落回同一支 `nowNearBottom && hasNewer` ⇒ 走廊換個名字繼續跑（實測 Chromium 1280×720：一次手勢一路跑到活尾巴）。jsdom 的 `scrollIntoView` 是無事件的 no-op、每一個長度都是 0，**這一格單元測試看不見**，證人是 `visual-guards/chat-forward-walk.ct.spec.tsx`。不跟的條件是 `hasNewer`，**其他 auto-follow（活尾巴新訊息、自己剛送出、進房定位）一律不動**。
+⚠️ **這一段取代了先前的「一次手勢一頁」，而那一整套機關已經刪除**：`loadNewer` 的 `human` 參數、`HUMAN_RETRY_MIN_MS` 400ms 節流、被吞手勢的 trailing 補送、`pageUnseenIdRef` 視覺閘、`lastServedAnchorRef`、`blockedInFlightRef`、`forwardExhaustedRef`、`ChatArea` 的 `session.lastScrollTop` 方向判準與 `readerAtBottom` 探針，以及護欄 `visual-guards/chat-forward-walk.ct.spec.tsx`（含它的 story／fixtures）。**它們守的問題已經不存在**（沒有人在用手勢買頁），不要因為「這段註解寫得很仔細」就把它們搬回來。
 
-`useChat` 那邊留著兩道界，理由變了但仍然活著：`forwardExhaustedRef`「整頁都是已有列的那個錨點不再問第二次」＋ `human: true` 的 400ms 節流（`HUMAN_RETRY_MIN_MS`）。現在每一次 `loadNewer` 都帶 `human: true`，所以節流的意思是**每 400ms 最多一通往新的請求，成功或失敗都算** —— 擋的是一次滾輪的每秒約 60 個捲動事件（不節流實測每秒 20 個請求，獨立審查 #18 A-2），而不是擋讀的人。⚠️ **請求失敗也走這道界**：擋重打的不是 `forwardExhaustedRef`（那個 ref 只有成功那條路會寫，失敗時它是 null，兩道門都攔不住），所以節流必須是**時鐘**、無論結果都蓋章。位置講精確：它問在 `forwardExhaustedRef` 與 `loadingNewer` 那把鎖**之前**，但在「空 thread／`hasNewer` 為假」與兩道 anchor 閂之後 —— 不是「在最前面」。改回「只有成功才記」等於在 5xx 上讓一次滾輪照捲動事件的速率連打（實測：連送 10 個手勢 ⇒ 10 通，獨立審查 #19 F-1；現在同一個形狀量到 1 通）。⚠️ 這道界是**每 400ms 一通往新的請求**，不是「同一個錨點 400ms 一次」—— 後者是 `forwardExhaustedRef`，兩句不可互換。
+`fetchToLatest` 有**兩道停**，而且都不是「界」而是終止證明：短頁（＝到尾巴）；以及**滿頁卻一列新的都沒有**（server 在自我矛盾，錨點沒有前進 ⇒ 下一通會問一模一樣的問題 ⇒ 忙迴圈）。它**永不 reject**：某一頁失敗就把手上收到的照樣交出去。
 
-⚠️ **而被那道界擋下的手勢不是一律丟掉，也不是一律補送 —— 兩個方向各自壞過一次**（獨立審查 #20 與 #21）。
+🔴 **失敗照樣 commit，並且用 `hasNewer` 說實話。** 一次 commit 的代價是「不 commit ＝ 讀的人盯著空房間」，所以撈到一半失敗時仍然把手上有的貼上去，`hasNewer` 留 `true` —— 於是 `回到最新` 箭頭留在畫面上（唯一的出口，因為捲到極限的箱子連 scroll 事件都送不出來）、`load()` 繼續讓開、已讀水位繼續不准動。**`hasNewer` 因此變成例外狀態而不是常態，但它一行都不能刪。**
 
-一律丟掉會造出使用者卡死：手勢② 被吞掉時 `scrollTop` 已經壓在捲動極限上，而**瀏覽器只有在畫面真的移動時才送 scroll 事件**，所以「再捲一次」根本產生不了事件 —— 實測 Chromium：之後往下捲得到 0 個捲動事件，3 秒後仍然只有 1 頁。
+🔴 **已讀水位的守衛換人了，這是 fix12 自己造出來的風險。** 以前擋 mark-read 的是 `hasNewer`，而它成立是因為讓 `hasNewer` 變 false 的每一步都是讀的人親手捲出來的 ——「握得到活尾巴」和「看過活尾巴」剛好是同一件事。現在走訪自己撈完，`hasNewer` 落地就是 false 而讀的人還停在半年前那一則上，而 `ChatArea` 那支 mark-read effect **完全不看視窗位置**。所以守衛是 `ChatArea` 的 **`tailSeen`**（讀的人有沒有真的到過這條線的底部）：跳轉開始抓時設 false，**捲進底部帶／按下回到最新或預覽列／跳轉沒中而退回底部**三者之一才設回 true。`mayMarkRead = !hasNewer && !jumpPending && tailSeen`。⚠️ **送訊息不解除它** —— 停在歷史裡送一句話不代表看過中間那幾百則。釘在 `ChatArea.anchor-entry.test.tsx` 的「走訪把中間幾百則載進來,一則都不准被標成已讀」（真 ChatArea ＋ 真 useChat，量 `markChatRead` 的 ts）與 e2e `20_chat_jump_to_origin.spec.js`（量 server 端未讀數）。
 
-一律補送則讓「一次手勢一頁」當場變成假的：**真滾輪一次 flick 是幾十個捲動事件**（實測 Chromium：一次 flick 27 個事件，其中 6 個落在底部 80px 帶裡），第 2 個事件就落在窗口內、排了補送，於是沒有人再碰它就長出第二頁（e2e `tests/20_chat_jump_to_origin.spec.js` 量到 `Expected 61 / Received 80`）。
+錨點視窗期間（也就是走訪還沒完成、或走訪失敗停在半路）`hasNewer=true`，這時**不標已讀**、**不跑週期性/SSE 的最新頁載入**（把活尾巴併進歷史視窗會造出一段沒人撈過卻被畫成相鄰的縫），而且捲動位置反應器**不 auto-follow**（`if (!hasNewer) endRef.scrollIntoView()`）—— 不跟的條件是 `hasNewer`，**其他 auto-follow（活尾巴新訊息、自己剛送出、進房定位）一律不動**。
 
-分辨它們的判準**不是「捲動位置有沒有真的動」**——那條假設實測被推翻：一次 flick 落在底部帶裡的 6 個事件**全部**都真的位移了（9882→9932）。判準是**兩個條件同時成立**：
+🔴 **載入指示是一個狀態，不是兩個入口各一份（owner `c-de666642e77b`「不管是進聊天室，或點選元訊息都是這樣」＋ `c-d24ebd7f8d78`「照理說應該只有改一個地方吧？」）。** `useChat` 對外的 **`initialLoading`**＝「這條對話的第一次載入還沒 settle 且畫面上還沒有內容」，兩個門（`load()` 的 `.then`/`.catch`、`loadAround` 的 `finally`）寫**同一個** flag，`ChatArea` 只有**一處** render `<ChatThreadLoading />`。第三個入口不用再改任何一行。轉圈**延遲 150ms 才出現**（`CHAT_LOADING_DELAY_MS`）：快的時候完全不出現，因為閃一下比不出現更糟；那是**延遲**不是最短顯示時間，內容一到立刻消失。顏色全部走 theme token（`--color-border` / `--color-accent`），`prefers-reduced-motion` 換成脈動而不是靜止。護欄 `visual-guards/chat-thread-loading.ct.spec.tsx`（兩個入口 × 窄寬兩寬，加「一次落地」「快的時候不閃」）。
 
-1. **問的是不是新的一列**（`lastServedAnchorRef`）。失敗什麼都沒落地 ⇒ 最新那一列沒動 ⇒ 那些事件問的是上一通已經在問的同一塊地，是同一次手勢的餘波，不補送。⇒ 5xx 上一次 flick 只換到 **1 通**。
-2. **那一頁是不是已經寫進箱子了**（`pageUnseenRef`）。`commit` 是**同步**推進鏡像的，React 晚一步才把新的列寫進 DOM，所以有一道縫：最新那一列已經換了、螢幕上的箱子還是舊的矮的。落在那道縫裡的事件仍然是買下那一頁的那次手勢的尾巴，不是有人看到它之後的反應。
+📏 **成本量過了，數字在 `work/T-48-docs/fix11-render-cost.md`**（真 Chromium，附原始輸出）：`ChatArea` 沒有 virtualization，8,000 列一次載進畫面 0.58 秒 / 49 MB heap / 156k DOM 節點；**一頁一頁 commit 則是 12.4 秒**（二次式，因為每次 commit 都重跑整條）。這就是「撈完才 render」不只是偏好的原因。⚠️ 舊註解裡那句「8,000 則約兩分鐘、2.6 GB」**沒有任何產物支撐，而且重量之後不成立**，已經從 e2e spec 20 移除。
 
-   🔴 **這一條曾經是時鐘（`PAGE_SEEN_MIN_MS = 64`），而時鐘是猜的**（獨立審查 #22 F-1）。「commit 之後 64ms」只是「已經畫給人看了」的代理，慢機器上一個 render 就超過它；而且單元測試只允許 [48, 100] 這條窄帶，沒有任何值修得好。現在問的是**事件**：帶著那一頁的那次 render 的 layout effect 跑完，就是「寫進箱子了」——快機器慢機器同一條界，也不用任何常數。
-
-3. **這個 `scroll` 事件是不是手勢**（`ChatArea` 的 `lastScrollTop`）。內容變矮時瀏覽器會把 `scrollTop` **夾**回新的極限，並且為了那一夾送出一個 `scroll` 事件；那個事件天生落在底部帶裡，於是沒有人碰過箱子卻買到一頁。夾回去只會讓 `scrollTop` 變小，讀的人要更多只會讓它變大 —— 方向就是判準，不需要門檻值。
-
-   🟠 **而這一條有代價，代價是量過的（獨立審查 #23 F-4）**：吞掉那一夾之後讀的人**壓在捲動極限上**，往下推箱子不動、一個事件都不發（實測 Chromium：夾回去之後 5 次往下推得到 **0** 個事件）—— 於是下一頁要**兩個手勢**（先往上、再往下）才要得到，不是一個。這個交換是**故意選的**：夾不是手勢，不能買頁；而「多做一個手勢」救得回來，「白拿一頁」救不回來。釘在 `chat-forward-walk` 的「版面自己縮矮把讀的人夾回極限的那個事件,不准買到一頁」，動到它會紅。
-
-4. **補送到期時人還在不在底部帶**（`useChat` 的 `readerAtBottom` 探針，由 `ChatArea` 提供）。被吞掉的手勢是 400ms 之前做的，那段時間裡讀的人可能已經往上捲走了（獨立審查 #22 F-6）。
-
-另外，被 **`loadingNewer` 那把鎖**（不是時鐘）擋下的手勢是第三種：上一版在補送到期時先過時鐘、蓋章，然後撞上這把鎖直接 `return`，**手勢當場蒸發也不重排**，慢的失敗請求上讀者就靜默停住（#21 F-2）。現在它的命運由**那一通怎麼結束**決定：回來了 ⇒ 讀的人已經拿到他問的那塊地，補送就是一次手勢兩頁，丟掉；回不來 ⇒ 補送一次。而且只有一次：再一次補送要再有一次被擋下的手勢，壓在極限上的讀者送不出，所以它會停。
-
-**補送必須仍然是手勢驅動**：只有真的被拒的 `human` 呼叫才會排那顆 timer，落地的一頁不會（錨點視窗裡不 auto-follow，它送不出捲動事件），沒有人動它就不會自己排下一顆 —— 這條線一旦鬆掉，被裁掉的自動走廊就換個名字回來了。
-
-**待補送的那次手勢屬於它問的那條線，不是那個房間**：只綁 `withId` 的收尾射程不夠，同一個人跳到另一則訊息（400ms 內完成的 `loadAround`）視窗整個換掉、`withId` 沒變，補送會活著跨過去在新視窗上撈一頁**零手勢**的頁（#21 F-3）。所以每一條「換掉『往新』是什麼意思」的路（`loadAround`／`resetToLatest`／換人／unmount）都要一起丟掉它。
-
-🔴 **上面 2 與 3 這兩條，一度只有 jsdom 撐著（獨立審查 #23 F-1）**：單獨拿掉 sight gate、單獨拿掉方向規則，`chat-forward-walk` 各 20 次一次都沒紅，兩個一起拿掉 40 次也沒紅 —— 因為第 4 條那顆探針先把事件擋掉了，**縱深防禦把護欄的解析度吃掉了**。補這兩條的辦法是把**別的機制從答案裡拿掉**：sight gate 那條把頁的延遲拉到 650ms（400ms 節流窗口因此不在答案裡）、用不動 `scrollTop` 的合成事件（方向規則不在答案裡）、走立即那條路（F-6 探針不在答案裡），並且用 MessageChannel 排到 React 的 render 之前 —— 一個 `setTimeout` 排不進那道縫（實測：2ms 輪詢讀到的 distance 已經是 5140，列早就寫進去了）。方向規則那條則在**還沒有任何手勢**的進場狀態做（節流、sight gate、F-6 全都不在答案裡）。現在的矩陣是對角的：sight gate mutant ⇒ 只有 sight gate 那條紅（20/20），方向 mutant ⇒ 只有方向那條紅（20/20），彼此不互相染紅。
-
-jsdom 看不見「捲到極限就不再送事件」，也看不見一次手勢是幾十個事件（長度全是 0、`scrollIntoView` 無事件），證人是 `visual-guards/chat-forward-walk.ct.spec.tsx` —— 而那支自己也曾經瞎過：它把「一次手勢」模擬成一個 `el.scrollTop = …`，而且 mock 在同一幀就把頁回來了，兩件事各自都足以讓它看不見上面那些。它現在用 `flick()`（動量式、**位移總量在第一步之前就定死，不每步重讀箱子**）＋ `PAGE_LATENCY_MS`，並且**斷言事件數本身**（`MIN_FLICK_EVENTS`），退化回一個事件就會紅。
-
-**而「哪一個腳本模型才忠實」這個爭論已經用真的輸入裝置結掉了（獨立審查 #23 加分項）**：`page.mouse.wheel` 走 Chromium 真的輸入管線，一次動量 flick 量到 **29 個真的捲動事件 / 442ms、買到 1 頁**，箱子在 flick 進行中從 10491 長到 15631px 而 `scrollTop` 停在 9948 —— 讀的人**沒有**被自己的動量帶到新的底部（距離 5140px）。那是固定預算模型的預測，不是每步重讀模型的。這條釘在「同一個手勢用真的滾輪做一次 —— 仍然只買一頁」。它仍然不是真的手指與觸控板，也沒有 overscroll bounce。
-
-回到活尾巴的路有兩條：往下捲 `loadNewer`（有世代票，晚到的一頁要丟掉，不然歷史會被接在最新後面而且 `hasNewer` 會翻回 true ⇒ 那條對話從此不標已讀）、或 `resetToLatest`（**取代**不是合併，並且負責解除 anchor 的載入 hold-off——不解除的話那間房從此不再刷新）。
+回到活尾巴的路只剩一條：**`resetToLatest`**（`回到最新` 箭頭／預覽列）——**取代**不是合併，並且負責解除 anchor 的載入 hold-off（不解除的話那間房從此不再刷新）。往下捲那條走訪已經沒有對外的把手了。
 
 回覆卡的 red badge 與聊天未讀互不清除；任務關聯卡共用卡身，只顯示任務標題與查看詳情連結。
 

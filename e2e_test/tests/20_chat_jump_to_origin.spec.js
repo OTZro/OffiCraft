@@ -9,10 +9,21 @@
 // 「跳對了、剛好那一則在最下面」長得一模一樣。目標只要比 30 則舊就必定跳錯。
 //
 // 修完是這樣：以訊息 id 開窗（GET /api/chat?end_id= 往舊、?start_id= 往新，
-// 兩端都含），兩頁撈回來就停在那一則上。**不是把整條歷史拉下來** —— owner 的
-// 另一半交辦是「要注意 performance issue…向上向下滑再另打 API 去撈」，所以這支
-// 也量「載進來的列數遠少於整條線」，以及往下捲一次會再撈**一頁**（一次手勢一頁，
-// 不是一路走回最新 —— f995f507 拿掉了那條走廊）。
+// 兩端都含），落在那一則上。
+//
+// 🔴 T-48 fix12（owner rc-e1fb80065f8f「可以直接在這票做，並且一次撈100則撈完」
+// ＋ c-6a973512ed77「我是指整個訊息撈完才 render」）：往新那條**不再是一次手勢
+// 一頁**。`loadAround` 從錨點一路撈到活尾巴，每通 100 則（`limit` 在 window 路徑
+// 本來就吃得到，上限 `chatWindowMaxLimit = 200`），**全部撈完才 render 一次**。
+// 所以這支原本那兩條斷言（「載進來的列數遠少於整條線」、「最新那一則不在 DOM」）
+// 現在是**反的**，並且已經改寫成它們的對立面。
+//
+// ⚠️ 那個反轉曾經來回過一次。f995f507 之前有一條「走廊」會自動走完，被拿掉時
+// 這裡留下一行註解說它「實測 8,000 則約兩分鐘、2.6 GB」。那個數字**沒有任何產物
+// 支撐**，而且重量之後不成立：8,000 則一次載進畫面實測 0.58 秒 / 49 MB heap /
+// 156k DOM 節點（work/T-48-docs/fix11-render-cost.md，真 Chromium，附原始輸出）。
+// 真正要小心的是**一頁一頁 commit** 的累積成本（8,000 則 12.4 秒），而 fix12 正是
+// 因此改成一次 commit。
 //
 // 真瀏覽器才量得到的部分：落點是不是真的在視窗裡（jsdom 沒有版面，
 // scrollIntoView 只能記錄有沒有被呼叫），以及窄寬兩寬下都要成立。
@@ -31,8 +42,6 @@ const {
 const TOTAL = 80; // ≫ 一頁 30，目標挑第 3 則:往舊往新都還有東西
 const TARGET_INDEX = 3;
 const PAD = '— 墊長一點，讓每一列都有高度，整條線真的會溢出視窗';
-// 「撈完一頁就停住了」的觀察期。理由寫在用到它的那一支裡。
-const STOP_SETTLE_MS = 3000;
 
 const WIDTHS = [
   { name: '窄 (390)', size: { width: 390, height: 780 } },
@@ -79,121 +88,26 @@ for (const w of WIDTHS) {
       // ③ 定位閃光落在那一列上，不是別人身上。
       await expect(target).toHaveClass(/chat__msg--located/);
 
-      // ④ 效能那一半：撈回來的是「那一則附近的一個視窗」，不是整條線。
-      const loaded = await thread.locator('.chat__msg').count();
-      expect(
-        loaded,
-        '跳到原訊息只該撈目標附近的視窗，不是整條歷史',
-      ).toBeLessThan(TOTAL);
-      // 最新那一則不在載入的視窗裡 —— 這正是舊實作會誤降落的地方。
+      // ④ 🔴 fix12 的正題，而且這一條以前是它的反面：一路撈到了活尾巴。
+      // 以前這裡斷言「最新那一則不在 DOM」（一次手勢一頁），現在必須在 ——
+      // 否則讀的人得自己走回去，而那條路已經沒有了。
       await expect(
         thread.locator(`[data-msg-id="${ids[TOTAL - 1]}"]`),
-      ).toHaveCount(0);
+        '跳到原訊息要一路撈到最新那一則',
+      ).toBeAttached();
+      const loaded = await thread.locator('.chat__msg').count();
+      expect(loaded, '整條線都該在畫面上').toBe(TOTAL);
 
-      // ⑤ 箭頭要在：最新那一則既不在視窗裡、也還沒被撈進來。
+      // ⑤ 箭頭仍然要在：最新那一則**已經載進來了**，但它不在視窗裡 ——
+      // 讀的人停在目標上。箭頭講的是「你不在最新」，不是「最新還沒載」。
       await expect(page.getByTestId('chat-jump-latest')).toBeVisible();
 
-      // ⑥ 點箭頭 → 回到真的最新那一則。這一步是箭頭在「錨點視窗」下的新義務：
-      // 只是捲到 DOM 的最後一列，會停在一則根本不是最新的訊息上。
+      // ⑥ 點箭頭 → 捲到真的最新那一則。
       await page.getByTestId('chat-jump-latest').click();
       const newest = thread.locator(`[data-msg-id="${ids[TOTAL - 1]}"]`);
-      await expect(newest).toBeAttached();
       await expect(newest).toBeInViewport();
     });
 
-    test('捲到錨點視窗底部只往新撈一頁就停 —— 最新那一則仍然不在 DOM,再捲一次才再多一頁', async ({
-      page,
-    }) => {
-      // owner 逐字：「向上向下滑再另打 API 去撈，就像聊天室的向上卷一樣」。
-      // 往舊那條路 16_chat_scrollback 已經釘住；這裡釘的是**往新**那條，
-      // 那是舊 API 根本表達不出來的方向（before_ts/before_id 只會往回走）。
-      //
-      // 🔴 這支釘的是 f995f507 的那個反轉。在那之前，一次手勢會把「你站的地方到
-      // 最新之間的全部」一路撈完（實測 8,000 則約兩分鐘、2.6 GB），所以這支原本
-      // 斷言的是「一路走回最新那一則」。owner 圈 B 之後改成**一次手勢一頁**：
-      // 捲到底撈一頁就停，停在半路不裝作結束 —— 由箭頭（⑤）承擔那句話。
-      await page.setViewportSize(w.size);
-      const request = page.request;
-      const token = await ownerToken(request);
-      const NAME = uniqueName('JumpForward M');
-      const M = await hireMember(request, token, NAME);
-
-      const ids = [];
-      for (let i = 1; i <= TOTAL; i++) {
-        const msg = await postChatAs(request, token, M.id, `line ${i} ${PAD}`);
-        ids.push(msg.id);
-      }
-
-      await bootAuthedSpa(page, token);
-      await page.evaluate(
-        ([mid, cid]) => {
-          window.location.hash = `#office/chat/${cid}/msg/${mid}`;
-        },
-        [ids[TARGET_INDEX - 1], M.id],
-      );
-
-      const thread = page.locator('.chat__messages');
-      const rows = thread.locator('.chat__msg');
-      const newest = thread.locator(`[data-msg-id="${ids[TOTAL - 1]}"]`);
-      await expect(
-        thread.locator(`[data-msg-id="${ids[TARGET_INDEX - 1]}"]`),
-      ).toBeAttached();
-      const before = await rows.count();
-      expect(before).toBeLessThan(TOTAL);
-
-      const gesture = () =>
-        thread.evaluate((el) => {
-          el.scrollTop = el.scrollHeight;
-          el.dispatchEvent(new Event('scroll'));
-        });
-
-      // ① 一次手勢 ⇒ 列數變多（那一頁真的撈回來了）。
-      await gesture();
-      await expect
-        .poll(async () => rows.count(), {
-          message: '捲到視窗底部要往新再撈一頁',
-        })
-        .toBeGreaterThan(before);
-      const afterOne = await rows.count();
-
-      // ② …但**最新那一則仍然不在 DOM**。B 之前它會在 —— 這一格就是那個反轉。
-      await expect(
-        newest,
-        '一次手勢只該撈一頁：最新那一則不該被順帶撈進來',
-      ).toHaveCount(0);
-
-      // ③ 而且「停下來」是穩定的，不是量到一個還在跑的走廊的中途快照。
-      //    STOP_SETTLE_MS 的理由：這一站實測一頁的往返（手勢 → 列數變多）是
-      //    22ms／24ms（窄／寬，隔離站量的），走廊每多一頁就是一次同樣的往返。
-      //    3 秒 ≈ 一百多次往返，而 TOTAL=80 從這裡到最新只剩一頁多 —— 走廊若
-      //    還活著，這段時間內早就撈到最新了。只量一瞬間的話，一個慢半拍的第二頁
-      //    會被當成「停住了」，這一格就綠在錯的東西上。
-      await page.waitForTimeout(STOP_SETTLE_MS);
-      expect(
-        await rows.count(),
-        '停下來要是穩定的：沒有手勢就不該再自己多撈一頁',
-      ).toBe(afterOne);
-      await expect(
-        newest,
-        '停下來要是穩定的：最新那一則不該自己冒出來',
-      ).toHaveCount(0);
-
-      // ④ 箭頭仍在。B 之後「你不在最新」只剩它在講，它現在是承重的。
-      await expect(
-        page.getByTestId('chat-jump-latest'),
-        '停在半路時，只剩箭頭在說「你不在最新」',
-      ).toBeVisible();
-
-      // ⑤ 再一次手勢才會再多一頁 —— 手勢與頁是一對一，不是永遠停住。
-      await gesture();
-      await expect
-        .poll(async () => rows.count(), {
-          message: '第二次手勢要再撈一頁 —— 停住的是走廊，不是分頁',
-        })
-        .toBeGreaterThan(afterOne);
-
-      // 按箭頭落在最新那一則，由本檔第一支（⑥）釘住，這裡不重造一份。
-    });
   });
 }
 
@@ -259,12 +173,20 @@ test.describe('T-48 · 剩下的靜默失敗', () => {
     const target = thread.locator(`[data-msg-id="${ids[TARGET_INDEX - 1]}"]`);
     await expect(target).toBeInViewport();
 
-    // ① 停在錨點視窗上 —— 中間那一大段誰都沒看過,未讀數一則都不准少。
+    // ① 🔴 fix12 之後這一格更難守,不是更簡單。以前擋 mark-read 的是
+    // `hasNewer`(錨點視窗),而走訪現在會把中間那一整段**全部載進來**,
+    // `hasNewer` 在落地那一瞬間就是 false —— 進房那支 mark-read effect 完全不看
+    // 視窗位置,守衛換成 `tailSeen`(讀的人有沒有真的到過活尾巴)才擋得住。
+    // 這裡量的是 server 端的未讀數:前端旗標可以說謊,未讀數不會。
+    await expect(
+      thread.locator(`[data-msg-id="${ids[TOTAL - 1]}"]`),
+      '前提:走訪真的把最新那一則也載進來了 —— 否則擋住 mark-read 的是舊守衛',
+    ).toBeAttached();
     // 給它時間去做錯事:mark-read 是 fire-and-forget,不等它就等於沒量到。
     await page.waitForTimeout(1500);
     expect(
       await unreadCountOf(request, token, M.id),
-      '停在錨點視窗時不該送出 mark-read',
+      '跳過去不等於看過 —— 走訪載進來的那一整段不准被標成已讀',
     ).toBe(TOTAL);
 
     // ② 🔑 另一個方向,而且不能省:只釘①的話,「整條路壞掉、永遠不標」也會過,

@@ -97,6 +97,7 @@ var messageKeys = map[string]bool{
 	"chat.shareLinkCopyFailed":                         true,
 	"chat.systemSender":                                true,
 	"chat.tasksLink":                                   true,
+	"chat.threadLoading":                               true,
 	"chat.unreadBelow":                                 true,
 	"chat.viewImageLabel":                              true,
 	"chat.wakeButton":                                  true,
