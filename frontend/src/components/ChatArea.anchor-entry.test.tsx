@@ -580,7 +580,9 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
     // ⚠️ 一次滾輪是每秒約 60 個捲動事件,而讀的人如果停在底部(那一頁整頁都是
     // 已經握著的列 ⇒ 版面一格都沒長),每一個事件都會落回 `nowNearBottom &&
     // hasNewer`。界是 `useChat` 的 `forwardExhaustedRef` ＋ 400ms 的
-    // `HUMAN_RETRY_MIN_MS`:同一個錨點在 400ms 內只准問一次。
+    // `HUMAN_RETRY_MIN_MS`:**往新的請求**在 400ms 內只准一通(不分錨點)。
+    // 「同一個錨點只准問一次」是另一道界(`forwardExhaustedRef`),而且它只有成
+    // 功那條路會寫 —— 兩句話講的不是同一件事,這裡量的是時鐘那一道。
     seed(A, "a", 80, 100);
     const { container } = render(view(alice, "a3"));
     await waitFor(() =>
@@ -598,7 +600,7 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
     });
     expect(
       windowCalls.length,
-      "同一個錨點在 400ms 內被問了第二次 —— 那是每秒 20 個請求的第一圈",
+      "400ms 內送出了第二通往新的請求 —— 那是每秒 20 個請求的第一圈",
     ).toBe(entry + 1);
     expect(
       windowCalls[windowCalls.length - 1].anchor.startId,
@@ -607,17 +609,18 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
     expect(bubbles(container)).not.toContain("a79");
   });
 
-  it("往新那一頁失敗時不忙著重打,而窗口內被吞掉的那次手勢會在窗口結束時自己補送", async () => {
+  it("往新那一頁失敗時不忙著重打,而且那一次滾輪的其餘事件不准自己買到第二通", async () => {
     // 失敗只是沒有東西落地,沒有 re-render;而重試就是下一次手勢。
     // 🔴 那道界必須是 400ms 的時鐘,不是「這個錨點問過了」的閂 —— 閂只有成功
     // 那條路會寫,所以在失敗路上它擋不到任何東西(獨立審查 #19 F-1:失敗中連送
     // 10 個手勢,量到 10 通請求)。
-    // 🔴 而被那道界擋下的手勢**不能就這樣消失**(獨立審查 #20)。真瀏覽器裡讀的
-    // 人此時已經壓在捲動極限上,再往下推不會有任何捲動事件,所以「他再捲一次」
-    // 根本不是他做得到的事 —— 那一格的證人在
-    // `visual-guards/chat-forward-walk.ct.spec.tsx`(jsdom 的長度全是 0,看不見
-    // 「捲不動就沒有事件」)。這裡釘的是機制本身:窗口關閉時補送一次,而且只有
-    // 一次。
+    // 🔴 被那道界擋下的手勢不能就這樣消失(獨立審查 #20)—— 但**這裡不是那一
+    // 格**,而上一版把兩件事混成一件,一次滾輪因此自己買到第二頁(#21 F-1)。
+    // 失敗什麼都沒落地 ⇒ 最新那一列沒有動 ⇒ 這 20 個事件問的是上一通已經在問
+    // 的同一塊地,是同一次手勢的餘波。真正會補送的是「一頁落地之後的第二次手
+    // 勢」與「被鎖擋下、而那一通失敗了」,兩格都釘在
+    // `src/hooks/useChat.scrollback.test.ts`;真滾輪的形狀則由
+    // `visual-guards/chat-forward-walk.ct.spec.tsx` 的 flick 看著。
     seed(A, "a", 80, 100);
     const { container } = render(view(alice, "a3"));
     await waitFor(() =>
@@ -644,26 +647,30 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
     ).toBe(entry + 1);
     expect(bubbles(container)).not.toContain("a79");
 
-    // 窗口結束 —— 這一次伺服器好了。**沒有再送任何手勢**:被吞掉的那一次自己
-    // 補送,那一頁就該進得來。
+    // 窗口結束,而且伺服器好了 —— 還是不准有第二通:**沒有人再碰過那個箱子**。
     windowsFail = false;
     await act(async () => {
       await new Promise((r) => setTimeout(r, 450));
     });
     expect(
       windowCalls.length,
-      "被吞掉的那次手勢消失了 —— 捲到極限的讀者送不出下一個事件,這裡就是靜默停住",
-    ).toBe(entry + 2);
-    await waitFor(() => expect(bubbles(container)).toContain("a33"));
+      "一次滾輪在 5xx 上自己買到了第二通 —— 沒有人再碰它",
+    ).toBe(entry + 1);
+    expect(bubbles(container)).not.toContain("a33");
 
-    // 補送是一次,不是一條走廊:再放三個窗口過去,沒有人動它就不再有請求。
+    // 再放三個窗口過去也一樣。
     await act(async () => {
       await new Promise((r) => setTimeout(r, 1300));
     });
     expect(
       windowCalls.length,
       "沒有人碰它卻繼續往下撈 —— 那是 owner 裁掉的自動走廊換了個名字",
-    ).toBe(entry + 2);
+    ).toBe(entry + 1);
+
+    // 而重試仍然是下一次手勢:窗口早就過了,一個真的捲動事件立刻買到那一頁。
+    fireEvent.scroll(boxEl);
+    await waitFor(() => expect(windowCalls.length).toBe(entry + 2));
+    await waitFor(() => expect(bubbles(container)).toContain("a33"));
   });
 
   it("沒有跳轉目標的一般進房,照舊只打一頁最新的,一個視窗請求都沒有", async () => {

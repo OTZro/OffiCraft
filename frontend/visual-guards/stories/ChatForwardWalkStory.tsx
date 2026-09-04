@@ -69,11 +69,21 @@ api.listChat = async (
   }
   return log.slice(-size);
 };
+// 🔴 A PAGE DOES NOT LAND INSTANTLY, AND THE GESTURE IS STILL GOING WHILE IT
+// FLIES. A resolved-promise mock hands the page back inside the same frame, so
+// the box is already taller before the flick's second scroll event — which
+// hides every decision the product makes about the 2nd…nth event of ONE
+// gesture. Tens of milliseconds is what a real forward page costs, and it is
+// far inside the 400ms retry window, so this slows nothing down but the
+// arrival.
+const PAGE_LATENCY_MS = 40;
+
 api.listChatWindow = async (
   _withId: string,
   anchor: { startId?: string; endId?: string },
   limit: number,
 ) => {
+  await new Promise((r) => setTimeout(r, PAGE_LATENCY_MS));
   if (anchor.startId) {
     const w = window as unknown as Record<string, number>;
     w[FORWARD_COUNT_KEY] = (w[FORWARD_COUNT_KEY] ?? 0) + 1;

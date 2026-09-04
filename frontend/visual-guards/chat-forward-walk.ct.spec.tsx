@@ -30,21 +30,70 @@
 //                       tail (jsdom, same mutant: request count still 1, and
 //                       `ChatArea.anchor-entry.test.tsx` 14 passed / 1 FAILED)
 //
-// ⚠️ SETTLE_MS HAS TO CLEAR THE RETRY THROTTLE, NOT JUST THE NETWORK. Each
+// ⚠️ SETTLE_MS IS SIZED AGAINST THE RETRY THROTTLE, NOT THE NETWORK. Each
 // corridor page is a `human: true` ask, so `HUMAN_RETRY_MIN_MS` (400ms) puts a
-// floor under it: the runaway walk costs ~400ms per page whatever the server
-// does. A settle window that only fits one or two of those can measure a
-// still-broken product as a single page and go GREEN — the dangerous direction.
-// Keep it comfortably above 3 × HUMAN_RETRY_MIN_MS.
+// floor under it: a runaway walk costs ~400ms per page whatever the server
+// does, and a settle window has to fit several of those to see one.
+// 📏 HONESTLY: this was raised from 1200 to 2000 as INSURANCE, not because 1200
+// was measured to go green on a broken product. It was not — a reviewer ran the
+// mutant at 1200 and got the same red, same count (3). The earlier note here
+// claiming 1200 「會假綠」 was a guess written as a measurement; this is the
+// correction. 2000 is kept because the margin is free and the failure it would
+// hide is the dangerous direction.
 import { test, expect } from "@playwright/experimental-ct-react";
 import { ChatForwardWalkStory } from "./stories/ChatForwardWalkStory";
 import { TARGET_ID, FORWARD_COUNT_KEY } from "./stories/chatForwardWalkFixtures";
 
 /** Long enough that a corridor which is still running has run several more
- * pages by the time it expires. The pages themselves land in ~10ms here, but
- * the reader-retry throttle costs ~400ms each (see the header), so this is
- * sized against that floor, not against the network. */
+ * pages by the time it expires — sized against the ~400ms reader-retry floor,
+ * not against the network (see the header, including what was and was not
+ * measured about the old 1200). */
 const SETTLE_MS = 2000;
+
+/** 🔴 ONE GESTURE IS A BURST OF SCROLL EVENTS, NOT ONE. A wheel flick / trackpad
+ * swipe is momentum: the box moves in dozens of decreasing steps a few
+ * milliseconds apart, and Chromium fires a `scroll` event for every one of
+ * them. A guard that models the gesture as a single `el.scrollTop = …` is BLIND
+ * to everything the product does with the 2nd…40th event of the same
+ * gesture — which is exactly where 「一次手勢一頁」 dies (measured: the e2e
+ * `tests/20_chat_jump_to_origin.spec.js` was red on this while this file was
+ * green).
+ *
+ * Momentum, not a ramp: each step covers a quarter of what is left, so most of
+ * the events land in the last stretch of travel — including several inside the
+ * NEAR_BOTTOM_PX band, which is the half that matters. The travel target is
+ * captured BEFORE the first step, because a real flick's momentum is fixed at
+ * the fingertip: a page landing mid-flick makes the box taller, and the reader
+ * does NOT get carried to the new bottom for free.
+ *
+ * Returns the event count so the test can assert the gesture really had the
+ * shape of a gesture — if this ever degenerates to one event, the guard is
+ * blind again and must fail loudly rather than quietly. */
+async function flick(box: import("@playwright/test").Locator): Promise<number> {
+  return box.evaluate(async (el) => {
+    let events = 0;
+    const on = () => {
+      events += 1;
+    };
+    el.addEventListener("scroll", on);
+    const target = el.scrollHeight - el.clientHeight;
+    for (let i = 0; i < 60; i += 1) {
+      const remaining = target - el.scrollTop;
+      if (remaining <= 0) break;
+      el.scrollTop += Math.max(1, remaining * 0.25);
+      await new Promise((r) => setTimeout(r, 4));
+    }
+    await new Promise((r) => setTimeout(r, 30));
+    el.removeEventListener("scroll", on);
+    return events;
+  });
+}
+
+/** A flick has to be a flick. Chromium coalesces `scroll` to one event per
+ * frame, so a ~250ms flick delivers ~15 of them however many times the loop
+ * above writes `scrollTop` — measured 19. 12 is under that and far over the 1
+ * the old guard used, so it fails only when the shape is actually lost. */
+const MIN_FLICK_EVENTS = 12;
 
 test("one gesture buys exactly one forward page, and the page is not followed", async ({
   mount,
@@ -69,11 +118,12 @@ test("one gesture buys exactly one forward page, and the page is not followed", 
   const entry = await forwardCalls();
   expect(entry, "the anchor entry's own forward window").toBe(1);
 
-  // THE GESTURE. Setting `scrollTop` in the page is what a wheel does to the
-  // scroller, and Chromium fires the same scroll event for it.
-  await box.evaluate((el) => {
-    el.scrollTop = el.scrollHeight;
-  });
+  // THE GESTURE — ONE flick, i.e. one burst of dozens of scroll events.
+  const flickEvents = await flick(box);
+  expect(
+    flickEvents,
+    "一次 flick 必須是幾十個捲動事件 —— 只有一個的話這道護欄看不見「同一個手勢的第 2…40 個事件」",
+  ).toBeGreaterThanOrEqual(MIN_FLICK_EVENTS);
 
   await expect
     .poll(async () => cmp.locator(".chat__msg").count())
@@ -87,7 +137,7 @@ test("one gesture buys exactly one forward page, and the page is not followed", 
   await page.waitForTimeout(SETTLE_MS);
   expect(
     (await forwardCalls()) - entry,
-    "one gesture must buy ONE page — more means something is continuing the walk without the reader (the auto-follow's own scroll event is the way back in)",
+    "one flick must buy ONE page — more means something is continuing the walk without the reader (the auto-follow's own scroll event, or a replay armed by the SAME gesture's later events, is the way back in)",
   ).toBe(1);
 
   // …and the reason it stopped: the viewport was left where the reader put it,
@@ -103,10 +153,8 @@ test("one gesture buys exactly one forward page, and the page is not followed", 
   ).toBeGreaterThan(afterFirst.clientHeight);
   await expect(cmp.locator('[data-msg-id="a199"]')).toHaveCount(0);
 
-  // The second gesture — the reader scrolls through the page they just bought.
-  await box.evaluate((el) => {
-    el.scrollTop = el.scrollHeight;
-  });
+  // The second gesture — the reader flicks through the page they just bought.
+  expect(await flick(box)).toBeGreaterThanOrEqual(MIN_FLICK_EVENTS);
   await expect.poll(async () => (await forwardCalls()) - entry).toBe(2);
 });
 
@@ -120,10 +168,15 @@ test("one gesture buys exactly one forward page, and the page is not followed", 
 // all, right across the window and past it.
 //
 // Measured here, Chromium 1280×720, anchor a100 of 200:
-//   · dropped (before)  : 5 further pushes → 0 scroll events → 1 page at 3s
-//   · coalesced (after) : the refused gesture is replayed once when the window
+//   · dropped (before)  : 4 further pushes → 0 scroll events → 1 page at 3s
+//   · replayed (after)  : the refused gesture is replayed once when the window
 //                         closes → 2 pages, still with 0 events from those
 //                         pushes
+// ⚠️ NOT EVERY REFUSED GESTURE EARNS THIS, and the sibling test above is the
+// other half: a refusal is replayed only when the reader is asking about a row
+// they were actually SHOWN (a different newest row, and at least PAGE_SEEN_MIN_MS
+// after that page was committed). Replaying all of them turns one flick — which
+// is DOZENS of events — into two pages.
 // jsdom cannot produce this: its lengths all read 0, so a swallowed gesture is
 // always repeatable there and the defect passed review #19 unseen.
 test("窗口內被吞掉的那次手勢會在窗口結束時補送一次 —— 因為捲到極限之後再捲不會有事件", async ({
@@ -159,7 +212,11 @@ test("窗口內被吞掉的那次手勢會在窗口結束時補送一次 —— 
 
   // 手勢② 還在同一個 400ms 窗口裡 —— 它是真的手勢:剛貼上的那一頁在視野下方,
   // 所以這一下真的移動了捲軸、真的送出事件,然後被窗口攔下。
-  await page.waitForTimeout(150);
+  // 手勢② 是讀的人**看到**那一頁之後再推一次,所以它離那一頁落地要有真的反應
+  // 時間(120ms;產品端擋的是 64ms 內、還沒畫出來就到的事件)。同時窗口是從
+  // 「問出去」那一刻起算的,頁回得越慢餘裕越少 —— 量過:頁 200ms 才回來時,原
+  // 本寫死的 150ms 讓手勢② 落在 407ms,窗口外,測到的就不是被吞掉的那一次了。
+  await page.waitForTimeout(120);
   const gestureAt = Date.now() - t0;
   expect(
     gestureAt,
@@ -174,7 +231,7 @@ test("窗口內被吞掉的那次手勢會在窗口結束時補送一次 —— 
   //
   // ⚠️ 這一段停在窗口關閉之前:窗口一關,補送的那一頁就會把版面撐高,之後的推按
   // 當然又推得動了 —— 那是修好的樣子,不是這一段要量的東西。
-  await page.waitForTimeout(30);
+  await page.waitForTimeout(20);
   const pushes = await box.evaluate(async (el) => {
     let events = 0;
     const on = () => {
@@ -182,9 +239,9 @@ test("窗口內被吞掉的那次手勢會在窗口結束時補送一次 —— 
     };
     el.addEventListener("scroll", on);
     const before = el.scrollTop;
-    for (let i = 0; i < 5; i += 1) {
+    for (let i = 0; i < 4; i += 1) {
       el.scrollTop = el.scrollHeight;
-      await new Promise((r) => setTimeout(r, 20));
+      await new Promise((r) => setTimeout(r, 12));
     }
     el.removeEventListener("scroll", on);
     return { events, moved: el.scrollTop - before };

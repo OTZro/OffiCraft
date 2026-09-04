@@ -507,6 +507,41 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
   // see the trailing edge in `loadNewer`. Non-null = a REAL gesture is waiting;
   // it is never armed by anything but a refused `human` call.
   const humanTrailingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 🔴 THE ROW THE LAST SERVED ASK PAGED FROM — the unit that tells a SECOND
+  // gesture apart from the SAME gesture's 2nd…nth scroll event, and the reason
+  // 「捲動位置有沒有真的動」 could not (measured, see the gate).
+  const lastServedAnchorRef = useRef<string | null>(null);
+  // A real gesture that arrived while a forward page was ALREADY IN THE AIR and
+  // was turned away by the mutex rather than by the clock. It is only worth
+  // replaying if that page comes back EMPTY-HANDED — see the `finally`.
+  const blockedInFlightRef = useRef(false);
+  // 🔴 THE READER CANNOT REACT TO A PAGE THEY HAVE NOT BEEN SHOWN. `commit`
+  // advances the mirror SYNCHRONOUSLY and React paints one render later, so
+  // there is a frame in which the newest row has already moved while the box on
+  // screen is still the old, short one. A scroll event landing in that gap is
+  // the tail of the gesture that BOUGHT the page — it is not somebody reacting
+  // to it — yet by the anchor test alone it looks exactly like a second gesture,
+  // and it bought a second page (measured: CT `chat-forward-walk` went 5 green
+  // in 6 runs on that hole). 64ms is four frames: comfortably past the paint,
+  // and far under the ~150ms a reader takes to see a page and push again.
+  const PAGE_SEEN_MIN_MS = 64;
+  const pageSeenAtRef = useRef(0);
+  // 🔴 A PENDING GESTURE BELONGS TO THE THREAD IT WAS MADE AGAINST, AND
+  // `withId` IS THE WRONG RADIUS FOR THAT (independent review #21, F-3). A jump
+  // to a different message in the SAME conversation replaces the window without
+  // changing `withId`, so a replay armed against the old window survived it and
+  // bought a page on the new one with nobody having touched the box — the very
+  // 「零手勢就撈」 this ticket exists to stop. So every path that replaces what
+  // 「forward」 means drops it, alongside the exhausted marker it sits next to.
+  const dropPendingGesture = useCallback(() => {
+    if (humanTrailingRef.current !== null) {
+      clearTimeout(humanTrailingRef.current);
+      humanTrailingRef.current = null;
+    }
+    blockedInFlightRef.current = false;
+    lastServedAnchorRef.current = null;
+  }, []);
+
   // `loadNewer` calling itself: a self-reference inside its own `useCallback`
   // is a circular type, and the identity would go stale anyway.
   const loadNewerRef = useRef<(opts?: { human?: boolean }) => Promise<void>>(
@@ -727,11 +762,14 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       // absorbed. Clearing unconditionally would let a SUPERSEDED page erase the
       // stop sign belonging to the thread that actually won, and the forward
       // walk would ask again from a row it has already been answered about.
-      if (ok) forwardExhaustedRef.current = null;
+      if (ok) {
+        forwardExhaustedRef.current = null;
+        dropPendingGesture();
+      }
     } catch (e) {
       console.warn("useChat: resetToLatest failed", e);
     }
-  }, [withId, conv, view]);
+  }, [withId, conv, view, dropPendingGesture]);
 
   const refetch = useCallback(async () => {
     // Post-send refetch. MERGE the newest page (id-dedupe, history kept in
@@ -1212,14 +1250,22 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     // touching the box the timer is never scheduled and never re-schedules
     // itself — which is what keeps this from being the level-triggered corridor
     // the owner removed (rc-d2e1b69edc66 ①) wearing a timer for a hat.
+    const anchorNow = cur.messages[cur.messages.length - 1].id;
+    const armTrailing = (delay: number) => {
+      if (humanTrailingRef.current !== null) return;
+      humanTrailingRef.current = setTimeout(() => {
+        humanTrailingRef.current = null;
+        void loadNewerRef.current({ human: true });
+      }, Math.max(0, delay));
+    };
     if (opts?.human) {
       const since = Date.now() - humanRetryAtRef.current;
       if (since < HUMAN_RETRY_MIN_MS) {
-        if (humanTrailingRef.current === null) {
-          humanTrailingRef.current = setTimeout(() => {
-            humanTrailingRef.current = null;
-            void loadNewerRef.current({ human: true });
-          }, HUMAN_RETRY_MIN_MS - since);
+        if (
+          anchorNow !== lastServedAnchorRef.current &&
+          Date.now() - pageSeenAtRef.current >= PAGE_SEEN_MIN_MS
+        ) {
+          armTrailing(HUMAN_RETRY_MIN_MS - since);
         }
         return;
       }
@@ -1228,10 +1274,16 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     }
     // Already answered for this row: the page from here held nothing new, and
     // nothing has changed since. Asking again is the busy loop.
-    if (forwardExhaustedRef.current === cur.messages[cur.messages.length - 1].id)
-      return;
+    if (forwardExhaustedRef.current === anchorNow) return;
     const release = conv.latches.acquire("loadingNewer");
-    if (!release) return;
+    if (!release) {
+      // Turned away by the MUTEX, not the clock: this reader asked about ground
+      // the in-flight page has not answered for yet. Whether that is worth
+      // replaying depends on how that page ends, so the decision waits for it.
+      if (opts?.human) blockedInFlightRef.current = true;
+      return;
+    }
+    lastServedAnchorRef.current = anchorNow;
     // 🔴 THE GENERATION TICKET THIS WALK WENT WITHOUT (T-48, F2). `loadingNewer`
     // is a SAME-DIRECTION mutex and nothing more: it stops two forward pages
     // stacking, and says nothing about a load in the OTHER direction landing
@@ -1248,6 +1300,7 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
     // marking itself read for good, silently. Every other loader in this file
     // already takes a ticket; this one now does too.
     const seq = view.takeTicket();
+    let landed = false;
     try {
       const newest = cur.messages[cur.messages.length - 1];
       const page = await api.listChatWindow(
@@ -1255,6 +1308,11 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
         { startId: newest.id },
         CHAT_PAGE_SIZE,
       );
+      // ANSWERED — which is the fact the stranded-gesture decision below turns
+      // on, and it is deliberately not 「the commit won」: a SUPERSEDED page
+      // belongs to a thread that no longer exists, and a gesture made against
+      // that thread must die with it rather than be replayed onto the new one.
+      landed = true;
       // ⚠️ ASKED HERE, NOT INSIDE THE UPDATER. React does not run an updater
       // when the state setter is called — it runs it during the next render,
       // which is AFTER this function has finished. A first cut of this read its
@@ -1301,25 +1359,33 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
       // anchor we asked from is exhausted when its page held nothing new; a
       // page that did carry rows clears whatever was marked before.
       forwardExhaustedRef.current = addsNothing ? newest.id : null;
+      pageSeenAtRef.current = Date.now();
     } catch (e) {
       console.warn("useChat: loadNewer failed", e);
     } finally {
       release();
+      // 🔴 A GESTURE THE MUTEX ATE IS ONLY STRANDED IF THE PAGE CAME BACK WITH
+      // NOTHING. Landed ⇒ the reader now HOLDS what they were asking about and
+      // the ask was a duplicate — replaying it would be a second page for one
+      // gesture. Failed ⇒ they asked, got nothing, and (pinned at the scroll
+      // limit) cannot ask again; that one is replayed, once, on the far side of
+      // the retry window.
+      const stranded = blockedInFlightRef.current;
+      blockedInFlightRef.current = false;
+      if (!landed && stranded) {
+        armTrailing(HUMAN_RETRY_MIN_MS - (Date.now() - humanRetryAtRef.current));
+      }
     }
   }, [withId, conv, view]);
   loadNewerRef.current = loadNewer;
 
-  // A trailing gesture belongs to the conversation that made it. Leaving the
-  // room (or unmounting) drops it — every other latch in this hook is a lease
-  // on one conversation and this timer is no different.
+  // Leaving the room (or unmounting) drops it too — every other latch in this
+  // hook is a lease on one conversation and this timer is no different.
   useEffect(() => {
     return () => {
-      if (humanTrailingRef.current !== null) {
-        clearTimeout(humanTrailingRef.current);
-        humanTrailingRef.current = null;
-      }
+      dropPendingGesture();
     };
-  }, [withId]);
+  }, [withId, dropPendingGesture]);
 
   // 🔴 THE JUMP THAT CANNOT MISS SILENTLY (T-48 ③). Two windows around one
   // message id — `end_id` for the context ABOVE it, `start_id` for the context
@@ -1447,9 +1513,10 @@ export function useChat(withId: string, entryAnchorMsgId?: string): UseChat {
         // A new window (or a merged newest page) changes what "forward" means —
         // whatever anchor was marked exhausted no longer describes this thread.
         forwardExhaustedRef.current = null;
+        dropPendingGesture();
         return "found";
       }),
-    [withId, withAnchorFetch, conv, view],
+    [withId, withAnchorFetch, conv, view, dropPendingGesture],
   );
 
   const markRead = useCallback(
