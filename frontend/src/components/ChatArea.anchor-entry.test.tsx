@@ -505,7 +505,7 @@ describe("ChatArea 進房錨點優先(useChat 的 anchor 參數)", () => {
     ).not.toBeNull();
   });
 
-  it("走到活尾巴之後,新訊息照樣 auto-follow —— 不跟的只有錨點視窗", async () => {
+  it("走到活尾巴之後,新訊息照樣 auto-follow —— 不跟的只有走訪還沒走完的錨點視窗", async () => {
     // 🔴 上一條的另一半,而且它是唯一擋得住「乾脆把 auto-follow 拿掉」的東西。
     // 不跟的條件是 `hasNewer`,不是「有人跳過」:一般進房、活尾巴、自己剛送出的
     // 那一則,全部照跟。

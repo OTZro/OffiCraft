@@ -267,15 +267,25 @@ test.describe('T-48 · 讀取失敗要說「現在讀不到」,而且真的給�
 //
 // 這是這一票最容易壞的接縫,因為它同時要滿足兩件相反的事:**停在錨點**(不准被
 // 新訊息拉走、不准把中間那段標成看過)與**跳到最新**(點下去要真的到活的尾巴)。
-// 而錨點視窗期間 useChat 刻意不跑最新頁的載入,所以新訊息**進不了那個 thread**
-// —— 預覽列在錨點視窗下是不會出現的,讓位給箭頭(rc-72054864ff88 的互斥規則)。
-// 這支把整條脊椎走完:錨點 →(新訊息)→ 箭頭回到活尾巴 → 捲上去 →(再一則新訊息)
-// → 預覽列 → 點它 → 落在最新那一則 → 未讀歸零。
+//
+// 🔴 fix13 —— 這段檔頭原本寫的前提**已經不成立了**,連同它底下那條斷言一起反轉。
+// 它以前說的是:「錨點視窗期間 useChat 刻意不跑最新頁的載入,所以新訊息進不了那個
+// thread —— 預覽列在錨點視窗下是不會出現的,讓位給箭頭」。fix12 之後 `loadAround`
+// 從錨點**一路撈到活尾巴、全部撈完才 commit**,所以跳轉一落地 thread 就**已經接在
+// 活尾巴上**:SSE 的新訊息當然進得來,於是出現的是**預覽列**,而**箭頭讓位**
+// —— 方向恰好跟舊前提相反,但互斥規則本身(rc-72054864ff88,一次只准有一個底部
+// 提示,見 lib/chatBottomAffordance)一個字都沒變,只是換成另一邊贏。
+// 實測產物:work/T-48-docs/fix13-e2e-walk-to-latest.md 附了紅那一刻的 DOM 快照
+// —— `during-anchor` 那一列在 thread 裡、預覽列在場,畫面不是什麼都沒說。
+//
+// 這支把整條脊椎走完:錨點 →(新訊息)→ 預覽列取代箭頭 → 關掉預覽列 → 箭頭回來 →
+// 按箭頭回到活尾巴 → 捲上去 →(再一則新訊息)→ 預覽列 → 點它 → 落在最新那一則 →
+// 未讀歸零。兩個底部提示各自的路都走過,而且每一步都問一次 server 端的未讀數。
 //
 // 🔴 只有真瀏覽器算數:jsdom 沒有版面,量不到「那一則真的在視窗裡」;而未讀數要
 // 問 server,前端旗標可以說謊。
 test.describe('T-48 · 錨點視窗中有新訊息進來,點預覽列跳下去', () => {
-  test('停在錨點時讓位給箭頭,回到活尾巴之後預覽列照常運作,點下去落在最新那一則', async ({
+  test('錨點裡的新訊息由預覽列接手、箭頭讓位,兩條路都回得到活尾巴並落在最新那一則', async ({
     page,
   }) => {
     await page.setViewportSize({ width: 1280, height: 900 });
@@ -304,21 +314,55 @@ test.describe('T-48 · 錨點視窗中有新訊息進來,點預覽列跳下去',
     const target = thread.locator(`[data-msg-id="${ids[TARGET_INDEX - 1]}"]`);
     await expect(target).toBeInViewport();
 
-    // ① 新訊息在錨點視窗期間進來 —— 畫面必須**留在原地**,而且是箭頭在場,
-    //    不是預覽列(錨點視窗下 thread 不吃最新頁,所以沒有東西可以預覽)。
+    // ① 還沒有新訊息時,停在錨點上的底部提示是**箭頭** —— 下一格量的是它讓位,
+    //    所以要先確認它本來真的在場,否則「箭頭不見了」也可能是它從來沒出現過。
+    await expect(
+      page.getByTestId('chat-jump-latest'),
+      '停在錨點、最新那一則不在視窗裡 —— 箭頭必須在場',
+    ).toBeVisible();
+
+    // ② 🔴 fix13 反轉的那一格。新訊息在讀者停在錨點時進來:
+    //    · 畫面必須**留在原地**(不准被新訊息拉走)——這一半沒有變;
+    //    · 而底部提示換成**預覽列**,**箭頭讓位**。fix12 之後 thread 一落地就
+    //      接著活尾巴,新訊息進得來 ⇒ 有東西可以預覽 ⇒ 依互斥規則預覽列贏。
+    //      這裡兩邊都斷言:只釘「預覽列在」的話,兩個提示同時貼在畫面上也會過,
+    //      而那正是 lib/chatBottomAffordance 存在的理由。
     const duringBody = `during-anchor ${PAD}`;
     const during = await postChatAs(request, tokM, 'owner', duringBody);
-    await page.waitForTimeout(1500);
+    const duringStrip = page.getByTestId('chat-new-msg-preview');
+    await expect(
+      duringStrip,
+      '錨點落地就接著活尾巴了 —— 新訊息必須進得來並由預覽列說出來',
+    ).toBeVisible({ timeout: 15_000 });
+    await expect(duringStrip).toContainText(duringBody);
     await expect(target, '新訊息不准把讀者從錨點拉走').toBeInViewport();
-    await expect(page.getByTestId('chat-jump-latest')).toBeVisible();
-    await expect(page.getByTestId('chat-new-msg-preview')).toBeHidden();
-    // 中間那一大段誰都沒看過 —— server 端的未讀數一則都不准少。
+    await expect(
+      page.getByTestId('chat-jump-latest'),
+      '箭頭要讓位給預覽列 —— 一次只准有一個底部提示',
+    ).toBeHidden();
+    // 🔴 中間那一大段誰都沒看過 —— server 端的未讀數一則都不准少。
+    // 走訪把 80 則全載進來、`hasNewer` 已經是 false,擋住 mark-read 的只剩
+    // `tailSeen`。前端旗標可以說謊,未讀數不會。
     expect(
       await unreadCountOf(request, token, M.id),
       '停在錨點視窗時不該送出 mark-read',
     ).toBe(TOTAL + 1);
 
-    // ② 按箭頭回到活的尾巴 —— 錨點期間那則新訊息也在這裡出現。
+    // ③ 關掉預覽列 —— 箭頭要回來,而且**不准順手把人捲到底**:關掉的是提示,
+    //    不是位置,未讀數也一則都不准少。
+    await page.getByTestId('chat-new-msg-dismiss').click();
+    await expect(duringStrip).toBeHidden();
+    await expect(
+      page.getByTestId('chat-jump-latest'),
+      '預覽列關掉之後,箭頭要接回來 —— 否則讀者手上一條回去的路都沒有',
+    ).toBeVisible();
+    await expect(target, '關掉提示不等於離開錨點').toBeInViewport();
+    expect(
+      await unreadCountOf(request, token, M.id),
+      '關掉預覽列不是「我看過了」',
+    ).toBe(TOTAL + 1);
+
+    // ④ 按箭頭回到活的尾巴 —— 錨點期間那則新訊息也在這裡出現。
     await page.getByTestId('chat-jump-latest').click();
     await expect(thread.locator(`[data-msg-id="${during.id}"]`)).toBeInViewport();
     await expect
@@ -327,7 +371,7 @@ test.describe('T-48 · 錨點視窗中有新訊息進來,點預覽列跳下去',
       })
       .toBe(0);
 
-    // ③ 🔑 接回活尾巴之後,普通的預覽列路徑要**完全正常** —— 這一格才是 owner
+    // ⑤ 🔑 接回活尾巴之後,普通的預覽列路徑要**完全正常** —— 這一格才是 owner
     //    問的那句話。捲上去(讓最新那一則離開視窗)、對方再開口。
     //
     // ⚠️ 這個 waitForTimeout 原本是在等 `scrollToLatest` 的 2600ms 修正窗關掉
@@ -359,7 +403,7 @@ test.describe('T-48 · 錨點視窗中有新訊息進來,點預覽列跳下去',
       '箭頭要讓位給預覽列',
     ).toBeHidden();
 
-    // ④ 點預覽列跳下去 —— 落在**最新那一則**,提示消失,未讀再次歸零。
+    // ⑥ 點預覽列跳下去 —— 落在**最新那一則**,提示消失,未讀再次歸零。
     await page.getByTestId('chat-new-msg-jump').click();
     await expect(thread.locator(`[data-msg-id="${late.id}"]`)).toBeInViewport();
     await expect(strip).toBeHidden({ timeout: 10_000 });
