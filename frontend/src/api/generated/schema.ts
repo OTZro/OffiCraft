@@ -389,7 +389,7 @@ export interface paths {
          *
          *     The moment this returns, every token signed by that key is refused, and every attachment share link produced under it stops working: a share `?sig=` is an HMAC under a key derived from the signing key, so it is governed by the ring too (owner ruling, card rc-cf9c27c07442). There is no grace period and holders are not notified — which is why the timing is a person's decision and never a timer's.
          *
-         *     ⚠️ Warden credentials carry NO `exp`, so "wait for the old tokens to expire" is not a strategy for them: they are valid until their key leaves the ring. The question to answer before calling this is whether every machine has reconnected, not how many days have passed.
+         *     ⚠️ Warden credentials carry NO `exp`, so "wait for the old tokens to expire" is not a strategy for them: they are valid until their key leaves the ring. The question to answer before calling this is whether every machine has come back ON THE CURRENT KEY (`token_key_current` on GET /api/machines), not how many days have passed and not merely whether it reconnected: a machine that reconnected while still holding a credential this key signed drops off the moment this returns.
          *
          *     The key that is currently SIGNING cannot be removed (409) — rotate first, then remove the one that stepped down. An unknown `key_id` is a 404.
          */

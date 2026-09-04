@@ -201,6 +201,15 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 		// reasoned: the renew-summons tests went red on that ordering.
 		// After Connect the enqueue lands and the drain below writes it onto this
 		// very stream.
+		//
+		// ⚠️ IF YOU MOVED THIS LINE AND ARE READING THIS BECAUSE SOMETHING WENT
+		// RED: it is the ordering. Four tests die — TestAMachineStillOnAnOutgoing
+		// KeyIsToldToRenew, TestTheRenewFrameCarriesNoCredentialAtAll,
+		// TestAStaleMachineIsAskedOnceNoMatterHowOftenItCallsBack and
+		// TestAStaleMachineIsAskedAgainOnceTheIntervalHasPassed — and two of them
+		// report it as PREMISE FAILED, which points at their setup rather than at
+		// this line. The ordering is guarded (measured with that mutant), but no
+		// test NAMES it, so this note is the map from that red to this cause.
 		s.noteTokenKeyObservation(claimsFromContext(r.Context()), verifyingKeyFromContext(r.Context()))
 		// T-98f4 sticky placement: this connection is the PROOF that the session
 		// actually came up, and its token's machine claim names where. Record it
