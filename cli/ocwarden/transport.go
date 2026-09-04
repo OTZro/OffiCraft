@@ -533,13 +533,20 @@ func resolveRepoRoot(executable func() (string, error)) string {
 //     three-parent walk.
 //
 // exists is injected (os.Stat in production) so a test pins the branch deterministically.
-func resolveOcAgentBin(executable func() (string, error), exists func(string) bool, repoRoot string) string {
+// The second return says whether the path it chose ACTUALLY EXISTS. Before T-81 this
+// function answered a bare string and the fallback branch was never probed at all, so a
+// home-installed warden whose sibling was not downloaded yet answered
+// $HOME/cli/ocagent/ocagent — a path that has never existed on any machine — and the
+// caller symlinked to it without asking. Returning the existence bit is what lets the
+// spawn path tell "here it is" apart from "I had to guess and the guess is not there".
+func resolveOcAgentBin(executable func() (string, error), exists func(string) bool, repoRoot string) (string, bool) {
 	if exe, err := executable(); err == nil {
 		if sibling := filepath.Join(filepath.Dir(exe), "ocagent"); exists(sibling) {
-			return sibling
+			return sibling, true
 		}
 	}
-	return filepath.Join(repoRoot, "cli", "ocagent", "ocagent")
+	fallback := filepath.Join(repoRoot, "cli", "ocagent", "ocagent")
+	return fallback, exists(fallback)
 }
 
 // buildClaudeCredProbe wires the spawn-time claude-login gate (T-ba62), or nil
@@ -607,10 +614,19 @@ func buildCommandDeps(cfg Config, env func(string) string, runner CmdRunner) Com
 		// the resolved exec target: a home-installed warden finds ocagent as its OWN
 		// SIBLING ($HOME/.officraft/warden/ocagent) with no env/plist injection; a dev
 		// run falls back to <repoRoot>/cli/ocagent/ocagent. resolveOcAgentBin owns both.
-		RepoRoot:   resolveRepoRoot(os.Executable),
-		OcAgentBin: resolveOcAgentBin(os.Executable, func(p string) bool { _, err := os.Stat(p); return err == nil }, resolveRepoRoot(os.Executable)),
-		WriteFile:  osWriteFile,
-		MkdirAll:   os.MkdirAll,
+		RepoRoot: resolveRepoRoot(os.Executable),
+		// T-81: a FUNCTION, deliberately — this used to be resolveOcAgentBin's answer
+		// baked in right here, while the warden was still booting. On a fresh machine
+		// ocagent is downloaded AFTER that, so the value baked in was a path that did
+		// not exist yet, and nothing ever recomputed it: every member that machine
+		// spawned got a dangling symlink and stayed silently offline. Passing the
+		// closure moves the question to spawn time, so the first spawn after the
+		// download finds the binary with no warden restart.
+		ResolveOcAgentBin: func() (string, bool) {
+			return resolveOcAgentBin(os.Executable, func(p string) bool { _, err := os.Stat(p); return err == nil }, resolveRepoRoot(os.Executable))
+		},
+		WriteFile: osWriteFile,
+		MkdirAll:  os.MkdirAll,
 		// Symlink / Remove publish the workdir `ocagent` as a symlink to OcAgentBin.
 		Symlink: os.Symlink,
 		Remove:  os.Remove,

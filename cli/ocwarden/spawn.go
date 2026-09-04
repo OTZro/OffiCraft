@@ -249,6 +249,17 @@ func ocAgentSymlinkTarget(repoRoot, ocAgentBin string) string {
 	return filepath.Join(repoRoot, "cli", "ocagent", "ocagent")
 }
 
+// ocAgentTarget is the per-spawn resolution seam (T-81). It exists so start() can ask
+// the question at the moment it needs the answer instead of reading a value frozen at
+// warden boot. A nil ResolveOcAgentBin keeps the pre-T-81 dev/test construction working
+// — the repoRoot-relative path, reported as present so those callers see no new gate.
+func (d SpawnDeps) ocAgentTarget() (string, bool) {
+	if d.ResolveOcAgentBin == nil {
+		return ocAgentSymlinkTarget(d.RepoRoot, ""), true
+	}
+	return d.ResolveOcAgentBin()
+}
+
 // buildLaunchCommand is the port of build_launch_command: the one shell line tmux
 // new-session runs. Flags/order are FROZEN — a divergence makes the spawned claude
 // silently lose MCP (--mcp-config) or persona
@@ -701,13 +712,22 @@ type SpawnDeps struct {
 	// base for the ocagent shim's exec target (<repoRoot>/cli/ocagent/ocagent);
 	// injected (not derived inside start) so tests pin a deterministic root.
 	RepoRoot string
-	// OcAgentBin is the RESOLVED ocagent binary path the workdir `ocagent` symlink
-	// points at (resolveOcAgentBin: the ocwarden sibling when home-installed, else the
-	// repoRoot-relative dev path). Injected pre-resolved so start needs no FS probe.
-	// "" ⇒ ocAgentSymlinkTarget falls back to <RepoRoot>/cli/ocagent/ocagent.
-	OcAgentBin string
-	WriteFile  func(path, content string, mode os.FileMode) error
-	MkdirAll   func(path string, perm os.FileMode) error
+	// ResolveOcAgentBin answers "where is ocagent, and is it actually there?" and is
+	// called ONCE PER SPAWN, not once per process (T-81). The pre-resolved string it
+	// replaced was computed while the warden was booting — and on a FRESH machine
+	// ocagent is downloaded AFTER that moment, so the warden recorded a path that did
+	// not exist yet and never looked again: every member spawned on that machine got a
+	// DANGLING workdir symlink, never ran `ocagent listen`, and never came online —
+	// with the tmux window open and nothing anywhere reporting an error. Resolving at
+	// the moment of use means the first spawn after the download simply finds it, with
+	// no warden restart and nobody having to intervene.
+	// The bool is the OTHER half: it says the chosen path EXISTS. start() refuses the
+	// spawn when it is false, which turns "silently deaf forever" into one visible
+	// failure the server records. nil ⇒ the legacy repoRoot-relative dev path with NO
+	// existence gate (test/dev construction only; production always injects it).
+	ResolveOcAgentBin func() (string, bool)
+	WriteFile         func(path, content string, mode os.FileMode) error
+	MkdirAll          func(path string, perm os.FileMode) error
 	// Symlink / Remove publish the workdir `ocagent` as a SYMLINK to OcAgentBin (see
 	// ocAgentSymlinkTarget for why a symlink, not a wrapper/hardlink). Remove clears a
 	// stale link first so re-spawn into an existing workdir is idempotent (os.Symlink
@@ -944,7 +964,24 @@ func (d SpawnDeps) start(p StartParams) SpawnOutcome {
 		return SpawnOutcome{OK: false, Reason: fmt.Sprintf(
 			"symlink_failed: clearing stale ocagent link: %v", err)}
 	}
-	if err := d.Symlink(ocAgentSymlinkTarget(d.RepoRoot, d.OcAgentBin), ocAgentLink); err != nil {
+	ocAgentTarget, ocAgentPresent := d.ocAgentTarget()
+	if !ocAgentPresent {
+		// T-81: refuse LOUDLY rather than publish a link to nothing. The old code
+		// symlinked whatever path had been resolved at warden boot; os.Symlink
+		// happily creates a DANGLING link, the tmux window opens, claude starts,
+		// and the bare `ocagent listen` in the boot prompt is the only thing that
+		// fails — inside the agent's own session, where nobody is reading. From
+		// the outside that member is indistinguishable from one that crashed or
+		// ran out of tokens. This Reason travels back to the server with the
+		// spawn result, so the failure has somewhere to be seen.
+		return SpawnOutcome{OK: false, Reason: fmt.Sprintf(
+			"ocagent_not_found: no ocagent binary at %s. The agent would start "+
+				"but could never connect. If this machine was just installed, the "+
+				"download may still be running — the next spawn picks it up with no "+
+				"warden restart. Otherwise re-install the warden on this machine.",
+			ocAgentTarget)}
+	}
+	if err := d.Symlink(ocAgentTarget, ocAgentLink); err != nil {
 		return SpawnOutcome{OK: false, Reason: fmt.Sprintf(
 			"symlink_failed: publishing workdir ocagent link: %v", err)}
 	}

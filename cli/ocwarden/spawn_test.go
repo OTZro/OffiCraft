@@ -546,19 +546,31 @@ func TestResolveOcAgentBin(t *testing.T) {
 	homeExe := func() (string, error) { return "/Users/seth/.officraft/warden/ocwarden", nil }
 	devExe := func() (string, error) { return repoRoot + "/cli/ocwarden/ocwarden", nil }
 
-	// Sibling exists → use it (the self-contained home-install layout).
+	// Sibling exists → use it (the self-contained home-install layout), and report it
+	// as present.
 	sibling := "/Users/seth/.officraft/warden/ocagent"
-	if got := resolveOcAgentBin(homeExe, func(p string) bool { return p == sibling }, repoRoot); got != sibling {
-		t.Errorf("home-install must exec the sibling ocagent, got %q want %q", got, sibling)
+	if got, ok := resolveOcAgentBin(homeExe, func(p string) bool { return p == sibling }, repoRoot); got != sibling || !ok {
+		t.Errorf("home-install must exec the sibling ocagent, got %q ok=%v want %q ok=true", got, ok, sibling)
 	}
 	// No sibling on disk → fall back to the repoRoot-relative dev path.
 	wantFallback := repoRoot + "/cli/ocagent/ocagent"
-	if got := resolveOcAgentBin(devExe, func(string) bool { return false }, repoRoot); got != wantFallback {
+	if got, _ := resolveOcAgentBin(devExe, func(string) bool { return false }, repoRoot); got != wantFallback {
 		t.Errorf("dev run must fall back to repoRoot-relative ocagent, got %q want %q", got, wantFallback)
 	}
 	// Unresolvable executable → still yields the repoRoot fallback (no panic).
-	if got := resolveOcAgentBin(func() (string, error) { return "", errString("no exe") }, func(string) bool { return true }, repoRoot); got != wantFallback {
+	if got, _ := resolveOcAgentBin(func() (string, error) { return "", errString("no exe") }, func(string) bool { return true }, repoRoot); got != wantFallback {
 		t.Errorf("unresolvable exe must yield the repoRoot fallback, got %q", got)
+	}
+
+	// T-81 — the half that did not exist before: the fallback branch now REPORTS
+	// whether the path it settled on is actually there. This is the whole difference
+	// between "deaf forever, silently" and one visible refusal: nothing on a fresh
+	// machine has $HOME/cli/ocagent/ocagent, and the old signature had no way to say so.
+	if got, ok := resolveOcAgentBin(devExe, func(p string) bool { return p == wantFallback }, repoRoot); got != wantFallback || !ok {
+		t.Errorf("fallback that EXISTS must report ok=true, got %q ok=%v", got, ok)
+	}
+	if got, ok := resolveOcAgentBin(devExe, func(string) bool { return false }, repoRoot); got != wantFallback || ok {
+		t.Errorf("fallback that does NOT exist must report ok=false, got %q ok=%v", got, ok)
 	}
 }
 
