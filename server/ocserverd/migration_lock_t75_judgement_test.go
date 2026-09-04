@@ -250,9 +250,17 @@ func TestMigrationLockPrefixJudgement(t *testing.T) {
 }
 
 // TestMigrationLockCheckIsReachedAtAll is the "what if the check were simply
-// gone" arm, and it is aimed at a specific way this change could rot: someone
-// keeps the file, keeps the tests, and quietly makes the judgement return nil —
-// or points the live check at a corpus that cannot disagree with it.
+// gone" arm. It is aimed at ONE way this change could rot: someone points the
+// live check at a corpus that cannot disagree with it.
+//
+// It does NOT cover the other way, and an earlier version of this comment
+// claimed it did. Measured, not reasoned about: seed a mutant that makes
+// migrationLockFindings return nil unconditionally and this test still PASSES —
+// it never calls the judgement. What goes red on that mutant is
+// TestMigrationLockJudgementNamesEachDefect. Both mutants are caught; they are
+// caught by DIFFERENT tests, and a comment that credits this one with coverage
+// it does not have is the exact species of reassurance this whole change exists
+// to remove.
 //
 // It works by proving the live path is WIRED: the lock on disk, parsed, has the
 // same number of entries the shared enumeration returns, and the roll hash on

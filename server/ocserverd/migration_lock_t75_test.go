@@ -109,6 +109,18 @@ import (
 // directory goose collects from.
 const migrationLockFile = "migration.lock"
 
+// The two REPO-relative paths the append-only half hands to git. They are a
+// PAIR: the second is the only thing that tells "main does not carry the lock
+// because this has not landed yet" apart from "main carries the guard but the
+// lock is gone". If either file ever moves, BOTH constants must move in the
+// same commit — otherwise that half goes back to skipping forever while still
+// printing that it is enforced in CI, which is the exact shape this whole
+// change exists to kill.
+const (
+	migrationLockRepoPath      = "server/ocserverd/" + migrationLockFile
+	migrationLockGuardRepoPath = "server/ocserverd/migration_lock_t75_test.go"
+)
+
 // The header line's prefix, and the per-entry hash prefix. Both are constants
 // because they appear in failure messages and in the generator's output.
 const (
@@ -452,8 +464,11 @@ func migrationLockPrefixFindings(mainLines, treeLines []string) []string {
 	var findings []string
 	if len(treeLines) < len(mainLines) {
 		findings = append(findings, fmt.Sprintf("%s origin/main's %s has %d entries and this tree "+
-			"has %d — lines were REMOVED. Every line in the lock is a migration some station has "+
-			"already run; the list may only grow.",
+			"has %d — either lines were REMOVED (every line is a migration some station has "+
+			"already run; the list may only grow), or this branch is simply BEHIND main and has "+
+			"not merged it yet. Check that second one FIRST when you are running locally: it is "+
+			"by far the likelier of the two and it looks identical from here. `git merge "+
+			"origin/main`, then `bin/gen-migration-lock`.",
 			findExtra, migrationLockFile, len(mainLines), len(treeLines)))
 	}
 	n := len(mainLines)
@@ -548,23 +563,43 @@ func TestMigrationLockGrowsOnlyAtItsTail(t *testing.T) {
 			"cannot resolve origin/main (%v). It is NOT a pass — there was no baseline. It is "+
 			"enforced in CI.", err)
 	}
-	mainText, err := gitOut("show", "origin/main:server/ocserverd/"+migrationLockFile)
+	mainText, err := gitOut("show", "origin/main:"+migrationLockRepoPath)
 	if err != nil {
 		// Before this change lands, main has no lock. Once it does, a missing one
-		// means somebody deleted it — and that is a finding, not a skip. The
-		// distinction is made by asking git, not by a flag someone has to flip.
-		t.Skipf("origin/main (%s) does not carry server/ocserverd/%s yet (%v), so there is no "+
-			"baseline to be a prefix of. Expected only until this change lands; after that, a "+
-			"missing lock on main means it was deleted.", sha, migrationLockFile, err)
+		// means somebody deleted or moved it — and that is a finding, not a skip.
+		//
+		// The distinction has to ARM ITSELF. An earlier draft of this branch said
+		// it was "made by asking git, not by a flag someone has to flip" and then
+		// skipped on any error forever, which is a flag nobody ever flips wearing
+		// the words of a check. What arms it is asking git a second question: does
+		// main carry THIS GUARD? Before the merge commit it carries neither file,
+		// so the skip is honest. From the merge commit onward it carries the
+		// guard, and a guard on main with no lock beside it can only mean the lock
+		// was removed or moved out from under this hardcoded path.
+		if _, e := gitOut("cat-file", "-e", "origin/main:"+migrationLockGuardRepoPath); e == nil {
+			t.Fatalf("origin/main (%s) carries %s but NOT %s (%v). The guard is on main, so this "+
+				"is no longer the pre-landing state: the lock was deleted, or moved out from "+
+				"under the path this check reads. Either way the append-only half has silently "+
+				"had no baseline since that happened — restore the file at that path, or move "+
+				"BOTH constants in this file together.",
+				sha, migrationLockGuardRepoPath, migrationLockRepoPath, err)
+		}
+		t.Skipf("origin/main (%s) carries neither %s nor this guard (%v), so there is no baseline "+
+			"to be a prefix of and nothing has landed yet. It is NOT a pass. This branch is what "+
+			"puts both there; from that merge commit on, this same branch fatals instead.",
+			sha, migrationLockRepoPath, err)
 	}
 	mainParsed, err := parseMigrationLock(mainText)
 	if err != nil {
 		t.Fatalf("origin/main's %s does not parse: %v — main is the baseline, so this is a defect "+
 			"in main, not in this branch", migrationLockFile, err)
 	}
-	if len(mainParsed.lines) < migrationLockMinSQL {
+	// The floor is on main's TOTAL entry count, so it is the sum of both source
+	// floors — not migrationLockMinSQL alone, which counts only the .sql half.
+	if len(mainParsed.lines) < migrationLockMinSQL+migrationLockMinGo {
 		t.Fatalf("origin/main's %s holds %d entries (floor %d) — too few to be the real lock, so "+
-			"a prefix match against it would mean nothing", migrationLockFile, len(mainParsed.lines), migrationLockMinSQL)
+			"a prefix match against it would mean nothing", migrationLockFile,
+			len(mainParsed.lines), migrationLockMinSQL+migrationLockMinGo)
 	}
 	raw, err := os.ReadFile(migrationLockFile)
 	if err != nil {
