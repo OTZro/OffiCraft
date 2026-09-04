@@ -125,3 +125,31 @@ func TestInstallScriptCarriesTheHTTPSBase(t *testing.T) {
 			"(warden binary download, the code→token exchange, OC_BASE itself) must be https.\nbody:\n%s", bad, body)
 	}
 }
+
+// 🔴 bin/install.sh DEPENDS on this URL being plaintext, and nothing said so
+// until now. Its closing report greps the fresh serve log for the one-time
+// setup link with the literal pattern
+//
+//	grep -o "http://[^ ]*/?code=[A-Za-z0-9_-]*"     (bin/install.sh:1622)
+//
+// If this link ever came out https, that grep would quietly match nothing, the
+// installer would fall back to the plain URL, and a fresh install would stop
+// printing the claim link the owner needs to claim the server — with no error
+// anywhere. The scheme is correct today because the bind is hardwired to
+// loopback, but "correct by coincidence" is what this test converts into
+// "correct and watched".
+func TestFirstRunSetupURLStaysPlaintextForTheLoopbackBind(t *testing.T) {
+	for _, addr := range []string{"127.0.0.1:7755", "127.0.0.1:59123", "localhost:7755"} {
+		got := firstRunSetupURL(addr, "claim-token-abc")
+		want := "http://" + addr + "/?code=claim-token-abc"
+		if got != want {
+			t.Fatalf("firstRunSetupURL(%q) = %q, want %q — bin/install.sh:1622 greps for "+
+				"http://…/?code=… and would silently match nothing", addr, got, want)
+		}
+	}
+	// And the rule still applies if the address ever stops being loopback: the
+	// point is that the decision comes from schemeForHost, not from a literal.
+	if got := firstRunSetupURL("officraft.example.com", "c"); got != "https://officraft.example.com/?code=c" {
+		t.Fatalf("a non-loopback address must follow the same rule, got %q", got)
+	}
+}
