@@ -301,6 +301,14 @@ func cmdMigrate(env func(string) string, out io.Writer) int {
 		return 1
 	}
 	defer db.Close()
+	// Backup trigger ③ (backup.go), the SAME hook cmdServe mounts before its own
+	// goose call. `migrate` is the OTHER door into the same act — the upgrade
+	// path runs it directly — and until T-74 it was the door with no retreat
+	// point behind it: identical schema risk, no snapshot. It has to be BEFORE
+	// runMigrations, because a backup taken after goose has already lost the
+	// thing it exists to preserve. Never fatal, for cmdServe's reason: a failed
+	// backup must not turn an unlikely data risk into a certain failed upgrade.
+	backupBeforeMigrations(db, path, time.Now())
 	if err := runMigrations(db); err != nil {
 		fmt.Fprintf(out, "[ocserverd] FATAL: goose up: %v\n", err)
 		return 1
