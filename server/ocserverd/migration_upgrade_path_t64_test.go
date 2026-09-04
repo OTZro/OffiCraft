@@ -345,13 +345,29 @@ func TestAStationAtTheReleasedVersionCanUpgradeToThisTree(t *testing.T) {
 
 	// The baseline is only as fresh as origin/main is: this reads a REF, it never
 	// fetches (network in a unit test is another thing that fails quietly). A stale
-	// ref yields a stale baseline and therefore a silent false negative, so the SHA
-	// and its date are logged — they are what tells a reader of a failing run, or of
-	// a -v run, which world this verdict was reached in.
+	// ref yields a stale baseline, and it skews the two halves of this check in
+	// OPPOSITE directions — which is why the SHA and its date are logged, and not
+	// merely the fact that some baseline was used.
+	//
+	//   Version numbers go TOO PERMISSIVE: an older ref has a smaller released
+	//   max, so a version this check should have rejected slips through.
+	//
+	//   Shipped bodies go TOO STRICT: every edit main itself made between that
+	//   older ref and today reads as THIS TREE editing a shipped migration, and
+	//   the report names files and version numbers, so it is specific enough to
+	//   be believed. Measured 2026-09-04 by pointing the ref one month back:
+	//   five shipped migrations went red, all of them main's own history.
+	//
+	// So a reader of a failing run needs the date to know which world this verdict
+	// was reached in — a red here is not evidence on its own.
 	when, _ := gitOut("show", "-s", "--format=%ci", ref)
 	t.Logf("baseline: origin/main %s (%s). If that is older than main really is, "+
-		"`git fetch origin main` and re-run — a stale baseline can only make this check "+
-		"too permissive, never too strict.", ref, when)
+		"`git fetch origin main` and re-run before believing anything below — a stale "+
+		"baseline skews this check BOTH ways, not one. The version-number half goes too "+
+		"PERMISSIVE (smaller released max, so a too-low version slips through). The "+
+		"shipped-body half goes too STRICT: every edit main itself made since that ref "+
+		"is reported as this tree editing a shipped migration, named file by file and "+
+		"version by version, which reads exactly like a real finding.", ref, when)
 
 	// A released version this tree does not declare has TWO causes and they are not
 	// the same event, so they are not reported the same way.
