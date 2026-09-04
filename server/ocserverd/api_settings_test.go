@@ -29,7 +29,7 @@ func newSettingsTestServer(t *testing.T, password string) (*apiServer, *httptest
 	api.passwordHash = auth.passwordHash
 	api.passwordChangedAt = auth.passwordChangedAt
 	api.ctxhigh = auth.ctxhigh
-	h, err := buildHandler(specsFor(api), api.keys, d.GetMember, api.authPasswordChangedAt)
+	h, err := buildHandler(specsFor(api), api.keys, d.GetMember, api.authPasswordChangedAt, nil)
 	if err != nil {
 		t.Fatalf("buildHandler: %v", err)
 	}

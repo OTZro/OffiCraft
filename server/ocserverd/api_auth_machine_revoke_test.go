@@ -48,7 +48,7 @@ func revokeStack(t *testing.T) (*httptest.Server, []byte, *apiServer) {
 	}
 	secret := []byte(interopSecret)
 	api := newAPIServer(dal, NewHub(), singleKeyring(secret), 3600, "../..")
-	h, err := buildHandler(specsFor(api), api.keys, dal.GetMember, nil)
+	h, err := buildHandler(specsFor(api), api.keys, dal.GetMember, nil, nil)
 	if err != nil {
 		t.Fatalf("buildHandler: %v", err)
 	}

@@ -224,7 +224,16 @@ func extractToken(r *http.Request) string {
 // signature verification — a forged token is still just "invalid token" and
 // never reaches a roster read. It also binds every exp-less credential to an
 // active warden row; no other signed JWT may become permanent.
-func requireAuth(keys *keyring, ownerIatFloor func() int64, lookup func(id string) (*Member, error), next http.Handler) http.Handler {
+//
+// observeTokenKey (nil = record nothing) is T-80's seam, and it is HERE for the
+// reason every other cut above is here: this is the single choke every gated
+// route passes through, so a machine cannot reach any authenticated surface
+// without its credential's signing key being seen. Putting it on one handler, or
+// on the heartbeat route, would leave the answer depending on which endpoints a
+// given warden happens to call. It runs only on a request that passed EVERY
+// refusal above — a credential that was rejected proves nothing about which key
+// the machine is on.
+func requireAuth(keys *keyring, ownerIatFloor func() int64, lookup func(id string) (*Member, error), observeTokenKey func(claims map[string]any, keyID string), next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if keys == nil || len(keys.verifySecrets()) == 0 {
 			writeError(w, http.StatusUnauthorized, "auth not configured")
@@ -235,7 +244,7 @@ func requireAuth(keys *keyring, ownerIatFloor func() int64, lookup func(id strin
 			writeError(w, http.StatusUnauthorized, "missing credentials")
 			return
 		}
-		claims, err := verifyJWTAnyKey(keys, token, time.Now().Unix())
+		claims, keyID, err := verifyJWTAnyKey(keys, token, time.Now().Unix())
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "invalid token")
 			return
@@ -290,6 +299,16 @@ func requireAuth(keys *keyring, ownerIatFloor func() int64, lookup func(id strin
 		if refusal := revocationRefusal(claims, lookup); refusal != "" {
 			writeError(w, http.StatusUnauthorized, refusal)
 			return
+		}
+		// 🔴 T-80: RECORD WHICH KEY VERIFIED THIS CREDENTIAL. Deleting this line
+		// is the whole feature disappearing while every keyring test stays
+		// green, so it is pinned from the wire by
+		// TestAMachineAuthenticatingRecordsTheKeyThatVerifiedItsCredential.
+		// It is deliberately the LAST thing before the handler: everything above
+		// can still refuse, and only a credential that was actually accepted is
+		// evidence of which key that machine is on.
+		if observeTokenKey != nil {
+			observeTokenKey(claims, keyID)
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), claimsContextKey, claims)))
 	})
@@ -347,7 +366,11 @@ func shareSigGate(keys *keyring, verify shareSigVerifier, raw, authed http.Handl
 // (keyring_rotation_t62_test.go) instead of leaving it as an argument nobody
 // guards.
 func buildAPIHandler(api *apiServer, lookup func(id string) (*Member, error)) (http.Handler, error) {
-	return buildHandler(specsFor(api), api.keys, lookup, api.authPasswordChangedAt)
+	// api.noteTokenKeyObservation is wired HERE and only here, for the same
+	// reason the ring is: it is the one production assembly, so a test that
+	// drives the real handler exercises the real observation (T-80).
+	return buildHandler(specsFor(api), api.keys, lookup, api.authPasswordChangedAt,
+		api.noteTokenKeyObservation)
 }
 
 // buildHandler assembles the mux from the route table: boot assertions FIRST
@@ -355,7 +378,7 @@ func buildAPIHandler(api *apiServer, lookup func(id string) (*Member, error)) (h
 // registered with its auth + RBAC chokes. Mirrors create_app + register_routes.
 // lookup is the roster read the principal resolver classifies agent-scoped
 // callers through (nil = token-only classification, the plumbing-test face).
-func buildHandler(specs []RouteSpec, keys *keyring, lookup func(id string) (*Member, error), ownerIatFloor func() int64) (http.Handler, error) {
+func buildHandler(specs []RouteSpec, keys *keyring, lookup func(id string) (*Member, error), ownerIatFloor func() int64, observeTokenKey func(claims map[string]any, keyID string)) (http.Handler, error) {
 	if err := assertAllRoutesLabelled(specs); err != nil {
 		return nil, err
 	}
@@ -372,7 +395,7 @@ func buildHandler(specs []RouteSpec, keys *keyring, lookup func(id string) (*Mem
 			if spec.Requires != principalMachine {
 				h = requirePrincipalClass(spec.Requires, lookup, h)
 			}
-			h = requireAuth(keys, ownerIatFloor, lookup, h)
+			h = requireAuth(keys, ownerIatFloor, lookup, observeTokenKey, h)
 			if spec.ShareSig != nil {
 				h = shareSigGate(keys, spec.ShareSig, spec.Handler, h)
 			}

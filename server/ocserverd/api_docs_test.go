@@ -135,7 +135,7 @@ func TestDocsMcpToolsCallableByAssistantAgent(t *testing.T) {
 	}
 
 	secret := []byte("tasks-test-secret")
-	h, err := buildHandler(specsFor(api), api.keys, api.dal.GetMember, nil)
+	h, err := buildHandler(specsFor(api), api.keys, api.dal.GetMember, nil, nil)
 	if err != nil {
 		t.Fatalf("buildHandler: %v", err)
 	}

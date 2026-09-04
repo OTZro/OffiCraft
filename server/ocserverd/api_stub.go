@@ -45,6 +45,14 @@ type apiServer struct {
 	// restart. Read through keys.signingSecret() per mint — never cache the
 	// []byte it returns across requests.
 	keys *keyring
+	// tokenKeyObs is the process-local memo behind noteTokenKeyObservation
+	// (T-80): identity id → the signing-key id this station last RECORDED for
+	// it. It exists to keep an observation made on EVERY authenticated request
+	// off the write pool, which is one connection wide (server/CLAUDE.md §7) —
+	// only a CHANGE reaches the database. Losing it on a restart costs one
+	// redundant write per machine, which is why it does not need to be durable.
+	tokenKeyObsMu sync.Mutex
+	tokenKeyObs   map[string]string
 	// settingsMu guards the LIVE settings snapshot below (passwordHash /
 	// passwordChangedAt / ownerTokenTTL / agentTokenTTL / ctxhigh): the boot-time DB snapshot is
 	// updated IN PLACE by the B3 owner endpoints (set-password /

@@ -228,3 +228,84 @@ func (s *apiServer) HandleBootstrapApiBootstrapPost(w http.ResponseWriter, r *ht
 		Token:   token,
 	})
 }
+
+// ── T-80: which key is each machine's credential actually signed by ──────────
+
+// noteTokenKeyObservation records, against the identity that just
+// authenticated, WHICH signing key verified its credential — and it is the only
+// producer of member.token_key_id.
+//
+// 🔴 THE VALUE IS THIS STATION'S OWN OBSERVATION, AND THE DESIGN LEANS ON THAT.
+// keyID comes from verifyJWTAnyKey: the key whose HMAC actually matched. There
+// is no claim, no header field and no heartbeat block through which a machine
+// could tell us which key it holds, and there must not be one. The question this
+// answers — "is every machine off the outgoing key, i.e. is it safe to press
+// remove" — gates an IMMEDIATE, un-grace-periodded revocation, so an answer a
+// machine could assert would be an answer a stale or hostile machine could
+// assert. A machine that has not authenticated since the rotation simply keeps
+// its old value, which reads honestly as "nothing has proved this one moved".
+//
+// 🔴 ONLY A CHANGE REACHES THE DATABASE, AND THE MEMO IS THE ONLY THING THAT
+// MAKES THAT TRUE. This runs on EVERY authenticated request on every gated
+// route, and the write pool is ONE connection wide (server/CLAUDE.md §7) — a
+// write per request would serialise the whole server behind a bookkeeping
+// column. The memo is process-local and lossy on purpose: a restart costs one
+// redundant write per machine and nothing else.
+//
+// 🔑 THERE IS EXACTLY ONE SUPPRESSION, DELIBERATELY. An earlier shape had two —
+// this memo AND a `if m.TokenKeyID != keyID` re-check before the write — and the
+// second one made the first unguarded: removing the memo left every test green,
+// because the DB comparison still absorbed the repeat. Two representations of
+// "have we already recorded this" is the same-fact-twice shape this repo keeps
+// getting bitten by, and here it hid which of them was load-bearing. The memo is
+// now it, and TestRepeatedRequestsOnAnUnchangedKeyCostNoFurtherWrites dies
+// without it.
+//
+// Only warden rows are stamped (Kind == machineKind). Agents and outsource
+// workers reach the same gate, but their credentials are short-lived and
+// re-minted by the server itself, so they are never what stands between the
+// owner and a removal. They still take a memo slot, which is what keeps the
+// roster read below off the common path for them too.
+func (s *apiServer) noteTokenKeyObservation(claims map[string]any, keyID string) {
+	if s == nil || s.dal == nil || keyID == "" {
+		return
+	}
+	sub, _ := claims["sub"].(string)
+	if sub == "" {
+		return
+	}
+	s.tokenKeyObsMu.Lock()
+	seen, ok := s.tokenKeyObs[sub]
+	s.tokenKeyObsMu.Unlock()
+	if ok && seen == keyID {
+		return
+	}
+	m, err := s.dal.GetMember(sub)
+	if err != nil {
+		// A read failure is not evidence of anything. Leave the memo alone so
+		// the next request retries, exactly as the roster-revocation seam
+		// declines to treat a lookup error as a verdict (server/CLAUDE.md §2).
+		return
+	}
+	if m == nil || m.Kind != machineKind {
+		// Not a machine: remember the answer so this lookup does not repeat on
+		// every request of an ordinary agent's session.
+		s.rememberTokenKey(sub, keyID)
+		return
+	}
+	if err := s.dal.SetMemberTokenKeyID(sub, keyID); err != nil {
+		// Do not memo a write that did not land, or the observation is lost
+		// until the next rotation.
+		return
+	}
+	s.rememberTokenKey(sub, keyID)
+}
+
+func (s *apiServer) rememberTokenKey(sub, keyID string) {
+	s.tokenKeyObsMu.Lock()
+	defer s.tokenKeyObsMu.Unlock()
+	if s.tokenKeyObs == nil {
+		s.tokenKeyObs = map[string]string{}
+	}
+	s.tokenKeyObs[sub] = keyID
+}

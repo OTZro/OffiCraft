@@ -43,7 +43,7 @@ func newLessonsTestServer(t *testing.T) (*httptest.Server, *DAL, []byte) {
 		t.Fatalf("hashPassword: %v", err)
 	}
 	api.passwordHash = phc
-	h, err := buildHandler(specsFor(api), api.keys, dal.GetMember, nil)
+	h, err := buildHandler(specsFor(api), api.keys, dal.GetMember, nil, nil)
 	if err != nil {
 		t.Fatalf("buildHandler: %v", err)
 	}

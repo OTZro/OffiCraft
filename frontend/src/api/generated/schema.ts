@@ -6287,6 +6287,16 @@ export interface components {
                 [key: string]: components["schemas"]["RuntimeCapabilityDTO"];
             };
             /**
+             * Token Key Current
+             * @description Whether ``token_key_id`` is the key that is signing RIGHT NOW, i.e. whether this machine has already come back on the current signing key. null = never observed (the same condition as a null ``token_key_id``). Computed server-side against the live ring rather than left to the client, for ``hardware_stale``'s reason: a client comparing ids would need the active key id on the wire as well, and that is a second home for the same fact that can disagree with this one. It is a projection of an OBSERVATION, so it is only ever as fresh as the last time that machine authenticated — false means "has not been seen on the current key", never "is broken".
+             */
+            token_key_current?: boolean | null;
+            /**
+             * Token Key Id
+             * @description Which signing key the station last VERIFIED a credential of this machine's with; null = it has never verified one. This is the station's OWN observation, taken from the key whose HMAC actually matched at the auth gate — machines cannot report it, and there is deliberately no wire field through which they could. It exists to answer the one question standing before a key REMOVAL, which is immediate and has no grace period: has every machine come back on the new key yet. A machine that has not authenticated since a rotation keeps its previous value, which reads correctly as "nothing has proved this one moved". Key ids are random and carry no key material (they are never derived from the key), so publishing one is safe by construction.
+             */
+            token_key_id?: string | null;
+            /**
              * Warden Shape
              * @description Which shape this machine's warden is actually running under, taken verbatim from its heartbeat (``anchor`` | ``legacy`` | ``unknown``; see ``AgentTelemetryIngestDTO.warden_shape``). null = this warden build does not report a shape at all, i.e. it has not received the anchor-cutover release yet — DISTINCT from ``unknown`` (new build ran, could not read its parent). The server never infers one from the other and never derives the verdict itself: unlike ``bin_status`` this is reported, not computed, because only the reporting process can see its own parent.
              */

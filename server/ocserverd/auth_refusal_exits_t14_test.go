@@ -72,7 +72,7 @@ func refusalExitStack(t *testing.T, secret []byte, ownerIatFloor func() int64) (
 	// Handing the gate api.keys instead makes that exit unreachable and the
 	// probe for it silently un-run — which is exactly what the positive control
 	// below caught when the T-62 keyring sweep did it.
-	h, err := buildHandler(specsFor(api), singleKeyring(secret), dal.GetMember, ownerIatFloor)
+	h, err := buildHandler(specsFor(api), singleKeyring(secret), dal.GetMember, ownerIatFloor, nil)
 	if err != nil {
 		t.Fatalf("buildHandler: %v", err)
 	}
