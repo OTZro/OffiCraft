@@ -180,6 +180,14 @@ async function tapOption(scope, idx) {
   await chip(scope, idx).click();
 }
 
+// CHAT SURFACE ONLY. Since owner c-6f054c1cb481 (2026-09-04) every card in a
+// chat thread mounts COLLAPSED — one row, no options, no composer — so the
+// reader opens it before there is anything to press. The 請示 page and the
+// task-page embed did NOT change; do not call this on those.
+async function expandChatCard(chatCard) {
+  await chatCard.getByTestId('chat-reply-card-expand').click();
+}
+
 // The card's ONE send button (ReplyComposer). `scope` must already be narrowed
 // to the card face — the chat thread has a composer of its own.
 function sendButton(scope) {
@@ -403,6 +411,7 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
     const chatCardB = chatCardOf(page, cardB);
     await expect(chatCardB).toBeVisible();
     await expect(chatCardB).toContainText(summaryB);
+    await expandChatCard(chatCardB);
     await expect(chatCardB.getByTestId('reply-option')).toHaveCount(1);
     await expect(chip(chatCardB, 0)).toContainText('AI 建議');
     const counterQuestion = '哪一台伺服器?先給我主機名稱。';
@@ -439,6 +448,9 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
       chatCardC,
       'a card opened mid-conversation must appear inline live (SSE)',
     ).toBeVisible({ timeout: 15_000 });
+    // Opened BEFORE the answer POST below, on purpose: the flip this leg pins
+    // has to happen on a card the owner is already looking at.
+    await expandChatCard(chatCardC);
     await expectBadge(page, baseWaiting + 1); // the badge follows live too
     const answerRes = await request.post(
       `${BASE}/api/reply-cards/${cardC.id}/answer`,
@@ -622,6 +634,10 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
     const chatCard2 = chatCardOf(page, card2);
     await expect(chatCard1, 'card 1 must mount inline').toBeVisible();
     await expect(chatCard2, 'card 2 must mount inline ALONGSIDE card 1').toBeVisible();
+    // BOTH opened before either is answered — the pool bug this guards needs
+    // two live card subscribers mounted at the same time.
+    await expandChatCard(chatCard1);
+    await expandChatCard(chatCard2);
 
     // Answer card 1 with ONE tap on a chip — the POST must complete, not hang.
     await tapOption(chatCard1, 0);
