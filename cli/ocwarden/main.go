@@ -739,8 +739,10 @@ func waitGraceful(wg *sync.WaitGroup, grace time.Duration) {
 // warden that never renews looks identical until somebody removes a signing key.
 // That is the shape this repo has already been bitten by (a handler's one wiring
 // line deleted, 2716 tests green). Here the seams are reachable, and
-// updater_seams_t80_test.go CALLS what this handed over rather than checking it
-// is non-nil — a seam wired to the wrong producer is still non-nil.
+// renew_verb_t80_test.go CALLS what this handed over rather than checking it
+// is non-nil — a seam wired to the wrong producer is still non-nil. (Measured:
+// wiring Renew to Kick compiles and leaves the seam non-nil, and
+// TestWireUpdaterSeams_RenewRaisesTheDemandOnTheUpdaterItWasGiven goes red.)
 //
 // WHY renew IS NOT Kick. `update` and a reconnect are two producers of the same
 // coalesced self-update wake, so both are Kick. `renew` is not: a bare Kick wakes
