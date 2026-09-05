@@ -36,7 +36,17 @@ vi.mock("./hooks/useOrgName", () => ({
     setOrgName: () => {},
   }),
 }));
-vi.mock("./hooks/useOwnerName", () => ({
+// PARTIAL mock, not a whole-module factory. The real module also exports
+// OwnerNameProvider — App wraps its whole tree in it — and useOwnerDisplayName.
+// A factory mock returning only `useOwnerName` silently drops the other two, and
+// that stays invisible until main starts USING one of them: it did, in ef72b7f
+// ("引文畫出收件者，並用 owner 自己設的名字叫他"), and this file then failed with
+//   No "OwnerNameProvider" export is defined on the "./hooks/useOwnerName" mock.
+// Nothing about this file changed — the module grew underneath it. importOriginal
+// keeps every export this test does not deliberately override, so the next export
+// added to that module cannot break this file the same way.
+vi.mock("./hooks/useOwnerName", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./hooks/useOwnerName")>()),
   useOwnerName: (fallback: string) => ({
     ownerName: fallback,
     setOwnerName: () => {},
