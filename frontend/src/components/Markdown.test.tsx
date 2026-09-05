@@ -278,6 +278,24 @@ describe("Markdown", () => {
       expect(c.querySelector("a")).toBeNull();
       expect(c.textContent).toContain("[x](<>)");
     });
+
+    // The ONE behaviour change unwrapping causes outside the link cases above,
+    // measured on both sides (main 85c2dd6a vs this branch) rather than argued:
+    // `![alt](<url>)` used to be literal text and is now rendered the same way
+    // `![alt](url)` ALREADY was on main — a "!" followed by an ordinary link.
+    // Pinned because the two are only consistent by accident of sharing one
+    // code path: narrow the unwrap to destinations not preceded by "!" and
+    // every positive case above stays green while this one silently drops back
+    // to literal text. What is NOT pinned here, because this work does not
+    // change it: this renderer produces no <img> for either form.
+    it("renders an angle-bracketed image the same way it already rendered a plain one", () => {
+      const c = renderMd("![alt](<https://example.com/i.png>)");
+      const a = c.querySelector("a");
+      expect(a?.getAttribute("href")).toBe("https://example.com/i.png");
+      expect(a?.textContent).toBe("alt");
+      expect(c.textContent).toBe("!alt");
+      expect(c.querySelector("img")).toBeNull();
+    });
   });
 
   // T-59 — the compare url is a THIRD link class, and its whole promise is
