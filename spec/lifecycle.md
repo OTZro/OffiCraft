@@ -31,18 +31,54 @@
     tokens carry no `machine_id`. The SSE listener projects observed position from this
     claim (spec/sse.md §5).
 - Verification MUST, in order: check the 3-segment shape; reject any header `alg` other
-  than `HS256` (no `alg:none` downgrade); compare the signature **constant-time**; require a
+  than `HS256` (no `alg:none` downgrade); compare the signature **constant-time** against
+  each key in the signing-key ring (§1.2) until one matches; require a
   numeric `exp` and reject `now >= exp` (expired); require a non-empty `sub`. Failures MUST map to 401 at the HTTP gate.
+  An expired token is expired under every key, so verification MUST stop at the first
+  `exp` failure rather than pay an HMAC per key to reach the same answer. The refusal
+  MUST NOT say WHICH key failed, or how many were tried.
 
-### 1.2 Signing secret — DB settings authority
+### 1.2 Signing keys — DB settings authority, one ring, one signer
 
-The signing secret lives in the DB settings store (`auth.jwt_secret`, base64url of the raw
-key bytes), loaded ONCE at app assembly. It is decoupled from the owner password: a
+The signing keys live in the DB settings store as a RING: `auth.jwt_keys` (a JSON array of
+`{id, key, created_ts}`, the key being base64url of the raw bytes) plus
+`auth.jwt_active_key_id`, which names the ONE key that signs. Every key in the ring
+VERIFIES; only the active one MINTS. The ring is decoupled from the owner password: a
 password change never rotates it, so already-issued tokens keep verifying.
+
+The ring is loaded at app assembly and thereafter held BY POINTER, shared by the minting
+surfaces and by the HTTP gate. Rotation therefore takes effect on the next request —
+there is no restart and no handler rebuild. (This is a reload within ONE process: the DB
+row is the durable authority, but a second server on the same database does not learn of
+a rotation until it restarts.)
+
+Two operator actions, and no timer anywhere:
+
+- **rotate** mints a key, appends it and moves the signing mark. Every existing key stays,
+  so nothing already issued stops working. The outgoing key never signs again.
+- **remove** drops a retired key, and refuses to touch the one that is signing. THIS is
+  the revocation: every token — and every `?sig=` share credential, both the attachment
+  share-link one and the comparison one (`GET /api/diff`), which OpenAPI documents as
+  "derived from the server signing secret" and which are therefore governed by this ring
+  too — produced under that key stops verifying the instant the call returns,
+  with no grace period. It is a human's decision precisely because it has no undo.
+  ⚠️ Warden credentials carry no `exp` (see "Mint surfaces and TTL semantics" below), so
+  "wait for the old tokens to expire" is not a strategy for them: they are valid until
+  their key leaves the ring.
+
+Both actions MUST write the DB BEFORE swapping memory, so a failed write cannot leave a
+process signing with a key no restart could recover.
+
+Key ids MUST be random and persisted, NEVER derived from key material. A hash-derived id
+is harmless for a random key and a password oracle for a migrated one, whose key is
+`SHA-256` over the owner password (provisioning step 2 below).
 
 Provisioning, first match wins:
 
-1. an existing DB `auth.jwt_secret` value (the steady state);
+0. an existing `auth.jwt_keys` ring (the steady state once this install has one);
+1. an existing DB `auth.jwt_secret` value — the pre-ring row, adopted VERBATIM as the
+   ring's first key and given a fresh random id, which is then persisted. The row is not
+   deleted: it is the key every already-issued token is signed with;
 2. one-shot import from a pre-settings-table install's `oc.toml`: an explicit
    `[auth].secret` (UTF-8 bytes) verbatim, else — when the file carries a password — the
    password-DERIVED secret `SHA-256(b"officraft.jwt.hs256.v1:" + password_utf8)`
@@ -58,25 +94,136 @@ retired `var/jwt_secret` fallback file has no successor.
 
 | mint | scope / sub | ttl | machine_id claim |
 |---|---|---|---|
-| `POST /api/login` (owner password → token) | `owner` / the fixed single-tenant owner id `"owner"` | DB setting `auth.owner_token_ttl` (default **86400 s**; owner-adjustable via `PATCH /api/settings`, applies from the next login) | none |
-| `POST /api/tokens/mint` (owner-gated) | `agent` / `body.member_id` | `min(ttl_days*86400, 400 days)` — the 400-day ceiling MUST cap every long-lived agent token | none |
+| `POST /api/login` (owner password **+ TOTP code once enrolled** → token) | `owner` / the fixed single-tenant owner id `"owner"` | DB setting `auth.owner_token_ttl` (default **86400 s**; owner-adjustable via `PATCH /api/settings`, applies from the next login) | none |
+| `POST /api/mint` (owner-gated) | `agent` / `body.member_id` | `min(ttl_days*86400, 400 days)` — the 400-day ceiling MUST cap every long-lived agent token, and an `exp` is ALWAYS stamped (`mintJWT` computes `now + ttl` unconditionally; `ttl_days: 0` mints a token that is already expired, never a permanent one). 🔴 For a member whose `kind` is NOT `warden`, the ceiling is not a guarantee of lifetime: the token carries NO exemption from the §1.2 cut 3 agent floor, so it dies the moment that member next reports waking, however many days are left on it (owner 2026-08-30, rc-162a4ace086d option 0 — asked and accepted). A long-lived token handed to an external script therefore stops working at that member's next boot. 🔴 THE `kind="warden"` CASE IS THE EXCEPTION AND IT IS OPEN ON PURPOSE. This route resolves its target with `staffOnly`, which refuses `kind='outsource'` and NOTHING ELSE — so a mint MAY be aimed at a machine (warden) member, and §1.2 cut 3 exempts `kind="warden"` rows by design. The resulting token is therefore an `agent`-scope credential that NO boot report can end. It is NOT unrevocable: it still expires (≤ 400 days), and removing that machine from the roster still refuses it through the cut 2 machine revocation. What is missing is only the boot cut. Two guards were proposed for this — refusing a machine target here, and raising the floor at dispatch time — and owner DEFERRED both on 2026-08-31, verbatim 「都先不加」(rc-b08b0a5d678b, free text, no option selected). That is a POSTPONEMENT, not an accepted permanent gap: this paragraph MUST be revisited rather than read as a settled design. | none |
 | `POST /api/bootstrap` (with `member_id`) | `agent` / member id | DB setting `auth.agent_token_ttl` (default **604800 s**) | `member.desired_machine_id` (omitted if empty) |
 | reconcile START payload (server-side, per spawn) | `agent` / member id | `auth.agent_token_ttl` | `member.desired_machine_id` |
 | machine onboard / boot-command / bootstrap-here exec-token | `agent` / warden member id | **no expiry** (`exp` omitted; response `expires_in=0`) | none (warden tokens carry no placement claim) |
 | `POST /api/machines/claim` (public; redeems a one-time claim code) | `agent` / warden member id | **no expiry** (`exp` omitted; response `expires_in=0`) — the same permanent mint used by every warden install path | none (warden tokens carry no placement claim) |
 
-Warden credentials are revoked by removing their machine from the roster, which rejects the
-next gated request. Existing finite warden credentials remain finite until that machine is
-reinstalled and receives a newly minted permanent credential. The 400-day cap remains the
+Warden credentials are revoked two ways: removing that machine from the roster, which
+rejects its next gated request, and removing the KEY that signed it (§1.3 cut 4), which
+rejects every credential that key signed at once. The first is per machine and is the
+ordinary one; the second is the fleet-wide one and requires convergence first (§1.3).
+
+Existing finite warden credentials do NOT need a reinstall to become permanent ones: the
+warden renews itself through §1.4 once its credential is far enough into its life, and what
+it receives back is a permanent mint. (This paragraph used to say the opposite — that they
+"remain finite until that machine is reinstalled". That was already untrue before T-80,
+which is why it is corrected rather than updated: self-renewal predates this ticket, and
+the sentence has simply been describing a world without it.) The 400-day cap remains the
 ceiling for non-warden agent-token mints.
 
 - Login MUST verify the password against the DB-stored argon2id hash (`auth.password_hash`)
   and answer a flat 401 for a wrong password OR no set password, with no distinguishing
   hint (the first-run state is disclosed only by the PUBLIC `GET /api/auth/status`).
+- **Second factor (TOTP).** While `auth.totp_secret` holds an ACTIVE secret, a correct
+  password is NOT sufficient: login MUST also verify a RFC 6238 code (HMAC-SHA1, 6 digits,
+  30 s step, ±1 step accepted) and MUST answer the SAME flat 401 when the code is missing
+  or wrong — the refusal never says which factor failed, because naming it confirms a
+  correct password to someone who guessed only that half. Codes are SINGLE-USE: the
+  highest step accepted is persisted as `auth.totp_last_step` and every candidate at or
+  below it is refused, so a code cannot be replayed inside its own acceptance window.
+  Verifying and advancing that floor MUST be one critical section, or two concurrent
+  logins presenting the same code both pass.
+  - **Rollout flag.** `auth.mfa_offered` (default **false**, so an install that
+    upgrades into this build is unaffected until its owner opts in) decides
+    whether the factor may be SET UP: while it is false `…/enroll` and
+    `…/activate` MUST answer 403 and the cockpit hides the entry. It is read and
+    written by the owner-gated `GET /api/auth/mfa` / `POST /api/auth/mfa/offer`,
+    deliberately NOT by `GET /api/settings` (admin_agent floor + MCP tool — the
+    owner's credential posture is not an agent read path).
+    🔴 It MUST NOT gate verification. While a factor is armed, withdrawing the
+    feature leaves login demanding the code, `mfa_required` true, and `…/disable`
+    working. A flag that switched verification off would be a bypass: a stolen
+    owner token could withdraw the feature and walk past the factor that exists
+    to stop exactly that.
+  - Arming is a two-step ceremony and BOTH steps are owner-gated: `POST /api/auth/mfa/enroll`
+    writes an inert `auth.totp_pending_secret` and returns it once (the only moment a secret
+    crosses the wire); `POST /api/auth/mfa/activate` MUST require the current **password**
+    as well as a code from that pending secret before promoting it. The password is required
+    because ARMING is as destructive as removing — a stolen owner token alone could
+    otherwise install a factor the attacker controls and lock the owner out.
+  - `POST /api/auth/mfa/disable` MUST require both the password and a live code: a factor a
+    stolen session can switch off protects nothing after the theft. It is therefore NOT the
+    lost-authenticator path — that is the local `ocserverd mfa-disable` command, which
+    substitutes proof of host shell access and takes effect at the next serve start.
+  - `GET /api/auth/status` additionally discloses `mfa_required` to unauthenticated callers,
+    deliberately: the login wall must render the right fields before any token exists, and a
+    distinguishable "password ok, code missing" refusal would leak strictly more.
+- **Credential-attempt brake.** It applies to the two PUBLIC credential seams and to
+  NOTHING else: `POST /api/login` and `POST /api/auth/set-password`'s claim token.
+  `POST /api/auth/change-password` and the `/api/auth/mfa/activate` +
+  `/api/auth/mfa/disable` credential checks are NOT braked in any way — no floor, no
+  concurrency cap, no call into the throttle at all.
+
+  🔑 **The dividing line is whether an UNAUTHENTICATED caller can reach the seam, not
+  whether the caller is logged in.** Those are different sentences and set-password is
+  where they come apart: it is not a login, yet it is braked, because it is public, it
+  compares a caller-supplied 32-byte secret, and it runs the same argon2id as login. Any
+  future seam that is public and verifies a secret belongs behind this brake regardless of
+  what it is called.
+
+  The brake keeps NO failure history: there is no attempt counter, no exponential backoff,
+  no lockout and no decay window. It is two mechanisms, both on those two seams only:
+  - a **concurrency cap** on credential verifications in progress at once, shared by the
+    two. A caller refused for concurrency gets **429 + `Retry-After`**; that is the only
+    429 these routes can produce. It exists for memory as much as for policy: argon2id is
+    ~19 MiB a verification, so an unbounded burst is an OOM kill.
+  - a **refusal floor**: a refusal answers no earlier than a fixed interval after the
+    request started, while a SUCCESS is answered immediately. Together with the cap this
+    bounds the front door at `cap ÷ floor` attempts a second.
+
+  Because both braked seams are public, nothing an AUTHENTICATED caller does can consume a
+  slot the login page needs. That coupling existed while the owner-gated seams shared the
+  pool — a token holder could fill it and make the owner's own login answer 429 — and
+  removing them from the brake removed it. ⚠️ The accepted consequence is that a holder of
+  an owner token may guess the current password at change-password without a brake; the
+  reasoning is that a stolen owner token is already the disaster this design defends against
+  rather than one a delay mitigates.
+
+  🔑 **"Without a brake" is not "unbounded", and the difference is measured rather than
+  asserted.** change-password holds the settings write lock across its password
+  verification, so those verifications are fully SERIALISED — 8 concurrent calls cost
+  7.1–7.9x one call (ratio ≈ N), against login's 4 concurrent at 1.15–1.31x (ratio ≈ 1) as
+  the control. A token holder therefore gets roughly one guess per verification, and the
+  process-wide ceiling on concurrent password hashing is the brake's cap plus that one.
+  Removing the brake from this route changed neither figure — the lock was always the
+  binding constraint — only the depth of the queue behind the lock.
+
+  ⚠️ That settings write lock is SHARED with `/api/login`'s second-factor step, so sustained
+  traffic on change-password queues every login's code check behind it. This predates the
+  brake changes and is recorded here because it was previously written down nowhere.
+
+  There is deliberately **no lockout of any kind**, and that is the point of the shape: the
+  earlier counter refused callers BEFORE verifying them, so a stranger reaching the login
+  page could hold the owner out with a trickle of failures and only a host shell could lift
+  it. Nothing here has state an attacker can drive.
+
+  Three rules are contract, not style:
+  - the brake MUST sit AFTER any refusal that consults no credential (the `409`s on
+    set-password, mfa/activate and mfa/disable), or a documented 409 becomes a 429;
+  - the gate MUST reserve, not merely read: a concurrent burst that only inspects state
+    passes in its entirety, which both defeats the floor and admits N simultaneous
+    argon2id verifications;
+  - the floor MUST be a DEADLINE measured from the start of the request, never a sleep
+    added after the decision, and it must be served with no other lock held. Every
+    `/api/login` refusal — wrong password, wrong code, or both — MUST be indistinguishable
+    by message AND by elapsed time, or the identical refusal message discloses through
+    latency exactly what it refuses to say.
+- **Password-exposure alert.** The one `/api/login` refusal that carries information is a
+  CORRECT password with a wrong second factor: the password has leaked, and no brake
+  repairs that. The server therefore posts a durable chat message to the seeded assistant
+  asking her to have the owner change it. It MUST be dispatched asynchronously (doing the
+  work inline makes that one branch measurably slower than the others and leaks the bit the
+  floor is hiding) and MUST be rate-limited to at most one message per window, carrying the
+  number of attempts folded into it (the trigger is attacker-controlled). It is a mailbox
+  message, not a wake: an offline assistant reads it when she next comes online.
 - First-run claim: while no password is set, serve start mints a one-shot
   `auth.claim_token` and prints it ONLY to the local serve log / installer banner;
-  `POST /api/auth/set-password` MUST require it (401 mismatch; 409 once a password
-  exists) and MUST consume it on success. Possession proves host shell access — the gate
+  `POST /api/auth/set-password` MUST require it (401 mismatch, served no earlier than the
+  refusal floor; 409 once a password exists; 429 when the concurrency cap is full) and MUST
+  consume it on success. Possession proves host shell access — the gate
   against a public-tunnel visitor claiming a fresh server.
 - Machine claim codes: the onboard / boot-command responses mint a **one-time claim code**
   (32 random bytes, base64url) alongside the exec-token, and the `boot_command` one-liner
@@ -86,7 +233,9 @@ ceiling for non-warden agent-token mints.
   Every failed redemption (unknown / expired / already used) is the same flat 401 with no
   distinguishing hint. The legacy `install.sh?token=` surface stays byte-identical
   indefinitely.
-- Token verification is stateless with TWO revocation cuts:
+- Token verification is stateless with FOUR revocation cuts (the fourth arrived with the
+  signing-key ring, §1.2 — and note that unlike the three below it is not a per-token cut:
+  removing a key refuses every token that key signed, at once):
   1. **owner scope — the password floor.** Owner-scope tokens whose `iat` is earlier than
      the DB `auth.password_changed_at` (stamped by `POST /api/auth/change-password`) MUST
      be refused (401).
@@ -130,7 +279,146 @@ ceiling for non-warden agent-token mints.
      teardown refusal MUST precede the `ocwarden` subprocess — a 409 written after
      the daemon was booted out is worse than no guard.
 
-  For every other agent token, expiry stays the only invalidation.
+  3. **agent scope — the member's own last 開工.** `POST /api/self/waking` MUST raise the
+     reporting member's `agent_iat_floor` to the `iat` of the token THAT CALL was made
+     with, and every gated route MUST then refuse (401) any `agent`-scope token whose
+     `iat` is STRICTLY LESS THAN that member's floor. A member's generations overlap on
+     purpose (§6.3 close-out), so the id alone cannot say which one is speaking; the
+     caller's `iat` can, and this cut is what makes the NEW generation coming up end the
+     previous one's authority (owner 2026-08-30, rc-fe6451abe579: 「新的一輪一上線就失效」,
+     a handover cut in half being the accepted cost).
+
+     The stamp MUST be the caller's OWN `iat` and the comparison MUST be strict. Together
+     those are what stop the session that raises the floor from being refused by it,
+     whatever the gap between its mint and its boot report and whatever the skew between
+     the two clocks; a floor stamped from the server clock would refuse a token that
+     merely took a few seconds to arrive.
+
+     Scope notes, all load-bearing: `kind="warden"` rows are EXEMPT, and that is a safety
+     property rather than an optimisation — a warden credential is `agent` scope with NO
+     `exp` (§1.3), so a floor raised above one could never expire out of the way and the
+     machine would be off the fleet permanently, recoverable only by a hand re-install.
+     A failed roster read MUST NOT refuse (unknown ≠ superseded), and a member that has
+     never reported waking (floor 0 — every row predating the cut) refuses nothing.
+
+     ⚠️ **NOT SOLVED, deliberately** (owner 2026-08-28: 「先不管搶同一秒的問題好了」):
+     `iat` is whole seconds, so two generations of one member that start inside the SAME
+     second are indistinguishable to this comparison and neither is refused. Nothing in
+     this cut claims otherwise.
+
+     🔴 **WHAT THIS CUT DOES NOT REACH.** The refusal is evaluated at REQUEST time, so an
+     SSE stream that was ALREADY accepted is never re-checked against the floor. On the
+     ORDINARY path that is not a narrow race but a routine gap of seconds to minutes,
+     because the boot order raises the floor FIRST and connects the stream LAST:
+
+     - Both boot sequences are `1. report_waking` → `2. resume_summary` → `3. ocagent
+       listen`, and both state 不可更改順序 in those words (`seeds/boot_sequence.md`,
+       `seeds/boot_sequence_codex.md`). `cli/ocwarden/spawn.go` restates the same order in
+       its SOP comment (`report_waking → resume_summary → ocagent listen`).
+     - NOTHING attaches a listener at spawn. On the claude path warden launches only
+       `claude`; the model itself starts `ocagent listen` at step 3. On the codex path the
+       seed forbids the model to start one at all (「不要自己啟動 `ocagent listen`」) and
+       `cli/ocwarden/codex_session.go` execs it only on the FIRST `turn/completed` — i.e.
+       AFTER the turn in which the model has already called `report_waking`.
+     - Step 2 is not instant: `resume_summary` can be big enough that the seed tells the
+       model to spend a whole sub-agent on it rather than burn its own context.
+
+     So the ordinary sequence is: the successor's `report_waking` raises the floor (step 1)
+     → from that instant the outgoing session's ordinary calls 401, WHILE ITS SSE IS STILL
+     ATTACHED and, being already accepted, never re-checked → seconds to minutes later the
+     successor finally reaches step 3 and its SSE connect kicks the incumbent off
+     (`Hub.Connect` is kick-old-admit-new inside ONE critical section: the `delete` and
+     `close(old.kicked)` run under the same `h.mu.Lock()` as the insert). For the whole of
+     that gap a live stream belongs to a credential the server has already stopped
+     accepting, and the outgoing session is a mute listener: it still receives events, it
+     just cannot act on any of them.
+
+     Two further shapes, neither closed here:
+
+     - **(a) the successor never reaches step 3.** If it stalls or dies during boot, the
+       floor stays up and the incumbent keeps the SSE slot — and keeps the member
+       projected `online` — until it drops on its own. Nothing else bounds this.
+     - **(b) when the takeover is throttled.** The anti-flap guard (`takeoverBurst` kicks
+       within `takeoverWindow`, hub.go) returns 409 BEFORE the delete/close, so a
+       throttled successor does not kick anyone and the INCUMBENT keeps the slot. Its
+       `report_waking` is a separate call and still raises the floor, so here too the old
+       stream outlives the cut, un-re-checked, until it drops on its own — at which point
+       its reconnect meets the floor and gets the `X-OC-Auth-Refusal: agent-superseded`
+       marker (authz.go).
+
+     None of this is closed by this package. Re-checking live streams against the floor
+     would close all of it and is NOT proposed here.
+
+     🔴 **TWO NAMED DEBTS, DEFERRED BY THE OWNER, NOT CLOSED** (2026-08-31, rc-b08b0a5d678b,
+     verbatim 「都先不加」, free text, no option selected). Both were put to him as guards for
+     the `kind="warden"` exemption above and both were declined FOR NOW; they are recorded
+     here so the hole is named rather than implied by the exemption's absence:
+
+     1. **The mint door is open.** `POST /api/mint` resolves its target with
+        `staffOnly`, which refuses only `kind='outsource'` — so a mint MAY be aimed at a
+        warden member, and the token it returns is `agent` scope that NO boot report can
+        ever end (§1.3, mint table). Refusing a machine target at that route was proposed
+        and deferred.
+     2. **The floor is not raised at dispatch.** Only `report_waking` moves it, so between
+        a START dispatch and the new session's own boot report the previous generation's
+        token is still good. Raising the floor at dispatch time was proposed and deferred.
+
+     Deferral is a POSTPONEMENT and not an accepted permanent design: revisit both rather
+     than reading their absence as settled.
+
+  4. **every scope — a signing key leaving the ring.** Removing a key
+     (`POST /api/auth/signing-keys/{key_id}/remove`, §1.2) refuses every token that key
+     signed, whatever its scope, from the next request onward. It is the ONLY cut of the
+     four that is not per-token and not per-principal: it is per KEY, so it takes tokens
+     the operator never enumerated — including `kind="warden"` credentials, which the three
+     cuts above deliberately exempt or cannot reach and which carry no `exp` to expire out
+     of the way. That is why it is a human's decision with no timer and no undo, and why
+     the settings page states the cost before the press. It also ends every attachment
+     share-link `?sig=` produced under that key, which is not a token at all.
+
+  For every other agent token — a `kind="warden"` credential, and any token on a member
+  that has never reported waking — **expiry is not the only invalidation any more**: cut 4
+  reaches them, and for a warden credential it is the only cut that does. Short of that,
+  expiry remains the only one.
+
+  🔴 **Cut 4 was, until T-80, a cut nobody could afford to make.** It reaches warden
+  credentials and nothing got them out of its way: the renewal path (§1.4) existed and was
+  wired, but its only trigger was an approaching expiry and a warden credential has none,
+  so it never ran. Pressing remove therefore meant every machine in the fleet losing its
+  credential in the same instant, with no mechanism to give them new ones — which is why
+  no key had ever been removed, and why "we can revoke a credential" was a sentence with
+  no operation behind it.
+
+  What T-80 adds is not a new cut but the **convergence** that has to precede this one:
+
+  - The station records, per machine, WHICH ring key last verified that machine's
+    credential — observed at the auth gate from the key whose HMAC matched, never
+    reported by the machine. It is exposed as `token_key_id` / `token_key_current` on
+    `GET /api/machines`. An implementation MUST NOT accept this fact from the machine:
+    the answer gates an immediate, grace-period-free revocation, so an answer a machine
+    can assert is an answer a stale or hostile machine can assert.
+    ⚠️ **Its READERS are wider than the owner.** `GET /api/machines` sits on
+    `principalMachine`, the LOWEST rank, so every authenticated principal — every agent
+    and every warden, not just the cockpit — can read every machine's `token_key_id`.
+    That is not a leak: key ids are drawn from crypto/rand and are never derived from key
+    material (keyring.go states why deriving one would be a password oracle), so the id
+    discloses nothing about the key. What it DOES disclose is how many distinct keys the
+    ring is currently in use across. Accepted deliberately rather than overlooked; an
+    implementation MUST NOT respond to this by putting the ACTIVE key id on the wire as
+    well, which is the shortcut that would let a client compute `token_key_current`
+    itself and would give the same fact a second home.
+  - A machine observed on a key that is no longer signing is sent the `renew`
+    warden-command (spec/sse.md), which carries no credential and no target — the station
+    says GO, and the machine runs its own §1.4 renewal.
+  - Convergence is therefore COUNTABLE FROM OUTSIDE and is the precondition for a
+    removal: every active machine reading `token_key_current: true`. A machine that has
+    not authenticated since the rotation keeps its previous value, which reads honestly
+    as "nothing has proved this one moved" rather than as converged.
+
+  ⚠️ **What this does NOT change**: removal is still immediate, still has no grace period,
+  still takes every share-link `?sig=` produced under that key, and is still a human's
+  decision with no timer. Convergence makes the press SAFE for the fleet; it does not make
+  it reversible, and it says nothing about the links.
 
 ### 1.4 Credential renewal (`POST /api/machines/renew-credential`)
 
@@ -166,8 +454,8 @@ payload) — they MUST produce byte-identical context for the same inputs.
 
 `role_key := explicit role param → member.role_key → "assistant"`. The
 resolved role folds as: owner overlay (non-tombstoned) wins; else the file seed; neither →
-fail (HTTP 404 on the bootstrap endpoint; the reconcile producer fails closed with no START). `task_type` defaults to the seed lessons task type (`"general"`). Lessons
-fold per `(role_key, task_type)`: overlay wins, else the shared file seed.
+fail (HTTP 404 on the bootstrap endpoint; the reconcile producer fails closed with no START). Lessons
+fold per `role_key` alone (T-2 removed the `task_type` axis): overlay wins, else the shared file seed.
 The user-custom block folds from the owner's user-context row; absent/tombstoned → empty.
 
 ### 2.2 Assembly order — normative
@@ -179,7 +467,7 @@ The boot context is these blocks, in this order, joined into one document:
 3. **角色定義** (`# Role:`) — what this role does;
 4. **判準** (`# Insight`) — how this role weighs things;
 5. **學習筆記** (`# Lessons`) — what it has learned doing it;
-6. **啟動程序** — the boot-sequence file seed, selected by the READER'S OWN runtime
+6. **啟動步驟** — the boot-sequence file seed, selected by the READER'S OWN runtime
    (`claude | codex`, blank folding to `claude`), and carrying that runtime's 執行環境
    section. It is LAST — the recency-authoritative tail — and nothing may be appended
    after it.
@@ -209,7 +497,7 @@ fold and the list here was not updated.
 An outsource worker's boot context is this same document **with the persona removed** —
 it has no role, so it carries no 角色定義, no 判準 and no 學習筆記 — in this same order,
 with no outsource-specific document of any kind. 使用者自訂 used to sit between 學習筆記
-and 啟動程序; T-4595 moved it above the persona so that the staff and outsource
+and 啟動步驟; T-4595 moved it above the persona so that the staff and outsource
 assemblies would line up, leaving the persona as their only difference.
 
 "No outsource-specific document of any kind" is normative and exhaustive: the outsource
@@ -303,10 +591,13 @@ The server owns desired-state reconciliation; the warden is a stateless executor
 
 ### 4.1 Cadence and candidates
 
-- A background tick MUST run every **30 s** and is **always on in production** —
-  the reconcile producer is mounted unless the serve flag `--no-reconcile` is
-  passed. That flag is the shadow-deployment kill-switch for THIS producer: it disables it
-  WHOLESALE (the cadence loop AND every event-driven warden-command dispatch it owns), which
+- A background tick MUST run every **30 s** and is **always on in production**. Since
+  T-14 item 5 there is ONE cadence loop, not two: it runs the reconcile half
+  (`runReconcileTick`) and then the outsource half (`runOutsourceTick`), each under its own
+  lock and never both at once, and each half is skipped when ITS serve flag is passed.
+  `--no-reconcile` is the shadow-deployment kill-switch for THIS producer: it disables it
+  WHOLESALE (its half of the cadence tick AND every event-driven warden-command dispatch it
+  owns), which
   covers **every command this producer DISPATCHES** at a staff-member or warden row — START,
   STOP, UNINSTALL, and the machine-upgrade `update` kick (`api_machines.go`). Every
   member-facing HTTP verb funnels into those seams.
@@ -323,7 +614,7 @@ The server owns desired-state reconciliation; the warden is a stateless executor
   oracle, spec/sse.md §7).
   (b) **Outsource workers.** Worker spawn and stop dispatch (`worker_spawn.go`) never consults
   `--no-reconcile`; the mirror flag `--no-outsource` gates only the assignment PRODUCER
-  (`outsourceTickNow`, plus not mounting that cadence). Everything else that reaches
+  (`outsourceTickNow`, plus that producer's half of the cadence tick). Everything else that reaches
   `respawnWorkerForOwnerOp` / `enqueueWorkerStop` consults **neither** flag — the owner verbs
   (restart, model change, relocate, stop, refocus), a task terminate that dismisses its
   workers, and the worker's own `report_stopped` — so a shadow server with both flags set
@@ -332,9 +623,10 @@ The server owns desired-state reconciliation; the warden is a stateless executor
   What "the producer" covers is wider than dispatch, including: its dispatch seams; the
   desired-state control writes that ride the same posture (`consumeUninstallOnDisconnect`
   enqueues nothing and is still gated); the row stamps the decide pass itself performs
-  (`stampWakeObservability`, `stampMemberPlacementBlocked`); the one HTTP kick that borrows it
-  (`api_machines.go`); and — because the cadence is simply not mounted — every roster pass
-  that cadence runs BEFORE it decides anything (context-high recycle stamping,
+  (`stampWakeObservability`, `stampMemberPlacementBlocked`, and — T-14 #4 — `armDecidedHandover`,
+  which opens a relocate wind-down epoch on the row); the one HTTP kick that borrows it
+  (`api_machines.go`); and — because the whole reconcile HALF of the cadence tick is skipped —
+  every roster pass that half runs BEFORE it decides anything (context-high recycle stamping,
   recycle-marker and stale-stopping clears, uninstall-intent consumption,
   lapsed-receipt sweep). Each of those passes persists real member rows. A
   rewrite that gates only the dispatches leaves every one of them running against real data.
@@ -356,6 +648,9 @@ The server owns desired-state reconciliation; the warden is a stateless executor
 
 Per member: `desired_state` intent (`online | offline | uninstall`; junk-safe parse — any
 unrecognised value MUST be treated as `offline`, fail-safe never-spawn),
+`restart_after_stop` — the SECOND owner intent, split out of `desired_state` (T-14 項目 7,
+owner 2026-08-30 `rc-bc1b029a3aa2`): `desired_state` answers 「下線用多強」 and this answers
+「下線之後要不要起來」. Not on the wire; see §4.3,
 the persisted runtime (`claude | codex`; absent/blank legacy rows fold to `claude`),
 the live `online` fact (**the SSE hub's `is_online` is the single online truth**),
 `refocus_since`, the agent-reported stopped fact, and the selected machine's volatile
@@ -386,41 +681,74 @@ runtime capability report.
 「不要兜底：只有你按強制下線才收它」. The server does not arm a deadline here and never
 decides that time is up.
 
-- ¬online → converged; reset bookkeeping.
+- ¬online → converged; reset bookkeeping. **…and this is where a queued 重啟 is spent**
+  (T-14 項目 7): if `restart_after_stop` is set, THIS edge clears it, flips `desired_state`
+  back to `online` and clears the wind-down anchors, so the same tick takes the §4.3
+  `desired_state=online` arm and STARTs the member. `forced_stop_at` is deliberately kept —
+  it records the session BEFORE this one. A 重啟 verb (重新聚焦 / 改機器 / 換 model) arriving
+  while a stop is in flight (`stopping_since > 0`) is what sets the flag: the stop keeps its
+  rung and its anchors, and only 「起來」 is added — 「沿用強硬下線規則 但是附加上線規則」.
+  A 重啟 verb on a member merely AT REST (no stop in flight) still only saves and answers
+  `held_down` (T-ed79 #4/#14): 「活化 it when you want it to run」.
 - online → the member is `stopping` and the producer dispatches **NOTHING**, indefinitely.
   The agent has been handed the offboard sequence and is working it; a clock here would
   cut off a session that was told there is no countdown.
-- Collection **on this online arm** has two sources, neither of them a timer:
+- Collection **on this online arm** has three sources, and the server arms none of them:
   1. **the agent's own `report_stopped`** — that call itself dispatches the SINGLE robust
-     **STOP**, event-driven, not on the next tick; and
-  2. **the owner pressing 強制下線** — the SAME command, it only skips the waiting.
+     **STOP**, event-driven, not on the next tick;
+  2. **the owner pressing 加速停止** (T-ed79) — `POST /api/members/{id}/accelerated-stop`
+     re-stamps `stopping_since` and writes `refocus_op = accelerated_stop`, so `decideDown`
+     collects at `stopping_since + stop.accelerated_grace_secs` and `offboardKindOf`
+     quotes that same instant to the agent. This does NOT reopen `rc-27d1710174dd`: the
+     ruling is about the SERVER deciding time is up, and nothing here arms without the
+     owner's press; and
+  3. **the owner pressing 強制下線** — the SAME command, it only skips the waiting.
   (A member still `waking` is a different case and is NOT covered by this arm: deactivating
   a wake that has been dispatched but never connected force-stops it outright — nobody is
   inside being told anything. See §4.2 and `docs/design/offboard-flow.md` §三.)
 - There is no separate force-kill RPC either way: the warden self-escalates the kill.
-- 🔴 **An OUTSOURCE worker does not have these two arms — it has only the forced one.**
-  `POST /api/outsource-workers/{id}/stop` is named like the graceful 下線 but behaves like
-  強制下線: it sets `desired_state=offline` and kills the session on the spot, with no
-  grace, no 預告 and no chance to work the sequence. So it stamps what 強制下線 stamps
-  (`forced_stop_at` **and** `stopping_since`, T-c996) and the worker is told **nothing** —
-  the same ruling, now enforced on both sides rather than only on the staff side.
-  ⚠️ **The consequence is a real gap, not a design choice**: there is today no verb that
-  gives an outsource worker the graceful 下線 a staff member gets. Adding one is a change to
-  the owner's set of buttons, not a bug fix, so it is out of T-c996's scope and is recorded
-  here rather than silently filled in.
+- 🔴 **An OUTSOURCE worker now has all three arms too (T-ed79, owner 2026-08-21
+  「往正職靠：外包那顆改成優雅停止，強制殺移到第三顆按鈕」).**
+  `POST /api/outsource-workers/{id}/stop` is a GRACEFUL close-out: it sets
+  `desired_state=offline`, stamps `stopping_since`, clears any in-flight refocus epoch,
+  fans the 〈停止〉 notice at the worker's own session and **returns**. It does **not**
+  kill and it does **not** stamp `forced_stop_at` — that anchor is what keeps the FORCED
+  verb silent, and this verb's whole point is that the notice arrives. The 收口 is the
+  worker's own `report_stopped`, exactly as on the staff 下線 arm. An OFFLINE worker (no
+  session to hear the notice) still takes the immediate kill.
+  ⚠️ **The kill moved, it was not removed**: it is now
+  `POST /api/outsource-workers/{id}/force-stop`, which stamps `forced_stop_at` **and**
+  `stopping_since` (T-c996's pairing, unchanged) and says nothing. The middle rung
+  `POST /api/outsource-workers/{id}/accelerated-stop` covers BOTH worker arms — it used
+  to 409 on a `desired_state=offline` worker, which was right while 停止 killed on the
+  spot and would be a dead rung now.
+  ⚠️ **The gap this bullet used to record is closed**: there IS now a verb that gives an
+  outsource worker the graceful 下線 a staff member gets, and it is the one named 停止.
 - ✅ **The second outsource gap is closed (T-fe5e, owner 2026-08-19 `rc-5c478001de8a`)**: an
   outsource **重新聚焦** used to be collected on a flat 120 s clock — `autoHandoverWorker`
   (`worker_spawn.go`) timed a worker's in-flight handover out at
   `refocus_since + StoppingTimeoutSecs` and **never read `refocus_op`** — while the notice
   that worker was sent said nothing about time. Both the in-flight arm and the worker DTO's
-  `refocus_deadline` now go through the SAME `recycleGraceFor` / `refocusDeadlineOf` pair the
-  staff side uses, so 重新聚焦 runs no clock on either kind and every other cause keeps its
-  120 s. The owner ruled the two kinds identical and rejected the asymmetry argument that had
+  `refocus_deadline` now read the SAME `refocus_op`-aware judgement the staff side reads —
+  each at its own layer, not both through both: the in-flight arm asks `recycleGraceFor`
+  directly, while the DTO asks `winddownDeadlineOf`, the two-axis expression that wraps it
+  (`recycleGraceFor` on the 下線 axis, `refocusDeadlineOf` on the 換手 one). So 重新聚焦 runs
+  no clock on either kind. (T-ed79 then widened that set:
+  the only causes left on a clock, staff or worker, are `context_high` and the
+  owner-pressed `accelerated_stop`.) The owner ruled the two kinds identical and rejected the asymmetry argument that had
   been offered for keeping the clock (「如果正職只有一個任務 那跟外包的代價不一樣嗎」): a
   staff member holding a single task pays exactly what a worker holding one pays.
+  ⚠️ **That parity was half-kept until T-14 item 3**: the worker DTO read only the 換手 axis
+  (`refocusDeadlineOf` on `refocus_since`), so an owner-pressed 加速停止 on a **下線** worker
+  — which re-anchors `stopping_since`, not `refocus_since` — quoted `refocus_deadline = 0`
+  while `runOutsourceTick`'s stop arm was collecting it at `stopping_since + grace`. Neither
+  the cockpit nor the worker's own notice was told about a clock that was running. The DTO
+  now calls `winddownDeadlineOf` — the member face's own two-axis expression — on the
+  `memberFromWorker` projection its presence word already goes through.
   ⚠️ **What that ruling costs, stated rather than buried**: a worker that never answers its
   stopped report now waits indefinitely, holding its task with it. The exit is the owner's
-  own 停止 button — the same exit the staff side has.
+  own hand — the same escalation the staff side has, and since T-ed79 the same three rungs:
+  停止 → 加速停止 → 強制停止.
 - 🔴 **Neither of those two paths re-dispatches.** Both go through the one-shot
   `dispatchRobustStopNow`, which enqueues once and does NOT write `last_command` /
   `last_command_at` — so the producer's de-dupe/re-dispatch discipline below never engages
@@ -468,19 +796,71 @@ ONE-SHOT, never a standing order):
 | timer | value | meaning |
 |---|---|---|
 | cadence | 30 s | tick period |
-| `start_timeout` | 90 s | START unconfirmed → failed spawn |
+| `start_timeout` | `WakingTTLSecs` | START unconfirmed → failed spawn |
 | `stop_grace` | 120 s | self-stop window before the robust stop — **unreachable today**: the arm that consumes it is guarded by `SoftOffboardGrace == 0` (see §4.3) |
 | `stop_retry` | 90 s | STOP/UNINSTALL re-dispatch window (lost-frame recovery) |
-| `recycle_grace` | 120 s | dump-stuck fallback from `refocus_since` — but the wait is **`recycleGraceFor(refocus_op)`, which answers *whether there is a clock at all* as well as how long**: an owner-pressed 重新聚焦 (`refocus_op = refocus`) is **not on a clock** (owner 2026-08-19, `rc-c540367065ad`) and is collected only by the agent's own stopped report or by 強制下線; `context_high` and `restart_self` already say 120 s and get exactly that |
+| `recycle_grace` | 120 s (owner-settable) | dump-stuck fallback from `refocus_since` — but the wait is **`recycleGraceFor(refocus_op)`, which answers *whether there is a clock at all* as well as how long**, and since T-ed79 both it and the sentence (`offboardKindOf`) read ONE judgement, `winddownKindFor`. 加速停止 has TWO causes since 2026-08-21: `context_high` (the SECOND context threshold) and `accelerated_stop` (the owner pressing the button — the middle rung of 停止 → 加速停止 → 強制停止). Every other cause (`refocus`, `context_notice`, `relocate`, `runtime/model`, `restart_self`, `token_expiry`, and anything unnamed) is a plain **停止**: no clock at all, collected only by the agent's own stopped report or by 強制停止. FINAL is a positive condition, not a fallthrough — that is what stopped an owner verb the owner never put on a clock from carrying one. **The 120 is a DEFAULT, not a constant, since 2026-08-21**: `stop.accelerated_grace_secs` (10..3600) moves it, and it is deliberately ONE key for every clocked cause — the clock, the wire deadline and the sentence all reach it through the same `recycleGraceFor` pair, so an owner cannot end up with a countdown quoted to the agent that differs from the one the tick collects on. It says HOW LONG and never WHO: a soft cause stays uncollected at every value the key accepts |
 | `soft_offboard_grace` | 600 s | how long a close-out may say NOTHING before its anchor is treated as residue — **not a deadline, and no longer measured from the anchor**. Neither soft arm escalates any more: 下線 never did (`rc-27d1710174dd`) and 重新聚焦 stopped on 2026-08-19 (`rc-c540367065ad`), so what this value still does is make `decideDown` run **no clock at all** (§4.3) and set the silence `clearStaleStoppingOnOnline` requires before it sweeps (§4.5) — which is what keeps the 強制下線 button on screen for as long as the close-out is still reporting. Compile-time constant (`SoftOffboardGraceSecs`), deliberately not owner-settable |
 | `backoff_base` / `backoff_cap` | 5 s / 300 s | exponential start backoff |
 | `circuit_threshold` / `circuit_cooldown` | 5 / 120 s | sticky breaker (verified hard failures only) |
 
 ### 4.5 Recycle (refocus / context-high auto-handover)
 
+- **Context pressure opens a wind-down at BOTH thresholds, and they are different
+  kinds (T-ed79).** `stampContextHighRecycle` stamps `refocus_op = context_notice`
+  when the session crosses the FIRST threshold (`ctx.notice_pct`; codex: the notice
+  round, 60% through it) — a plain **停止**, no clock, nothing in the sentence about
+  time — and `refocus_op = context_high` at the SECOND (`ctx.handover_pct`; codex:
+  the compaction threshold) — **加速停止**, on the `recycle_grace` clock. Before this
+  the first threshold opened nothing at all: it emitted one SSE band (§6 of
+  spec/sse.md, unchanged) and the wind-down began only at the second, so an agent
+  that missed that one frame met the final call with no close-out started.
+- **The ONE promotion is `context_notice` → `context_high`**, and it **MUST re-stamp
+  `refocus_since`**: the deadline is `refocus_since + grace`, so promoting in place
+  would quote a deadline already in the past and collect the member on the same tick
+  that announced it. The promotion needs no frame of its own — the notice rides every
+  write to the member row, and the promotion IS a write. Nothing else is ever
+  promoted: an epoch opened by the owner (`refocus` / `relocate` / `runtime/model`)
+  or by the agent (`restart_self`) stays a 停止 at any percentage, because turning the
+  owner's explicit no-clock stop into a clocked one would take that decision away from
+  him where he cannot see it. A member that has already reported stopped is not
+  promoted either — it is collected on this tick.
+
+- **Token expiry opens a 停止 an hour before the token dies (T-ed79, owner
+  2026-08-21).** `stampTokenExpiryWinddown` runs in the same tick, straight after
+  the context pass, and stamps `refocus_op = token_expiry` on any live agent session
+  — staff **or outsource worker** — whose agent token is inside its last
+  `tokenExpiryLeadSecs`. It is a plain 停止:
+  the owner's model for a token renewal is the same as for a refocus or a model
+  change — 「就是呼叫軟下線，然後等他 report_stopped 以後再呼叫上線」 — so the
+  collection is the agent's own stopped report or 強制停止, exactly as for every
+  other soft cause.
+  🔴 **The expiry is DERIVED, not stored**: `session_boot_ts + auth.agent_token_ttl`
+  (`tokenExpiryOf`). The token is minted at START dispatch and the anchor is
+  stamped later, on the SSE first-connect edge, so the derivation is an **upper
+  bound** — the trigger fires a little LATE, never before the token exists. It also
+  reads the CURRENT TTL setting rather than the one the token was minted with, so
+  changing `auth.agent_token_ttl` mid-session moves the estimate for sessions whose
+  tokens did not move. Both error terms are deliberate: recording the real `exp`
+  would need a durable per-session column, and this cause is soft, so being wrong
+  costs a wasted handover rather than a cut-off one.
+  🔴 **WHY IT HAS TO EXIST**: every step of the offboard sequence is an MCP call on
+  the session's own bearer token, so an expired token does not degrade the close-out
+  — it makes the close-out impossible.
+  🔴 **The ONE exempt kind is `warden`, and the reason is its CREDENTIAL, not its
+  role**: `mintWardenToken` mints with no `exp` claim at all, so there is no expiry
+  to lead. `tokenExpiryOf` therefore excludes warden by name (T-170e). It used to
+  allow-list `assistant`, which swept outsource in with warden even though a
+  worker's token comes from the same `mintAgentToken` with the same
+  `auth.agent_token_ttl` — the exemption was wider than the reason written beside it.
+  Ordering matters: the context pass runs FIRST, because both passes skip a member
+  that already carries `refocus_since` and `canPromoteToAcceleratedStop` only
+  promotes a `context_notice` epoch — a token stamp landing first would therefore
+  block the second context threshold's 加速停止 on that member entirely.
+
 - A recycle never flips `desired_state` — it stays `online` throughout; the flow is:
   `refocus_since` stamped → member delta fans → the agent-side listener REFETCHES the
-  member row and, on a confirmed NEW refocus epoch, surfaces the 下線程序 text the
+  member row and, on a confirmed NEW refocus epoch, surfaces the 〈停止〉 text the
   SERVER PUSHED in that delta (`offboard_notice`) as the handover wake to
   its interactive session, which persists its state and self-reports over MCP
   (`report_stopping` → `report_stopped`; the runtime never auto-reports on the
@@ -489,13 +869,15 @@ ONE-SHOT, never a standing order):
   the kill event-driven, not on the next tick) OR `recycleGraceFor(refocus_op)` elapses
   (the dead-session fallback — an unresponsive session that never reports is force-stopped
   by the server; the agent side needs no timeout of its own. **The wait is not one number**:
-  120 s for `context_high` / `restart_self`, and **no fallback at all** for an owner-pressed
-  `refocus`, which waits indefinitely for the stopped report or the owner's 強制下線 — see
+  `stop.accelerated_grace_secs` (default 120 s) for the TWO 加速停止 causes —
+  `context_high` (the second context threshold) and `accelerated_stop` (the owner's
+  press) — and **no fallback at all** for every other cause,
+  which waits indefinitely for the stopped report or the owner's 加速停止 / 強制停止 — see
   the `recycle_grace` row in §4.4) → the SSE drop makes
   ¬online → the next tick's plain START respawns.
 - **The wake text is the document, not client copy**: the SERVER composes the
-  sentence, folds the 下線程序 document into it and PUSHES both in the member delta
-  (`offboard_notice`), so an owner editing 下線程序 changes what the next collected
+  sentence, folds the 〈停止〉 document into it and PUSHES both in the member delta
+  (`offboard_notice`), so an owner editing 〈停止〉 changes what the next collected
   session is told with no client release.
   🔴 This REPLACES the pull model this section used to specify, and with it the
   argument for pull ("a pushed payload would fail silently on a flaky link and be
@@ -542,6 +924,114 @@ ONE-SHOT, never a standing order):
   so does `activate` — but the non-destructive route to it is the chat's 就地喚醒
   row, NOT the detail panel's Spawn, which for a `stopping` member opens the
   settings dialog and never sends activate.
+- 🔴 **These passes reach an OUTSOURCE WORKER through a projection, not through the
+  reconcile roster (T-170e).** No worker row reaches the reconcile tick's decide
+  pass — until T-14 項目 6 because `ListMembers` was `kind != 'outsource'`, and since
+  then because `runReconcileTick` drops every row `lifecycleTickDriverFor` sends to
+  the other half — so a worker is never offered to any of them; `runOutsourceTick` calls `runWorkerLifecyclePasses`
+  (`lifecycle_roster.go`), which projects its ACTIVE, not-held-down workers with
+  `memberFromWorker` and folds the four wind-down fields back onto the worker rows.
+  Until T-170e only the context pass was projected, so a worker had no token-expiry
+  lead (its session simply died mid-task with no close-out) and no survived-stop
+  sweep (a `stopping_since` left by a stop it survived read 停止中 in the cockpit for
+  the life of the session).
+- 🔴 **WHICH passes run, and in what order, is now ONE list: `lifecycleRosterPasses`
+  (`lifecycle_roster.go`), read by `runReconcileTick` and `runWorkerLifecyclePasses`
+  alike (T-170e stage 3).** There is no second call list to keep in step. Each pass
+  declares its own `AppliesTo`, so a formality added to the list reaches BOTH sides
+  by construction and one that must not has to write the restriction down where a
+  reader — and `lifecycle_roster_parity_t170e_test.go` — sees it by name. Exactly
+  one pass is restricted today: `recycle_loop_break` is staff-only, because a worker
+  already has a loop-break in `autoHandoverWorker` asking a different question
+  (`boot_ts > refocus_since`). A wind-down rule that goes ON this list and is then
+  quietly narrowed to one side fails by name in that test.
+  - 🔴 **KNOWN GAP — `LIFECYCLE-LIST-IS-OPT-IN-T170E`.** An earlier draft of this
+    bullet claimed "a wind-down rule that is not on this list does not apply to
+    anybody, however member-shaped its code looks." That is a **claim, not a
+    mechanism**, and it is corrected here rather than deleted because it was the
+    stronger-sounding half. Measured: a new pre-decide roster loop written the old
+    way — inline in `runReconcileTick`, staff roster only, never entered into
+    `lifecycleRosterPasses` — is caught by **nothing**. The list guards narrowing a
+    listed formality; it does not force a formality onto the list. Both historical
+    failures (token-expiry lead, survived-stop sweep) had the second shape, not the
+    first. Closing it needs an AST-level guard over both producers plus an explicit
+    exclusion list — T-170e stage 5, deliberately out of stage 3's scope.
+  - 🟡 **NARROWED BY T-170e stage 5, STILL OPEN — `lifecycle_identity_gate_t170e_test.go`.**
+    `TestTickProducersHaveNoUndeclaredRosterLoop` walks `runReconcileTick` and
+    `runOutsourceTick` with `go/parser` and requires every iteration in them to be
+    accounted for by name AND by count in `lifecycleProducerLoopRulings`. Re-measured
+    on the mutant above: it now fails, naming the producer and the loop, and it does
+    so **without any kind expression to find** — which is the whole point, since
+    neither historical failure had one. Its sibling
+    `TestIdentityGatesAreEachOnTheRecord` is the other half: every `Kind` comparison,
+    kind switch, kind-seam call and member-kind struct stamp in the package's
+    production sources must carry a written reason.
+    - **What is now caught:** the loop written INLINE IN A PRODUCER'S OWN BODY.
+      That is the spelling the mutant above has, and the spelling both historical
+      failures had.
+    - 🔴 **What is still caught by nothing: the same loop one call frame down.**
+      Measured 2026-08-27: lift that staff-only loop verbatim into a new method
+      and call it from `runReconcileTick` — every test in the package stays green.
+      Gate (1) sees no kind expression; gate (2) sees a CALL, not a loop, in the
+      producer body. Putting the loop inside `runLifecycleRosterPasses`' own body
+      is green for the same reason. Nothing in the tree guards this today, and no
+      work is scheduled on it — it is written down so the next person measures
+      rather than assumes.
+    - Two further scope limits, stated in that file's header: the scan is
+      **`server/ocserverd` only**, and neither gate can tell a true reason from a
+      fluent false one. The second is not hypothetical — a shipped ledger reason
+      was already found describing the wrong mechanism, twice.
+- 🔴 **The ENTRY filter is one function too: `lifecyclePolicyFor(m).ShouldExist()`.**
+  It is the only place the 正職/外包 difference may be spelled at the door — the
+  owner's ruling that 「正職會不會有 instance 存活取決於 人物設定有沒有這個角色，外包則是取決於
+  task 還是不是未完成狀態。其餘的部分應該要統一才對」. It replaced four hand-copies
+  (`runReconcileTick`, `reconcileMemberNow`, `runOutsourceTick`'s projection filter,
+  and the copy inside the test helper `workerTickPass`).
+- 🔴 **The 停止 → 加速停止 → 強制停止 ladder binds the WORKER side too, and it binds
+  it at every stamp site — there are FIVE, not one.** `armRefocusEpoch` is the one
+  way an epoch is OPENED (the fifth row below only PROMOTES one that is already
+  open, which is why it survives that word); before T-170e three worker sites
+  hand-wrote the same four anchors instead, so none of them carried the ladder check
+  and each was the same bug wearing a different button. Those three now stamp through
+  `armRefocusEpoch` on a `memberFromWorker` projection, folding back only the four
+  fields it mutates. **Enumerate this table before adding a stamp site — the T-170e
+  bug WAS three sites nobody had enumerated:**
+  | site | verb | on a ladder refusal |
+  | --- | --- | --- |
+  | `openOwnerOpHandover` (`worker_spawn.go`) | 改機器 / 換 model | the change is SAVED, the stage does not move; the existing wind-down keeps its own deadline and owns the move |
+  | `HandleRefocusOutsourceWorker…` (`api_outsource.go`) | 重新聚焦 | **409** — the owner pressed a button, so he gets an answer (the staff twin `HandleRefocusMember` refuses on the same rule; the sentence differs in exactly one noun, `this worker` vs `this member`) |
+  | `workerRestartSelf` (`worker_spawn.go`) | `restart_self` | **409** — the refusal is written by `HandleRestartSelfApiSelfRefocusPost` itself, VERBATIM the sentence its own staff arm writes further down in the same function (`m.Kind == KindOutsource` arm vs the fall-through `armRefocusEpoch` arm); the two arms are one rule |
+  | `HandleAcceleratedStopOutsourceWorker…` | 加速停止 | n/a — it ADVANCES the ladder, and it deliberately does not zero the anchors (the twin of the staff 加速停止 arm) |
+  | `stampContextHighRecycle` promotion arm (`reconcile.go`, the `if promoting` branch) | none — the reconcile tick's own context pass, projected onto workers by `runWorkerLifecyclePasses` (`lifecycle_roster.go`), which `runOutsourceTick` calls | n/a — it also ADVANCES, and only forwards: `canPromoteToAcceleratedStop` lets it move `context_notice` → `context_high` and nothing else. It hand-writes `refocus_since` / `refocus_op` INSTEAD of calling `armRefocusEpoch` on purpose — that helper zeroes the wind-down anchors, and here they belong to a close-out already in flight (see the `armRefocusEpoch is deliberately NOT used` note directly above that assignment) |
+  ⚠️ **`重啟` (restart) is a deliberate hole in this table, not a missing row.**
+  `ownerOpDisplacesTheSession(restart) == true` (`worker_spawn.go`), so the
+  `!ownerOpDisplacesTheSession(op) && s.workerHasStateToFlush(w)` arm in
+  `respawnWorkerForOwnerOp` (`worker_spawn.go`, the arm *after* the
+  `DesiredStateOffline` held-down one) is never taken for 重啟 and the ladder never
+  sees it. That is intended and predates T-170e — but **NOT because 重啟 can only arrive at a worker
+  the owner has already stopped.** It can arrive at any live worker:
+  `HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost`
+  (`api_outsource.go`) has exactly two preconditions — the row exists and it is
+  not `released` — and **no desired-offline gate at all**. Press 重啟 on a worker with
+  `desired_state="online"` that is mid-加速停止 and it answers **200**, zeroes
+  `refocus_since` / `refocus_op` / `stopping_since` / `stopped_since`, and the deadline
+  goes with them.
+  The reason that is right is that **重啟 is not a wind-down cause at all — it is a
+  kill+respawn.** It does not ask the current session for a close-out; it displaces
+  it (`respawnWorkerForOwnerOp` → `respawnWorkerForOwnerOpNow` → `respawnWorkerNow`,
+  which kills the session on the resolved target before it re-spawns), and the handler says so on the row itself: its `if s.hub.IsOnline(id)`
+  arm (`api_outsource.go`) stamps the `session_alive` receipt *"this worker was
+  still running — 重啟 is replacing that session, not starting a first one. If it
+  does not come back, its previous session was still holding the slot"*. The four
+  anchors it clears all DATE THE SESSION BEING REPLACED; carrying them into the
+  successor is what makes the next 改機器 / 換 model read them as "this epoch's
+  wind-down is already collected". So clearing them is a correct clean sheet for a new
+  session, **not a way around the ladder** — there is no ladder step left to be on once
+  the session the ladder was counting for is gone. (`forced_stop_at` is deliberately
+  KEPT, per the staff activate's rule.) Winding 重啟 down instead would fan an SOP 預告
+  at a session that is about to be killed regardless and then wait out a deadline for
+  an answer that changes nothing. A reader of the rows above would otherwise reasonably
+  assume 重啟 is covered; it is not, and it should not be.
 
 ### 4.6 Dispatch discipline
 

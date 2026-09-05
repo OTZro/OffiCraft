@@ -3,6 +3,7 @@ import { useI18n } from "../i18n";
 import { effortText } from "../i18n/compose";
 import { formatCost } from "../lib/cost";
 import { Markdown } from "./Markdown";
+import { ConfirmModal } from "./ConfirmModal";
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -116,6 +117,10 @@ export interface AgentDetailVM {
   contextPct: number | null;
   compactionCount?: number | null;
   cost: number | null;
+  /** 成本歸零. Optional so a panel that cannot offer it simply does not render
+   * the button — same posture as onRefocus. IRREVERSIBLE: the panel always
+   * confirms first, and the wrapper is what actually calls the endpoint. */
+  onResetCost?: () => Promise<void>;
   onRefocus?: () => Promise<void>;
   refocusSince: number | null;
   /** Which operation opened the in-flight wind-down ("" when none), and the
@@ -261,7 +266,7 @@ interface AgentDetailPanelProps {
 /**
  * The ONE detail panel both the member page and the outsource-worker page
  * render through (card order = the member panel's, the convergence baseline):
- * back → identity (slot) → 模型/投入度 | 機器/Claude Account → runtime
+ * back → identity (slot) → 模型/思考強度 | 機器/Claude Account → runtime
  * (context% + est.$ + 換手) → 最近操作 → terminal → expand cards (slot +
  * initial prompt). Kind-specific content plugs in through the slots; the
  * shared cards read only the unified view model.
@@ -380,13 +385,33 @@ export function AgentDetailPanel({
   // the reason it has not taken effect yet, and roughly when it will (T-7f28).
   // Only the two owner-op causes qualify: a context-pressure handover or a bare
   // 重新聚焦 is not applying anything of the owner's, so those keep the old line.
-  const windDownNote =
-    (vm.refocusOp === "relocate" || vm.refocusOp === "runtime/model") &&
+  //
+  // 🔴 THE DEADLINE IS NOT PART OF THE GATE (T-ed79). It used to be a second
+  // conjunct, and the day relocate and runtime/model became 停止 —
+  // winddownKindFor answers no-clock ⇒ refocusDeadlineOf returns 0 ⇒ the mapper
+  // maps 0 → null — that conjunct went permanently false and this whole note
+  // became unreachable, silently restoring the 「上次重新聚焦」 history line
+  // T-7f28 was written to remove. The cause decides WHETHER to say it; the
+  // deadline only decides WHICH of the two sentences, and null is the ordinary
+  // answer today, not a missing value.
+  //
+  // 🔴 …and the CLOCKED causes need a line of their own (T-ed79). accelerated_stop
+  // and context_high are the two that put the member on a deadline, and neither
+  // is applying a change of the owner's, so neither belongs in the sentence
+  // above. Without an arm here they fell through to 「上次重新聚焦 <time>」 — a
+  // PAST-TENSE history line printed while a deadline the owner started this
+  // second is counting down, and the deadline itself appeared nowhere in the UI
+  // at all. The owner pressing 加速停止 has to be able to see the clock he armed.
+  const deadlineText =
     vm.refocusDeadline != null
-      ? msg.agentWindDownForChange(
-          new Date(vm.refocusDeadline * 1000).toLocaleTimeString(),
-        )
+      ? new Date(vm.refocusDeadline * 1000).toLocaleTimeString()
       : null;
+  const windDownNote =
+    vm.refocusOp === "relocate" || vm.refocusOp === "runtime/model"
+      ? msg.agentWindDownForChange(deadlineText)
+      : vm.refocusOp === "accelerated_stop" || vm.refocusOp === "context_high"
+        ? msg.agentWindDownOnDeadline(deadlineText)
+        : null;
 
   // ── 最近操作 (last warden receipt) ─────────────────────────────────────────
   const hasLastOp = vm.lastOp !== "" && vm.lastOpAt != null;
@@ -477,6 +502,30 @@ export function AgentDetailPanel({
     vm.runtime === "codex" && vm.compactionCount != null
       ? `${contextText} (${t.mp.compactionCount(vm.compactionCount)})`
       : contextText;
+  // 成本歸零 is IRREVERSIBLE — nothing is retained server-side and there is no
+  // undo route — so it is the one action on this panel that never fires from
+  // the click itself. The confirm is the whole safety mechanism.
+  const [costResetOpen, setCostResetOpen] = useState(false);
+  const [costResetPending, setCostResetPending] = useState(false);
+  const [costResetError, setCostResetError] = useState<string | null>(null);
+
+  async function handleCostReset() {
+    if (!vm.onResetCost) return;
+    setCostResetPending(true);
+    setCostResetError(null);
+    try {
+      await vm.onResetCost();
+      setCostResetOpen(false);
+    } catch {
+      // Keep the modal open and say so: a reset that silently failed looks
+      // exactly like one that worked, and the owner cannot tell them apart
+      // from the cell alone (both halves absent renders as the dash either way).
+      setCostResetError(t.mp.costResetError);
+    } finally {
+      setCostResetPending(false);
+    }
+  }
+
   const costText = vm.cost != null ? formatCost(vm.cost) : dash;
 
   return (
@@ -490,7 +539,7 @@ export function AgentDetailPanel({
       {rendered.overlays}
       {rendered.afterIdentityCards}
 
-      {/* info card: LEFT 執行環境 + 模型 + 投入度 (editable launch intents), RIGHT 機器 +
+      {/* info card: LEFT 執行環境 + 模型 + 思考強度 (editable launch intents), RIGHT 機器 +
        * runtime account — the member page's mp-info2 layout, now the ONE layout. */}
       <div className="mp-card mp-info2">
         <div className="mp-field" data-testid={`${p}-model-effort-cell`}>
@@ -506,7 +555,7 @@ export function AgentDetailPanel({
           </div>
           <div className="mp-field__value" data-testid={`${p}-model-value`}>
             {shownModel || dash}
-            {/* Deliberately NOT the parenthesised form the 投入度 row uses
+            {/* Deliberately NOT the parenthesised form the 思考強度 row uses
                 below: that one restates the raw value, this one states the
                 value's PROVENANCE. Same styling with the same punctuation
                 would put two different kinds of thing in the same shape. */}
@@ -584,6 +633,23 @@ export function AgentDetailPanel({
           <div className="mp-cell">
             <div className="mp-cell__head">
               <span className="mp-cell__label">💲 {t.mp.estimatedCost}</span>
+              {vm.onResetCost && (
+                <button
+                  type="button"
+                  className="mp-cost-reset"
+                  data-testid={`${p}-cost-reset`}
+                  // Nothing measured ⇒ nothing to destroy. Offering an
+                  // irreversible-action prompt that would clear nothing is just
+                  // a confusing no-op, and vm.cost is null EXACTLY when both
+                  // halves are absent — the same condition the cell renders as
+                  // the dash, so the button and the value can never disagree.
+                  disabled={costResetPending || vm.cost == null}
+                  title={t.mp.costResetHint}
+                  onClick={() => setCostResetOpen(true)}
+                >
+                  {t.mp.costReset}
+                </button>
+              )}
             </div>
             <div className="mp-cell__value" data-testid={`${p}-cost`}>
               {costText}
@@ -754,6 +820,24 @@ export function AgentDetailPanel({
       )}
 
       {rendered.afterPromptCards}
+
+      {costResetOpen && (
+        <ConfirmModal
+          testId={`${p}-cost-reset-confirm`}
+          confirmTestId={`${p}-cost-reset-confirm-btn`}
+          body={msg.costResetConfirmBody(costText)}
+          error={costResetError}
+          cancelLabel={t.common.cancel}
+          confirmLabel={t.mp.costResetConfirm}
+          busy={costResetPending}
+          danger
+          onCancel={() => {
+            setCostResetOpen(false);
+            setCostResetError(null);
+          }}
+          onConfirm={() => void handleCostReset()}
+        />
+      )}
     </div>
   );
 }

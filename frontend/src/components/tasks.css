@@ -223,7 +223,7 @@
   border-color: color-mix(in srgb, var(--color-wait-external) 45%, transparent);
 }
 
-/* v4/v5 head: the badge row (☑ #T-xxxx · 優先權 chip · 狀態) leads, sharing row
+/* v4/v5 head: the badge row (☑ #<task id> · 優先權 chip · 狀態) leads, sharing row
    1 with the ▸/▾ expand indicator pinned at the card's top-right (v5 — it took
    the corner over from the deleted ⋮ menu); the title sits on row 2; then the
    aligned label column (任務類型 / 負責人 / 建立者 / 識別鍵). There is no
@@ -775,6 +775,16 @@ button.task-artifacts__chip:hover {
   color: var(--color-text-strong);
   border-color: color-mix(in srgb, var(--color-overlay) 25%, transparent);
 }
+/* The 「N版」 entry is a TEXT chip, not one of the 24px icon squares beside it —
+   it has to fit a number and a word without clipping either. */
+.task-artifacts__versions {
+  width: auto;
+  min-width: 24px;
+  padding: 0 7px;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+}
 .task-artifacts__remove:hover {
   color: var(--color-danger);
   border-color: color-mix(in srgb, var(--color-danger) 45%, transparent);
@@ -815,7 +825,7 @@ button.task-card__type-chip:hover {
   overflow-wrap: anywhere;
 }
 
-/* row 2 — the fixed badge row: 優先權 chip · #T-xxxx id badge · 狀態 badge.
+/* row 2 — the fixed badge row: 優先權 chip · #<task id> badge · 狀態 badge.
    flex-wrap keeps a pathological locale/width honest (wraps, never
    overflows). */
 .task-card__badge-row {
@@ -951,7 +961,7 @@ button.task-card__status-chip:hover {
   color: var(--color-danger);
 }
 
-/* ── deps 「等 T-xxxx」 blocks (v6) ──
+/* ── deps 「等 <task id>」 blocks (v6) ──
    One full-width block per dep, stacked. They render in the SAME slot the old
    .task-card__keys row held (between the meta column and the progress bar) —
    the slot was never the problem, the grey-hairline-mono-box styling was. See
@@ -1054,7 +1064,7 @@ button.task-card__status-chip:hover {
 /* ── ⏱ + tinted rounded row ──
    Born as the task-level waiting_external reason row (T-a20b); that block was
    removed as duplicate in T-c514 (the reason now lives only in the step). The
-   RULE stays because the deps 「等 T-xxxx」 chip below extends it — this is the
+   RULE stays because the deps 「等 <task id>」 chip below extends it — this is the
    card's shared "waiting" shape, and .task-card__waiting--dep is now its only
    consumer. Kept as a base + modifier pair rather than folded into --dep so the
    shape stays reusable and the dep chip's own diff stays about colour. */
@@ -1078,7 +1088,7 @@ button.task-card__status-chip:hover {
   flex: none;
   margin-top: 2px;
 }
-/* ── deps 「等 T-xxxx」 block (v6) ──
+/* ── deps 「等 <task id>」 block (v6) ──
    Extends the ⏱ + rounded tinted shape above — that is already this card's word
    for "waiting", and the old dep chip's grey mono hairline box was a second,
    worse word for the same idea.

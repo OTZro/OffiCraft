@@ -129,9 +129,20 @@ CREATE TABLE role_def (
 );
 
 -- lessons — per-role learnings overlay: agents sharing a role share one doc.
--- task_type is currently a single fixed key; the column stays because the
--- frozen wire (LessonsDTO) declares it and this doc family has grown an axis
--- before (office-wide → per-role).
+--
+-- 🔴 THE task_type COLUMN BELOW NO LONGER EXISTS ON A MIGRATED STATION, and
+-- this note is kept in the PAST TENSE rather than deleted because the CREATE
+-- below still names it and a reader arriving here needs to know why.
+-- What this comment used to say, in the present tense, was: "task_type is
+-- currently a single fixed key; the column stays because the frozen wire
+-- (LessonsDTO) declares it and this doc family has grown an axis before
+-- (office-wide → per-role)." Both halves of that reason are spent. T-2 removed
+-- the axis — 00061_drop_non_general_lessons.sql deleted every non-'general'
+-- row, then 00062_drop_lessons_task_type.sql rebuilt this table as
+-- (role_key PRIMARY KEY, text, tombstoned) — and LessonsDTO no longer declares
+-- the field on the wire at all.
+-- The SQL below is UNCHANGED and must stay so: it is the state 00062 migrates
+-- FROM, and a station replaying history from zero has to pass through it.
 CREATE TABLE lessons (
     role_key   TEXT NOT NULL,
     task_type  TEXT NOT NULL,

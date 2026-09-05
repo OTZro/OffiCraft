@@ -16,9 +16,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -171,9 +173,36 @@ type contextKey string
 
 const claimsContextKey contextKey = "ocserverd.claims"
 
+// verifyingKeyContextKey carries WHICH ring key verified this request's
+// credential (T-80). It is put here rather than acted on in the middleware
+// because the two questions are answered in different places: only requireAuth
+// can know which key matched, and only a handler can know whether this request
+// is evidence of anything.
+//
+// 🔴 WHY THAT SEPARATION IS THE WHOLE POINT. The first shape of this feature
+// recorded the key in the middleware, on every gated route — which is wrong in
+// the one direction that matters, because a request is not proof that the
+// machine is RUNNING on the credential it just presented. A warden renewing
+// itself presents its CANDIDATE credential to /api/machines before writing it
+// to disk (cli/ocwarden/renewapply.go: probe, then write, then exec), so the
+// middleware recorded "this machine has moved to the new key" about a
+// credential the machine might never adopt — and if the write then failed, the
+// station said converged while the machine kept running on the old key. That is
+// the number reading SAFE when it is not, on the one screen whose whole purpose
+// is to gate an irreversible removal.
+const verifyingKeyContextKey contextKey = "ocserverd.verifying_key_id"
+
 func claimsFromContext(ctx context.Context) map[string]any {
 	claims, _ := ctx.Value(claimsContextKey).(map[string]any)
 	return claims
+}
+
+// verifyingKeyFromContext returns the id of the ring key that verified this
+// request, or "" when there is none (an unauthenticated route, or a test that
+// built the context by hand).
+func verifyingKeyFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(verifyingKeyContextKey).(string)
+	return id
 }
 
 // extractToken pulls the bearer token from the request — the byte-faithful
@@ -193,19 +222,36 @@ func extractToken(r *http.Request) string {
 		}
 		return header
 	}
-	return r.URL.Query().Get("token")
+	return r.URL.Query().Get(authTokenQueryParam)
 }
+
+// authTokenQueryParam is the header-less credential extractToken accepts above.
+// Named here rather than typed at each use because it is not only read: GET
+// /api/chat refuses query parameters it does not declare (unknownChatQueryParams)
+// and has to know that this one is a credential rather than a typo — a second
+// spelling of it there would deny every EventSource and <img src> that carries
+// its token this way, and would deny them only in production.
+const authTokenQueryParam = "token"
 
 // requireAuth wraps a GATED handler with the JWT gate: the extracted token
 // (header first, then the `?token=` query fallback — see extractToken)
-// verified against the single HS256 secret, claims stashed on the request
+// verified against the LIVE signing-key ring, claims stashed on the request
 // context, 401 deny-by-default on anything else.
+//
+// 🔴 keys is the ring itself, not a key copied out of it (T-62). Every gated
+// route closes over this same pointer, which is what makes a rotation take
+// effect on the next request instead of at the next restart. A token verifies
+// if ANY key still in the ring signed it; REMOVING a key is what revokes the
+// tokens it signed.
 //
 // ownerIatFloor (nil = no cut) is the change-password revocation seam
 // (lifecycle.md §1.3): an owner-scope token whose iat is EARLIER than the
 // floor was minted before the last password change and is refused — the one
 // stateful exception to stateless verification. Agent/warden tokens never
-// consult it.
+// consult it — they have their OWN floor, which is a different shape and lives
+// on the member row (agentIatFloorRefusal below): T-14 項目 4B refuses an
+// agent-scope token minted for a generation its member has already replaced.
+// Warden credentials consult neither.
 //
 // lookup (nil = no cut) is the SECOND revocation seam, added here for T-9cf8
 // and deliberately in the same place: a credential belonging to a machine the
@@ -213,9 +259,16 @@ func extractToken(r *http.Request) string {
 // signature verification — a forged token is still just "invalid token" and
 // never reaches a roster read. It also binds every exp-less credential to an
 // active warden row; no other signed JWT may become permanent.
-func requireAuth(secret []byte, ownerIatFloor func() int64, lookup func(id string) (*Member, error), next http.Handler) http.Handler {
+//
+// T-80: the id of the ring key that verified this request is put on the context
+// (verifyingKeyContextKey) and NOT acted on here. requireAuth is the only place
+// that can know which key matched; it is emphatically NOT the place that can
+// know whether the request means the machine is RUNNING on that credential.
+// See verifyingKeyContextKey for what recording it here got wrong, and
+// HandleEventsApiEventsGet for where the answer is actually taken.
+func requireAuth(keys *keyring, ownerIatFloor func() int64, lookup func(id string) (*Member, error), next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if len(secret) == 0 {
+		if keys == nil || len(keys.verifySecrets()) == 0 {
 			writeError(w, http.StatusUnauthorized, "auth not configured")
 			return
 		}
@@ -224,7 +277,7 @@ func requireAuth(secret []byte, ownerIatFloor func() int64, lookup func(id strin
 			writeError(w, http.StatusUnauthorized, "missing credentials")
 			return
 		}
-		claims, err := verifyJWT(token, secret, time.Now().Unix())
+		claims, keyID, err := verifyJWTAnyKey(keys, token, time.Now().Unix())
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "invalid token")
 			return
@@ -238,6 +291,40 @@ func requireAuth(secret []byte, ownerIatFloor func() int64, lookup func(id strin
 				}
 			}
 		}
+		// The AGENT-side twin of the floor above, and deliberately next to it —
+		// same mechanism, different shape: ownerIatFloor is ONE global number
+		// (the owner has no roster row), while an agent's floor is per member
+		// and is read off that member's row through `lookup`. Warden rows are
+		// exempt by name inside; see agentIatFloorRefusal for why that is a
+		// safety property and not a shortcut.
+		if agentIatFloorRefusal(claims, lookup) {
+			// The refusal is AUTHORITATIVE and permanent: the floor only ever
+			// rises, so this credential can never come back. Name it on the
+			// response so the process still holding the old session's socket
+			// can stop retrying and shut itself down, instead of reconnecting
+			// every ≤15s forever while the cockpit shows the SUCCESSOR as the
+			// live one. Body text is unchanged on purpose — see
+			// authRefusalHeader in authz.go.
+			w.Header().Set(authRefusalHeader, refusalAgentSuperseded)
+			// And SAY SO in the log. This refusal ends a live session: the
+			// process reading the marker kills its own tmux and the model
+			// session under it. Every other way a member's session dies leaves
+			// a trace on the station; without this line the owner sees a
+			// member's tmux simply vanish with NOTHING in the server log, and
+			// the only remaining evidence is a 401 status code indistinguishable
+			// from the ordinary ones above. Nothing secret is written: the
+			// subject is a member id and the iat is a timestamp — no token, no
+			// signature, no claim body.
+			sub, _ := claims["sub"].(string)
+			iat, _ := claims["iat"].(float64)
+			log.Printf("[auth] REFUSED %s: agent credential iat=%d is below its "+
+				"member's agent_iat_floor — a newer session of this member has "+
+				"reported waking, so this one is superseded. Marked %s: %s; the "+
+				"process holding it should stop retrying and shut itself down.",
+				sub, int64(iat), authRefusalHeader, refusalAgentSuperseded)
+			writeError(w, http.StatusUnauthorized, "invalid token")
+			return
+		}
 		if permanentCredentialRefusal(claims, lookup) {
 			writeError(w, http.StatusUnauthorized, "invalid token")
 			return
@@ -246,19 +333,34 @@ func requireAuth(secret []byte, ownerIatFloor func() int64, lookup func(id strin
 			writeError(w, http.StatusUnauthorized, refusal)
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), claimsContextKey, claims)))
+		// T-80: hand the verifying key id down, do not act on it. Everything
+		// above can still refuse, so a key id only reaches a handler on a
+		// credential that was actually accepted — but "accepted" is still not
+		// "the machine is running on it", which is why nothing is recorded here.
+		ctx := context.WithValue(r.Context(), claimsContextKey, claims)
+		ctx = context.WithValue(ctx, verifyingKeyContextKey, keyID)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-// shareSigGate is the third auth path on the ONE ShareSig-flagged route (the
-// attachment blob GET): a bearer credential of any kind (header or ?token=)
-// always takes the normal authed chain — a present-but-invalid token stays a
-// 401 and NEVER falls through to the sig. Only a credential-less request may
-// present ?sig=; a valid sig (HMAC over exactly the path's attachment_id —
-// sharesig.go) serves the RAW handler, which by construction reads only that
-// one blob; a bad sig is 401; no sig at all falls to the authed chain's
+// shareSigGate is the third auth path on a ShareSig-flagged route: a bearer
+// credential of any kind (header or ?token=) always takes the normal authed
+// chain — a present-but-invalid token stays a 401 and NEVER falls through to
+// the sig. Only a credential-less request may present ?sig=; a valid sig serves
+// the RAW handler; a bad sig is 401; no sig at all falls to the authed chain's
 // "missing credentials" 401.
-func shareSigGate(secret []byte, raw, authed http.Handler) http.Handler {
+//
+// WHAT a valid sig means is the ROW's business, not this gate's: the row hands
+// in the verifier (RouteSpec.ShareSig), which reads its subject out of the
+// request and checks it against its OWN domain-separated key — the attachment
+// blob GET signs its path's attachment_id, GET /api/diff signs both addresses
+// and both labels. One gate, one precedence ladder, per-row subjects; every
+// other row never consults sigs at all.
+//
+// The verifier is handed the RING, not a key: which key signed a given sig is
+// not knowable from the request, so every verifier tries all of them
+// (sharesig.go) and a removed key ends its sigs on both rows alike.
+func shareSigGate(keys *keyring, verify shareSigVerifier, raw, authed http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if extractToken(r) != "" {
 			authed.ServeHTTP(w, r)
@@ -269,7 +371,7 @@ func shareSigGate(secret []byte, raw, authed http.Handler) http.Handler {
 			authed.ServeHTTP(w, r)
 			return
 		}
-		if len(secret) == 0 || !verifyShareSig(secret, r.PathValue("attachment_id"), sig) {
+		if keys == nil || !verify(keys, r, sig) {
 			writeError(w, http.StatusUnauthorized, "invalid signature")
 			return
 		}
@@ -279,12 +381,29 @@ func shareSigGate(secret []byte, raw, authed http.Handler) http.Handler {
 
 // ── app assembly ─────────────────────────────────────────────────────────────
 
+// buildAPIHandler is the PRODUCTION assembly seam: it is the only place that
+// decides which key ring the gate gets, and it always answers api.keys.
+//
+// 🔴 IT EXISTS SO THAT DECISION IS TESTABLE. buildHandler takes a ring as a
+// parameter because a handful of tests must hand it a DIFFERENT one (a nil ring
+// is how auth_refusal_exits_t14_test.go reaches the "auth not configured"
+// exit). That parameter is also how the gate and the mint could silently drift
+// apart: hand buildHandler a ring that is not api.keys and every rotation moves
+// the minting half while the verifying half stays behind — signed tokens the
+// server itself refuses, and nothing in the tree would have gone red. Wrapping
+// the one production call in a named function puts that line under test
+// (keyring_rotation_t62_test.go) instead of leaving it as an argument nobody
+// guards.
+func buildAPIHandler(api *apiServer, lookup func(id string) (*Member, error)) (http.Handler, error) {
+	return buildHandler(specsFor(api), api.keys, lookup, api.authPasswordChangedAt)
+}
+
 // buildHandler assembles the mux from the route table: boot assertions FIRST
 // (fail closed — a bad table is an error, never a served app), then each row
 // registered with its auth + RBAC chokes. Mirrors create_app + register_routes.
 // lookup is the roster read the principal resolver classifies agent-scoped
 // callers through (nil = token-only classification, the plumbing-test face).
-func buildHandler(specs []RouteSpec, secret []byte, lookup func(id string) (*Member, error), ownerIatFloor func() int64) (http.Handler, error) {
+func buildHandler(specs []RouteSpec, keys *keyring, lookup func(id string) (*Member, error), ownerIatFloor func() int64) (http.Handler, error) {
 	if err := assertAllRoutesLabelled(specs); err != nil {
 		return nil, err
 	}
@@ -301,9 +420,9 @@ func buildHandler(specs []RouteSpec, secret []byte, lookup func(id string) (*Mem
 			if spec.Requires != principalMachine {
 				h = requirePrincipalClass(spec.Requires, lookup, h)
 			}
-			h = requireAuth(secret, ownerIatFloor, lookup, h)
-			if spec.ShareSig {
-				h = shareSigGate(secret, spec.Handler, h)
+			h = requireAuth(keys, ownerIatFloor, lookup, h)
+			if spec.ShareSig != nil {
+				h = shareSigGate(keys, spec.ShareSig, spec.Handler, h)
 			}
 		}
 		mux.Handle(spec.Method+" "+spec.Path, h)
@@ -337,7 +456,7 @@ func specsFor(s *apiServer) []RouteSpec {
 // (at process start) so the probes report the sha of the RUNNING code — an
 // autodeploy that pulls a new sha but fails to restart keeps reporting the
 // OLD sha (handlers._PROCESS_SHA contract).
-func newAPIServer(dal *DAL, hub *Hub, secret []byte, tokenTTL int64, root assetRoot) *apiServer {
+func newAPIServer(dal *DAL, hub *Hub, keys *keyring, tokenTTL int64, root assetRoot) *apiServer {
 	// T-66a2 L3: bind the durable warden-command queue and rehydrate the FIFO
 	// before anything can connect. Assembly is the RIGHT seam: an upgrade
 	// re-execs this process, so "the queue survives a restart" is exactly "a
@@ -361,9 +480,10 @@ func newAPIServer(dal *DAL, hub *Hub, secret []byte, tokenTTL int64, root assetR
 		telemetry:                    newMemStore(),
 		gauge:                        newMemStore(),
 		machineClaims:                newMachineClaimStore(),
-		secret:                       secret,
+		keys:                         keys,
 		ownerTokenTTL:                tokenTTL,
 		agentTokenTTL:                defaultAgentTokenTTL,
+		acceleratedGraceSecs:         acceleratedGraceSecsDefault,
 		outsourceMaxParallel:         defaultOutsourceMaxParallel,
 		docCapCharsDuty:              dutyCapCharsDefault,
 		docCapCharsInsight:           contextDocMaxCharsDefault,
@@ -374,6 +494,7 @@ func newAPIServer(dal *DAL, hub *Hub, secret []byte, tokenTTL int64, root assetR
 		docCapCharsBootSequence:      bootSequenceCapCharsDefault,
 		docCapCharsOffboard:          offboardCapCharsDefault,
 		chatBudgetChars:              chatBudgetCharsDefault,
+		backupRetain:                 backupRetainDefault,
 		ctxhigh:                      defaultSseContextHigh(),
 		root:                         root,
 		binHashes:                    bindistBinaryHashesFrom(bindistFS()),
@@ -386,9 +507,11 @@ func newAPIServer(dal *DAL, hub *Hub, secret []byte, tokenTTL int64, root assetR
 		workerSpawnAttempts:          map[string]int{},
 		workerReclaimed:              map[string]bool{},
 		workerStopPending:            map[string]string{},
+		workerStopLanded:             map[string]workerStopDispatch{},
 		workerMachinePref:            map[string]string{},
 		workerReconcileStates:        map[string]reconcileState{},
 		workerMachineCooldown:        map[string]float64{},
+		workerOfflineSince:           map[string]float64{},
 	}
 }
 
@@ -454,6 +577,8 @@ func (l keepAliveListener) Accept() (net.Conn, error) {
 	return c, nil
 }
 
+const stationShutdownTimeout = 5 * time.Second
+
 // cmdServe is the zero-argument canonical start (service.app.serve): read
 // oc.toml, open + migrate + seed the store, load the DB settings snapshot
 // (running the one-shot oc.toml → DB auth migration — settings.go), assemble
@@ -461,15 +586,10 @@ func (l keepAliveListener) Accept() (net.Conn, error) {
 // (unless --no-reconcile) and the outsource-assignment scheduler cadence
 // (unless --no-outsource), bind host:port.
 func cmdServe(env func(string) string, noReconcile, noOutsource bool, out io.Writer) int {
-	cfg, warnings, err := loadConfig(configPath(env))
-	if err != nil {
-		fmt.Fprintf(out, "[ocserverd] FATAL: %v\n", err)
-		return 1
+	cfg, dsn, rc := announceResolution("serve", env, out)
+	if rc != 0 {
+		return rc
 	}
-	for _, w := range warnings {
-		fmt.Fprintf(out, "[ocserverd] WARN: %s\n", w)
-	}
-	dsn := resolveDSN(env, cfg)
 	dbPath, ok := sqliteFilePath(dsn)
 	if !ok {
 		fmt.Fprintf(out, "[ocserverd] FATAL: serve supports sqlite DSNs only for now (got %q)\n", dsn)
@@ -523,14 +643,28 @@ func cmdServe(env func(string) string, noReconcile, noOutsource bool, out io.Wri
 		fmt.Fprintf(out, "[ocserverd] FATAL: load settings: %v\n", err)
 		return 1
 	}
-	api := newAPIServer(dal, NewHub(), auth.secret, auth.ownerTokenTTL, ".")
+	// The signing-key ring, loaded ONCE and then shared BY POINTER with the
+	// handler tree below (T-62). auth.secret is this install's pre-ring key: it
+	// seeds the ring the first time this binary boots and is thereafter just
+	// the oldest key in it. Nothing downstream copies the key bytes out, which
+	// is why a rotation reaches every signer and verifier without a restart.
+	keys, err := loadKeyring(dal, auth.secret)
+	if err != nil {
+		fmt.Fprintf(out, "[ocserverd] FATAL: load signing keys: %v\n", err)
+		return 1
+	}
+	api := newAPIServer(dal, NewHub(), keys, auth.ownerTokenTTL, ".")
 	api.agentTokenTTL = auth.agentTokenTTL
 	api.passwordHash = auth.passwordHash
 	api.passwordChangedAt = auth.passwordChangedAt
+	api.mfaOffered = auth.mfaOffered
+	api.totpSecret = auth.totpSecret
+	api.totpLastStep = auth.totpLastStep
 	api.ctxhigh = auth.ctxhigh
 	api.codexCompactionThreshold = auth.codexCompactionThreshold
 	api.codexNoticeRound = auth.codexNoticeRound
 	api.monitoringRefreshSeconds = auth.monitoringRefreshSeconds
+	api.acceleratedGraceSecs = auth.acceleratedGraceSecs
 	api.outsourceMaxParallel = auth.outsourceMaxParallel
 	api.docCapCharsDuty = auth.docCapCharsDuty
 	api.docCapCharsInsight = auth.docCapCharsInsight
@@ -541,6 +675,7 @@ func cmdServe(env func(string) string, noReconcile, noOutsource bool, out io.Wri
 	api.docCapCharsBootSequence = auth.docCapCharsBootSequence
 	api.docCapCharsOffboard = auth.docCapCharsOffboard
 	api.chatBudgetChars = auth.chatBudgetChars
+	api.backupRetain = auth.backupRetain
 	api.updaterReceiveBeta = auth.updaterReceiveBeta
 	api.updaterAutoUpdate = auth.updaterAutoUpdate
 	// $OC_RELEASE_API_BASE is a HARNESS seam (conformance/e2e): it re-points
@@ -583,7 +718,7 @@ func cmdServe(env func(string) string, noReconcile, noOutsource bool, out io.Wri
 		fmt.Fprintf(out, "[ocserverd] FATAL: claim token: %v\n", err)
 		return 1
 	}
-	handler, err := buildHandler(specsFor(api), auth.secret, dal.GetMember, api.authPasswordChangedAt)
+	handler, err := buildAPIHandler(api, dal.GetMember)
 	if err != nil {
 		fmt.Fprintf(out, "[ocserverd] FATAL: %v\n", err)
 		return 1
@@ -591,24 +726,22 @@ func cmdServe(env func(string) string, noReconcile, noOutsource bool, out io.Wri
 	// The MCP tools/call loopback re-enters this very mux (auth gate + RBAC
 	// choke + param binding included) — wire it back onto the server.
 	api.loopback = handler
-	// Reconcile producer (reconcile.go): the 30s cadence is ALWAYS ON unless
-	// --no-reconcile (the shadow-deployment kill-switch — it also disables the
-	// event-driven dispatch seams via api.noReconcile).
+	// The lifecycle producer cadence (lifecycle_tick.go): ONE 30s loop running
+	// the reconcile half (reconcile.go) then the outsource half
+	// (outsource_sched.go), each under its own lock. Both kill switches survive
+	// the merge unchanged in meaning — each one skips ITS half inside the tick,
+	// and still disables that producer's event-driven seams (api.noReconcile /
+	// api.noOutsource). The loop is mounted either way; with both flags set its
+	// body is two boolean tests.
 	api.noReconcile = noReconcile
-	if noReconcile {
-		fmt.Fprintln(out, "[ocserverd] --no-reconcile: reconcile producer disabled (no cadence, no warden-command dispatch)")
-	} else {
-		api.startReconcileCadence(time.Duration(reconcileCadenceSecs * float64(time.Second)))
-	}
-	// Outsource assignment scheduler (outsource_sched.go; M3 Phase 2): the 30s
-	// cadence is ALWAYS ON unless --no-outsource (which also disables the
-	// event-driven create_task tick via api.noOutsource).
 	api.noOutsource = noOutsource
-	if noOutsource {
-		fmt.Fprintln(out, "[ocserverd] --no-outsource: outsource-assignment scheduler disabled (no cadence, no event-driven assignment)")
-	} else {
-		api.startOutsourceCadence(time.Duration(outsourceCadenceSecs * float64(time.Second)))
+	if noReconcile {
+		fmt.Fprintln(out, "[ocserverd] --no-reconcile: reconcile producer disabled (no cadence half, no warden-command dispatch)")
 	}
+	if noOutsource {
+		fmt.Fprintln(out, "[ocserverd] --no-outsource: outsource-assignment scheduler disabled (no cadence half, no event-driven assignment)")
+	}
+	api.startLifecycleCadence(time.Duration(lifecycleCadenceSecs * float64(time.Second)))
 	// Auto-update cadence (auto_update.go): ALWAYS mounted — the OFF-default
 	// `updater.auto_update` setting gates action, so an owner arming it via
 	// PATCH /api/settings needs no restart. An unarmed tick is two mutex reads.
@@ -651,7 +784,17 @@ func cmdServe(env func(string) string, noReconcile, noOutsource bool, out io.Wri
 	// the kernel-assigned address, so use it for both the announcement and
 	// in-process URLs rather than retaining the requested :0 placeholder.
 	boundAddr := ln.Addr().String()
-	api.selfBase = "http://" + boundAddr
+	// The scheme comes from schemeForHost (base_scheme_t78.go), not from a
+	// literal. It resolves to http today and every day: boundAddr is this
+	// listener's own address and defaultHost is hardwired to 127.0.0.1. So this
+	// is not a behaviour change — it is the FIFTH place that decided a scheme on
+	// its own, and the most load-bearing of them: selfBase is written into a real
+	// machine's OC_BASE by runWardenInstallHere (api_machines.go) and by the
+	// first-run onboarding path, i.e. into a launchd plist that nothing ever
+	// re-derives. Found by the independent reviewer, who noted it is the same
+	// "correct by coincidence" this ticket already fixed once in browser.go and
+	// asked why that reasoning stopped one file short.
+	api.selfBase = schemeForHost(boundAddr) + "://" + boundAddr
 	fmt.Fprintf(out, "ocserverd serving on http://%s\n", boundAddr)
 	if claimToken != "" {
 		setupURL := firstRunSetupURL(boundAddr, claimToken)
@@ -665,11 +808,40 @@ func cmdServe(env func(string) string, noReconcile, noOutsource bool, out io.Wri
 			fmt.Fprintf(out, "[ocserverd]   %s\n", setupURL)
 		}
 	}
+	// Root every request in a station context. A signal shutdown cancels that
+	// context after marking the cause, so active SSE handlers run their defer and
+	// record station-shutdown instead of looking like peer disconnects. An
+	// upgrade marks the same cause before re-exec but deliberately leaves the
+	// listener alive until syscall.Exec (or its failure) so the existing
+	// restart contract is preserved.
+	stationCtx, stationCancel := context.WithCancel(context.Background())
+	api.stationCancel = stationCancel
+	httpServer := &http.Server{
+		Handler: handler,
+		BaseContext: func(net.Listener) context.Context {
+			return stationCtx
+		},
+	}
+	signalCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
+	shutdownDone := make(chan struct{})
+	go func() {
+		<-signalCtx.Done()
+		api.markStationShutdown()
+		api.cancelStationContext()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), stationShutdownTimeout)
+		defer cancel()
+		_ = httpServer.Shutdown(shutdownCtx)
+		close(shutdownDone)
+	}()
 	// Wrap the listener so every accepted connection carries the keep-alive
 	// half-open reaper (T-7e07; sseKeepAlive above).
-	if err := http.Serve(keepAliveListener{ln}, handler); err != nil {
+	if err := httpServer.Serve(keepAliveListener{ln}); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintf(out, "[ocserverd] FATAL: %v\n", err)
 		return 1
+	}
+	if signalCtx.Err() != nil {
+		<-shutdownDone
 	}
 	return 0
 }

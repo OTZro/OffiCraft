@@ -105,21 +105,6 @@ func TestCreateManualMintsSystemKeyFromDisplayName(t *testing.T) {
 	}
 }
 
-// TestManualDisplayLabel pins the prose face: distinct display names carry
-// the addressing key in parentheses; a blank or key-equal display name is
-// the bare key (no "x（x）" stutter).
-func TestManualDisplayLabel(t *testing.T) {
-	if got := manualDisplayLabel("重構後端", "tm-1a2b3c4d5e6f"); got != "重構後端（tm-1a2b3c4d5e6f）" {
-		t.Fatalf("distinct display label: %q", got)
-	}
-	if got := manualDisplayLabel("", "review-pr"); got != "review-pr" {
-		t.Fatalf("blank display must be the bare key: %q", got)
-	}
-	if got := manualDisplayLabel("review-pr", "review-pr"); got != "review-pr" {
-		t.Fatalf("key-equal display must not stutter: %q", got)
-	}
-}
-
 func TestAgentCreatesManualAndEditsContentFields(t *testing.T) {
 	api := newTasksTestServer(t)
 
@@ -299,7 +284,7 @@ func TestOwnerAssigneeOnCreateIsValidatedAndApplied(t *testing.T) {
 func TestAdminAgentAssigneeIsAppliedOnCreateAndEdit(t *testing.T) {
 	api := newTasksTestServer(t)
 	if err := api.dal.PutMember(Member{
-		ID: "m-admin", Kind: KindAssistant, RoleKey: adminRoleKey,
+		ID: "m-admin", Kind: KindStaff, RoleKey: adminRoleKey,
 	}); err != nil {
 		t.Fatalf("PutMember: %v", err)
 	}

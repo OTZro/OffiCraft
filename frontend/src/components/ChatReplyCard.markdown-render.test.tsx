@@ -2,7 +2,7 @@
 // free text and must render through the shared, XSS-safe `Markdown` component.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { render, fireEvent } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { ChatReplyCard } from "./ChatReplyCard";
 import type { ReplyCard } from "../api/adapter";
@@ -15,7 +15,8 @@ function mkCard(over: Partial<ReplyCard>): ReplyCard {
     kind: "decision",
     summary: "要幫你寄出這封信嗎？",
     body: "",
-    options: ["寄出", "先不要"],
+    options: [{ text: "寄出", aiPick: true }, { text: "先不要", aiPick: false }],
+    selectMode: "single",
     status: "waiting",
     attachments: [],
     createdTs: Date.now() / 1000 - 600,
@@ -26,12 +27,17 @@ function mkCard(over: Partial<ReplyCard>): ReplyCard {
   };
 }
 
-function renderCard(id = "rc-1") {
-  return render(
+/** Every inline card mounts COLLAPSED now (owner 2026-09-04), and the markdown
+ * this file is about lives in the OPEN card's body/summary — so the render
+ * opens it. */
+async function renderCard(id = "rc-1") {
+  const r = render(
     <I18nProvider>
       <ChatReplyCard replyCardId={id} fallbackSummary="(summary)" />
     </I18nProvider>
   );
+  fireEvent.click(await r.findByTestId("chat-reply-card-expand"));
+  return r;
 }
 
 beforeEach(() => {
@@ -48,7 +54,7 @@ describe("ChatReplyCard markdown render (T-13af)", () => {
     __injectMockReplyCard(
       mkCard({ body: "**注意**:\n- 會寄到客戶信箱\n- 無法撤回" })
     );
-    const { container, findByTestId } = renderCard();
+    const { container, findByTestId } = await renderCard();
     await findByTestId("chat-reply-card");
 
     const body = container.querySelector(".reply-card__body")!;
@@ -61,7 +67,7 @@ describe("ChatReplyCard markdown render (T-13af)", () => {
     __injectMockReplyCard(
       mkCard({ body: "<img src=x onerror=alert(1)>" })
     );
-    const { container, findByTestId } = renderCard();
+    const { container, findByTestId } = await renderCard();
     await findByTestId("chat-reply-card");
 
     const body = container.querySelector(".reply-card__body")!;
@@ -76,7 +82,7 @@ describe("ChatReplyCard markdown render (T-13af)", () => {
     __injectMockReplyCard(
       mkCard({ summary: "要不要合 **fms #20054**（`919fe961`）？", body: "內文" })
     );
-    const { container, findByTestId } = renderCard();
+    const { container, findByTestId } = await renderCard();
     await findByTestId("chat-reply-card");
 
     const summary = container.querySelector(".reply-card__summary")!;
@@ -91,7 +97,7 @@ describe("ChatReplyCard markdown render (T-13af)", () => {
   it("still renders the fallbackSummary when the card has not landed", async () => {
     // no __injectMockReplyCard → component falls back; the fallback path must
     // survive the switch to <Markdown>.
-    const { container, findByTestId } = renderCard("rc-missing");
+    const { container, findByTestId } = await renderCard("rc-missing");
     await findByTestId("chat-reply-card");
 
     const summary = container.querySelector(".reply-card__summary")!;

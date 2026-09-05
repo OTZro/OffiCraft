@@ -1,3 +1,43 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// 🔴 T-10 · HOW TO TELL WHETHER A GATE IS DRAWN IN THE RIGHT PLACE
+//
+// Learned expensively across this file and its sibling (the other of
+// MonitorPage.mutation-reconcile.test.tsx / e2e_test/tests/
+// 10_settings_roles_inline.spec.js): three separate gates were written,
+// reviewed and shipped while guarding something narrower than what they said
+// they guarded.
+//
+// THE RULE. A gate's assertion message IS its specification. If a test double
+// exists that makes the message FALSE while the assertion still PASSES, the
+// gate is drawn in the wrong place — however sensible the expression it
+// evaluates happens to look.
+//
+// HOW TO APPLY IT. Write the property as one sentence (the message usually is
+// that sentence). Then list EVERY line that sentence depends on and build a
+// double for each. The expression the gate itself reads is only ONE of those
+// lines. The three worked examples, all from this ticket:
+//   • "the fake must have captured subscribers" → `.length > 0` passed happily
+//     on a store-last-only fake, which was precisely the bug it was added to
+//     catch. Guarded "not zero"; claimed "the right one".
+//   • "must FAN OUT to EVERY subscriber" → `.length > 1` still passed when the
+//     emit one line below delivered to `handlers[0]` only. The sentence
+//     depended on the emit; the enumeration had covered only the length.
+//   • "No later poll, at any speed, can satisfy this" → true of polls, false of
+//     the frame-triggered fourth request, which is neither a poll nor later.
+//
+// SCOPE: assertion messages AND comments, equally. The third example was a
+// comment, and a confidently wrong comment is worse than none — the next
+// maintainer acts on it. Anything a maintainer will act on is in scope.
+//
+// 🔴 THE LIMITATION, UNVARNISHED. This rule has caught three cases here, and in
+// two of them it only fired because a SECOND person applied it. The author of
+// these tests had already adopted the rule, applied it to his own gate, and
+// still shipped the fan-out hole — he enumerated doubles for the expression the
+// gate read and not for the line directly beneath it. So it is an effective
+// REVIEW check and is NOT reliable as an author self-check. If the only person
+// who has ever run doubles against a gate is the person who wrote it, that gate
+// has not actually been checked yet.
+// ─────────────────────────────────────────────────────────────────────────────
 // e2e_test/tests/10_settings_roles_inline.spec.js
 // B10 · 角色誌/監控 inline create rows + role rename/reset gating (M2-2 batch:
 // 8d947d1 / 23d8063 / cee768f / 49d1930 / 3f88128).
@@ -196,10 +236,76 @@ test.describe('B10 · settings roles + monitor — inline create rows & gating',
     await expect(row, 'a successful create collapses the row').toHaveCount(0, {
       timeout: 10_000,
     });
+
+    // ── T-10: both assertions below are anchored so the 5s trailing poll can
+    // NOT be what satisfies them. Without that, this step is a luck detector.
+    //
+    // MonitorPage's onboard awaits `refetchMachines()` and only THEN collapses
+    // the row, so under a correct hook the new row is already committed when
+    // the collapse above passes — required latency is zero. When the hook
+    // instead discards that refetch (the T-10 defect), the row arrives only on
+    // the trailing poll, and both assertions must fail rather than wait it out.
+    //
+    // Measured on this suite's own flow (fresh station, /api/settings reports
+    // monitoring_refresh_seconds=5): the row collapses ~0.25s after mount and
+    // the trailing poll lands ~5.1s after mount — a gap of 4907/4950/5019ms
+    // over three runs. Playwright's default expect timeout is 5000ms (this
+    // config sets no `expect.timeout`), so the old bare `toContainText` was
+    // racing that poll to within ~50ms and usually LOSING the race in the
+    // defect's favour — i.e. going green on a broken hook. The CI trace on
+    // run 33033163627 is the same race landing 4ms the other way.
+    //
+    // (1) The causal anchor: read the table at the moment of collapse. No later
+    //     POLL, at any speed, can retroactively satisfy this — but see the
+    //     KNOWN GAP below, because a poll is not the only other supplier.
+    //
+    // 🔴 KNOWN GAP, NAMED RATHER THAN PAPERED OVER. Neither assertion here has
+    //    a request-count gate, and there is a fourth request that is neither a
+    //    poll nor later. `useMachines`' schedule() computes
+    //    `delay = max(0, refreshSeconds*1000 - (now - lastStarted))`, and the
+    //    timer callback's `inFlight` guard is set only by the effect's own
+    //    refresh, never by a manual `refetch()`. So once >= refreshSeconds has
+    //    elapsed since the last effect refresh, the member frame fires a real
+    //    GET IMMEDIATELY, alongside the in-flight refetch, and that GET's own
+    //    answer already contains the new row.
+    //
+    //    Measured 2026-08-27 in this browser, with a 6s idle before onboarding
+    //    and only the reconciling GET held open: reconciling GET [6187, 7689]
+    //    (still in flight), frame at 6324, extra GET [6324, 6326], row on
+    //    screen at 6352 — and the inline row did not collapse until 7964. The
+    //    row beat the collapse by 1.6 SECONDS. So against this fourth request
+    //    the "read the table at collapse" anchor is worth exactly ZERO, not
+    //    "a narrow margin": on a broken hook both assertions here would pass
+    //    DETERMINISTICALLY, not occasionally.
+    //
+    //    Why it is left as a gap rather than fixed here: this test's job is the
+    //    inline-row UX (Esc collapses, Enter creates, the registry agrees), and
+    //    bolting the full request-accounting apparatus onto it would bury that.
+    //    The flow above idles ~250ms before onboarding — roughly 20x under the
+    //    5s threshold — so the fourth request is unreachable on this path today.
+    //    That is a property of the current step ordering, not a guarantee: put a
+    //    >5s wait anywhere above and this silently stops holding.
+    //    The DETERMINISTIC T-10 guard is the forced-overlap test at the bottom
+    //    of this file, which does carry the request-count gate (gate (0)).
+    const tableAtCollapse = await page
+      .locator('.mon-table, table')
+      .first()
+      .innerText();
+    expect(
+      tableAtCollapse,
+      'the new row must already be in the table when the inline row collapses — ' +
+        'arriving later means the create refetch was discarded and only the 5s poll repaired it',
+    ).toContain(MACHINE_NAME);
+
+    // (2) The retrying assertion, kept for a genuinely slow render, but with an
+    //     explicit budget FAR below the ~4.9s poll gap. 2s is ~2900ms of
+    //     clearance under the poll while still granting 2s to a DOM check that
+    //     is already satisfied, so it cannot turn into a new false RED — the
+    //     failure mode this whole ticket must not create.
     await expect(
       page.locator('.mon-table, table').first(),
       'the machine table must show the new row under the typed name',
-    ).toContainText(MACHINE_NAME);
+    ).toContainText(MACHINE_NAME, { timeout: 2_000 });
     // API對照: the registry carries it (created via POST /api/machines).
     const machines = await (
       await request.get(`${BASE}/api/machines`, { headers: authHeaders(token) })
@@ -209,4 +315,41 @@ test.describe('B10 · settings roles + monitor — inline create rows & gating',
       'the machine registry must carry the onboarded machine',
     ).toBeTruthy();
   });
+
+  // ── T-10 deterministic regression guard — RETIRED 2026-08-27 ────────────
+  // A forced-overlap case used to live here. It held the reconciling GET open
+  // 400ms so the onboard's own `member` frame would land INSIDE it, turning the
+  // ~1%-of-runs T-10 race into a certainty, and then asserted the row was on
+  // screen at the instant the inline row collapsed.
+  //
+  // It was removed on the owner's ruling, and the reason is worth keeping:
+  //
+  //   > 「這個問題不是很重要 晚一點到又怎麼了」
+  //   > 「regression 的價值在於被保護的對象的重要性」
+  //
+  // A race cannot be commanded, only observed — so the case carried an
+  // anti-vacuity gate that reddened when the staging did not happen ("this run
+  // proves nothing"). That gate was correct and it fired on main the very first
+  // time (run 33050066316 on 013de9c3: the frame landed at t=337.4 while the
+  // reconciling GET ran [360, 774] — it beat the window by 23ms because the POST
+  // itself outran the frame's delivery). Nothing was wrong with the product.
+  // But an intermittent red nobody can act on is exactly the thing that teaches
+  // everyone to re-run first, which is the defect class this repo is actively
+  // trying to remove — so a guard over a five-second cosmetic delay is not worth
+  // paying for it.
+  //
+  // WHAT STILL GUARDS T-10 (do not read this as "unguarded"):
+  //   • the unit layer — useMachines.test.ts / useMonitoring.enabled.test.ts /
+  //     useMonitoring.sse-invalidation.test.ts. Four NAMED assertions, driven
+  //     with refreshSeconds pushed to an hour and no timer ever advanced, so the
+  //     only thing that can put the row on screen is the in-flight answer
+  //     itself. Deterministic, no clock, no flake. Re-introducing the defect
+  //     reddens all four (measured).
+  //   • the case ABOVE — it asserts the row is present at the moment the inline
+  //     row collapses, which the 5s trailing poll cannot satisfy. It is a
+  //     CORRECT detector but only samples the race when it flips naturally
+  //     (~1%), so treat it as a bonus, not as the guard.
+  //
+  // If the cost of this bug ever rises (e.g. onboard stops being the only path
+  // through it), the removed case is recoverable from git history on this file.
 });

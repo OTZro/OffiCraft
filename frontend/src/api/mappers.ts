@@ -8,6 +8,7 @@ import type { ThemeBundle } from "../lib/themeBundle";
 import type { components } from "./generated/schema";
 import { DOC_CAP_CHARS_DEFAULTS } from "./docCap";
 import { CHAT_BUDGET_CHARS_DEFAULT } from "./chatBudget";
+import { BACKUP_RETAIN_DEFAULT } from "./backupRetain";
 import type {
   Member,
   MemberStatus,
@@ -21,11 +22,11 @@ import type {
   VersionView,
   ReleaseCheckView,
   BackupHealthView,
+  SigningKeyView,
   BackupHealthStatus,
   BackupHealthCode,
   GlobalContextView,
   BootDocView,
-  BootDocKind,
   DocumentHistoryEntryView,
   DocumentHistoryView,
   DocumentRevisionView,
@@ -58,6 +59,7 @@ import type {
   WireVersion,
   WireReleaseCheck,
   WireBackupHealth,
+  WireSigningKeys,
   WireGlobalContext,
   WireBootDoc,
   WireDocumentHistory,
@@ -77,6 +79,7 @@ import type {
   WireChatRead,
   WireChatGalleryEntry,
   WireReplyCard,
+  WireReplyCardOption,
   WireWebhookEndpoint,
   WireWebhookRequestLog,
   WireScheduledMessage,
@@ -85,7 +88,10 @@ import type {
   WireTaskListItem,
   WireTaskDepRef,
   WireTaskStep,
+  WireTaskStepDetail,
   WireTaskArtifact,
+  WireTaskArtifactRef,
+  WireTaskArtifactVersion,
   WireOutsourceWorker,
   WireTaskManual,
   WireTaskManualListItem,
@@ -104,12 +110,16 @@ import type {
   ChatReadReceipt,
   GalleryAttachment,
   ReplyCard,
+  ReplyCardOption,
   ServerSettingsView,
   OnboardingReportView,
   TaskView,
   TaskDepRefView,
   TaskStepView,
+  TaskStepDetailView,
   TaskArtifactView,
+  TaskArtifactRefView,
+  TaskArtifactVersionView,
   OutsourceWorkerView,
   TaskTypeView,
   TaskManualSummaryView,
@@ -214,7 +224,7 @@ export function toMember(w: WireMember): Member {
     actualEffort: w.actual_effort || "",
     model: w.model, // direct
     effort: (w.effort || "medium") as Effort, // direct (narrowed to union)
-    kind: w.kind, // "assistant" | "warden" | … — office roster keeps assistants only
+    kind: w.kind, // "staff" | "warden" | … — office roster keeps staff only
     desiredMachineId: w.desired_machine_id, // direct passthrough — warden↔machine resolution for teardown
     // The owner's lifecycle intent — a warden carrying "uninstall" drives the
     // machines panel's "uninstalling…" transitional state. Direct passthrough.
@@ -325,20 +335,48 @@ export function toChatMessage(w: WireChatMessage): ChatMessage {
     // The reply card folded onto this message (wake snapshot only). Absent on
     // every other chat read, so the honest null — the message carries no card.
     card: w.card ? toChatInlineReplyCard(w.card) : null,
+    // The quoted message's id (`reply_to`). Honest passthrough: the server
+    // sends "" for a message that replies to nothing, which reads as null here.
+    replyTo: w.reply_to ? w.reply_to : null,
+    // WHAT was replied to (`reply_to_chat`), rebuilt server-side on every read.
+    // The key is OMITTED by the server both when this message is not a reply and
+    // when its original no longer exists — one null covers both, and the UI
+    // tells them apart by looking at `replyTo`, which never disappears.
+    //
+    // The strings are taken as they arrive. `content` in particular is NOT
+    // re-shortened here: its length is defined on the server and nowhere else,
+    // so a second trim in the browser would be a second rule to keep in step.
+    //
+    // `to` rides across for the same reason `from` does: the quote line draws
+    // 「寄件者 → 收件者」, and the recipient it draws is the QUOTED message's,
+    // not this thread's peer — a quote may come from another conversation.
+    replyToChat: w.reply_to_chat
+      ? {
+          id: w.reply_to_chat.id,
+          from: w.reply_to_chat.from,
+          fromName: w.reply_to_chat.from_name ?? "",
+          to: w.reply_to_chat.to,
+          toName: w.reply_to_chat.to_name ?? "",
+          content: w.reply_to_chat.content ?? "",
+        }
+      : null,
   };
 }
 
 /** Map one wire in-place reply card (`ChatMessageDTO.card`) → the view model.
- * Pure passthrough of the DECISION fields; `answer_option_idx` keeps its
- * three-way meaning (a number = that option was picked, null = free text only
- * or not answered yet), so it is NOT coerced to a sentinel index. */
+ * Pure passthrough of the DECISION fields; `answer_option_idxs` keeps its
+ * three-way meaning (a list = those options were circled, null = free text only
+ * or not answered yet), so an absent list is NOT coerced to an empty one — the
+ * card face draws 「你選的」 off membership in this list, and an empty list and
+ * a null one must not both mean "answered with nothing". */
 export function toChatInlineReplyCard(
   w: WireChatInlineReplyCard,
 ): ChatInlineReplyCardView {
   return {
-    options: w.options ?? [],
-    answerOptionIdx:
-      typeof w.answer_option_idx === "number" ? w.answer_option_idx : null,
+    options: (w.options ?? []).map(toReplyCardOption),
+    answerOptionIdxs: Array.isArray(w.answer_option_idxs)
+      ? w.answer_option_idxs
+      : null,
     answerText: w.answer_text ?? "",
     answeredTs: w.answered_ts ?? 0,
     answeredAtDisplay: w.answered_at_display ?? "",
@@ -369,6 +407,13 @@ export function toGalleryAttachment(
  * `answer` stays null unless answered (never fabricated); the wire guarantees
  * `status` ∈ {waiting, answered, expired} (the narrowing cast mirrors
  * `toMember`'s). */
+/** Map one wire quick-reply option → the view model. `ai_pick` defaults FALSE
+ * when the wire omits it: an unmarked option is not the AI's recommendation,
+ * and there is no positional fallback to guess with. */
+export function toReplyCardOption(w: WireReplyCardOption): ReplyCardOption {
+  return { text: w.text, aiPick: w.ai_pick ?? false };
+}
+
 export function toReplyCard(w: WireReplyCard): ReplyCard {
   return {
     id: w.id,
@@ -376,7 +421,8 @@ export function toReplyCard(w: WireReplyCard): ReplyCard {
     kind: w.kind,
     summary: w.summary ?? "",
     body: w.body ?? "",
-    options: w.options ?? [],
+    options: (w.options ?? []).map(toReplyCardOption),
+    selectMode: w.select_mode,
     status: w.status as ReplyCard["status"],
     // QUESTION-side attachments (T-5e8a): honest passthrough of the served
     // refs — an absent/defaulted wire field reads as an empty list.
@@ -402,7 +448,7 @@ export function toReplyCard(w: WireReplyCard): ReplyCard {
       : null,
     answer: w.answer
       ? {
-          optionIdx: w.answer.option_idx,
+          optionIdxs: w.answer.option_idxs,
           text: w.answer.text ?? "",
           attachments: (w.answer.attachments ?? []).map((a) => ({
             id: a.id,
@@ -431,9 +477,14 @@ export function toTaskStep(w: WireTaskStep): TaskStepView {
     // One-line reason while the step sits in waiting_external; "" otherwise
     // (T-9ca5). Honest passthrough.
     waitingReason: w.waiting_reason ?? "",
-    // The step's working note (T-cc3e) — bound to no status, unlike
-    // waitingReason above. Honest passthrough.
-    note: w.note ?? "",
+    // 🔴 The note TEXT is not here, and it is not here on the WIRE either
+    // (T-66, owner rc-4c8065fb30a5). What the task view carries is its SIZE,
+    // and that number is the whole basis of the cockpit's 備註 entry: > 0 means
+    // there is something to open, 0 means the step genuinely has none. The text
+    // is fetched on open through `getTaskStep`. Honest passthrough of an
+    // additive-optional wire field, so an old payload reads as 0 rather than
+    // fabricating an entry.
+    noteSizeChars: w.note_size_chars ?? 0,
     // Read-time join the server computes (`reply_card_status`): the bound card's
     // live status for the card-bearing step, "" otherwise. Closed set only, else
     // honest null.
@@ -447,6 +498,21 @@ export function toTaskStep(w: WireTaskStep): TaskStepView {
     orderIdx: w.order_idx,
     startedTs: w.started_ts ?? 0,
     finishedTs: w.finished_ts ?? 0,
+  };
+}
+
+/** Map one wire SINGLE step → `TaskStepDetailView` (T-66) — the response of
+ * `get_task_step`, the only read that serves a step note's text. Honest
+ * passthrough; `detailLevel` is carried across rather than dropped, because it
+ * is the payload's own statement that this is the full step and not the task
+ * view's summary row. */
+export function toTaskStepDetail(w: WireTaskStepDetail): TaskStepDetailView {
+  return {
+    ...toTaskStep(w),
+    detailLevel: w.detail_level,
+    note: w.note,
+    noteSizeChars: w.note_size_chars,
+    noteCapChars: w.note_cap_chars,
   };
 }
 
@@ -470,7 +536,44 @@ export function toTaskArtifact(w: WireTaskArtifact): TaskArtifactView {
     attachmentId: w.attachment_id ?? "",
     createdTs: w.created_ts ?? 0,
     createdBy: w.created_by ?? "",
+    versionCount: w.version_count ?? 0,
   };
+}
+
+/** Map one retained PREVIOUS version of a pinned deliverable (T-60). Honest
+ * passthrough, and `versionCount`'s twin above is the reason it matters: an
+ * older server that does not send `version_count` reads as 0, which is NOT
+ * "one version" — it is "this server never said", and the card shows no
+ * versions entry rather than claiming the deliverable has never been replaced. */
+export function toTaskArtifactVersion(
+  w: WireTaskArtifactVersion,
+): TaskArtifactVersionView {
+  const kind =
+    w.kind === "file" || w.kind === "image" || w.kind === "link"
+      ? w.kind
+      : "link";
+  return {
+    id: w.id,
+    kind,
+    url: w.url ?? "",
+    label: w.label ?? "",
+    filename: w.filename ?? "",
+    mime: w.mime ?? "",
+    isImage: w.is_image ?? false,
+    attachmentId: w.attachment_id ?? "",
+    createdTs: w.created_ts ?? 0,
+    createdBy: w.created_by ?? "",
+  };
+}
+
+/** Map one wire artifact INDEX row → `TaskArtifactRefView` (T-66) — the two
+ * fields a task response carries per deliverable since owner c-cd063427fb2f.
+ * Honest passthrough: an artifact pinned without a label maps to "", and this
+ * mapper does NOT invent one from a filename or a url, because it has neither.
+ * The renderer decides what a nameless artifact looks like, on the full row it
+ * fetched through `listTaskArtifacts`. */
+export function toTaskArtifactRef(w: WireTaskArtifactRef): TaskArtifactRefView {
+  return { id: w.id, label: w.label ?? "" };
 }
 
 /** Map one wire dep ref → `TaskDepRefView` (T-a3e4). Honest passthrough: an
@@ -523,7 +626,9 @@ export function toTask(w: WireTask): TaskView {
       .sort((a, b) => a.orderIdx - b.orderIdx),
     // Full task carries the resolved set; count kept == length so a hydrated
     // card keeps the same 「產物 N」 badge as its light-list frame.
-    artifacts: (w.artifacts ?? []).map(toTaskArtifact),
+    // INDEX rows (T-66): id + label. The full rows come from
+    // `listTaskArtifacts`, not from here — see TaskView.artifacts.
+    artifacts: (w.artifacts ?? []).map(toTaskArtifactRef),
     artifactCount: (w.artifacts ?? []).length,
   };
 }
@@ -648,6 +753,13 @@ export function toOutsourceWorker(w: WireOutsourceWorker): OutsourceWorkerView {
     refocusDeadline:
       w.refocus_deadline && w.refocus_deadline > 0 ? w.refocus_deadline : null,
     desiredState: w.desired_state ?? "online",
+    // Response-only, absent on every read face — passed through as-is so
+    // `undefined` keeps meaning "this answer does not carry the signal"
+    // (T-ed79 #5/#12). Coalescing them to false here would erase exactly the
+    // distinction the three fields exist to make.
+    relocationPending: w.relocation_pending ?? undefined,
+    relocationDeferred: w.relocation_deferred ?? undefined,
+    activationPending: w.activation_pending ?? undefined,
   };
 }
 
@@ -957,6 +1069,9 @@ export function toServerSettings(w: WireServerSettings): ServerSettingsView {
     codexNoticeRound: w.codex_notice_round,
     codexCompactionThreshold: w.codex_compaction_threshold ?? 3,
     monitoringRefreshSeconds: w.monitoring_refresh_seconds ?? 5,
+    // 120 is the server's shipped default (StoppingTimeoutSecs), the value an
+    // install that never touched the knob runs on.
+    acceleratedGraceSecs: w.accelerated_grace_secs ?? 120,
     outsourceMaxParallel: w.outsource_max_parallel ?? 0,
     // ?? that segment's shipped default, not 0: a server too old to send the
     // field still caps at it, and a 0 here would read as "no cap" to every
@@ -981,6 +1096,11 @@ export function toServerSettings(w: WireServerSettings): ServerSettingsView {
     // the caps above: against a server too old to send the field, 0 would read
     // as "no chat at all", which is the one answer that is never right.
     chatBudgetChars: w.chat_budget_chars ?? CHAT_BUDGET_CHARS_DEFAULT,
+    // T-8 backup retention. Same "?? the shipped default, never 0" reasoning:
+    // against a server too old to send the field, 0 would render as "keep no
+    // backups", which is the one answer that is never right — and it is the
+    // answer a reader would then try to raise, believing they were fixing it.
+    backupRetain: w.backup_retain ?? BACKUP_RETAIN_DEFAULT,
     // The two software-update toggles (schema-optional for DTO-compat; the
     // Go wire always emits both — `?? false` only fires against an older
     // server, where OFF is exactly the honest reading).
@@ -1091,9 +1211,17 @@ export function toOnboardingReport(
     state: w.state,
     startedAt: w.started_at ?? 0,
     finishedAt: w.finished_at ?? 0,
+    // 🔴 ABSENT = NEVER DISMISSED (T-0648). There is no migration, so every
+    // report row written before the field existed arrives without it. 0 is the
+    // honest reading of that absence; the other one would swallow the banner on
+    // every install that predates this change.
+    dismissedAt: w.dismissed_at ?? 0,
     steps: (w.steps ?? []).map((s) => ({
       name: s.name,
       ok: s.ok ?? false,
+      // Absent = no code (an older server, or a success). "" then falls through
+      // to `reason` in the banner, which is exactly the pre-T-0648 behaviour.
+      code: s.code ?? "",
       reason: s.reason ?? "",
       detail: s.detail ?? "",
     })),
@@ -1146,6 +1274,27 @@ export function toReleaseCheck(w: WireReleaseCheck): ReleaseCheckView {
  * The nullable numbers coalesce to null (a defaulted-away wire field arrives as
  * `undefined`); nothing here manufactures a timestamp or an age.
  */
+/**
+ * WireSigningKeys → SigningKeyView[] (T-62), preserving the server's order
+ * (oldest first).
+ *
+ * The one narrowing: `created_ts` of 0 becomes null. Zero is how the wire says
+ * "this key has been here since before the ring existed and its creation time
+ * was never recorded" — passed through as a number it would render as January
+ * 1970, which is not an unknown date but a WRONG one. Narrowing it here means
+ * no component has to remember the convention.
+ *
+ * 🔴 Nothing is derived from a key here, and there is nothing to derive from:
+ * the wire carries no key material at all.
+ */
+export function toSigningKeys(w: WireSigningKeys): SigningKeyView[] {
+  return w.keys.map((k) => ({
+    keyId: k.key_id,
+    createdTs: k.created_ts === 0 ? null : k.created_ts,
+    isSigning: k.is_signing,
+  }));
+}
+
 export function toBackupHealth(w: WireBackupHealth): BackupHealthView {
   const status: BackupHealthStatus =
     w.status === "healthy" || w.status === "unhealthy" ? w.status : "unknown";
@@ -1178,30 +1327,27 @@ export function toGlobalContext(w: WireGlobalContext): GlobalContextView {
 /**
  * Map one folded boot-context block → the view model (T-791e).
  *
- * `kind` is narrowed rather than passed through: the wire field is a bare
- * string (see WireBootDoc's note on the frozen spec), and every cockpit surface
- * that reads it branches on the closed pair. An unrecognised value would sail
- * into a `switch` with no arm for it and render as a boot_sequence page for a
- * document that is not one, so it is refused at the seam instead — the same
- * "narrow at the mapper, never downstream" rule toPresence follows.
+ * 🔴 `kind` IS PASSED STRAIGHT THROUGH, AND THAT ASSIGNMENT IS A GUARD (T-3201).
+ * The wire field used to be a bare string, so this mapper carried a hand-written
+ * copy of the closed set to narrow it against — a second list of the same fact,
+ * and the kind of copy that goes stale silently. The spec now declares the enum,
+ * so the wire type IS the closed set and this line only compiles while
+ * `types.ts :: BootDocKind` still spells the same one. A kind added to the spec
+ * and nowhere else reddens HERE, at the seam, before anything downstream can be
+ * handed a value its `switch` has no arm for.
  */
 export function toBootDoc(w: WireBootDoc): BootDocView {
-  if (
-    w.kind !== "system_interaction" &&
-    w.kind !== "boot_sequence" &&
-    w.kind !== "offboard"
-  ) {
-    throw new Error(`toBootDoc: unknown boot document kind ${JSON.stringify(w.kind)}`);
-  }
-  const kind: BootDocKind = w.kind;
   return {
-    kind,
+    kind: w.kind,
     key: w.key,
     text: w.text,
+    readOnlyHead: w.read_only_head,
+    body: w.body,
     sizeChars: w.size_chars,
     capChars: w.cap_chars,
     isDefault: w.is_default,
     hasSeed: w.has_seed,
+    readOnly: w.read_only,
   };
 }
 
@@ -1318,7 +1464,6 @@ export function toBootstrap(w: WireBootstrap): BootstrapView {
   return {
     role: w.role,
     name: w.name,
-    taskType: w.task_type,
     context: w.context,
   };
 }
@@ -1472,7 +1617,6 @@ export function toLessons(w: WireLessons): LessonsView {
     sizeChars: w.size_chars ?? 0,
     capChars: w.cap_chars ?? 0,
     roleKey: w.role_key,
-    taskType: w.task_type,
     text: w.text,
     isDefault: w.is_default,
   };
@@ -1641,6 +1785,13 @@ export function toResumeTask(w: WireResumeTask): ResumeTaskView {
     answeredCardSteps: (w.answered_card_steps ?? []).map(
       toResumeAnsweredCardStep,
     ),
+    // T-91 — the handover hold and the reverse dependency edge. The ?? ""
+    // arms are the ordinary additive-optional posture, not a guess: a server
+    // that predates these fields honestly means "no hold, nobody waiting".
+    lock: w.lock ?? "",
+    reassignedFrom: w.reassigned_from ?? "",
+    reassignedFromKind: w.reassigned_from_kind ?? "",
+    blocking: w.blocking ?? [],
   };
 }
 

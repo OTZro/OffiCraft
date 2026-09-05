@@ -50,18 +50,46 @@
       "seam_reason": "The send half of the same shared builder above."
     },
     {
-      "id": "ocagent-attachment-upload",
+      "id": "ocagent-attachment-post",
       "source": "cli/ocagent/upload.go",
       "callsite": "req, err := http.NewRequest(http.MethodPost, reqURL, f)",
       "kind": "skip",
-      "skip_reason": "Streams raw file bytes, not JSON — there is no request schema for a wire test to compare a body against."
+      "skip_reason": "Streams a raw body, not JSON — there is no request schema for a wire test to compare a body against. It is cmdUpload's own send: T-59 had extracted it into a shared postAttachment for `diff`, then `diff` stopped uploading at all (a comparison is a URL, not a stored blob) and the seam was folded back into its one caller."
     },
     {
-      "id": "ocagent-attachment-upload-do",
+      "id": "ocagent-attachment-post-do",
       "source": "cli/ocagent/upload.go",
       "callsite": "resp, err := client.Do(req)",
       "kind": "skip",
       "skip_reason": "The send half of the raw-bytes upload above."
+    },
+    {
+      "id": "ocagent-diff-external-hop",
+      "source": "cli/ocagent/diff.go",
+      "callsite": "return mintExternalDiffLink(client, cfg, before, after,",
+      "kind": "seam",
+      "seam_reason": "cmdDiff's ONE conditional hop: reached only when --external asks for the signed link, and the request it performs is ocagent-diff-share-link-mint below. The default flavour returns before this line without touching the network at all."
+    },
+    {
+      "id": "ocagent-diff-share-link-mint",
+      "source": "cli/ocagent/diff.go",
+      "callsite": "req, err := http.NewRequest(http.MethodGet, reqURL, nil)",
+      "kind": "skip",
+      "skip_reason": "GET with a nil body — nothing goes out. It asks GET /api/diff/share-link to mint the EXTERNAL comparison link, and it is the ONE request `diff` can make: only the server holds the signing key, so the default (internal) link is a pure local computation and this is what --external costs."
+    },
+    {
+      "id": "ocagent-diff-share-link-mint-do",
+      "source": "cli/ocagent/diff.go",
+      "callsite": "resp, err := client.Do(req)",
+      "kind": "skip",
+      "skip_reason": "The send half of the bodyless mint GET above."
+    },
+    {
+      "id": "ocagent-diff-dispatch-hop",
+      "source": "cli/ocagent/main.go",
+      "callsite": "return cmdDiff(newStreamingClient(), cfg, args[0], args[1],",
+      "kind": "seam",
+      "seam_reason": "Dispatch into cmdDiff. It sends NOTHING by default — the internal link is a pure function of the two addresses — and exactly one GET when --external asks the server to mint the signed one (ocagent-diff-share-link-mint below)."
     },
     {
       "id": "ocagent-attachment-download",
@@ -177,13 +205,6 @@
       "seam_reason": "codexSession.post: the sidecar's shared JSON send. Its four telemetry/context uplinks go through it, and the http client is built inline here, which is why they are driven through httptest rather than an injected transport."
     },
     {
-      "id": "codex-reply-card-send",
-      "source": "cli/ocwarden/codex_session.go",
-      "callsite": "resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)",
-      "kind": "seam",
-      "seam_reason": "The send half of openReplyCard's request, built inline above it. The client is constructed at the callsite rather than injected, which is why the reply-card uplink is driven through httptest."
-    },
-    {
       "id": "codex-post-seam-send",
       "source": "cli/ocwarden/codex_session.go",
       "callsite": "resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)",
@@ -237,18 +258,6 @@
       "wire_test": "cli/ocwarden/codex_uplink_wire_test.go",
       "wire_needle": "drive(\"rate-limits\", func() {",
       "wire_case": "rate-limits"
-    },
-    {
-      "id": "codex-reply-card",
-      "source": "cli/ocwarden/codex_session.go",
-      "callsite": "req, err := http.NewRequest(http.MethodPost, strings.TrimRight(s.base, \"/\")+\n\t\t\"/api/reply-cards\", bytes.NewReader(raw))",
-      "kind": "json",
-      "method": "post",
-      "path": "/api/reply-cards",
-      "request_schema": "#/components/schemas/ReplyCardCreateDTO",
-      "wire_test": "cli/ocwarden/codex_uplink_wire_test.go",
-      "wire_needle": "drive(\"reply-card\", func() {",
-      "wire_case": "reply-card"
     },
     {
       "id": "warden-runonce-hop",
@@ -335,13 +344,6 @@
       "skip_reason": "Dispatch to the attachment upload command, which streams raw file bytes rather than JSON: there is no request schema to compare a body against."
     },
     {
-      "id": "codex-reply-card-call",
-      "source": "cli/ocwarden/codex_session.go",
-      "callsite": "cardID := s.openReplyCard(question, bind)",
-      "kind": "seam",
-      "seam_reason": "The sidecar calling its own reply-card producer. The body it builds is compared as codex-reply-card; this is the call into it."
-    },
-    {
       "id": "warden-install-getter",
       "source": "cli/ocwarden/install.go",
       "callsite": "return httpGetter(&http.Client{Timeout: selfUpdateHTTPTimeout}, base, token)",
@@ -379,7 +381,7 @@
     {
       "id": "ocagent-listen-3",
       "source": "cli/ocagent/listen.go",
-      "callsite": "for _, m := range fetchChat(client, cfg, cfg.ID) {",
+      "callsite": "msgs := fetchChat(client, cfg, cfg.ID)",
       "kind": "skip",
       "skip_reason": "GET: reads the chat page back through getJSON — no request body"
     },
@@ -421,13 +423,6 @@
       "skip_reason": "GET: reads this member's row back through getJSON — no request body"
     },
     {
-      "id": "ocagent-run-1",
-      "source": "cli/ocagent/listen_run.go",
-      "callsite": "drainChat(l.api, l.cfg, l.seen, l.out, false)",
-      "kind": "seam",
-      "seam_reason": "hop: drains the chat backlog through fetchChat — a GET. No POST below it. (It used to add 'the presence POST is reached from the wind-down hook' — that POST and that hook's sends are both gone since T-a9d6.)"
-    },
-    {
       "id": "ocagent-run-2",
       "source": "cli/ocagent/listen_run.go",
       "callsite": "handleReplyCard(l.api, l.cfg, frame, l.replySeen, trigger, l.out)",
@@ -451,9 +446,9 @@
     {
       "id": "ocagent-run-6",
       "source": "cli/ocagent/listen_run.go",
-      "callsite": "drainChat(l.api, l.cfg, l.seen, l.out, true)",
+      "callsite": "drainChat(l.api, l.cfg, l.out, l.drainWarn, l.ack)",
       "kind": "seam",
-      "seam_reason": "hop: drains the chat backlog through fetchChat — a GET. No POST below it. (It used to add 'the presence POST is reached from the wind-down hook' — that POST and that hook's sends are both gone since T-a9d6.)"
+      "seam_reason": "hop: the ONE place chat is drained since T-48 — both entrances (every connect and a chat delta) call l.drainChatNow(), which calls this. It is a GET (fetchChat), and since T-48 there IS a POST below it: the read receipt filed after the lines are printed. That POST is claimed by ocagent-chat-mark-read; this row stays a seam because the body is built there, not here."
     },
     {
       "id": "ocagent-run-7",
@@ -507,9 +502,9 @@
     {
       "id": "codex-hop-4",
       "source": "cli/ocwarden/codex_session.go",
-      "callsite": "s.reportIdentity()\n\t\t\t\t\ts.requestRateLimits()",
+      "callsite": "s.reportIdentity()\n\t\t\t\t\ts.requestRateLimits()\n\t\t\t\t\tidentityHeartbeat.Reset(codexTelemetryThrottle)\n\t\t\t\t},\n\t\t\t\ts.openListenerTurn, s.closeBatch)",
       "kind": "seam",
-      "seam_reason": "hop to the codex identity POST declared by codex-identity"
+      "seam_reason": "hop to the codex identity POST declared by codex-identity. The anchor deliberately runs to the CLOSING argument of handleListenerLine rather than stopping at requestRateLimits: independent review swapped that third argument for a no-op `func(string) {}` and every codex member went permanently silent — no notice, no chat event, no task event ever became a turn — with all three Go suites AND this guard green. Deleting the whole call was already caught here by accident (the reportIdentity/requestRateLimits pair lives in the closure); replacing one argument was caught by nothing. Pinning `s.openListenerTurn)` inside the anchor is what makes that swap red."
     },
     {
       "id": "codex-hop-5",
@@ -517,13 +512,6 @@
       "callsite": "s.reportRateLimits(rateLimitSnapshot(result))",
       "kind": "seam",
       "seam_reason": "hop to the codex rate-limit POST declared by codex-rate-limits"
-    },
-    {
-      "id": "codex-hop-6",
-      "source": "cli/ocwarden/codex_session.go",
-      "callsite": "s.handleServerRequest(msg)\n\t\t\t\t}",
-      "kind": "seam",
-      "seam_reason": "hop: a codex server request reaches the reply-card POST declared by codex-reply-card"
     },
     {
       "id": "codex-hop-7",
@@ -538,13 +526,6 @@
       "callsite": "s.reportRateLimits(snapshot)",
       "kind": "seam",
       "seam_reason": "hop to the codex rate-limit POST declared by codex-rate-limits"
-    },
-    {
-      "id": "codex-hop-9",
-      "source": "cli/ocwarden/codex_session.go",
-      "callsite": "s.handleServerRequest(msg)\n\t\t\t}",
-      "kind": "seam",
-      "seam_reason": "hop: a codex server request reaches the reply-card POST declared by codex-reply-card"
     },
     {
       "id": "warden-command-1",
@@ -826,6 +807,38 @@
       "callsite": "w.verify, w.writeTok",
       "kind": "seam",
       "seam_reason": "The other half of the same copy: the probe seam read OUT of the wiring struct. One row per send is why the two sides of one assignment are two rows."
+    },
+    {
+      "id": "ocagent-chat-mark-read-seam",
+      "source": "cli/ocagent/listen.go",
+      "callsite": "reportChatRead(client, cfg, show, warn, out)",
+      "kind": "seam",
+      "seam_reason": "Hands drainChat's just-printed lines to the read-receipt reporter and puts nothing on the wire itself — the grouping by sender and the send both happen inside reportChatRead, whose postJSON call is declared as ocagent-chat-mark-read."
+    },
+    {
+      "id": "ocagent-chat-mark-read",
+      "source": "cli/ocagent/listen.go",
+      "callsite": "postJSON(client, cfg, markReadPath, map[string]any{",
+      "kind": "json",
+      "method": "post",
+      "path": "/api/chat/mark-read",
+      "request_schema": "#/components/schemas/MarkChatReadDTO",
+      "wire_test": "cli/ocagent/listen_markread_test.go",
+      "wire_needle": "if bad := schemaViolations(body, declared); len(bad) > 0 {"
+    },
+    {
+      "id": "ocagent-run-1",
+      "source": "cli/ocagent/listen_run.go",
+      "callsite": "l.drainChatNow()\n\tcase replyCardTopic:",
+      "kind": "seam",
+      "seam_reason": "chat delta arrives — hop: one of the two entrances to l.drainChatNow() (T-48 centralised them). The body-bearing send below it is the read receipt, claimed by ocagent-chat-mark-read; the wire GET is claimed by ocagent-run-6. This line itself puts nothing on the wire."
+    },
+    {
+      "id": "ocagent-run-9",
+      "source": "cli/ocagent/listen_run.go",
+      "callsite": "l.drainChatNow()\n\n\tonAct := func() { activity = true }",
+      "kind": "seam",
+      "seam_reason": "every connect/reconnect (T-48: closes the outage gap) — hop: one of the two entrances to l.drainChatNow() (T-48 centralised them). The body-bearing send below it is the read receipt, claimed by ocagent-chat-mark-read; the wire GET is claimed by ocagent-run-6. This line itself puts nothing on the wire."
     }
   ]
 }

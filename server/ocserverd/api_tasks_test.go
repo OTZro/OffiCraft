@@ -24,12 +24,30 @@ import (
 
 // ── pure domain derivations ──────────────────────────────────────────────────
 
-func TestTaskNoDerivesFromTheIDPrefix(t *testing.T) {
-	if got := TaskNo("t-7d40aabbccdd"); got != "T-7d40" {
-		t.Fatalf("TaskNo: want T-7d40, got %q", got)
+// TaskNo IS the id — no prefix swap, no case change, no truncation.
+//
+// The "T-" display form was tried first and did not survive review: the number
+// on screen read "T-72dd79b666d0" while the id was "t-72dd79b666d0", and task
+// lookup is `SELECT … WHERE id = ?` against `id TEXT PRIMARY KEY` with no
+// COLLATE NOCASE, so pasting the displayed number back still 404s. A projection
+// that differs from the id by even one character buys nothing and costs a
+// mapping nobody can see. Owner 2026-08-25: 「Make it simple, no need
+// complicated mechanism unless my approval」.
+func TestTaskNoIsTheIDItself(t *testing.T) {
+	for _, id := range []string{"t-72dd79b666d0", "t-7d40aabbccdd", "t-ab", ""} {
+		if got := TaskNo(id); got != id {
+			t.Fatalf("TaskNo(%q) must be the id itself, got %q", id, got)
+		}
 	}
-	if got := TaskNo("t-ab"); got != "T-ab" {
-		t.Fatalf("TaskNo short id: want T-ab, got %q", got)
+}
+
+// The case of the prefix is the whole point of the case above, so it gets its
+// own failure message: this is the exact character that made the displayed
+// number un-pasteable.
+func TestTaskNoDoesNotRecaseThePrefix(t *testing.T) {
+	if got := TaskNo("t-72dd79b666d0"); strings.HasPrefix(got, "T-") {
+		t.Fatalf("TaskNo must not upper-case the prefix — lookup is "+
+			"case-sensitive, so %q cannot be pasted back", got)
 	}
 }
 
@@ -175,7 +193,7 @@ func TestCanAgentTaskTransitionFullTable(t *testing.T) {
 		{TaskStatusInProgress, TaskStatusDone}:            true,
 	}
 	// waiting_owner is off BOTH sides now (T-68b7): the card lifecycle owns the
-	// entry (open_gate / create_reply_card) and the exit (the answer restores
+	// entry (create_reply_card with linked_task) and the exit (the answer restores
 	// in_progress). Neither {* → waiting_owner} nor {waiting_owner → *} is a
 	// legal agent report — the loop below asserts every waiting_owner pair false.
 	for _, from := range statuses {
@@ -224,7 +242,7 @@ func newTasksTestServer(t *testing.T) *apiServer {
 	if err := runMigrations(db); err != nil {
 		t.Fatalf("goose up: %v", err)
 	}
-	return newAPIServer(NewDAL(db), NewHub(), []byte("tasks-test-secret"), 3600,
+	return newAPIServer(NewDAL(db), NewHub(), singleKeyring([]byte("tasks-test-secret")), 3600,
 		assetRoot(t.TempDir()))
 }
 
@@ -375,9 +393,9 @@ func claimTask(t *testing.T, api *apiServer, taskID, executor string) *httptest.
 	return rec
 }
 
-// ── gate arming ──────────────────────────────────────────────────────────────
+// ── gate arming (create_reply_card + linked_task) ────────────────────────────
 
-func TestOpenGateArmsTheCardBindsTheStepAndFlipsTheTask(t *testing.T) {
+func TestBoundCardArmsTheGateStepAndFlipsTheTask(t *testing.T) {
 	api := newTasksTestServer(t)
 	task := createAdHocTask(t, api, "m-exec")
 	view := submitPlan(t, api, task.ID, "m-exec", []map[string]any{
@@ -391,14 +409,14 @@ func TestOpenGateArmsTheCardBindsTheStepAndFlipsTheTask(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	api.HandleOpenTaskGateApiTasksTaskIdStepsStepIdGatePost(rec,
-		taskReq(t, "POST", "/x", map[string]any{
+	api.HandleCreateReplyCardApiReplyCardsPost(rec,
+		taskReq(t, "POST", "/api/reply-cards", map[string]any{
 			"kind": "decision", "summary": "ship it?",
-			"options": []string{"ship", "hold"},
-		}, "m-exec", "agent"),
-		task.ID, gateStep.ID)
+			"options":     []map[string]any{{"text": "ship"}, {"text": "hold"}},
+			"linked_task": map[string]any{"task_id": task.ID, "step_id": gateStep.ID},
+		}, "m-exec", "agent"))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("open gate: %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("open bound card: %d %s", rec.Code, rec.Body.String())
 	}
 	card := decodeBody[replyCardDTO](t, rec)
 	if card.Status != replyCardStatusWaiting {
@@ -433,16 +451,18 @@ func TestOpenGateArmsTheCardBindsTheStepAndFlipsTheTask(t *testing.T) {
 
 }
 
-// openGateCard arms a gate/plain step via open_gate and returns the served card.
-func openGateCard(t *testing.T, api *apiServer, taskID, actor, stepID, summary string) replyCardDTO {
+// openCardOnStep arms a gate/plain step by opening a card with an explicit
+// linked_task — the ONE card-open entrance since T-18.
+func openCardOnStep(t *testing.T, api *apiServer, taskID, actor, stepID, summary string) replyCardDTO {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	api.HandleOpenTaskGateApiTasksTaskIdStepsStepIdGatePost(rec,
-		taskReq(t, "POST", "/x", map[string]any{
-			"kind": "decision", "summary": summary, "options": []string{"a", "b"},
-		}, actor, "agent"), taskID, stepID)
+	api.HandleCreateReplyCardApiReplyCardsPost(rec,
+		taskReq(t, "POST", "/api/reply-cards", map[string]any{
+			"kind": "decision", "summary": summary, "options": []map[string]any{{"text": "a"}, {"text": "b"}},
+			"linked_task": map[string]any{"task_id": taskID, "step_id": stepID},
+		}, actor, "agent"))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("open gate %s: %d %s", stepID, rec.Code, rec.Body.String())
+		t.Fatalf("open bound card on %s: %d %s", stepID, rec.Code, rec.Body.String())
 	}
 	return decodeBody[replyCardDTO](t, rec)
 }
@@ -459,7 +479,7 @@ func answerCard(t *testing.T, api *apiServer, cardID string, body map[string]any
 // TestManualWaitingOwnerReportIsRejected pins T-68b7 ②: waiting_owner is NOT an
 // agent-reportable status. A report of it on the step is a 400 (not the
 // state-machine 409) — waiting_owner is reachable only by opening a card
-// (open_gate / create_reply_card), and a rejected report moves nothing. (The
+// (create_reply_card with linked_task), and a rejected report moves nothing. (The
 // task-level status report route is gone — task status is derived, T-8449.)
 func TestManualWaitingOwnerReportIsRejected(t *testing.T) {
 	api := newTasksTestServer(t)
@@ -476,10 +496,10 @@ func TestManualWaitingOwnerReportIsRejected(t *testing.T) {
 		t.Fatalf("manual step waiting_owner report must 400, got %d %s",
 			rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "open_gate") ||
-		!strings.Contains(rec.Body.String(), "create_reply_card") {
-		t.Fatalf("step 400 must name open_gate + create_reply_card: %s",
-			rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "create_reply_card") ||
+		!strings.Contains(rec.Body.String(), "linked_task") {
+		t.Fatalf("step 400 must name the one lever that DOES enter waiting_owner "+
+			"(create_reply_card with linked_task): %s", rec.Body.String())
 	}
 	got, _ := api.dal.GetTask(task.ID)
 	if got.Status != TaskStatusInProgress {
@@ -499,10 +519,10 @@ func TestAnsweringACardResumesTheTaskAndStep(t *testing.T) {
 	})
 	gateStep := view.Steps[0]
 	startFirstStep(t, api, task.ID, "m-exec")
-	card := openGateCard(t, api, task.ID, "m-exec", gateStep.ID, "go?")
+	card := openCardOnStep(t, api, task.ID, "m-exec", gateStep.ID, "go?")
 
 	if rec := answerCard(t, api, card.ID,
-		map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
+		map[string]any{"option_idxs": []int{0}}); rec.Code != http.StatusOK {
 		t.Fatalf("answer: %d %s", rec.Code, rec.Body.String())
 	}
 	step, _ := api.dal.GetTaskStep(gateStep.ID)
@@ -544,7 +564,7 @@ func TestAnsweringACardOnATerminatedOrDoneTaskIsRejected(t *testing.T) {
 			})
 			gateStep := view.Steps[0]
 			startFirstStep(t, api, task.ID, "m-exec")
-			card := openGateCard(t, api, task.ID, "m-exec", gateStep.ID, "go?")
+			card := openCardOnStep(t, api, task.ID, "m-exec", gateStep.ID, "go?")
 
 			// closeTask is the shared terminal side-effect helper behind both
 			// the owner's terminate() and an eventual in_progress→done agent
@@ -564,7 +584,7 @@ func TestAnsweringACardOnATerminatedOrDoneTaskIsRejected(t *testing.T) {
 			strandLegacyOrphanCard(t, api, card.ID)
 			beforeUpdatedTS := stored.UpdatedTS
 
-			rec := answerCard(t, api, card.ID, map[string]any{"option_idx": 0})
+			rec := answerCard(t, api, card.ID, map[string]any{"option_idxs": []int{0}})
 			if rec.Code != http.StatusConflict {
 				t.Fatalf("answering an orphaned card on a %s task must 409, got %d %s",
 					status, rec.Code, rec.Body.String())
@@ -616,15 +636,15 @@ func TestAnsweringOneOfTwoCardsKeepsTheTaskWaiting(t *testing.T) {
 		{"name": "q2", "dod": "d2"},
 	})
 	startFirstStep(t, api, task.ID, "m-exec")
-	card1 := openGateCard(t, api, task.ID, "m-exec", view.Steps[0].ID, "q1?")
-	card2 := openGateCard(t, api, task.ID, "m-exec", view.Steps[1].ID, "q2?")
+	card1 := openCardOnStep(t, api, task.ID, "m-exec", view.Steps[0].ID, "q1?")
+	card2 := openCardOnStep(t, api, task.ID, "m-exec", view.Steps[1].ID, "q2?")
 	if got, _ := api.dal.GetTask(task.ID); got.Status != TaskStatusWaitingOwner {
 		t.Fatalf("two armed cards: task must be waiting_owner, got %s", got.Status)
 	}
 
 	// Answer the first: its step resumes, but the task stays waiting (card2).
 	if rec := answerCard(t, api, card1.ID,
-		map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
+		map[string]any{"option_idxs": []int{0}}); rec.Code != http.StatusOK {
 		t.Fatalf("answer 1: %d %s", rec.Code, rec.Body.String())
 	}
 	if s0, _ := api.dal.GetTaskStep(view.Steps[0].ID); s0.Status != StepStatusInProgress {
@@ -636,7 +656,7 @@ func TestAnsweringOneOfTwoCardsKeepsTheTaskWaiting(t *testing.T) {
 
 	// Answer the last: now the task resumes too.
 	if rec := answerCard(t, api, card2.ID,
-		map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
+		map[string]any{"option_idxs": []int{0}}); rec.Code != http.StatusOK {
 		t.Fatalf("answer 2: %d %s", rec.Code, rec.Body.String())
 	}
 	if got, _ := api.dal.GetTask(task.ID); got.Status != TaskStatusInProgress {
@@ -644,14 +664,12 @@ func TestAnsweringOneOfTwoCardsKeepsTheTaskWaiting(t *testing.T) {
 	}
 }
 
-// TestOpenGateArmsANonGatePlainStep pins the fix for the "open_gate cannot
-// raise a plain node" report: open_gate on an is_gate=false, not-done step of a
-// live task is a legitimate ad-hoc 請示. It arms the step exactly as
-// create_reply_card's auto-bind would (waiting_owner + bound card + task
-// follows) — the two card-open paths agree (armStepWithCard). is_gate is a
-// plan-declared property and is NOT flipped: the step becomes a card-carrying
-// plain step, the state resumeGateState already folds.
-func TestOpenGateArmsANonGatePlainStep(t *testing.T) {
+// TestBoundCardArmsANonGatePlainStep: a linked_task naming an is_gate=false,
+// not-done step of a live task is a legitimate ad-hoc 請示 and arms it
+// (waiting_owner + bound card + task follows). is_gate is a plan-declared
+// property and is NOT flipped: the step becomes a card-carrying plain step, the
+// state resumeGateState already folds.
+func TestBoundCardArmsANonGatePlainStep(t *testing.T) {
 	api := newTasksTestServer(t)
 	task := createAdHocTask(t, api, "m-exec")
 	view := submitPlan(t, api, task.ID, "m-exec", []map[string]any{
@@ -664,13 +682,13 @@ func TestOpenGateArmsANonGatePlainStep(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	api.HandleOpenTaskGateApiTasksTaskIdStepsStepIdGatePost(rec,
-		taskReq(t, "POST", "/x", map[string]any{
-			"kind": "decision", "summary": "which cloud?", "options": []string{"aws", "gcp"},
-		}, "m-exec", "agent"),
-		task.ID, plainStep.ID)
+	api.HandleCreateReplyCardApiReplyCardsPost(rec,
+		taskReq(t, "POST", "/api/reply-cards", map[string]any{
+			"kind": "decision", "summary": "which cloud?", "options": []map[string]any{{"text": "aws"}, {"text": "gcp"}},
+			"linked_task": map[string]any{"task_id": task.ID, "step_id": plainStep.ID},
+		}, "m-exec", "agent"))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("open gate on a plain step must 200, got %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("binding a plain step must 200, got %d %s", rec.Code, rec.Body.String())
 	}
 	card := decodeBody[replyCardDTO](t, rec)
 	if card.Status != replyCardStatusWaiting {
@@ -684,9 +702,9 @@ func TestOpenGateArmsANonGatePlainStep(t *testing.T) {
 	if step.Status != StepStatusWaitingOwner || step.ReplyCardID != card.ID {
 		t.Fatalf("plain step must be waiting_owner + bound: %+v", step)
 	}
-	// is_gate stays false — open_gate arms, it does not rewrite the plan shape.
+	// is_gate stays false — arming does not rewrite the plan shape.
 	if step.IsGate {
-		t.Fatalf("open_gate must not flip is_gate on a plain step: %+v", step)
+		t.Fatalf("arming must not flip is_gate on a plain step: %+v", step)
 	}
 	stored, err := api.dal.GetTask(task.ID)
 	if err != nil || stored == nil {
@@ -745,6 +763,24 @@ func seedManualWithKey(t *testing.T, api *apiServer, typeKey string) {
 		TypeKey:  typeKey,
 		Fields:   `[{"name":"pr","required":true,"is_key":true}]`,
 		Assignee: `{"kind":"member","member_id":"m-exec"}`,
+	}); err != nil {
+		t.Fatalf("seed manual: %v", err)
+	}
+}
+
+// seedManualWithLabel is seedManualWithKey with a DISPLAY NAME that differs from
+// the key. The difference is load-bearing for the close-out nudge: its read-only
+// head shows the HUMAN label while the MCP addressing string in the same sentence
+// must stay the raw type_key (T-fa76). With the plain helper the two are equal, so
+// an assertion that swaps one for the other passes — which is exactly what an
+// independent review's mutant found.
+func seedManualWithLabel(t *testing.T, api *apiServer, typeKey, displayName string) {
+	t.Helper()
+	if err := api.dal.PutTaskManual(TaskManual{
+		TypeKey:     typeKey,
+		DisplayName: displayName,
+		Fields:      `[{"name":"pr","required":true,"is_key":true}]`,
+		Assignee:    `{"kind":"member","member_id":"m-exec"}`,
 	}); err != nil {
 		t.Fatalf("seed manual: %v", err)
 	}
@@ -835,9 +871,9 @@ func TestCreateTypedTaskAssignedToMemberIsThatMembersAlone(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed manual: %v", err)
 	}
-	putMemberRow(t, api, "m-exec", KindAssistant, "")           // the assignee (seeded for the 發包 gate)
-	putMemberRow(t, api, "m-y", KindAssistant, "")              // another 正職 WITH a member row: the 發包 gate would ADMIT it, so only rule 3 blocks the override
-	putMemberRow(t, api, "m-mira", KindAssistant, adminRoleKey) // an admin_agent
+	putMemberRow(t, api, "m-exec", KindStaff, "")           // the assignee (seeded for the 發包 gate)
+	putMemberRow(t, api, "m-y", KindStaff, "")              // another 正職 WITH a member row: the 發包 gate would ADMIT it, so only rule 3 blocks the override
+	putMemberRow(t, api, "m-mira", KindStaff, adminRoleKey) // an admin_agent
 	body := func(pr string, extra map[string]any) map[string]any {
 		b := map[string]any{"title": "review " + pr, "type_key": "review",
 			"inputs": map[string]any{"pr": pr}}
@@ -901,7 +937,7 @@ func TestCreateTypedTaskWithOutsourceAssigneeAdmitsAny正職(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed manual: %v", err)
 	}
-	putMemberRow(t, api, "m-x", KindAssistant, "") // a plain 正職 with a member row
+	putMemberRow(t, api, "m-x", KindStaff, "") // a plain 正職 with a member row
 	// (d) rule 4 is untouched by the F1 fix: a manual OUTSOURCE assignee has no
 	// member subject (manualAssigneeMember==""), so any 正職 may create it — with
 	// OR without an explicit target.kind=outsource override.
@@ -936,8 +972,8 @@ func TestCreateTypedTaskWithOutsourceAssigneeAdmitsAny正職(t *testing.T) {
 func TestCreateAdHocMemberExecutorIsSelfOnlyForPlain正職(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
-	putMemberRow(t, api, "m-self", KindAssistant, "")
-	putMemberRow(t, api, "m-mira", KindAssistant, adminRoleKey)
+	putMemberRow(t, api, "m-self", KindStaff, "")
+	putMemberRow(t, api, "m-mira", KindStaff, adminRoleKey)
 
 	// A 一般正職 pointing the executor at ANOTHER member → 403.
 	if rec := createTaskAs(t, api, map[string]any{
@@ -1108,7 +1144,7 @@ func TestInheritDispatchSpec_SharedRules(t *testing.T) {
 func TestCreateTaskDispatchTargetMachineMustResolve(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
-	putMemberRow(t, api, "m-disp", KindAssistant, "")
+	putMemberRow(t, api, "m-disp", KindStaff, "")
 	seedMachine(t, api, "m-real")
 
 	dispatch := func(title, machine string) *httptest.ResponseRecorder {
@@ -1145,7 +1181,7 @@ func dispatchInheritanceServer(t *testing.T) *apiServer {
 	seedMachine(t, api, "m-disp-box")
 	seedMachine(t, api, "m-explicit-box")
 	if err := api.dal.PutMember(Member{
-		ID: "m-disp", Name: "Dispatcher", Kind: KindAssistant,
+		ID: "m-disp", Name: "Dispatcher", Kind: KindStaff,
 		Runtime: RuntimeCodex, Model: "gpt-5-codex", Effort: "low",
 		DesiredMachineID: "m-disp-box", RosterStatus: RosterStatusActive,
 	}); err != nil {
@@ -1197,7 +1233,7 @@ func TestCreateTypedTaskDispatchInheritsTheManual(t *testing.T) {
 	}
 
 	// An explicit runtime that differs from the manual drops the inherited model.
-	putMemberRow(t, api, "m-bare", KindAssistant, "")
+	putMemberRow(t, api, "m-bare", KindStaff, "")
 	got = storedTaskFor(t, api, createTaskAs(t, api, map[string]any{
 		"title": "runtime mismatch", "type_key": "typed",
 		"target": map[string]any{"kind": "outsource", "runtime": "codex"}},
@@ -1234,7 +1270,7 @@ func TestCreateAdHocTaskDispatchInheritsTheDispatcher(t *testing.T) {
 
 	// SENTINEL against over-inheriting: a dispatcher that names NO machine must
 	// leave it empty rather than borrowing one from anywhere else.
-	putMemberRow(t, api, "m-bare", KindAssistant, "")
+	putMemberRow(t, api, "m-bare", KindStaff, "")
 	got = storedTaskFor(t, api, createTaskAs(t, api, map[string]any{
 		"title":  "no machine anywhere",
 		"target": map[string]any{"kind": "outsource"}}, "m-bare", "agent"))
@@ -1258,7 +1294,7 @@ func TestCreateTypedTaskWithManualOutsourceAssigneeIsNotADispatch(t *testing.T) 
 	api := newTasksTestServer(t)
 	api.noOutsource = true
 	seedMachine(t, api, "m-manual-box")
-	putMemberRow(t, api, "m-disp", KindAssistant, "")
+	putMemberRow(t, api, "m-disp", KindStaff, "")
 	if err := api.dal.PutTaskManual(TaskManual{
 		TypeKey: "typed", Fields: "[]",
 		Assignee: `{"kind":"outsource","runtime":"claude","model":"opus","effort":"high","machine":"m-manual-box"}`,
@@ -1617,12 +1653,12 @@ func TestSubmitPlanFreezesAnsweredCardStepsAsSuperseded(t *testing.T) {
 		}
 	}
 	// "ask direction" gets an ANSWERED card; "pending ask" a still-WAITING one.
-	answered := openGateCard(t, api, task.ID, "m-exec", v1.Steps[1].ID, "which way?")
+	answered := openCardOnStep(t, api, task.ID, "m-exec", v1.Steps[1].ID, "which way?")
 	if rec := answerCard(t, api, answered.ID,
-		map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
+		map[string]any{"option_idxs": []int{0}}); rec.Code != http.StatusOK {
 		t.Fatalf("answer: %d %s", rec.Code, rec.Body.String())
 	}
-	waiting := openGateCard(t, api, task.ID, "m-exec", v1.Steps[2].ID, "later?")
+	waiting := openCardOnStep(t, api, task.ID, "m-exec", v1.Steps[2].ID, "later?")
 
 	// Re-plan with entirely fresh names.
 	v2 := submitPlan(t, api, task.ID, "m-exec", []map[string]any{
@@ -1673,7 +1709,7 @@ func TestSubmitPlanFreezesAnsweredCardStepsAsSuperseded(t *testing.T) {
 	}
 	// The resume snapshot's current step skips the frozen row: first
 	// non-terminal = "build".
-	rows, _, _, err := api.resumeTasksFor("m-exec", nil)
+	rows, _, err := api.resumeTasksFor("m-exec", nil)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("resume rows: %+v %v", rows, err)
 	}
@@ -1685,7 +1721,7 @@ func TestSubmitPlanFreezesAnsweredCardStepsAsSuperseded(t *testing.T) {
 	// removed step (releaseCardHold's guards) — 200, and the task resumes
 	// in_progress since no other card waits.
 	if rec := answerCard(t, api, waiting.ID,
-		map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
+		map[string]any{"option_idxs": []int{0}}); rec.Code != http.StatusOK {
 		t.Fatalf("answering the orphaned card must still 200: %d %s",
 			rec.Code, rec.Body.String())
 	}
@@ -1706,9 +1742,9 @@ func TestSubmitPlanRelistingAnsweredCardStepContinuesTheLiveRow(t *testing.T) {
 		{"name": "ask direction", "dod": "owner answered"},
 	})
 	startFirstStep(t, api, task.ID, "m-exec")
-	card := openGateCard(t, api, task.ID, "m-exec", v1.Steps[0].ID, "which way?")
+	card := openCardOnStep(t, api, task.ID, "m-exec", v1.Steps[0].ID, "which way?")
 	if rec := answerCard(t, api, card.ID,
-		map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
+		map[string]any{"option_idxs": []int{0}}); rec.Code != http.StatusOK {
 		t.Fatalf("answer: %d %s", rec.Code, rec.Body.String())
 	}
 	v2 := submitPlan(t, api, task.ID, "m-exec", []map[string]any{
@@ -1740,7 +1776,7 @@ func TestSubmitPlanFreezesExpiredCardStepsToo(t *testing.T) {
 		{"name": "ask direction", "dod": "owner answered"},
 	})
 	startFirstStep(t, api, task.ID, "m-exec")
-	card := openGateCard(t, api, task.ID, "m-exec", v1.Steps[0].ID, "which way?")
+	card := openCardOnStep(t, api, task.ID, "m-exec", v1.Steps[0].ID, "which way?")
 	rec := httptest.NewRecorder()
 	api.HandleExpireReplyCardApiReplyCardsCardIdExpirePost(rec,
 		taskReq(t, "POST", "/x", nil, "owner", "owner"), card.ID)
@@ -1763,7 +1799,7 @@ func TestSubmitPlanFreezesExpiredCardStepsToo(t *testing.T) {
 // TestSupersededIsTerminalOnEveryWriteFace pins the walls around the frozen
 // state: an agent report INTO superseded is a 400 (not its lever — the server
 // freezes on submit_plan), any report OUT of it is a 409 (terminal),
-// re-arming it via open_gate is a 409, a later replan neither deletes nor
+// re-arming it with a linked_task is a 409, a later replan neither deletes nor
 // re-freezes it, and a later plan may honestly re-introduce the same name as
 // a NEW pending row (superseded work was not completed — no done-style
 // dedupe).
@@ -1780,9 +1816,9 @@ func TestSupersededIsTerminalOnEveryWriteFace(t *testing.T) {
 		!strings.Contains(rec.Body.String(), "not agent-reportable") {
 		t.Fatalf("report INTO superseded must 400: %d %s", rec.Code, rec.Body.String())
 	}
-	card := openGateCard(t, api, task.ID, "m-exec", v1.Steps[0].ID, "which way?")
+	card := openCardOnStep(t, api, task.ID, "m-exec", v1.Steps[0].ID, "which way?")
 	if rec := answerCard(t, api, card.ID,
-		map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
+		map[string]any{"option_idxs": []int{0}}); rec.Code != http.StatusOK {
 		t.Fatalf("answer: %d %s", rec.Code, rec.Body.String())
 	}
 	v2 := submitPlan(t, api, task.ID, "m-exec", []map[string]any{
@@ -1792,7 +1828,7 @@ func TestSupersededIsTerminalOnEveryWriteFace(t *testing.T) {
 	if v2.Steps[0].Status != StepStatusSuperseded {
 		t.Fatalf("precondition: frozen row: %+v", v2.Steps[0])
 	}
-	// Start the fresh step so the task derives to in_progress — open_gate checks
+	// Start the fresh step so the task derives to in_progress — the create checks
 	// the task status before the step's superseded terminal, so the task must be
 	// armable for the superseded-specific 409 below to be the one that fires.
 	if rec := reportStepStatus(t, api, task.ID, v2.Steps[1].ID, "m-exec",
@@ -1806,13 +1842,14 @@ func TestSupersededIsTerminalOnEveryWriteFace(t *testing.T) {
 	}
 	// Re-arming the frozen row is a 409 (the card pointer is audit trail).
 	rec := httptest.NewRecorder()
-	api.HandleOpenTaskGateApiTasksTaskIdStepsStepIdGatePost(rec,
-		taskReq(t, "POST", "/x", map[string]any{
-			"kind": "decision", "summary": "again?", "options": []string{"a", "b"},
-		}, "m-exec", "agent"), task.ID, frozenID)
+	api.HandleCreateReplyCardApiReplyCardsPost(rec,
+		taskReq(t, "POST", "/api/reply-cards", map[string]any{
+			"kind": "decision", "summary": "again?", "options": []map[string]any{{"text": "a"}, {"text": "b"}},
+			"linked_task": map[string]any{"task_id": task.ID, "step_id": frozenID},
+		}, "m-exec", "agent"))
 	if rec.Code != http.StatusConflict ||
 		!strings.Contains(rec.Body.String(), "superseded") {
-		t.Fatalf("open_gate on superseded must 409: %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("binding a superseded step must 409: %d %s", rec.Code, rec.Body.String())
 	}
 	// A LATER replan re-listing the frozen NAME mints a fresh pending twin —
 	// the frozen row stays beside it as history, frozen exactly once.
@@ -1935,28 +1972,42 @@ func TestWaitingExternalRequiresAReasonAndClearsOnExit(t *testing.T) {
 
 // ── terminal side effects: the task-close nudge band (spec/sse.md §8) ────────
 
-// popTaskCloseFrames drains every buffered frame off l and returns the
-// task-close band frames (bare data: events — no id: line).
-func popTaskCloseFrames(t *testing.T, l *hubListener) []string {
+// taskCloseNotices returns the DURABLE close-out rows written for one recipient
+// about one task.
+//
+// 🔴 IT READS THE STORE, NOT A CONNECTION (T-91). This used to be
+// popTaskCloseFrames, draining an SSE listener — and that shape was the defect
+// rather than the harness: the assertion "the executor's live connection got a
+// frame" is only satisfiable by an executor that HAS a live connection, which
+// is exactly the executor that did not need protecting. Reading the store is
+// what "the recipient sees this at its next wake" means.
+func taskCloseNotices(t *testing.T, api *apiServer, recipient, taskID string) []ChatMessage {
 	t.Helper()
-	var out []string
-	for {
-		frame := l.pop()
-		if frame == nil {
-			return out
-		}
-		text := string(frame)
-		if !strings.Contains(text, `"topic":"task-close"`) {
+	all, err := api.dal.ListChat()
+	if err != nil {
+		t.Fatalf("list chat: %v", err)
+	}
+	var out []ChatMessage
+	for _, m := range all {
+		if m.Recipient != recipient || m.Sender != wireSystemSender {
 			continue
 		}
-		if strings.Contains(text, "id: ") {
-			t.Fatalf("a directed nudge must carry no id line: %q", text)
+		if id, _ := m.Meta["task_id"].(string); id != taskID {
+			continue
 		}
-		out = append(out, text)
+		if _, isClose := m.Meta["closed_by"]; !isClose {
+			continue // a reassign/unblock notice on the same task
+		}
+		out = append(out, m)
 	}
+	return out
 }
 
-func TestTaskCloseNudgeRidesTheExecutorsConnectionOnly(t *testing.T) {
+// Renamed from TestTaskCloseNudgeRidesTheExecutorsConnectionOnly (T-91): the
+// nudge no longer rides a connection at all. What survives is the ADDRESSING
+// claim — it is written for the executor and for nobody else — which is now
+// asserted against durable rows.
+func TestTaskCloseNudgeIsAddressedToTheExecutorAlone(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		close func(t *testing.T, api *apiServer, taskID string)
@@ -1980,43 +2031,211 @@ func TestTaskCloseNudgeRidesTheExecutorsConnectionOnly(t *testing.T) {
 			if code != http.StatusOK {
 				t.Fatalf("create: %d", code)
 			}
-			executor, err := api.hub.Connect("m-exec", "")
-			if err != nil {
-				t.Fatal(err)
-			}
-			owner, err := api.hub.Connect("", "")
-			if err != nil {
-				t.Fatal(err)
-			}
+			// Nobody connects: the whole point is that this reaches an
+			// executor that was not there when its task closed.
 			tc.close(t, api, created.Task.ID)
-			frames := popTaskCloseFrames(t, executor)
-			if len(frames) != 1 {
-				t.Fatalf("executor must get exactly one nudge, got %d: %v",
-					len(frames), frames)
+			rows := taskCloseNotices(t, api, "m-exec", created.Task.ID)
+			if len(rows) != 1 {
+				t.Fatalf("executor must get exactly one durable nudge, got %d: %v",
+					len(rows), rows)
 			}
-			if !strings.Contains(frames[0], created.Task.ID) ||
-				!strings.Contains(frames[0], "write_task_learnings") ||
-				!strings.Contains(frames[0], "report_task_closeout") {
-				t.Fatalf("nudge must name the task and both close-out tools: %q",
-					frames[0])
+			if rows[0].Body == "" {
+				t.Fatalf("the nudge must carry the rendered document, not an empty body")
 			}
-			if got := popTaskCloseFrames(t, owner); len(got) != 0 {
-				t.Fatalf("the owner fan-out must never carry the nudge: %v", got)
+			if got := taskCloseNotices(t, api, wireOwnerID, created.Task.ID); len(got) != 0 {
+				t.Fatalf("the close nudge is the EXECUTOR's, never the owner's: %v", got)
 			}
 		})
 	}
 }
 
-func TestTaskCloseNudgeSkipsAdHocTasks(t *testing.T) {
+// TestTaskCloseNudgeTextComesFromTheDocument is the LIVE-LAYER assertion this
+// ticket exists for (T-7870). Every other lifecycle document proves itself the
+// same way — edit the document, then read the bytes an agent actually receives
+// — and 〈任務收尾〉 was the one document that could not, because the sentence
+// came from a Go literal beside the send site instead of from the document.
+//
+// 🔴 A GREEN UNIT SUITE IS NOT EVIDENCE HERE, which is why this test is written
+// at the send site rather than beside decideTaskCloseNudge: the last time an
+// owner-approved rewrite of a lifecycle document failed to reach agents
+// (task_unblocked), every test in the tree stayed green, because they all
+// asserted the Go literal against itself.
+//
+// Two sides, so a pass cannot come from the assertion being vacuous:
+//   - a marker appended to the EDITABLE body reaches the executor, and
+//   - the read-only head the owner approved (rc-812aa13fb165) is what the
+//     nudge opens with — not the superseded Go sentence it replaced.
+func TestTaskCloseNudgeTextComesFromTheDocument(t *testing.T) {
 	api := newTasksTestServer(t)
-	task := createAdHocTask(t, api, "m-exec")
-	executor, err := api.hub.Connect("m-exec", "")
+	seedManualWithLabel(t, api, "review-pr", "審查 PR")
+	spec, head, body := splitSeed(t, api, docKindTaskCloseout)
+
+	// Store the overlay the way the WRITE FACE stores one: the editable body
+	// joined under the shipped read-only head. A body-only row is a shape the
+	// cockpit cannot produce, and eventNoticeText refuses it — using it here
+	// would make this test pass or fail for the wrong reason.
+	const marker = "OC-T7870-DOC-REACHES-THE-AGENT"
+	stored, err := api.bootDocStoredText(spec, body+marker+"\n")
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := api.dal.PutBootDocument(BootDocument{
+		Kind: spec.Kind, Key: spec.Key, Text: stored,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	created, code := createTypedTask(t, api, "review-pr", "123")
+	if code != http.StatusOK {
+		t.Fatalf("create: %d", code)
+	}
+	driveTaskDone(t, api, created.Task.ID, "m-exec")
+
+	rows := taskCloseNotices(t, api, "m-exec", created.Task.ID)
+	if len(rows) != 1 {
+		t.Fatalf("executor must get exactly one nudge, got %d: %v", len(rows), rows)
+	}
+	got := rows[0].Body
+
+	if !strings.Contains(got, marker) {
+		t.Fatalf("the executor did not receive the edited document — the send site is "+
+			"still composing its own sentence.\nreason=%q", got)
+	}
+	// 🔴 THE HEAD IS THE TICKET NUMBER ALONE SINCE T-6f44 (owner's decision 3:
+	// 「最低限度就是 task id」). {status}, {type_key} and {manual_label} were all
+	// facts the agent can read off the ticket; the number is the one it cannot,
+	// and it is what tells two simultaneous close-outs apart. The body now opens
+	// by telling the agent to get_task and read type_key from there.
+	wantHead := mustRender(t, spec, head, map[string]string{
+		"task_no":   TaskNo(created.Task.ID),
+		"closed_by": "m-exec",
+	})
+	if !strings.HasPrefix(got, wantHead) {
+		t.Fatalf("the nudge does not open with the approved read-only head.\n got %q\nwant prefix %q",
+			got, wantHead)
+	}
+}
+
+// TestTaskCloseNudgeStaysSilentWhenTheDocumentCannotRender pins the HALF OF THE
+// CONTRACT A GREEN SUITE DOES NOT NOTICE (T-7870). Wiring the words to the
+// document buys a second obligation with them: when the document cannot be
+// rendered, the send site must post NOTHING rather than fall back to a sentence
+// of its own — a fallback would put back the second source of truth this ticket
+// removed, and would hide the unrenderable document behind text that reads fine.
+//
+// 🔴 THIS TEST EXISTS BECAUSE A MUTANT FOUND IT MISSING. Replacing the
+// `sig.Reason != ""` guard with `if true` left every test in the package green,
+// so the rule was documented in a comment and enforced by nobody; an agent would
+// then receive a nudge whose whole body is empty and no surface would say why.
+//
+// The fault is induced with the ONE shape eventNoticeText refuses and the write
+// face cannot produce — a split document stored without its read-only head,
+// which is what rows written before the marker existed still look like.
+// ⚠️ THIS TEST LOST ITS SUBJECT IN T-6f44 AND IS KEPT AS A WEAKER CLAIM, said
+// out loud rather than left to be discovered. It guarded the manual-label
+// fallback: a task whose manual row is gone has no display label, so the head had
+// to name the raw type_key instead of rendering 「回到「」這本任務手冊」. Decision 3
+// took {manual_label} — and {type_key}, and {status} — out of the head entirely,
+// so the fallback no longer reaches any document and NOTHING here can observe it.
+// The label is still computed in api_tasks.go, and is now dead text.
+//
+// What is still worth asserting, and is all that is: a task whose manual is gone
+// is STILL OWED a nudge, and that nudge still opens with its ticket number. The
+// mutant this file was written against (delete the two-line fallback) is green
+// again — by construction, because the branch it deletes feeds nothing.
+func TestTaskCloseNudgeFallsBackToTheRawKeyWhenTheManualIsGone(t *testing.T) {
+	api := newTasksTestServer(t)
+	seedManualWithLabel(t, api, "review-pr", "審查 PR")
+	created, code := createTypedTask(t, api, "review-pr", "123")
+	if code != http.StatusOK {
+		t.Fatalf("create: %d", code)
+	}
+	// The manual is deleted AFTER the task exists — the shape a task outlives its
+	// type in. The task keeps its type_key, so the nudge is still owed.
+	if _, err := api.dal.DeleteTaskManual("review-pr"); err != nil {
+		t.Fatal(err)
+	}
+	driveTaskDone(t, api, created.Task.ID, "m-exec")
+
+	rows := taskCloseNotices(t, api, "m-exec", created.Task.ID)
+	if len(rows) != 1 {
+		t.Fatalf("a task whose manual is gone is still owed a nudge, got %d rows", len(rows))
+	}
+	spec, head, _ := splitSeed(t, api, docKindTaskCloseout)
+	wantHead := mustRender(t, spec, head, map[string]string{
+		"task_no":   TaskNo(created.Task.ID),
+		"closed_by": "m-exec",
+	})
+	if !strings.HasPrefix(rows[0].Body, wantHead) {
+		t.Fatalf("a task whose manual is gone is still owed the nudge, opening with "+
+			"its ticket number.\n got %q\nwant prefix %q", rows[0].Body, wantHead)
+	}
+	// The head names nothing it cannot fill: no empty 「」 pair, and no leftover
+	// manual/type_key clause that would now have nothing behind it.
+	for _, gone := range []string{"「」", "任務手冊", "type_key"} {
+		if strings.Contains(wantHead, gone) {
+			t.Fatalf("the head still carries %q, which decision 3 moved to the body: %q",
+				gone, wantHead)
+		}
+	}
+}
+
+func TestTaskCloseNudgeStaysSilentWhenTheDocumentCannotRender(t *testing.T) {
+	api := newTasksTestServer(t)
+	seedManualWithKey(t, api, "review-pr")
+	spec, _, body := splitSeed(t, api, docKindTaskCloseout)
+	if err := api.dal.PutBootDocument(BootDocument{
+		Kind: spec.Kind, Key: spec.Key, Text: body,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	created, code := createTypedTask(t, api, "review-pr", "123")
+	if code != http.StatusOK {
+		t.Fatalf("create: %d", code)
+	}
+	driveTaskDone(t, api, created.Task.ID, "m-exec")
+
+	if rows := taskCloseNotices(t, api, "m-exec", created.Task.ID); len(rows) != 0 {
+		t.Fatalf("an unrenderable 〈任務收尾〉 must send nothing, not an empty or "+
+			"substituted nudge; the executor received: %v", rows)
+	}
+	// Positive control: the very same fixture with an INTACT document does send —
+	// otherwise "no frame" would prove the harness broken rather than the rule kept.
+	stored, err := api.bootDocStoredText(spec, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := api.dal.PutBootDocument(BootDocument{
+		Kind: spec.Kind, Key: spec.Key, Text: stored,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	second, code := createTypedTask(t, api, "review-pr", "456")
+	if code != http.StatusOK {
+		t.Fatalf("create: %d", code)
+	}
+	driveTaskDone(t, api, second.Task.ID, "m-exec")
+	if rows := taskCloseNotices(t, api, "m-exec", second.Task.ID); len(rows) != 1 {
+		t.Fatalf("positive control: an intact document must still nudge, got %d rows", len(rows))
+	}
+}
+
+// 🔴 THE INVERSE OF TestTaskCloseNudgeSkipsAdHocTasks, WHICH THIS REPLACES.
+// That test asserted an ad-hoc close nudges NOBODY, on the reasoning that a
+// typeless task has no manual to fold learnings into. The owner overturned it
+// in T-91: the notice's job is telling an executor its ticket is closed, and a
+// typeless ticket closes just as hard. The old test is not weakened here, it is
+// REVERSED — its subject was removed by ruling, so leaving it green would have
+// meant leaving the ruling unimplemented.
+func TestTaskCloseNudgeReachesAnAdHocTasksExecutor(t *testing.T) {
+	api := newTasksTestServer(t)
+	task := createAdHocTask(t, api, "m-exec")
 	driveTaskDone(t, api, task.ID, "m-exec")
-	if got := popTaskCloseFrames(t, executor); len(got) != 0 {
-		t.Fatalf("an ad-hoc close has no manual — no nudge, got %v", got)
+	rows := taskCloseNotices(t, api, "m-exec", task.ID)
+	if len(rows) != 1 {
+		t.Fatalf("an ad-hoc (typeless) close must still tell its executor the "+
+			"ticket is closed, got %d rows", len(rows))
 	}
 }
 
@@ -2156,13 +2375,14 @@ func TestResumeSummaryCarriesTheCallersOpenTasksAsLightRows(t *testing.T) {
 	// Arm the "approve" gate — the task flips waiting_owner; the light row
 	// still lists it (non-terminal) without any gate/step detail.
 	rec = httptest.NewRecorder()
-	api.HandleOpenTaskGateApiTasksTaskIdStepsStepIdGatePost(rec,
-		taskReq(t, "POST", "/x", map[string]any{
+	api.HandleCreateReplyCardApiReplyCardsPost(rec,
+		taskReq(t, "POST", "/api/reply-cards", map[string]any{
 			"kind": "decision", "summary": "go?",
-			"options": []string{"go", "hold"},
-		}, "m-exec", "agent"), task.ID, view.Steps[2].ID)
+			"options":     []map[string]any{{"text": "go"}, {"text": "hold"}},
+			"linked_task": map[string]any{"task_id": task.ID, "step_id": view.Steps[2].ID},
+		}, "m-exec", "agent"))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("open gate: %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("open bound card: %d %s", rec.Code, rec.Body.String())
 	}
 	card := decodeBody[replyCardDTO](t, rec)
 
@@ -2424,11 +2644,18 @@ func markDuplicate(t *testing.T, api *apiServer, taskID, duplicateOf, sub, scope
 	return rec
 }
 
-// TestMarkDuplicateClosesTaskPointsAtOriginalAndSkipsNudge pins the happy path:
-// the task lands in the duplicated terminal status with duplicate_of set +
-// closed_ts stamped, and — unlike done/terminated — NO learnings nudge fires
-// down the executor's connection (T-02c9 point 6: a duplicate has no lessons).
-func TestMarkDuplicateClosesTaskPointsAtOriginalAndSkipsNudge(t *testing.T) {
+// TestMarkDuplicateClosesTaskPointsAtOriginal pins the happy path: the task
+// lands in the duplicated terminal status with duplicate_of set + closed_ts
+// stamped, and its executor IS told.
+//
+// 🔴 THE "AndSkipsNudge" HALF OF THIS TEST WAS REVERSED BY OWNER RULING (T-91).
+// It asserted that a duplicated close notifies nobody, on T-02c9 point 6's
+// reasoning that a duplicate has no lessons to fold back. True about LESSONS,
+// and the wrong question: the executor of a ticket somebody else just marked
+// duplicate needs to know its ticket is closed. Marking someone else's task a
+// duplicate was, measured, one of the two ways to close a task completely
+// silently.
+func TestMarkDuplicateClosesTaskPointsAtOriginal(t *testing.T) {
 	api := newTasksTestServer(t)
 	seedManualWithKey(t, api, "review-pr")
 	original, code := createTypedTask(t, api, "review-pr", "100")
@@ -2438,10 +2665,6 @@ func TestMarkDuplicateClosesTaskPointsAtOriginalAndSkipsNudge(t *testing.T) {
 	dupCreated, code := createTypedTask(t, api, "review-pr", "101")
 	if code != http.StatusOK {
 		t.Fatalf("create dup: %d", code)
-	}
-	executor, err := api.hub.Connect(dupCreated.Task.ExecutorID, "")
-	if err != nil {
-		t.Fatal(err)
 	}
 	rec := markDuplicate(t, api, dupCreated.Task.ID, original.Task.ID,
 		dupCreated.Task.ExecutorID, "agent")
@@ -2458,8 +2681,10 @@ func TestMarkDuplicateClosesTaskPointsAtOriginalAndSkipsNudge(t *testing.T) {
 	if got.ClosedTS == nil || *got.ClosedTS <= 0 {
 		t.Fatalf("closed_ts must stamp on the terminal transition, got %v", got.ClosedTS)
 	}
-	if frames := popTaskCloseFrames(t, executor); len(frames) != 0 {
-		t.Fatalf("a duplicated close must NOT nudge learnings, got %v", frames)
+	if rows := taskCloseNotices(t, api, dupCreated.Task.ExecutorID,
+		dupCreated.Task.ID); len(rows) != 1 {
+		t.Fatalf("a duplicated close must tell its executor the ticket is closed "+
+			"(owner ruling, T-91 — this used to assert the opposite), got %d rows", len(rows))
 	}
 }
 
@@ -2631,7 +2856,7 @@ func TestSetTaskPriorityExecutorFreezesAndUnfreezesSymmetrically(t *testing.T) {
 func TestSetTaskPriorityFrozenByNamesWhoFroze(t *testing.T) {
 	api := newTasksTestServer(t)
 	if err := api.dal.PutMember(Member{
-		ID: "m-admin", Kind: KindAssistant, RoleKey: adminRoleKey,
+		ID: "m-admin", Kind: KindStaff, RoleKey: adminRoleKey,
 	}); err != nil {
 		t.Fatalf("PutMember: %v", err)
 	}
@@ -2704,7 +2929,7 @@ func TestSetTaskPriorityForeignAgentIs403(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("foreign agent: want 403, got %d %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "caller is not the task's executor") {
+	if !strings.Contains(rec.Body.String(), executorGuardRefusal) {
 		t.Fatalf("wrong 403 face: %s", rec.Body.String())
 	}
 }
@@ -2716,7 +2941,7 @@ func TestSetTaskPriorityForeignAgentIs403(t *testing.T) {
 func TestSetTaskPriorityAdminAgentMayRetuneAndFreeze(t *testing.T) {
 	api := newTasksTestServer(t)
 	if err := api.dal.PutMember(Member{
-		ID: "m-admin", Kind: KindAssistant, RoleKey: adminRoleKey,
+		ID: "m-admin", Kind: KindStaff, RoleKey: adminRoleKey,
 	}); err != nil {
 		t.Fatalf("PutMember: %v", err)
 	}

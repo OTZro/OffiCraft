@@ -51,7 +51,7 @@ func seedHandoffTask(t *testing.T, api *apiServer, id, creator, executor string,
 func seedActiveMember(t *testing.T, api *apiServer, id string) {
 	t.Helper()
 	if err := api.dal.PutMember(Member{
-		ID: id, Name: id, Kind: "assistant", RoleKey: "dev",
+		ID: id, Name: id, Kind: "staff", RoleKey: "dev",
 		RosterStatus: RosterStatusActive,
 	}); err != nil {
 		t.Fatalf("seed member %s: %v", id, err)
@@ -158,7 +158,7 @@ func TestHandoffGateRefusesTheClosingReportAndLeavesTheTaskAnswerable(t *testing
 // T-f265, narrowed TWICE by the owner on the same day:
 //   - it used to MINT a task on the creator (rc-dc3305f590a7 「轉派都不需要另外開
 //     票」) — that task's own first line told an ordinary member to terminate it,
-//     and terminate_task requires admin_agent;
+//     and terminate_task required admin_agent when this was written; T-b56e opened it to the task's own executor on 2026-08-20, and this paragraph is history, not current authz;
 //   - the durable chat notice that replaced it was withdrawn as well
 //     (rc-e04adbc42574, option ①): once work is handed over it belongs to
 //     whoever holds it, and the system should not report back.
@@ -534,7 +534,12 @@ func TestBlockerCloseReleasesAndTellsTheDependentExecutor(t *testing.T) {
 	api := newTasksTestServer(t)
 	seedActiveMember(t, api, "m-creator")
 	blocker := seedHandoffTask(t, api, "t-cccc00000001", "m-creator", "m-exec", "design")
-	dependent := seedHandoffTask(t, api, "t-cccc00000002", "m-creator", "m-next")
+	// Distinct task NUMBERS, not merely distinct ids. TaskNo now keeps the
+	// WHOLE id (owner ruling 2026-08-25), so sibling ids no longer collide on
+	// their own; these two stay visibly different anyway so that a send site
+	// swapping {blocked_task_no} for {blocker_task_no} is legible at a glance
+	// rather than a diff of the last hex digits.
+	dependent := seedHandoffTask(t, api, "t-dddd00000002", "m-creator", "m-next")
 	if err := api.dal.AddTaskDep(dependent.ID, blocker.ID); err != nil {
 		t.Fatalf("add dep: %v", err)
 	}
@@ -543,8 +548,85 @@ func TestBlockerCloseReleasesAndTellsTheDependentExecutor(t *testing.T) {
 		// The dep itself auto-satisfies the gate, so this must pass.
 		t.Fatalf("close: %d %s", rec.Code, rec.Body.String())
 	}
-	// The DURABLE half — an SSE frame alone is what failed in T-8a1e.
-	assertHandoverChat(t, api, "m-next", TaskNo(blocker.ID))
+	// The DURABLE half — an SSE frame alone is what failed in T-8a1e. It probes
+	// the DEPENDENT's number since T-6f44: the blocker's number left the sentence
+	// (see below), so a probe on it would now fail as a stale fixture rather than
+	// as the delivery failure this line is about.
+	assertHandoverChat(t, api, "m-next", TaskNo(dependent.ID))
+
+	// 🔴 AND THE WHOLE TEXT OF IT, because since T-3201 this notice is the
+	// 〈解除阻擋〉 DOCUMENT rather than a Go string — which is what finally puts
+	// the owner's approved three-branch body (rc-8c0045ef7c38) on the wire
+	// instead of the pre-rewrite single sentence that told a ticket already in
+	// progress to go and plan itself. Two failures need the whole text: the send
+	// site naming another event's kind (every one of these documents opens with
+	// a [任務編號], so a keyword probe passes on the wrong one), and the
+	// body silently reverting to that sentence.
+	// ⚠️ THE BLOCKER'S NUMBER, TITLE AND STATUS LEFT THE SENTENCE (T-6f44,
+	// decision 3 applied to this document). What the agent has to act on is the
+	// ticket that was RELEASED — its own — and which ticket was blocking, what it
+	// was called and how it ended change nothing about what to do next; the
+	// dependency is on the ticket for anyone who wants it. Two defects went with
+	// them: {blocker_status} rendered an untranslated wire code into Chinese
+	// prose (「已經done了」), and the sentence carried the only halfwidth comma of
+	// the ten.
+	//
+	// ⚠️ WHAT THAT COSTS THIS FILE, said plainly: the fixture's two distinct task
+	// NUMBERS (see above) no longer discriminate a send site that swapped
+	// {blocked_task_no} for {blocker_task_no} — there is only one slot left, so
+	// the swap is not expressible. The assertion below is still the whole text,
+	// which is what catches the send site posting another event's document.
+	body := releaseNoticeTo(t, api, "m-next")
+	want := "[" + TaskNo(dependent.ID) + "] 擋著這張任務的前置任務已經結束，它不再擋著你。\n\n" +
+		"- **還沒開始**：請 get_task 讀內容、submit_plan 規劃步驟後開始執行。\n" +
+		"- **已經在進行中**：接著推進，不必重新規劃。\n" +
+		"- **優先權是凍結**：先問清楚為什麼被凍結，等能解凍的人解開再動。"
+	if body != want {
+		t.Fatalf("the release notice is not the 〈解除阻擋〉 document:\n got %q\nwant %q", body, want)
+	}
+	// The two defects, asserted gone by name — a rewrite that reintroduced either
+	// would still satisfy "the whole text matches" on the day someone updates the
+	// literal above without noticing what they were updating it to.
+	if strings.Contains(body, ",") {
+		t.Errorf("the halfwidth comma is back in the release notice: %q", body)
+	}
+	for _, code := range []string{"done", "terminated"} {
+		if strings.Contains(body, code) {
+			t.Errorf("the untranslated wire code %q is back in the release notice: %q", code, body)
+		}
+	}
+	// A name nothing filled must never ride out with the braces still on it —
+	// the send site drops the notice instead. Asserted beside a notice that DID
+	// arrive, so "no braces" cannot be satisfied by a server that sent nothing.
+	if bad := DocVarsIn(body); len(bad) > 0 {
+		t.Fatalf("the notice reached the executor with %v still in it: %q", bad, body)
+	}
+}
+
+// releaseNoticeTo returns the ONE server-authored notice this recipient got,
+// failing when there is not exactly one.
+//
+// 🔴 IT SELECTS BY RECIPIENT, NEVER BY WHAT THE TEXT SAYS. Selecting on a
+// phrase from the expected document would turn "the send site posted a
+// different document" into "no notice found", which reads as a delivery failure
+// and hides the text that actually went out — the one thing the caller needs to
+// see.
+func releaseNoticeTo(t *testing.T, api *apiServer, recipient string) string {
+	t.Helper()
+	msgs, err := api.dal.ListChatInvolving(recipient, 50)
+	if err != nil {
+		t.Fatalf("list chat: %v", err)
+	}
+	var found []string
+	for _, m := range msgs {
+		if m.Recipient == recipient && m.Sender == wireSystemSender {
+			found = append(found, m.Body)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("want exactly one system notice to %s, got %d: %q", recipient, len(found), found)
+	}
+	return found[0]
 }
 
 func TestASecondLiveBlockerHoldsTheReleaseBack(t *testing.T) {
@@ -574,7 +656,10 @@ func TestASecondLiveBlockerHoldsTheReleaseBack(t *testing.T) {
 	if rec := closeReport(t, api, second.ID, second.ID+"-sa", "m-exec2", nil); rec.Code != http.StatusOK {
 		t.Fatalf("close second: %d %s", rec.Code, rec.Body.String())
 	}
-	assertHandoverChat(t, api, "m-next", TaskNo(second.ID))
+	// The notice names the BLOCKED task ({blocked_task_no}), not the blocker
+	// that was just closed. Under the four-hex number every id in this test
+	// rendered as "T-cccc", so naming the wrong one here passed by collision.
+	assertHandoverChat(t, api, "m-next", TaskNo(dependent.ID))
 }
 
 func TestTaskHasLiveBlocker(t *testing.T) {
@@ -986,6 +1071,20 @@ func replanRefusalProblems(msg string) []string {
 // round-2 rework (commit 74faaca, api_tasks_handoff.go). It is the negative
 // sample: everything replanRefusalProblems claims to catch must be caught here,
 // or the checker is decoration.
+//
+// 🔴 DO NOT "UPDATE" IT WHEN THE LIVE MESSAGE CHANGES — including its `(T-x)`
+// preamble, which T-5291 removed from the live text and deliberately left here.
+// The reason is what the sentence above already says: this is a DATED VERBATIM
+// QUOTE. Edit it and it is no longer the thing it claims to be, and the test
+// below proves nothing about the rework it is named after.
+//
+// The reason is NOT "editing it would gut TestReplanRefusalCheckerRejectsThe-
+// PreReworkWording" — an earlier T-5291 note claimed that and it is false,
+// measured: replanRefusalProblems never reads the preamble at all (it checks
+// submit_plan / update_step_status / create_task / the three handoff constants /
+// their order / the 403 caveat). Changing `(T-x)` here would leave that test
+// green. It stays frozen because it is a quotation, not because anything would
+// break.
 const historicalReplanRefusal = "task 't-x' (T-x) was created by 'm-a' but " +
 	"executed by 'm-b': this plan leaves EVERY step done, which CLOSES the task, " +
 	"and a closed task can never be replanned. A plan carries no handoff " +
@@ -1197,8 +1296,10 @@ func TestReplanClosesWhenASuccessorAlreadyDependsOnTheTask(t *testing.T) {
 			"too: status=%q handoff=%q task_id=%q",
 			closed.Status, closed.Handoff, closed.HandoffTaskID)
 	}
-	// half B must still fire from a replan-driven close.
-	assertHandoverChat(t, api, "m-next", TaskNo(task.ID))
+	// half B must still fire from a replan-driven close. The notice names the
+	// BLOCKED successor, not the task that closed — the two ids used to share
+	// the number "T-iiii", so this once passed either way.
+	assertHandoverChat(t, api, "m-next", TaskNo(successor.ID))
 }
 
 // mark_duplicate must stay a zero-friction call for the population the gate does
@@ -1327,5 +1428,95 @@ func TestSubmitPlanCannotCloseAroundTheGateByFreezingASettledCardStep(t *testing
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("a replan that FREEZES its way to all-done must be gated exactly "+
 			"like the closing step report: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// ── the 422 preamble carries the FULL task id exactly once ───────────────────
+//
+// T-5291 round 2. The preamble was written when TaskNo was a projection:
+// `task '<id>' (<TaskNo(id)>)` gave the caller the machine key AND the short
+// number a human would read off the card. Now that TaskNo returns the id
+// unchanged, that parenthetical prints the same string twice —
+//
+//	task 't-72dd79b666d0' (t-72dd79b666d0) was created by …
+//
+// — which is pure noise in the message this file's own comment calls "the whole
+// user-facing contract of the gate". A contract that repeats itself teaches the
+// reader to skim it.
+//
+// The pin is on a COUNT, not on the wording — a future preamble may phrase the
+// identity however it likes. Both doors are checked because they share the
+// preamble and only the tail differs; a change that fixes one and not the other
+// is exactly the drift this catches.
+//
+// 🔴 THE LIMIT OF THIS PIN, measured rather than assumed. It counts occurrences
+// of the FULL id string. A preamble that names the task once in full and once in
+// some RE-DERIVED shorter form is NOT counted and stays green — review built the
+// case: `TaskNo(t.ID)[:6]` yields
+//
+//	task 't-5291aabbccdd' (t-5291) was created by …
+//
+// i.e. the machine-key-plus-short-code double naming this ticket removed, with
+// this test still passing. Left narrow deliberately: enumerating "every form the
+// identity could be re-derived into" would be a second copy of the display rule,
+// which is the failure mode T-5291 exists to end. So the honest statement of
+// what this buys is the function name — the full id appears exactly once — and
+// nothing broader. Judging a NEW preamble is a reviewer's job.
+func TestGate422NamesTheTaskExactlyOnce(t *testing.T) {
+	const taskID = "t-5291aabbccdd"
+
+	// door 1: the closing step_report.
+	api := newTasksTestServer(t)
+	seedActiveMember(t, api, "m-creator")
+	seedHandoffTask(t, api, taskID, "m-creator", "m-exec", "design")
+	rec := closeReport(t, api, taskID, taskID+"-sa", "m-exec", nil)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("step_report door must refuse: %d %s", rec.Code, rec.Body.String())
+	}
+	report := errorMessage(t, rec)
+
+	// door 2: the replan that would leave every step done.
+	api2 := newTasksTestServer(t)
+	seedActiveMember(t, api2, "m-creator")
+	task2 := seedHandoffTask(t, api2, taskID, "m-creator", "m-exec", "a", "b")
+	steps, err := api2.dal.ListTaskSteps(task2.ID)
+	if err != nil {
+		t.Fatalf("list steps: %v", err)
+	}
+	for _, st := range steps {
+		if st.Name == "a" {
+			st.Status = StepStatusDone
+			if err := api2.dal.PutTaskStep(st); err != nil {
+				t.Fatalf("put step: %v", err)
+			}
+		}
+	}
+	rec2 := httptest.NewRecorder()
+	api2.HandleSubmitTaskPlanApiTasksTaskIdPlanPost(rec2,
+		taskReq(t, "POST", "/api/tasks/"+taskID+"/plan",
+			map[string]any{"steps": []map[string]any{{"name": "a", "dod": "d"}}},
+			"m-exec", "agent"), taskID)
+	if rec2.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("replan door must refuse: %d %s", rec2.Code, rec2.Body.String())
+	}
+	replan := errorMessage(t, rec2)
+
+	for _, tc := range []struct {
+		door string
+		msg  string
+	}{{"step_report", report}, {"replan", replan}} {
+		// Non-vacuity first: the id must be in there at all. Counting to 1 in a
+		// message that names the task ZERO times would "pass" while the caller
+		// has lost the one thing that tells them WHICH task refused.
+		n := strings.Count(tc.msg, taskID)
+		if n == 0 {
+			t.Fatalf("[%s] the 422 no longer names the task at all — the caller "+
+				"cannot tell which task refused: %s", tc.door, tc.msg)
+		}
+		if n != 1 {
+			t.Fatalf("[%s] the 422 prints the task identity %d times (want 1) — "+
+				"TaskNo is the id now, so `task '<id>' (<TaskNo>)` is the same "+
+				"string twice: %s", tc.door, n, tc.msg)
+		}
 	}
 }

@@ -2,7 +2,7 @@
 //
 // T-791e turned the two read-only seed cards into editable documents, so the
 // list is now FOUR rows in boot-assembly order — 系統互動 → 使用者自訂 →
-// 啟動程序（Claude Code）→ 啟動程序（Codex CLI）— and the two boot sequences
+// 啟動步驟（Claude Code）→ 啟動步驟（Codex CLI）— and the two boot sequences
 // have a row EACH, never one row for "the boot sequence". The editable
 // behaviour of the three new pages lives in BootDocPage.test.tsx; what is
 // pinned here is the list itself, the routing into each page, and the
@@ -20,14 +20,15 @@ import { __resetMock } from "../api/mock";
 
 const s = zh.settings;
 
-/** Render Settings and navigate landing → 角色誌 (the roles/blocks list). */
+/** Render Settings and navigate landing → 全域情境 (the block list; T-a241
+ * moved it out of 角色誌 into its own section). */
 async function openRolesLog() {
   const utils = render(
     <I18nProvider>
       <SettingsPage />
     </I18nProvider>
   );
-  fireEvent.click(utils.getByText(s.roles));
+  fireEvent.click(utils.getByText(s.globalContext));
   // The three block entries render synchronously; the role list is async.
   await utils.findByText(s.systemName);
   return utils;
@@ -39,7 +40,7 @@ beforeEach(() => {
 
 describe("SettingsPage · global-context 4 blocks", () => {
   it("lists the blocks in boot-assembly order", async () => {
-    // 啟動程序 is ONE row, not one per runtime (owner 2026-08-14, card
+    // 啟動步驟 is ONE row, not one per runtime (owner 2026-08-14, card
     // rc-e1abbc506b70 option 1: "我沒有想到被切割成這麼多份"). The runtime is
     // chosen inside the page. The two DOCUMENTS stay separate — that is
     // asserted on the page itself, in BootDocPage.test.tsx.
@@ -48,8 +49,8 @@ describe("SettingsPage · global-context 4 blocks", () => {
     const iSystem = text.indexOf(s.systemName);
     const iCustom = text.indexOf(s.customName);
     const iBoot = text.indexOf(s.bootName);
-    // 下線程序 is FOURTH (T-c9c0): the list runs an agent's life end to end,
-    // 開機 → 下線, so it follows 啟動程序 rather than leading it.
+    // 〈停止〉 is FOURTH (T-c9c0): the list runs an agent's life end to end,
+    // 開機 → 下線, so it follows 啟動步驟 rather than leading it.
     const iOffboard = text.indexOf(s.offboardName);
     expect(iSystem).toBeGreaterThanOrEqual(0);
     expect(iCustom).toBeGreaterThan(iSystem);

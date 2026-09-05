@@ -2,11 +2,9 @@
 // role_key (T-3809). The role journal's third block, beside Duty (the role
 // definition) and Learning (the lessons doc).
 //
-// Shaped after useLessons, with two deliberate differences:
+// Shaped after useLessons, with one deliberate difference:
 //
-//  1. NO task_type axis. That axis belongs to lessons; insight is one document
-//     per role, keyed on the bare role_key.
-//  2. The view it returns KEEPS size_chars / cap_chars. useLessons drops the
+//  * The view it returns KEEPS size_chars / cap_chars. useLessons drops the
 //     wire's bookkeeping fields as noise; here the cap is the number the card
 //     header shows, and it is the only place an owner can read the live
 //     doc.cap_chars.insight setting without being admin.

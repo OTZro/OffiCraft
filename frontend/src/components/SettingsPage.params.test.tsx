@@ -48,6 +48,10 @@ describe("SettingsPage · 參數調整", () => {
     const pct = utils.getByLabelText(s.handover) as HTMLInputElement;
     expect(pct.value).toBe("50");
     expect((utils.getByLabelText(s.monitoringRefresh) as HTMLInputElement).value).toBe("5");
+    // 加速停止 的秒數 (T-ed79). The whole premise of that button is that the
+    // number is the owner's, and docs/guide/members.md sends him HERE to change
+    // it — until this row existed the only way to move it was the API.
+    expect((utils.getByLabelText(s.acceleratedGrace) as HTMLInputElement).value).toBe("120");
   });
 
   it("changing the login TTL patches the server immediately", async () => {
@@ -88,6 +92,27 @@ describe("SettingsPage · 參數調整", () => {
     await utils.findByText(s.paramsSaveError);
     expect(pct.value).toBe("70");
     expect((await api.getServerSettings()).handoverPct).toBe(70);
+  });
+
+  it("persists the 加速停止 grace and refuses a value the server would 422", async () => {
+    const patch = vi.spyOn(api, "patchServerSettings");
+    const utils = await openParams();
+    const secs = utils.getByLabelText(s.acceleratedGrace) as HTMLInputElement;
+    fireEvent.change(secs, { target: { value: "300" } });
+    fireEvent.blur(secs);
+    await waitFor(async () =>
+      expect((await api.getServerSettings()).acceleratedGraceSecs).toBe(300),
+    );
+    expect(patch).toHaveBeenCalledWith({ acceleratedGraceSecs: 300 });
+    // The local guard mirrors settings.go's 10..3600 exactly: a value the server
+    // would reject must never leave the page, or the owner reads a 422 for a
+    // number the UI offered him.
+    fireEvent.change(secs, { target: { value: "5" } });
+    fireEvent.blur(secs);
+    await utils.findByText(s.paramsSaveError);
+    expect((await api.getServerSettings()).acceleratedGraceSecs).toBe(300);
+    expect(patch).toHaveBeenCalledTimes(1);
+    patch.mockRestore();
   });
 
   it("persists the monitoring refresh interval and rejects zero", async () => {

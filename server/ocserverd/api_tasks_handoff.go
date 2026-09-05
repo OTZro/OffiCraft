@@ -111,7 +111,26 @@ const (
 // user-facing contract of the gate, so it names the ways out VERBATIM — a
 // fail-closed guard that does not tell you how to pass is just an outage.
 func handoffGateReason(t Task, door string) string {
-	who := "task '" + t.ID + "' (" + TaskNo(t.ID) + ") was created by '" +
+	// This used to read `task '<id>' (<TaskNo(id)>)`, which was two different
+	// strings while TaskNo was the four-hex projection — the machine key plus
+	// the number on the card. T-5291 made TaskNo the id itself, so the
+	// parenthetical became the same string a second time, in the message this
+	// file calls the whole user-facing contract of the gate. Removed.
+	//
+	// 🔴 WHAT IS ACTUALLY PINNED, exactly: TestGate422NamesTheTaskExactlyOnce
+	// counts occurrences of the FULL id and requires exactly one. That is a
+	// deliberately narrow pin and it is narrower than "named once" — review
+	// measured the gap: a preamble rebuilt as `TaskNo(t.ID)[:6]` prints
+	// `task 't-5291aabbccdd' (t-5291) …`, which is the machine-key-plus-short-
+	// code double naming this ticket just removed, and the test stays GREEN
+	// because the short form is not an occurrence of the full id.
+	//
+	// The pin is left narrow on purpose. Counting "any re-derived form of the
+	// identity" means enumerating the forms, which is a second, drifting copy of
+	// the display rule — the exact failure mode T-5291 exists to end. Whether a
+	// NEW preamble says the same thing twice is a reviewer's judgement; the test
+	// only guarantees the full id is not simply pasted in twice.
+	who := "task '" + t.ID + "' was created by '" +
 		t.CreatorID + "' but executed by '" + t.ExecutorID + "'"
 	if door == handoffDoorReplan {
 		// A replan carries no declaration field, so pointing the caller back at
@@ -341,12 +360,23 @@ func (s *apiServer) releaseDependentsOnClose(t Task, now float64, trigger string
 		// dependent that is still FROZEN is told it can start (the release
 		// removed only one of its two reasons to wait), and a worker that has
 		// already left is still addressed. Both were true before T-e77f too.
+		//
+		// 🔴 THE NOTICE IS THE 〈解除阻擋〉 DOCUMENT NOW (T-3201), and that is
+		// what puts the owner's approved rewrite on the wire. He approved
+		// replacing the old single sentence 「這張任務現在可以開始:請 get_task
+		// 讀內容、submit_plan 規劃步驟後開始執行。」 with three branches
+		// (rc-8c0045ef7c38) — it assumed a released ticket had not started, and
+		// there is live evidence of it saying so to one already in progress. The
+		// rewrite landed in the seed and this line kept sending the old sentence,
+		// so the approval was on disk and not on the wire until the document
+		// became the notice. "" means it could not be rendered — post nothing
+		// rather than a sentence with {blocker_title} still in it.
 		if d.ExecutorID != "" {
-			s.postTaskChat(d, wireSystemSender, d.ExecutorID,
-				"["+TaskNo(d.ID)+"] 擋住這張任務的前置任務 "+TaskNo(t.ID)+
-					"「"+t.Title+"」已經"+t.Status+"了,它不再擋著你。"+
-					"這張任務現在可以開始:請 get_task 讀內容、submit_plan 規劃步驟後開始執行。",
-				trigger)
+			if notice := s.taskNoticeText(docKindTaskUnblocked, map[string]string{
+				"blocked_task_no": TaskNo(d.ID),
+			}); notice != "" {
+				s.postTaskChat(d, wireSystemSender, d.ExecutorID, notice, trigger, nil)
+			}
 		}
 		s.publishTask(d, trigger)
 		if d.ExecutorKind == TaskExecutorOutsource && d.ExecutorID == "" {

@@ -24,6 +24,7 @@ var subcommands = []struct{ name, help string }{
 	{"backup", "take one online snapshot of this instance's database (single consistent file)"},
 	{"set-password", "store the owner password's argon2id hash in DB settings ($OC_NEW_PASSWORD)"},
 	{"claim-token", "print the one-shot first-run claim code (exit 3 once a password is set)"},
+	{"mfa-disable", "clear the owner's TOTP second factor (lost-authenticator recovery)"},
 }
 
 func usage(out io.Writer) {
@@ -36,10 +37,12 @@ func usage(out io.Writer) {
 	}
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "flags (serve):")
-	fmt.Fprintln(out, "  --no-reconcile   do not run the reconcile producer (no cadence loop,")
-	fmt.Fprintln(out, "                   no warden-command dispatch) — the shadow-deploy kill-switch")
-	fmt.Fprintln(out, "  --no-outsource   do not run the outsource-assignment scheduler (no cadence,")
-	fmt.Fprintln(out, "                   no event-driven assignment) — the --no-reconcile mirror")
+	fmt.Fprintln(out, "  --no-reconcile   do not run the reconcile producer (its half of the")
+	fmt.Fprintln(out, "                   cadence tick is skipped, no warden-command dispatch)")
+	fmt.Fprintln(out, "                   — the shadow-deploy kill-switch")
+	fmt.Fprintln(out, "  --no-outsource   do not run the outsource-assignment scheduler (its half")
+	fmt.Fprintln(out, "                   of the cadence tick is skipped, no event-driven")
+	fmt.Fprintln(out, "                   assignment) — the --no-reconcile mirror")
 }
 
 // realMain is the testable entrypoint: argv WITHOUT the program name, an env
@@ -95,6 +98,13 @@ func realMain(argv []string, env func(string) string, out io.Writer) int {
 		}
 		return cmdClaimToken(env, out)
 
+	case "mfa-disable":
+		if len(rest) != 0 {
+			fmt.Fprintln(out, "[ocserverd] mfa-disable takes no arguments (the database comes from the resolved DSN)")
+			return 2
+		}
+		return cmdMFADisable(env, out)
+
 	case "-h", "--help", "help":
 		usage(out)
 		return 0
@@ -116,15 +126,21 @@ func parseServeFlags(args []string, out io.Writer) (bool, bool, bool) {
 		switch a {
 		case "--no-reconcile", "-no-reconcile":
 			// The shadow-deployment kill-switch (spec/lifecycle.md Appendix B #1):
-			// disables the reconcile producer wholesale — cadence loop AND the
-			// event-driven warden-command dispatch it owns. The rest of the
-			// server runs unchanged; §4.1 enumerates what the flag does NOT cover.
+			// disables the reconcile producer wholesale — ITS HALF of the one
+			// cadence tick AND the event-driven warden-command dispatch it owns.
+			// Since T-14 item 5 the loop itself is mounted either way and the
+			// flag is read at the call site (runLifecycleTick), so "wholesale"
+			// means "that producer does nothing", not "no goroutine exists". The
+			// rest of the server runs unchanged; §4.1 enumerates what the flag
+			// does NOT cover.
 			noReconcile = true
 		case "--no-outsource", "-no-outsource":
 			// The outsource-scheduler kill-switch (the --no-reconcile mirror,
 			// M3 contract §B.4): disables the assignment producer wholesale —
-			// cadence AND the event-driven create_task tick — so a shadow server
-			// never mints workers against the production queue.
+			// its half of the cadence tick AND the event-driven create_task tick
+			// — so a shadow server never mints workers against the production
+			// queue. Same shape as above: skipped at the call site, never read
+			// inside runOutsourceTick (lifecycle_tick.go carries the ruling).
 			noOutsource = true
 		default:
 			fmt.Fprintf(out, "[ocserverd] unknown serve flag %q\n\n", a)

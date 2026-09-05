@@ -1,6 +1,6 @@
 // hooks/useOutsourceWorkers.ts — the office 外包 panel's data (SPEC §4): the
 // LIVE outsource-worker roster (codename · 任務狀態 + 任務標題 + the bound task's
-// T-xxxx / type / created stamp, ALL riding the worker DTO), ordered 依任務建立
+// 任務編號 / type / created stamp, ALL riding the worker DTO), ordered 依任務建立
 // 時間新→舊, plus the global parallel cap (settings.outsource_max_parallel)
 // behind the panel's 「N / 上限」 + 齒輪.
 //

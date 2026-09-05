@@ -176,14 +176,20 @@ def _closed_topic_set() -> set[str]:
 
     ⚠️ SCOPE of this guard (and of ocserverd's TestSSETopicsMatchSpec, the other
     edge): it covers the ENTITY-DELTA topics only — the ones that ride
-    ``hub.Publish``. The four DIRECTED bands (``context-high`` §6,
-    ``token-expiry`` §6.1, ``warden-command`` §7, ``task-close`` §8) go out through ``PushDirected``,
+    ``hub.Publish``. The three DIRECTED bands (``context-high`` §6,
+    ``token-expiry`` §6.1, ``warden-command`` §7) go out through ``PushDirected``,
     bypass ``Publish`` entirely, and are a separate envelope family by design
     (§3.1's own note: "a separate envelope family, not entity-delta topics").
     Their ABSENCE from this set is deliberate, not an oversight — do NOT "fix"
     it by adding them here or to ``sseTopics``; they are pinned by their own
     tests (``test_context_high_*``, ``test_warden_command_band_start_frame``,
     and ocserverd's token-expiry wire test).
+
+    🔴 ``task-close`` §8 used to be the fourth. T-91 retired it as a wire band —
+    the close-out nudge is a DURABLE CHAT ROW now, because an at-most-once push
+    reached nobody who was offline when its task closed. It is absent here for a
+    different reason from the other three: not "directed rather than entity",
+    but "no longer sent on the wire at all".
     """
     path = HERE.parent / "spec" / "sse.md"
     return _parse_closed_topics(path.read_text(encoding="utf-8"), source=str(path))
@@ -408,7 +414,7 @@ def test_every_closed_topic_emits(client, owner_token, agent_a, fresh_member, ow
         ("reply_card", lambda: client.post(
             "/api/reply-cards",
             json={"kind": "decision", "summary": f"topic probe {tag}",
-                  "options": ["AI pick", "other"]},
+                  "options": [{"text": "AI pick"}, {"text": "other"}], "linked_task": None},
             headers=_auth(agent_a.token))),
         # The three M3 task-batch topics, each through an ORDINARY write face
         # (task creation / a worker field edit / manual creation) — not a
@@ -432,7 +438,7 @@ def test_every_closed_topic_emits(client, owner_token, agent_a, fresh_member, ow
             "/api/roles", json={"name": f"Conf Topic Role {tag}"},
             headers=_auth(owner_token))),
         ("lessons", lambda: client.post(
-            "/api/lessons/assistant/general", json={"text": f"topic probe {tag}"},
+            "/api/lessons/assistant", json={"text": f"topic probe {tag}"},
             headers=_auth(owner_token))),
         # insight — the ORDINARY write face (replace_insight), not the restore
         # path. Pinned here because a doc write that reaches the DB but never
@@ -803,7 +809,7 @@ def test_first_connect_clears_waking(base_url, client, owner_token) -> None:
     """§5.2 first-connect edge: the wake completes the instant the agent holds
     /api/events — waking_since MUST be cleared (observable: presence falls to
     OFFLINE after disconnect, not back to 'waking', although desired_state is
-    still online and the 90 s waking TTL has not lapsed)."""
+    still online and the configured waking TTL has not lapsed)."""
     agent = _fresh_agent(client, owner_token, f"waking-{uuid.uuid4().hex[:6]}")
     r = client.post(
         f"/api/members/{agent.member_id}/activate", json={},
@@ -1201,9 +1207,13 @@ def test_warden_command_band_start_frame(
         cmd = frame["data"]
         assert cmd["rpc"] == "start", cmd
         args = cmd["args"]
+        # EXACT set, not a subset: an extra key here is a field the warden was
+        # never told about. `task_type` was in this set until T-2 — it was
+        # sourced from the lessons bucket and carried for parity only — and its
+        # removal is what this equality now pins.
         assert set(args) == {
             "member_id", "persona_context", "member_token", "role",
-            "task_type", "runtime", "model", "effort", "session_name",
+            "runtime", "model", "effort", "session_name",
         }, args
         assert args["member_id"] == member_id, args
         assert args["runtime"] == "claude", args
@@ -1233,12 +1243,12 @@ def test_warden_command_band_start_frame(
 # ── T-db62 diagnostic: gate-card arm must fan reply_card to owner cockpit ─────
 #
 # The 請示 nav badge (useReplyCardCount) refetches on every reply_card delta;
-# owner reported the badge staying blank for an open_gate gate card until a
-# manual reload. conformance historically triggered reply_card ONLY via the
-# standalone POST /api/reply-cards path (test_every_closed_topic_emits). This pins
-# the OTHER open path — open_gate arming — actually fans a reply_card delta to
-# the owner connection, byte-for-byte the same live-update signal the badge
-# rides. If the badge bug is a missing frame, this goes red.
+# owner reported the badge staying blank for a gate card until a manual reload.
+# test_every_closed_topic_emits triggers reply_card through an UNBOUND create;
+# this pins the BOUND create — a linked_task that arms a step (T-18 folded
+# open_gate into it) — actually fanning a reply_card delta to the owner
+# connection, byte-for-byte the same live-update signal the badge rides. If the
+# badge bug is a missing frame, this goes red.
 def test_gate_arm_emits_reply_card_frame_to_owner(
     client, owner_token, agent_a, owner_sse
 ) -> None:
@@ -1259,14 +1269,15 @@ def test_gate_arm_emits_reply_card_frame_to_owner(
     # submit_plan answers with a bounded receipt (T-a98d); read the rows back.
     step_id = client.get(f"/api/tasks/{task_id}", headers=h).json()["steps"][0]["id"]
     # Task status is DERIVED (T-9ca5): report the step in_progress so the task
-    # derives in_progress — a gate can only arm on an in_progress task.
+    # derives in_progress — a card can only bind an in_progress task.
     assert client.post(
         f"/api/tasks/{task_id}/steps/{step_id}/status",
         json={"status": "in_progress"}, headers=h,
     ).status_code == 200
     r = client.post(
-        f"/api/tasks/{task_id}/steps/{step_id}/gate",
-        json={"kind": "decision", "summary": "gate probe", "options": ["go", "hold"]},
+        "/api/reply-cards",
+        json={"kind": "decision", "summary": "gate probe", "options": [{"text": "go"}, {"text": "hold"}],
+              "linked_task": {"task_id": task_id, "step_id": step_id}},
         headers=h,
     )
     assert r.status_code == 200, r.text

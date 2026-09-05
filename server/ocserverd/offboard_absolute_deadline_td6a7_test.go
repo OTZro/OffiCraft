@@ -54,8 +54,8 @@ import (
 // English quantity phrasing is not ("a couple of", "half an", "a few more"), so
 // a partial numeral whitelist would rebuild the
 // same false confidence the literal whitelist had, one layer down. The sentence
-// is composed from one fixed template in offboardNotice, so a spelled-out
-// duration can only get there by someone typing one on purpose.
+// is the read-only head of one document, so a spelled-out duration can only get
+// there by someone typing one on purpose.
 //
 // ⚠️ The unit is what the pattern turns on, never the digit, because a real
 // notice is full of legitimate numbers: "context 35% (your limits: 40% / 50%)",
@@ -65,7 +65,7 @@ import (
 // pattern reads what is left. An INSTANT is stable within the epoch; a SPAN is
 // not, and that difference is the whole ticket.
 //
-// 🔴 SCOPE — the guard reads only the composed sentence, never the 下線程序
+// 🔴 SCOPE — the guard reads only the composed sentence, never the 〈停止〉
 // document folded in beneath it. A review appended one sentence a human would
 // plausibly write to seeds/offboard.md — 「⚠️ 第 5 步收拾暫存最多花 5 分鐘」 —
 // and five tests went red on a REAL notice. The document is not what T-d6a7
@@ -94,9 +94,17 @@ var (
 	deadlineWords = regexp.MustCompile(`(?i)deadline|截止|死線|死线`)
 )
 
-// composedSentence is the half of a notice the SERVER writes. offboardNotice
-// folds the 下線程序 document in after a newline, and everything below that
-// line is the owner's prose, which these guards do not police.
+// composedSentence is the half of a notice the SERVER writes: the document's
+// read-only head, which is its first line. Everything below that line is the
+// owner-editable body, which these guards do not police.
+//
+// ⚠️ SINCE T-6f44 THE SOFT ARM HAS NO SUCH HALF — 〈停止〉's read-only head was
+// deleted with {where}, so its notice is the document from the first byte. This
+// function then returns the document's own title line, which is body text: the
+// guards below become a check on the first line of prose rather than on a
+// server-composed sentence. That is a weaker claim than it used to be on that
+// arm, and it is the honest one — there is no longer anything for the server to
+// compose there to be wrong about.
 func composedSentence(notice string) string {
 	if i := strings.Index(notice, "\n"); i >= 0 {
 		return notice[:i]
@@ -154,6 +162,18 @@ const (
 	deadlineEpochSince = 1_769_904_000 // 2026-02-01T00:00:00Z
 	deadlineEpochGrace = 120           // the recycle clock that actually collects
 	deadlineEpochWant  = "2026-02-01T00:02:00Z"
+	// The whole sentence the server composes for that epoch on a member with no
+	// gauge reading, under the shipped 40%/50% limits. Asserted verbatim rather
+	// than by substring — see the call sites.
+	// 🔴 report_stopped, not restart_self (T-3201). The sentence is now the
+	// 加速停止 document's own head, and the owner ruled that verb by name
+	// (c-5b3d8f192a0b): the server controls this member's lifecycle, so what it
+	// owes is a report.
+	// 🔴 ONE CHINESE SENTENCE SINCE T-6f44. {where} is gone (decision 4) and the
+	// English wrapper went with it; what is left is the one fact the body cannot
+	// state. The instant is still the whole point of this file and is still
+	// asserted as a Z-suffixed literal.
+	deadlineEpochSentence = "你的結束時刻是 " + deadlineEpochWant + "。"
 )
 
 func TestFinalCallQuotesAnAbsoluteDeadlineFromTheSameSourceAsTheCockpit(t *testing.T) {
@@ -174,8 +194,11 @@ func TestFinalCallQuotesAnAbsoluteDeadlineFromTheSameSourceAsTheCockpit(t *testi
 		return notice, m
 	}
 
-	// THE CLOCKED ARMS: an absolute deadline, equal to the one on the wire.
-	for _, op := range []string{refocusOpContextHigh, "restart_self", "relocate"} {
+	// THE CLOCKED ARM: an absolute deadline, equal to the one on the wire.
+	// T-ed79 left exactly one — the second context threshold. restart_self and
+	// relocate used to be here, on the clock by fallthrough rather than by
+	// ruling; they are now asserted as no-clock arms below, beside 重新聚焦.
+	for _, op := range []string{refocusOpContextHigh} {
 		t.Run("clocked: "+op, func(t *testing.T) {
 			grace, clocked := recycleGraceFor(op, cfg)
 			if !clocked {
@@ -187,9 +210,14 @@ func TestFinalCallQuotesAnAbsoluteDeadlineFromTheSameSourceAsTheCockpit(t *testi
 			}
 
 			notice, m := noticeFrom(t, op, deadlineEpochSince)
-			if !strings.Contains(notice, "Your deadline is "+deadlineEpochWant+".") {
-				t.Fatalf("%s must quote the absolute deadline %s:\n%s",
-					op, deadlineEpochWant, notice)
+			// The WHOLE composed sentence, not a substring of it: a
+			// strings.Contains on the deadline clause passes just as happily on
+			// a sentence that has lost its opener, its closer, or its position
+			// clause, and this file is here because one wording change went
+			// unnoticed. (The 〈停止〉 document folded in under the newline is
+			// the owner's prose and is not asserted — see composedSentence.)
+			if got := composedSentence(notice); got != deadlineEpochSentence {
+				t.Fatalf("%s sentence:\n got: %q\nwant: %q", op, got, deadlineEpochSentence)
 			}
 
 			// ONE source of truth: the sentence and the cockpit field must name the
@@ -210,14 +238,16 @@ func TestFinalCallQuotesAnAbsoluteDeadlineFromTheSameSourceAsTheCockpit(t *testi
 		})
 	}
 
-	// THE UNCLOCKED ARM (control in the other direction): no time at all —
+	// THE UNCLOCKED ARMS (control in the other direction): no time at all —
 	// neither a duration nor a deadline, because nothing is coming to collect.
-	t.Run("no clock: "+refocusOpRefocus, func(t *testing.T) {
-		for _, age := range []float64{1, SoftOffboardGraceSecs + 1, 10 * SoftOffboardGraceSecs} {
-			notice, _ := noticeFrom(t, refocusOpRefocus, nowSecs()-age)
-			assertQuotesNoTime(t, "重新聚焦", notice)
-		}
-	})
+	for _, op := range []string{refocusOpRefocus, refocusOpRestartSelf, memberOpRelocate, memberOpModel} {
+		t.Run("no clock: "+op, func(t *testing.T) {
+			for _, age := range []float64{1, SoftOffboardGraceSecs + 1, 10 * SoftOffboardGraceSecs} {
+				notice, _ := noticeFrom(t, op, nowSecs()-age)
+				assertQuotesNoTime(t, op, notice)
+			}
+		})
+	}
 }
 
 // …and the instant is rendered in UTC no matter what timezone the SERVER
@@ -241,11 +271,12 @@ func TestDeadlineIsRenderedInUTCWhateverTheServerProcessTimezone(t *testing.T) {
 			time.Local = loc
 			defer func() { time.Local = saved }()
 
-			notice := offboardNotice("context 50% (your limits: 40% / 50%)",
-				offboardCloserRestartSelf, true, deadlineEpochSince+deadlineEpochGrace, "")
-			if !strings.Contains(notice, "Your deadline is "+deadlineEpochWant+".") {
-				t.Fatalf("a server running in %s must still quote %s:\n%s",
-					zone, deadlineEpochWant, notice)
+			s := newReconcileTestServer(t)
+			notice := composedSentence(s.winddownNoticeText(offboardKindFinal, deadlineEpochSince+deadlineEpochGrace))
+			want := "你的結束時刻是 " + deadlineEpochWant + "。"
+			if notice != want {
+				t.Fatalf("a server running in %s composed:\n got: %q\nwant: %q",
+					zone, notice, want)
 			}
 		})
 	}
@@ -255,7 +286,7 @@ func TestDeadlineIsRenderedInUTCWhateverTheServerProcessTimezone(t *testing.T) {
 // on a real notice is worse than no guard at all, because the repair for a
 // false positive is to weaken it. Every sentence this server actually composes
 // is dense with numbers — percentages, thresholds, compaction rounds, and the
-// numbered steps of the 下線程序 document — and none of them is a span of time.
+// numbered steps of the 〈停止〉 document — and none of them is a span of time.
 func TestTimeShapeGuardReadsRealNoticesCorrectly(t *testing.T) {
 	s := newReconcileTestServer(t)
 
@@ -282,19 +313,16 @@ func TestTimeShapeGuardReadsRealNoticesCorrectly(t *testing.T) {
 	notices["下線"] = notice
 	// The codex arm's `where` counts ROUNDS, not seconds — the one place a bare
 	// "round 5 / round 6" could be mistaken for a clock.
-	notices["codex rounds"] = offboardNotice(
-		"compaction round 5 (your limits: round 5 / round 6)",
-		offboardCloserRestartSelf, false, 0, s.offboardText())
+	notices["codex rounds"] = s.winddownNoticeText(offboardKindSoft, 0)
 	// 🔴 The owner's prose, and the reason the guard is aimed at the sentence
 	// alone. This is the exact line a review appended to seeds/offboard.md, and
 	// it turned five tests red on a notice the server composed correctly. The
 	// document describes the STEPS; how long anything takes there is a human
 	// telling a human to hurry, not the server quoting a clock. Appended here
-	// rather than left to the staged copy so this stays covered even on a tree
-	// where the embed is empty and offboardText answers "".
-	notices["下線程序 prose under the sentence"] = offboardNotice(
-		"context 50% (your limits: 40% / 50%)", offboardCloserReportStopped, false, 0,
-		s.offboardText()+"\n⚠️ 第 5 步收拾暫存最多花 5 分鐘，別在這裡耗掉交接時間。")
+	// rather than left to the staged copy so this stays covered wherever the
+	// owner's own copy of the document happens to sit.
+	notices["〈停止〉 prose under the sentence"] = s.winddownNoticeText(offboardKindSoft, 0) +
+		"\n⚠️ 第 5 步收拾暫存最多花 5 分鐘，別在這裡耗掉交接時間。"
 
 	for name, n := range notices {
 		if frag, yes := quotesTimeOfAnyShape(n); yes {
@@ -307,6 +335,16 @@ func TestTimeShapeGuardReadsRealNoticesCorrectly(t *testing.T) {
 	// with, planted where a real one would be — INSIDE the composed sentence,
 	// with the real document folded in beneath it, so that neither the narrowed
 	// scope nor the RFC3339 exemption can hide one.
+	// 🔴 THE PLANT CANNOT LAND ANY MORE (T-6f44, decision 4). These strings used
+	// to be planted through {where} — the one slot a caller filled — and the
+	// assertion was that the shape guard caught them in the composed sentence.
+	// {where} is deleted: winddownNoticeText takes the argument and discards it,
+	// so nothing a caller passes reaches an agent at all.
+	//
+	// Both halves are therefore asserted, because either alone is worth little:
+	// the guard still catches every one of these shapes (run over the string
+	// directly, so the regexes stay covered), AND a countdown handed to the send
+	// site reaches no agent (which is strictly stronger than catching it).
 	for _, countdown := range []string{
 		"Time remaining: 74s.",
 		"You have 120 seconds left.",
@@ -325,12 +363,40 @@ func TestTimeShapeGuardReadsRealNoticesCorrectly(t *testing.T) {
 		"You have 1m14s left.",
 		"You have 1h30m0s left.",
 	} {
-		planted := offboardNotice("context 50% (your limits: 40% / 50%) "+countdown,
-			offboardCloserReportStopped, true, deadlineEpochSince+deadlineEpochGrace,
-			s.offboardText())
-		if _, yes := quotesTimeOfAnyShape(planted); !yes {
-			t.Fatalf("the shape guard misses a countdown written as %q:\n%s",
-				countdown, planted)
+		if _, yes := quotesTimeOfAnyShape(countdown + "\n"); !yes {
+			t.Fatalf("the shape guard misses a countdown written as %q", countdown)
+		}
+	}
+
+	// 🔴 THE SECOND HALF IS NOW A COMPILE-TIME FACT, NOT AN ASSERTION, and that
+	// is a strengthening rather than a gap. This loop used to PLANT each
+	// countdown in the {where} argument and assert it did not reach the agent.
+	// {where} is gone from the signature (T-6f44), so there is no longer any
+	// argument through which a caller could plant one — the property is held by
+	// the type, and a test that tried to assert it would not build.
+	//
+	// What replaces it is the stronger statement: the ONLY text that can reach
+	// an agent is the document itself, so assert the documents carry no
+	// countdown shape. A future edit that puts one in the seed fails here.
+	for _, kind := range []string{offboardKindSoft, offboardKindFinal} {
+		deadline := 0.0
+		if kind == offboardKindFinal {
+			deadline = deadlineEpochSince + deadlineEpochGrace
+		}
+		sent := s.winddownNoticeText(kind, deadline)
+		if sent == "" {
+			t.Fatalf("%s rendered nothing — this assertion cannot see a countdown "+
+				"in a sentence that was never composed", kind)
+		}
+		shape, yes := quotesTimeOfAnyShape(sent)
+		// The final arm legitimately quotes ONE absolute instant; what must
+		// never appear is a RELATIVE countdown, which is what this whole ticket
+		// removed (it cannot be replayed: the same epoch must render the same
+		// sentence however late it is composed).
+		if yes && !strings.Contains(sent, time.Unix(int64(deadline), 0).UTC().Format(time.RFC3339)) {
+			t.Errorf("%s carries a time shape (%q) that is not the absolute "+
+				"deadline — a relative countdown is back in the document:\n%s",
+				kind, shape, sent)
 		}
 	}
 }
@@ -369,7 +435,7 @@ func TestFinalCallSentenceIsStableAcrossReplaysWithinOneEpoch(t *testing.T) {
 
 	// …and only now, once the property has had its chance to fire: the arm under
 	// test really is the clocked one.
-	if !strings.Contains(first, "Your deadline is ") {
+	if !strings.Contains(first, "你的結束時刻是 ") {
 		t.Fatalf("the fixture must be on the clocked arm (it carries no deadline):\n%s", first)
 	}
 }

@@ -233,7 +233,7 @@ func TestSticky_ConnectStampsTheLandingFromTheTokenClaim(t *testing.T) {
 	// from one that has. For staff the anchor is purely observational; the
 	// placement chain still reads it for outsource only (TestSticky_* below).
 	if err := s.dal.PutMember(Member{ID: "g-staff", Name: "staff",
-		Kind: KindAssistant, DesiredState: DesiredStateOnline,
+		Kind: KindStaff, DesiredState: DesiredStateOnline,
 		RosterStatus: RosterStatusActive}); err != nil {
 		t.Fatalf("put staff: %v", err)
 	}
@@ -241,8 +241,11 @@ func TestSticky_ConnectStampsTheLandingFromTheTokenClaim(t *testing.T) {
 	if err != nil || staff == nil {
 		t.Fatalf("read staff: %+v %v", staff, err)
 	}
-	staff.DesiredMachineID = "m-other" // corroborates the claim below
-	if err := s.dal.PutMember(*staff); err != nil {
+	// corroborates the claim below — written through the pin's sole writer,
+	// since T-55 removed desired_machine_id from PutMember's DO UPDATE SET and
+	// this row already exists. (`staff` itself is not used past this point; the
+	// row is re-read below.)
+	if err := s.dal.SetMemberDesiredMachineID("g-staff", "m-other"); err != nil {
 		t.Fatalf("pin staff: %v", err)
 	}
 	connect("g-staff", "m-other")
@@ -256,7 +259,7 @@ func TestSticky_ConnectStampsTheLandingFromTheTokenClaim(t *testing.T) {
 	// …and an UNCORROBORATED staff claim still writes nothing: the 正身 gate is
 	// what keeps a wanderer from rewriting where a member lives, and widening
 	// the kind scope must not have widened that too.
-	staff2 := Member{ID: "g-staff2", Name: "staff2", Kind: KindAssistant,
+	staff2 := Member{ID: "g-staff2", Name: "staff2", Kind: KindStaff,
 		DesiredState: DesiredStateOnline, RosterStatus: RosterStatusActive}
 	if err := s.dal.PutMember(staff2); err != nil {
 		t.Fatalf("put staff2: %v", err)
@@ -299,10 +302,10 @@ func TestSticky_OwnerRelocateStillMoves(t *testing.T) {
 	connectWarden(t, s, "m-third")
 	landOn(t, s, w.ID, "m-other")
 
-	// The owner pins m-third by hand.
-	moved := readWorker(t, s, w.ID)
-	moved.DesiredMachineID = "m-third"
-	if err := s.dal.PutOutsourceWorker(moved); err != nil {
+	// The owner pins m-third by hand. The worker relocate face writes the pin
+	// through its sole writer since T-55 — PutOutsourceWorker is PutMember, and
+	// desired_machine_id is no longer in that statement's DO UPDATE SET.
+	if err := s.dal.SetMemberDesiredMachineID(w.ID, "m-third"); err != nil {
 		t.Fatalf("pin: %v", err)
 	}
 	if got := spawnTarget(t, s, readWorker(t, s, w.ID), ServerSelfHost, "m-other", "m-third"); got != "m-third" {
@@ -312,9 +315,11 @@ func TestSticky_OwnerRelocateStillMoves(t *testing.T) {
 	// 電腦上,再次換手應該活在其他電腦上」. Even after the pin is dropped, the
 	// worker stays on m-third rather than snapping back to the 手冊's m-other.
 	landOn(t, s, w.ID, "m-third")
-	unpinned := readWorker(t, s, w.ID)
-	unpinned.DesiredMachineID = ""
-	if err := s.dal.PutOutsourceWorker(unpinned); err != nil {
+	// Dropping the pin goes through its sole writer (T-55) — a whole-row write
+	// would leave m-third pinned, and the assertion below would then pass by
+	// walking the PIN arm a second time instead of the last-landing arm it is
+	// there to cover.
+	if err := s.dal.SetMemberDesiredMachineID(w.ID, ""); err != nil {
 		t.Fatalf("unpin: %v", err)
 	}
 	if got := spawnTarget(t, s, readWorker(t, s, w.ID), ServerSelfHost, "m-other", "m-third"); got != "m-third" {
@@ -441,9 +446,7 @@ func TestSticky_GhostConnectionNeverRewritesTheLanding(t *testing.T) {
 	s.outsourceMu.Lock()
 	delete(s.workerSpawnTarget, w.ID)
 	s.outsourceMu.Unlock()
-	pinned := readWorker(t, s, w.ID)
-	pinned.DesiredMachineID = "m-third"
-	if err := s.dal.PutOutsourceWorker(pinned); err != nil {
+	if err := s.dal.SetMemberDesiredMachineID(w.ID, "m-third"); err != nil {
 		t.Fatalf("pin: %v", err)
 	}
 	connect(w.ID, "m-third")

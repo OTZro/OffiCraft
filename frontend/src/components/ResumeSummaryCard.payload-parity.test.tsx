@@ -26,6 +26,50 @@
 // through unrendered and unnoticed: it goes red on arrival, naming itself.
 // The roll-call is a hard-coded list on purpose — the only way past it is to
 // edit it, and that edit is the review this file wants to force.
+//
+// ── 🔴 WHAT THIS FILE STILL DOES NOT GUARD (read before trusting a green run) ─
+// Most assertions below are SUBSTRING assertions (`toContain`). T-9871 converted
+// only the ones on the chat row it touched — parties, reply-card status,
+// attachments, timestamps — into whole-string equality composed from the same
+// wire row. THE REST WERE LEFT AS THEY WERE, deliberately: they guard note /
+// roster / machines / tasks, which is a different deliverable, and rewriting
+// them inside a quote-rendering change would have enlarged the diff and risked
+// weakening cover nobody was reviewing. Enumerate the CALL SITES (not this
+// prose) with
+//   grep -nE '\)\.(not\.)?toContain\(' src/components/ResumeSummaryCard.payload-parity.test.tsx
+// — 34 when this note was written, 4 of them negative. Do not trust that count,
+// run the query: this comment names the matcher, so a plain `grep toContain`
+// counts these lines too.
+//
+// (a) THE POSITIVE ONES — what stays green that should not.
+//     `expect(txt(row)).toContain(value)` asks only whether the value appears
+//     SOMEWHERE in that element's text. On a roster row, a machine id printed in
+//     the duty slot, a presence word printed twice, or a fabricated extra field
+//     appended to the row all satisfy it — the row's SHAPE is unasserted, only
+//     its ingredients. The same holds for the machines rows, the answered-card
+//     steps, the reply card's options / answer text / answered-at, the folded
+//     count, the cut label, and the section empty-state labels. And because
+//     several of these read a WHOLE row's text, a field that stopped rendering
+//     entirely stays green whenever a neighbouring field happens to print the
+//     same characters.
+//
+// (b) THE FOUR NEGATIVE ONES ARE NOT THE SAME SHAPE, AND MUST NOT BE
+//     "CONVERTED". `not.toContain` is an ABSENCE claim, and whole-string
+//     equality cannot express absence — rewriting it deletes the guard outright.
+//     They are, by what each protects:
+//       · the chat meta line must not print the raw epoch `ts` beside the
+//         server's rendered stamp (scoped to the meta line on purpose — the
+//         epoch legitimately appears inside the server's cursor hint);
+//       · the rendered `note` and cut `hint` must not show literal `**`, i.e.
+//         the markdown was rendered rather than dumped;
+//       · the container's innerHTML must not contain `<script` — the inert-HTML
+//         claim for agent- and outsider-authored content.
+//     Whoever sweeps (a) must leave these four alone or replace them with
+//     another assertion that is still about ABSENCE.
+//
+// The sweep of (a) is tracked as its own ticket by the coordinator (2026-08-23
+// ruling: same file ≠ same deliverable). Until it lands, this file proves the
+// values ARRIVED on screen; it does not prove they arrived in the right slots.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, screen, waitFor } from "@testing-library/react";
@@ -97,10 +141,17 @@ const WIRE: WireResumeSummary = {
       ts_display: "2026-08-12 22:13:04 +08:00",
       body_omitted_chars: 0,
       reply_card_status: "answered",
+      reply_to: "",
       attachments: [],
       card: {
-        options: ["照這個形狀做", "先擋著等下一輪"],
-        answer_option_idx: 1,
+        // ai_pick sits on the SECOND option and BOTH options are circled —
+        // deliberately. A first-option AI pick and a single-option answer are
+        // exactly the two shapes a positional reader gets right by accident.
+        options: [
+          { text: "照這個形狀做", ai_pick: false },
+          { text: "先擋著等下一輪", ai_pick: true },
+        ],
+        answer_option_idxs: [0, 1],
         answer_text: "先擋著,理由寫在卡上",
         answered_ts: 1786000600,
         answered_at_display: "2026-08-12 22:23:20 +08:00",
@@ -122,6 +173,7 @@ const WIRE: WireResumeSummary = {
       // the server. Not the same thing as chat_earlier_omitted below.
       body_omitted_chars: 1284,
       reply_card_status: "",
+      reply_to: "",
       attachments: [
         {
           id: "att-9",
@@ -131,6 +183,78 @@ const WIRE: WireResumeSummary = {
           is_image: false,
         },
       ],
+    },
+    // ── T-9871: the three shapes a REPLY arrives in ─────────────────────────
+    // The snapshot bills `reply_to_chat`'s names and excerpt against the chat
+    // budget on every wake, so these characters were already evicting other
+    // messages from the payload while nothing on screen showed them.
+    //
+    // (1) QUOTED — the server resolved the original and both its parties. This
+    // is the read that fills the quote's `from_name`/`to_name` at all.
+    {
+      id: "cm-3",
+      from: "owner",
+      from_name: "Seth",
+      to: "m-planner",
+      to_name: "普朗克",
+      body: "那就先擋著,我補一句給你參考",
+      ts: 1786000800,
+      ts_display: "2026-08-12 22:40:11 +08:00",
+      body_omitted_chars: 0,
+      reply_card_status: "",
+      reply_to: "cm-1",
+      reply_to_chat: {
+        id: "cm-1",
+        from: "m-planner",
+        from_name: "普朗克",
+        to: "owner",
+        to_name: "Seth",
+        content: "已完成後端組裝,等你決定要不要照這個形狀往下做",
+      },
+      attachments: [],
+    },
+    // (2) GONE — `reply_to` is set (this IS a reply and always was) but the
+    // server could not rebuild the quote on this read. One fixed sentence, no
+    // retry, and the two are told apart by `reply_to`, never by guessing.
+    {
+      id: "cm-4",
+      from: "m-planner",
+      from_name: "普朗克",
+      to: "owner",
+      to_name: "Seth",
+      body: "我回的是那則已經被刪掉的訊息",
+      ts: 1786000900,
+      ts_display: "2026-08-12 22:41:52 +08:00",
+      body_omitted_chars: 0,
+      reply_card_status: "",
+      reply_to: "cm-vanished",
+      attachments: [],
+    },
+    // (3) QUOTED, BUT EMPTY — the original carried only attachments, so its
+    // quotable text is "" — a legal value, NOT a failure — and its sender
+    // resolved to no roster row, so `from_name` is "". Both honest-empties on
+    // one row: the quote must still draw, named by address alone.
+    {
+      id: "cm-5",
+      from: "owner",
+      from_name: "Seth",
+      to: "m-ghost",
+      to_name: "",
+      body: "收到你那個附件了",
+      ts: 1786000950,
+      ts_display: "2026-08-12 22:43:07 +08:00",
+      body_omitted_chars: 0,
+      reply_card_status: "",
+      reply_to: "cm-2",
+      reply_to_chat: {
+        id: "cm-2",
+        from: "m-ghost",
+        from_name: "",
+        to: "m-planner",
+        to_name: "普朗克",
+        content: "",
+      },
+      attachments: [],
     },
   ],
   // TRUNCATED: whole messages that are NOT in this payload at all.
@@ -153,6 +277,14 @@ const WIRE: WireResumeSummary = {
       progress_total: 3,
       updated_ts: 1786000900,
       detail_chars: 375,
+      // T-91: the wake snapshot's task row carries the handover hold and the
+      // reverse dependency edge. Present-and-empty here on purpose — this is
+      // the ordinary row, so the parity fixture must show what an ordinary row
+      // looks like, not omit the fields.
+      lock: "",
+      reassigned_from: "",
+      reassigned_from_kind: "",
+      blocking: [],
       answered_card_steps: ANSWERED_CARD_STEPS,
     },
   ],
@@ -243,6 +375,10 @@ const RESUME_TASK_WIRE_TO_VIEW = {
   updated_ts: "updatedTs",
   detail_chars: "detailChars",
   answered_card_steps: "answeredCardSteps",
+  lock: "lock",
+  reassigned_from: "reassignedFrom",
+  reassigned_from_kind: "reassignedFromKind",
+  blocking: "blocking",
 } as const;
 
 const ANSWERED_CARD_STEP_WIRE_TO_VIEW = {
@@ -312,16 +448,21 @@ describe("ResumeSummaryCard renders the SAME snapshot the agent receives", () =>
     // 🔴 This is the assertion the "→ / ←" arrow could not satisfy. The arrow
     // showed neither an id nor a name: two different senders were the same
     // glyph, and a reader could not tell who said anything.
+    //
+    // 🔴 WHOLE-STRING equality, and the expectation is BUILT FROM THE SAME WIRE
+    // ROW the screen was built from — `name + id`, in that order, for every
+    // message in the payload. A `toContain("普朗克")` passes on a row that also
+    // prints something else, on a row that prints the name twice, and on a row
+    // that prints the name where the id belongs; it also cannot see a party
+    // that stopped being rendered at all as long as one neighbour still says
+    // the word. The composed form has none of those holes, and it grows with
+    // the fixture instead of naming two rows out of it.
     const u = await open();
     const froms = u.getAllByTestId("mp-resume-chat-from").map(txt);
     const tos = u.getAllByTestId("mp-resume-chat-to").map(txt);
 
-    expect(froms[0]).toContain("普朗克");
-    expect(froms[0]).toContain("m-planner");
-    expect(tos[0]).toContain("Seth");
-    expect(tos[0]).toContain("owner");
-    expect(tos[1]).toContain("普朗克");
-    expect(tos[1]).toContain("m-planner");
+    expect(froms).toEqual(WIRE.chat!.map((c) => `${c.from_name}${c.from}`));
+    expect(tos).toEqual(WIRE.chat!.map((c) => `${c.to_name}${c.to}`));
   });
 
   it("shows the id ALONE when the server resolved no name — never the id dressed as one", async () => {
@@ -339,10 +480,7 @@ describe("ResumeSummaryCard renders the SAME snapshot the agent receives", () =>
     // "some time is displayed" assertion would happily pass on that.
     const u = await open();
     const stamps = u.getAllByTestId("mp-resume-chat-ts").map(txt);
-    expect(stamps).toEqual([
-      WIRE.chat![0].ts_display,
-      WIRE.chat![1].ts_display,
-    ]);
+    expect(stamps).toEqual(WIRE.chat!.map((c) => c.ts_display));
     // And the raw epoch is never what the message's own time line shows — it
     // is the machine-readable twin, not something a reader was meant to
     // decode. Scoped to the meta line ON PURPOSE: the epoch legitimately
@@ -354,42 +492,162 @@ describe("ResumeSummaryCard renders the SAME snapshot the agent receives", () =>
       txt,
     );
     for (const meta of metas) {
-      expect(meta).not.toContain(String(WIRE.chat![0].ts));
-      expect(meta).not.toContain(String(WIRE.chat![1].ts));
+      for (const c of WIRE.chat!) {
+        expect(meta).not.toContain(String(c.ts));
+      }
     }
   });
 
-  it("draws the reply card ON the message that opened it: pick, free text, and when", async () => {
+  it("draws every circled option on the card that opened it, tagging the ai_pick option and not the first", async () => {
     const u = await open();
-    const card = u.getByTestId("mp-resume-chat-card");
-    const c = WIRE.chat![0].card!;
-    for (const opt of c.options!) expect(txt(card)).toContain(opt);
-    expect(txt(u.getByTestId("mp-resume-card-answer-text"))).toContain(
-      c.answer_text,
+    // Each option chip, WHOLE — the wording plus exactly the tags it earned.
+    // The AI tag rides the SECOND option here (that is where ai_pick is), and
+    // 已選 rides BOTH, because both indices are in answer_option_idxs. A reader
+    // that still tagged options[0], or that drew one 已選 for a two-option
+    // answer, disagrees with one of these strings.
+    expect(u.getAllByTestId("mp-resume-card-option").map(txt)).toEqual([
+      "照這個形狀做已選",
+      "先擋著等下一輪AI 建議已選",
+    ]);
+    expect(
+      u
+        .getAllByTestId("mp-resume-card-option")
+        .map((el) => el.getAttribute("data-picked")),
+    ).toEqual(["true", "true"]);
+    expect(txt(u.getByTestId("mp-resume-card-answer-text"))).toBe(
+      "補充文字 先擋著,理由寫在卡上",
     );
-    expect(txt(u.getByTestId("mp-resume-card-answered-at"))).toContain(
-      c.answered_at_display,
+    expect(txt(u.getByTestId("mp-resume-card-answered-at"))).toBe(
+      "回覆於 2026-08-12 22:23:20 +08:00",
     );
-    // WHICH option was picked — the decision itself, not merely that options
-    // existed. Marked on the option at answer_option_idx and nowhere else.
-    const picked = u
-      .getAllByTestId("mp-resume-card-option")
-      .filter((el) => el.getAttribute("data-picked") === "true")
-      .map(txt);
-    expect(picked).toHaveLength(1);
-    expect(picked[0]).toContain(c.options![c.answer_option_idx!]);
     // ONE home for the card: it rides the message, so there is exactly one.
     expect(u.getAllByTestId("mp-resume-chat-card")).toHaveLength(1);
   });
 
   it("carries the message's reply-card status and attachments across", async () => {
+    // WHOLE-STRING, composed from the same wire row plus the label the card
+    // prints beside it. `toContain(reply_card_status)` was satisfied by a row
+    // that printed the status with no label at all, or with the wrong one — and
+    // an "answered" that arrived unlabelled next to a timestamp is exactly the
+    // kind of thing a reader mis-reads.
     const u = await open();
-    expect(txt(u.getByTestId("mp-resume-chat-cardstatus"))).toContain(
-      WIRE.chat![0].reply_card_status,
+    expect(txt(u.getByTestId("mp-resume-chat-cardstatus"))).toBe(
+      `${R.replyCardStatusLabel}: ${WIRE.chat![0].reply_card_status}`,
     );
-    expect(txt(u.getByTestId("mp-resume-chat-attachments"))).toContain(
-      WIRE.chat![1].attachments![0].filename,
+    expect(txt(u.getByTestId("mp-resume-chat-attachments"))).toBe(
+      `${R.cardAttachmentsLabel} ${WIRE.chat![1].attachments![0].filename}`,
     );
+  });
+
+  // ── T-9871 · THE QUOTE THE SNAPSHOT ALREADY PAID FOR ────────────────────────
+  // `resumeChatMessageChars` bills the quote's from_name + to_name + content
+  // against the chat budget, so every wake spent characters — and evicted whole
+  // messages to afford them — on a quote this card drew nothing of. Reading a
+  // reply here meant reading half a conversation: the card showed neither what
+  // was replied to NOR that the message was a reply at all.
+  it("draws the quote a reply carries: both parties of the QUOTED message, and its excerpt", async () => {
+    const u = await open();
+    const wire = WIRE.chat![2];
+    const q = wire.reply_to_chat!;
+    const quotes = u.getAllByTestId("mp-resume-chat-quote");
+
+    // One quote per REPLY — the three reply rows of the fixture, and not one
+    // for the messages that are not replies. Anti-vacuity for everything below.
+    expect(quotes).toHaveLength(
+      WIRE.chat!.filter((c) => (c.reply_to ?? "") !== "").length,
+    );
+
+    // The quoted message's OWN parties — not this message's, and not this
+    // thread's peer. Composed from the quote object itself, whole-string.
+    expect(txt(u.getAllByTestId("mp-resume-chat-quote-from")[0])).toBe(
+      `${q.from_name}${q.from}`,
+    );
+    expect(txt(u.getAllByTestId("mp-resume-chat-quote-to")[0])).toBe(
+      `${q.to_name}${q.to}`,
+    );
+    expect(txt(u.getAllByTestId("mp-resume-chat-quote-body")[0])).toBe(
+      q.content,
+    );
+    // 🔴 THE SAME PAIR HAS TO REACH THE A11Y TREE. The strip's only structural
+    // signal that it is a quotation is its role + name; a screen-reader user who
+    // gets neither hears the quoted sentence as something this sender is saying
+    // now. Same assertion shape as ChatArea.reply-to.test.tsx.
+    expect(quotes[0].getAttribute("aria-label")).toBe(
+      zh.chat.replyQuoteRoleWho(`${q.from_name} → ${q.to_name}`),
+    );
+
+    // 🔴 THE QUOTE IS NOT THE MESSAGE. Both are 「寄件者 → 收件者」 lines in the
+    // same card, and this row is the one where they DISAGREE (the reply runs
+    // owner → m-planner, the quoted line ran m-planner → owner), so a quote
+    // accidentally fed the replying message's own parties would be caught here
+    // and nowhere else.
+    const row = u.getAllByTestId("mp-resume-chat-row")[2];
+    expect(txt(row.querySelector('[data-testid="mp-resume-chat-from"]'))).toBe(
+      `${wire.from_name}${wire.from}`,
+    );
+    expect(txt(u.getAllByTestId("mp-resume-chat-quote-from")[0])).not.toBe(
+      `${wire.from_name}${wire.from}`,
+    );
+  });
+
+  it("says the original is gone — the fixed sentence — when the reply has no quote", async () => {
+    // TWO STATES, NO THIRD. `reply_to` set with `reply_to_chat` absent is the
+    // server's own answer on THIS read: the original no longer exists. Nothing
+    // is in flight, so there is no third "still loading" shape to draw, and the
+    // sentence is the chat pane's — one claim, one wording, in both places.
+    const u = await open();
+    const gone = u.getAllByTestId("mp-resume-chat-quote-gone");
+    expect(gone).toHaveLength(
+      WIRE.chat!.filter(
+        (c) => (c.reply_to ?? "") !== "" && c.reply_to_chat == null,
+      ).length,
+    );
+    expect(txt(gone[0])).toBe(zh.chat.replyQuoteGone);
+    // …and the accessible name drops to the UNNAMED one: with no snapshot there
+    // is nobody to name, and a label still naming somebody would be a name this
+    // read did not resolve.
+    const goneStrip = u.getAllByTestId("mp-resume-chat-quote")[1];
+    expect(goneStrip.getAttribute("aria-label")).toBe(zh.chat.replyQuoteRole);
+    // …and that row draws NO quoted parties: a gone quote has nobody to name.
+    const row = u.getAllByTestId("mp-resume-chat-row")[3];
+    expect(row.querySelector('[data-testid="mp-resume-chat-quote-from"]')).toBeNull();
+  });
+
+  it("draws an attachment-only original as a NAMED quote with an empty line, not as a gone one", async () => {
+    // `content: ""` is legal (the quoted message carried only attachments) and
+    // is a different fact from "the original is gone". Folding one into the
+    // other tells the reader the conversation lost a message it still has.
+    // The same row also carries `from_name: ""` — the address alone, never the
+    // id dressed as a name.
+    const u = await open();
+    const q = WIRE.chat![4].reply_to_chat!;
+    const row = u.getAllByTestId("mp-resume-chat-row")[4];
+    expect(
+      txt(row.querySelector('[data-testid="mp-resume-chat-quote-body"]')),
+    ).toBe(q.content);
+    expect(
+      txt(row.querySelector('[data-testid="mp-resume-chat-quote-from"]')),
+    ).toBe(q.from);
+    expect(
+      row.querySelector('[data-testid="mp-resume-chat-quote-gone"]'),
+    ).toBeNull();
+    // The accessible name follows the SAME honest-empty rule by falling back to
+    // the ADDRESS — the a11y tree may not invent a name the payload does not
+    // carry, and it may not go silent either.
+    expect(
+      row
+        .querySelector('[data-testid="mp-resume-chat-quote"]')!
+        .getAttribute("aria-label"),
+    ).toBe(zh.chat.replyQuoteRoleWho(`${q.from} → ${q.to_name}`));
+  });
+
+  it("draws no quote at all on a message that is not a reply", async () => {
+    // The row's shape must not gain an empty quote slot: `reply_to: ""` means
+    // this message answers nothing, and an empty bordered strip above every
+    // ordinary message would read as a quote that failed to load.
+    const u = await open();
+    const row = u.getAllByTestId("mp-resume-chat-row")[0];
+    expect(row.querySelector('[data-testid="mp-resume-chat-quote"]')).toBeNull();
   });
 
   it("draws BOTH the folded marker and the absent marker", async () => {
@@ -735,6 +993,15 @@ describe("the roll-call: a field the seam gains cannot stay undrawn", () => {
         "id",
         "replyCardId",
         "replyCardStatus",
+        // T-4e95: the two halves of a reply, and they are deliberately two.
+        // `replyTo` is the id and says THAT this message is a reply; it never
+        // disappears. `replyToChat` is the quoted sender + a server-shortened
+        // line and says WHAT it replied to; it is rebuilt on every read and is
+        // legitimately null while `replyTo` is set (the original is gone).
+        // Collapsing them into one field is the change this roll-call is here
+        // to make announce itself.
+        "replyTo",
+        "replyToChat",
         "to",
         "toName",
         "ts",

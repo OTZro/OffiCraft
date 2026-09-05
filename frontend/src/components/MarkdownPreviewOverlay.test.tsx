@@ -17,13 +17,17 @@ import {
   MarkdownPreviewOverlay,
   isMarkdownAttachment,
 } from "./MarkdownPreviewOverlay";
+import { AlertTriangleIcon } from "./icons";
+import { zh } from "../i18n/locales/zh";
 
 describe("isMarkdownAttachment", () => {
   it("accepts markdown mimes and .md/.markdown filenames", () => {
     expect(isMarkdownAttachment("text/markdown", "x")).toBe(true);
     expect(isMarkdownAttachment("text/x-markdown", "x")).toBe(true);
     expect(isMarkdownAttachment("text/plain", "design.md")).toBe(true);
-    expect(isMarkdownAttachment("application/octet-stream", "NOTES.MARKDOWN")).toBe(true);
+    expect(
+      isMarkdownAttachment("application/octet-stream", "NOTES.MARKDOWN"),
+    ).toBe(true);
   });
   it("rejects non-markdown", () => {
     expect(isMarkdownAttachment("application/pdf", "report.pdf")).toBe(false);
@@ -56,10 +60,15 @@ describe("MarkdownPreviewOverlay", () => {
       </I18nProvider>,
     );
     // Heading rendered as an element (Markdown.tsx builds React elements).
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Hello" })).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Hello" })).toBeTruthy(),
+    );
     expect(screen.getByText("body")).toBeTruthy();
     // The download action is present and separate from the preview render.
-    const dl = screen.getByText("下載").closest("a.md-preview__download")!;
+    // Reached by ACCESSIBLE NAME, not by visible text: T-51 ④ made the header
+    // controls icon-only (owner: 「又都有字太多了，可以一起改成圖示就好嘛」), so
+    // 下載 is now the `aria-label` and nothing in the header prints it.
+    const dl = screen.getByRole("link", { name: "下載" }) as HTMLAnchorElement;
     expect(dl.getAttribute("download")).toBe("design.md");
     expect(dl.getAttribute("href")).toContain("/api/chat/attachment/att-1");
   });
@@ -67,10 +76,17 @@ describe("MarkdownPreviewOverlay", () => {
   it("renders an image in the shared header shell and changes its zoom", () => {
     render(
       <I18nProvider>
-        <MarkdownPreviewOverlay title="shot.png" url="/api/chat/attachment/att-image" attachmentId="att-image" mime="image/png" onClose={() => {}} />
+        <MarkdownPreviewOverlay
+          title="shot.png"
+          url="/api/chat/attachment/att-image"
+          attachmentId="att-image"
+          mime="image/png"
+          onClose={() => {}}
+        />
       </I18nProvider>,
     );
-    const image = document.body.querySelector<HTMLImageElement>(".md-preview__image")!;
+    const image =
+      document.body.querySelector<HTMLImageElement>(".md-preview__image")!;
     expect(image.src).toContain("/api/chat/attachment/att-image");
     expect(image.alt).toBe("shot.png");
     // The zoom cluster is reachable by name, not by the bare −/+ glyphs: those
@@ -85,6 +101,110 @@ describe("MarkdownPreviewOverlay", () => {
     expect(screen.getByText("100%")).toBeTruthy();
   });
 
+  // ── Paging across a caller-owned list (T-51 ①) ────────────────────────────
+  //
+  // 🔴 THE ARROW KEYS WERE ALREADY SPOKEN FOR, and that is the whole risk in
+  // this feature. Once an image is zoomed the wrap is a real scroll container
+  // (T-7e68 made the zoom real layout precisely so the edges the zoom pushes
+  // out of the frame stay reachable), and the arrows are the KEYBOARD's only
+  // way to get to them. A pager that grabs ArrowLeft/Right unconditionally
+  // re-opens the exact owner report that change exists to answer:
+  // 「可以放大，但無法左右或上下移動」. Same for a text file, which scrolls with
+  // the arrows and has no second way to reach its bottom.
+  //
+  // These three cases are the difference between "paging works" and "paging did
+  // not cost anything"; the first alone is green with the bug present.
+
+  function renderPaged(
+    onGo: (i: number) => void,
+    extra: { mime?: string; index?: number } = {},
+  ) {
+    render(
+      <I18nProvider>
+        <MarkdownPreviewOverlay
+          title="shot.png"
+          url="/api/chat/attachment/att-image"
+          attachmentId="att-image"
+          mime={extra.mime ?? "image/png"}
+          pager={{ index: extra.index ?? 1, total: 5, onGo }}
+          onClose={() => {}}
+        />
+      </I18nProvider>,
+    );
+    return document.body.querySelector<HTMLElement>(".md-preview")!;
+  }
+
+  it("steps through the caller's list from the arrow keys while the image is at 100%", () => {
+    const onGo = vi.fn();
+    const root = renderPaged(onGo);
+    fireEvent.keyDown(root, { key: "ArrowRight" });
+    expect(onGo).toHaveBeenCalledWith(2);
+    fireEvent.keyDown(root, { key: "ArrowLeft" });
+    expect(onGo).toHaveBeenLastCalledWith(0);
+  });
+
+  it("keeps paging from the arrow keys even while the image is zoomed", () => {
+    // The owner's ruling (2026-09-02, `c-521c38a1de77`), made against the first
+    // implementation, which handed the arrows back to the pan above 100%: a
+    // zoomed image can still be moved by drag, wheel, scrollbar and touch, so
+    // the arrows are not its only handle — while paging had no keyboard at all
+    // whenever a picture happened to be zoomed. ⚠️ The cost he accepted, named
+    // here so this is not reverted as a regression: a reader who uses ONLY a
+    // keyboard can no longer pan a zoomed image.
+    const onGo = vi.fn();
+    const root = renderPaged(onGo);
+    fireEvent.click(screen.getByRole("button", { name: "放大" }));
+    expect(screen.getByText("125%")).toBeTruthy();
+    fireEvent.keyDown(root, { key: "ArrowRight" });
+    expect(onGo).toHaveBeenCalledWith(2);
+  });
+
+  it("leaves the arrow keys to a text body, which has no other way to scroll", async () => {
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      text: async () => "# Long\n\nbody",
+    })) as unknown as typeof fetch;
+    const onGo = vi.fn();
+    const root = renderPaged(onGo, { mime: "text/markdown" });
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Long" })).toBeTruthy(),
+    );
+    fireEvent.keyDown(root, { key: "ArrowRight" });
+    expect(onGo).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "下一個" }));
+    expect(onGo).toHaveBeenCalledWith(2);
+  });
+
+  it("stops at the ends instead of wrapping around", () => {
+    const onGo = vi.fn();
+    const root = renderPaged(onGo, { index: 0 });
+    fireEvent.keyDown(root, { key: "ArrowLeft" });
+    expect(
+      onGo,
+      "there is nothing before the first item — silently landing on the last one loses the reader's place",
+    ).not.toHaveBeenCalled();
+    expect(
+      (screen.getByRole("button", { name: "上一個" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("carries no paging control when the caller has no list behind the item", () => {
+    render(
+      <I18nProvider>
+        <MarkdownPreviewOverlay
+          title="shot.png"
+          url="/api/chat/attachment/att-image"
+          attachmentId="att-image"
+          mime="image/png"
+          onClose={() => {}}
+        />
+      </I18nProvider>,
+    );
+    expect(screen.queryByRole("button", { name: "下一個" })).toBeNull();
+    expect(document.body.querySelector(".md-preview__pager-count")).toBeNull();
+  });
+
   // T-f014: staged composer attachments used to open a SECOND overlay
   // (the retired Lightbox) with nothing but an ×. They now land in
   // this shell — but the bytes have not been uploaded, so there is no blob id
@@ -94,18 +214,31 @@ describe("MarkdownPreviewOverlay", () => {
     const dataUri = "data:image/png;base64,iVBORw0KGgo=";
     render(
       <I18nProvider>
-        <MarkdownPreviewOverlay title="pasted.png" imageSrc={dataUri} onClose={() => {}} />
+        <MarkdownPreviewOverlay
+          title="pasted.png"
+          imageSrc={dataUri}
+          onClose={() => {}}
+        />
       </I18nProvider>,
     );
-    const image = document.body.querySelector<HTMLImageElement>(".md-preview__image");
+    const image =
+      document.body.querySelector<HTMLImageElement>(".md-preview__image");
     // Named, not a `!` deref: "the image element is missing" is a distinct
     // failure from "it points at the wrong bytes", and a TypeError reports
     // neither.
-    expect(image, "the staged bytes must render through the image branch").not.toBeNull();
+    expect(
+      image,
+      "the staged bytes must render through the image branch",
+    ).not.toBeNull();
     expect(image!.getAttribute("src")).toBe(dataUri);
     expect(document.body.querySelector("button.md-preview__share")).toBeNull();
-    const download = document.body.querySelector<HTMLAnchorElement>("a.md-preview__download");
-    expect(download, "staged bytes are a real file — the download stays").not.toBeNull();
+    const download = document.body.querySelector<HTMLAnchorElement>(
+      "a.md-preview__download",
+    );
+    expect(
+      download,
+      "staged bytes are a real file — the download stays",
+    ).not.toBeNull();
     expect(download!.getAttribute("href")).toBe(dataUri);
     expect(download!.getAttribute("download")).toBe("pasted.png");
   });
@@ -130,7 +263,9 @@ describe("MarkdownPreviewOverlay", () => {
         />
       </I18nProvider>,
     );
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Hello" })).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Hello" })).toBeTruthy(),
+    );
     const md = document.body.querySelector(".md-preview__md")!;
     expect(md.classList.contains("doc-md")).toBe(true);
   });
@@ -138,10 +273,16 @@ describe("MarkdownPreviewOverlay", () => {
   // Second source mode (the chat 放大閱讀 button): text the caller already
   // holds. Nothing to fetch, and no file to download.
   it("renders an inline source without fetching, and offers no download", async () => {
-    globalThis.fetch = vi.fn(() => Promise.reject(new Error("must not fetch"))) as unknown as typeof fetch;
+    globalThis.fetch = vi.fn(() =>
+      Promise.reject(new Error("must not fetch")),
+    ) as unknown as typeof fetch;
     render(
       <I18nProvider>
-        <MarkdownPreviewOverlay title="Mira" source={"# Inline\n\nbody text"} onClose={() => {}} />
+        <MarkdownPreviewOverlay
+          title="Mira"
+          source={"# Inline\n\nbody text"}
+          onClose={() => {}}
+        />
       </I18nProvider>,
     );
     // Synchronous — an inline source never passes through the loading state.
@@ -149,7 +290,11 @@ describe("MarkdownPreviewOverlay", () => {
     expect(globalThis.fetch).not.toHaveBeenCalled();
     expect(screen.queryByText("載入預覽中…")).toBeNull();
     expect(document.body.querySelector(".md-preview__download")).toBeNull();
-    expect(document.body.querySelector(".md-preview__md")!.classList.contains("doc-md")).toBe(true);
+    expect(
+      document.body
+        .querySelector(".md-preview__md")!
+        .classList.contains("doc-md"),
+    ).toBe(true);
   });
 
   // A message body is a CHAT surface: Enter means "new line" there, and the
@@ -175,7 +320,9 @@ describe("MarkdownPreviewOverlay", () => {
     expect(md.textContent).toContain("先確認環境變數。");
     expect(md.textContent).toContain("有問題隨時問我。");
     // …and were not welded together with a space (the exact default this guards).
-    expect(md.textContent).not.toContain("先確認環境變數。 不要直接在 prod 跑。");
+    expect(md.textContent).not.toContain(
+      "先確認環境變數。 不要直接在 prod 跑。",
+    );
   });
 
   // The OTHER half of that split, pinned so "turn breaks on everywhere" cannot
@@ -229,20 +376,24 @@ describe("MarkdownPreviewOverlay", () => {
       </I18nProvider>,
     );
     await waitFor(() =>
-      expect(document.body.querySelector("button.md-preview__share")).toBeTruthy(),
+      expect(
+        document.body.querySelector("button.md-preview__share"),
+      ).toBeTruthy(),
     );
     fireEvent.click(document.body.querySelector("button.md-preview__share")!);
     // The share link is minted for the ATTACHMENT ID, never the serve path.
     await waitFor(() => expect(mint).toHaveBeenCalledWith("att-backing"));
     expect(mint).not.toHaveBeenCalledWith("/api/chat/attachment/att-doc");
-    expect(
-      document.body.querySelector("a.md-preview__download"),
-    ).toBeTruthy();
+    expect(document.body.querySelector("a.md-preview__download")).toBeTruthy();
     blob.unmount();
 
     render(
       <I18nProvider>
-        <MarkdownPreviewOverlay title="Mira" source="# body" onClose={() => {}} />
+        <MarkdownPreviewOverlay
+          title="Mira"
+          source="# body"
+          onClose={() => {}}
+        />
       </I18nProvider>,
     );
     expect(document.body.querySelector("button.md-preview__share")).toBeNull();
@@ -250,7 +401,10 @@ describe("MarkdownPreviewOverlay", () => {
   });
 
   it("shows an honest error state on a failed fetch (never a blank render)", async () => {
-    globalThis.fetch = vi.fn(async () => ({ ok: false, status: 404 })) as unknown as typeof fetch;
+    globalThis.fetch = vi.fn(async () => ({
+      ok: false,
+      status: 404,
+    })) as unknown as typeof fetch;
     render(
       <I18nProvider>
         <MarkdownPreviewOverlay
@@ -265,7 +419,10 @@ describe("MarkdownPreviewOverlay", () => {
   });
 
   it("closes on the × button and on Esc", async () => {
-    globalThis.fetch = vi.fn(async () => ({ ok: true, text: async () => "# x" })) as unknown as typeof fetch;
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      text: async () => "# x",
+    })) as unknown as typeof fetch;
     const onClose = vi.fn();
     render(
       <I18nProvider>
@@ -278,7 +435,9 @@ describe("MarkdownPreviewOverlay", () => {
       </I18nProvider>,
     );
     // Let the fetch settle so the close click is the only state change asserted.
-    await waitFor(() => expect(screen.getByRole("heading", { name: "x" })).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "x" })).toBeTruthy(),
+    );
     fireEvent.click(screen.getByLabelText("關閉預覽"));
     expect(onClose).toHaveBeenCalledTimes(1);
     fireEvent.keyDown(window, { key: "Escape" });
@@ -312,10 +471,15 @@ describe("MarkdownPreviewOverlay 複製分享連結 (T-d10b)", () => {
 
   it("sits LEFT of 下載 in the header action row", async () => {
     renderOverlay();
-    await waitFor(() => expect(screen.getByRole("heading", { name: "doc" })).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "doc" })).toBeTruthy(),
+    );
     const actions = document.body.querySelector(".md-preview__actions")!;
     const share = screen.getByRole("button", { name: "複製分享連結" });
-    const dl = screen.getByText("下載").closest("a.md-preview__download")!;
+    // Reached by ACCESSIBLE NAME, not by visible text: T-51 ④ made the header
+    // controls icon-only (owner: 「又都有字太多了，可以一起改成圖示就好嘛」), so
+    // 下載 is now the `aria-label` and nothing in the header prints it.
+    const dl = screen.getByRole("link", { name: "下載" }) as HTMLAnchorElement;
     expect(actions.contains(share)).toBe(true);
     expect(share.compareDocumentPosition(dl) & 4).toBe(4);
   });
@@ -330,7 +494,9 @@ describe("MarkdownPreviewOverlay 複製分享連結 (T-d10b)", () => {
       configurable: true,
     });
     renderOverlay();
-    await waitFor(() => expect(screen.getByRole("heading", { name: "doc" })).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "doc" })).toBeTruthy(),
+    );
     fireEvent.click(screen.getByRole("button", { name: "複製分享連結" }));
 
     await waitFor(() => expect(mint).toHaveBeenCalledWith("att-7"));
@@ -344,8 +510,10 @@ describe("MarkdownPreviewOverlay 複製分享連結 (T-d10b)", () => {
     );
   });
 
-  it("shows 複製連結失敗 when the mint fails instead of faking success", async () => {
-    vi.spyOn(api, "getChatAttachmentShareLink").mockRejectedValue(new Error("boom"));
+  it("shows 複製連結失敗 with its own glyph when the mint fails instead of faking success", async () => {
+    vi.spyOn(api, "getChatAttachmentShareLink").mockRejectedValue(
+      new Error("boom"),
+    );
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const writeText = vi.fn(async () => {});
     Object.defineProperty(navigator, "clipboard", {
@@ -353,10 +521,111 @@ describe("MarkdownPreviewOverlay 複製分享連結 (T-d10b)", () => {
       configurable: true,
     });
     renderOverlay();
-    await waitFor(() => expect(screen.getByRole("heading", { name: "doc" })).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "doc" })).toBeTruthy(),
+    );
+    const idleGlyph = screen.getByRole("button", {
+      name: "複製分享連結",
+    }).innerHTML;
     fireEvent.click(screen.getByRole("button", { name: "複製分享連結" }));
     await waitFor(() => expect(writeText).not.toHaveBeenCalled());
     expect(screen.queryByRole("button", { name: "已複製連結" })).toBeNull();
-    expect(screen.getByRole("button", { name: "複製連結失敗" })).toBeTruthy();
+    const failed = screen.getByRole("button", { name: "複製連結失敗" });
+    expect(failed).toBeTruthy();
+    // T-51 ④ made these controls icon-only, so the accessible name above is the
+    // half only a screen reader gets. A sighted reader has the glyph and
+    // nothing else — a failure drawn as the idle copy icon is indistinguishable
+    // from "nothing happened yet". These two assertions are what makes deleting
+    // the copyFailed arm of the icon ternary go red: the name switch survives
+    // it, the glyph does not.
+    expect(failed.innerHTML).not.toBe(idleGlyph);
+    const { container: warning } = render(<AlertTriangleIcon size={14} />);
+    expect(failed.innerHTML).toBe(warning.innerHTML);
+  });
+
+  // T-59 — the COMPARE mode. A comparison stopped being an attachment the day
+  // it became a url, so this overlay no longer resolves anything for it: it
+  // hosts `DiffScreen` (which owns the read and its own tests) and, because
+  // there is no blob involved, offers none of the blob actions.
+  describe("compare mode", () => {
+    const params = { before: "att-0123456789ab", after: "att-fedcba987654" };
+
+    it("hosts the compare screen and offers no blob actions with it", async () => {
+      globalThis.fetch = vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          before: { text: "alpha\nbravo", label: "改動前", gone: false },
+          after: { text: "alpha\nBRAVO", label: "改動後", gone: false },
+        }),
+      })) as unknown as typeof fetch;
+
+      render(
+        <I18nProvider>
+          <MarkdownPreviewOverlay
+            title="逐行比對"
+            diffParams={params}
+            onClose={() => {}}
+          />
+        </I18nProvider>,
+      );
+
+      await waitFor(() => expect(screen.getByTestId("diff-screen")).toBeTruthy());
+      // No blob, so nothing to download and no FILE-level share link to mint —
+      // one here would point at a file that does not exist.
+      expect(screen.queryByText(zh.chat.mdPreview.download)).toBeNull();
+      expect(screen.queryByLabelText(zh.chat.copyShareLink)).toBeNull();
+      expect(screen.queryByText(zh.chat.mdPreview.openInNewTab)).toBeNull();
+    });
+
+    // T-59 — the comparison's OWN external link. This is the studio host of
+    // that control: the owner is looking at the comparison and wants to hand it
+    // to someone outside, which until now was a CLI action only.
+    it("offers the comparison's external link as an icon in the header actions", async () => {
+      const mint = vi
+        .spyOn(api, "getDiffShareLink")
+        .mockResolvedValue("/diff?before=att-0123456789ab&after=att-fedcba987654&sig=minted");
+      const writeText = vi.fn(async () => {});
+      Object.defineProperty(navigator, "clipboard", {
+        value: { writeText },
+        configurable: true,
+      });
+      globalThis.fetch = vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          before: { text: "alpha", label: "改動前", gone: false },
+          after: { text: "beta", label: "改動後", gone: false },
+        }),
+      })) as unknown as typeof fetch;
+
+      render(
+        <I18nProvider>
+          <MarkdownPreviewOverlay
+            title="逐行比對"
+            diffParams={params}
+            onClose={() => {}}
+          />
+        </I18nProvider>,
+      );
+
+      await waitFor(() => expect(screen.getByTestId("diff-screen")).toBeTruthy());
+      const button = screen.getByRole("button", { name: zh.diff.copyShareLink });
+      // It lives in the header action row, beside the close button — the same
+      // slot the file-level share control occupies, not a second place to look.
+      expect(
+        document.body
+          .querySelector(".md-preview__actions")!
+          .contains(button),
+      ).toBe(true);
+      // Icon-only (owner 2026-09-03「1. 用圖示」).
+      expect(button.textContent).toBe("");
+
+      fireEvent.click(button);
+      await waitFor(() => expect(mint).toHaveBeenCalledWith(params));
+      await waitFor(() =>
+        expect(writeText).toHaveBeenCalledWith(
+          `${window.location.origin}/diff?before=att-0123456789ab&after=att-fedcba987654&sig=minted`,
+        ),
+      );
+    });
   });
 });

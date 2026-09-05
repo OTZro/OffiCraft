@@ -15,6 +15,8 @@
 - self-update 用 content-hash swap oracle，先 verify 新 binary 可執行才 swap。warden 必須 exec-in-place（同 PID、argv、env），不可依賴 launchd 的 KeepAlive 把 self-update 後退出的 warden 拉回來；agent 是獨立 process，warden restart 不應讓 agent 掉出 online。
 - repo 已移除 code-signing 機制；不要重新引入 sign／identity knob，也不要把它和 root 規則保留的 TCC 身分錨點混為一談。binary identity 的現行證據是 bytes/hash 與 exec probe。
 - 15 分鐘輪詢是 update backstop；SSE reconnect 與 server `update` command 都可 `updater.Kick()`，buffered-1 去抖。舊 warden 對未知 update verb 要安全 log+skip，不可因不認識新動詞而誤執行。
+- **同一條 poll loop 有兩種醒法，而第三個生產者不是 `Kick`。** `renew` command 走 `updater.RenewNow`：先舉起換發需求、再 `Kick`。接成 `Kick` 會編譯、會跑、什麼都不換 —— warden 憑證沒有 `exp`，被叫醒的那一輪問「快到期了嗎」得到否定就結束了。這三條接線在 `wireUpdaterSeams`，因為原本它們在 realMain 的長駐分支裡、沒有任何測試進得去。
+- **換發需求只在替換憑證真的寫下去之後才清除。** 站台不可達、探測被拒、寫檔失敗都保留需求、下一輪再試：進入時就消耗掉，一次失敗就會讓那台機器停在已退役的金鑰上，而從站台看它跟「還沒輪到」一模一樣。
 - 30 秒心跳的 `warden_shape` 是從實際父行程 executable 判斷 `anchor`／`legacy`／`unknown`；每輪重讀，不看磁碟上「有沒有 anchor 檔」。省略與 `unknown` 不同：前者代表舊版未回報，後者代表新 build 讀不到父行程。binaries 只送 content hash，server 比 embedded bindist 算 `bin_status`，不埋版號。
 
 ## 3. TCC anchor 與 legacy migration
@@ -32,7 +34,8 @@
 
 ## 5. agent listener 與 worker session
 
-- `ocagent listen` 對 tmux probe 與 server SSE refusal fail-closed 但有 debounce：tmux `gone` 連續兩次才退出；`unknown` 要連續 8 次且跨 10 分鐘；`/api/events` 409 要連續 4 次且跨 120 秒。連線成功、網路錯、5xx 或短暫 server down 都重置 refusal，避免把抖動當成該自殺。spawn 的 bare shim 路徑順序由 `resolveOcAgentBin` 單點維護：`OC_AGENT_BIN` → home sibling → repo-relative dev binary。
+- `ocagent listen` 對 tmux probe 與 server SSE refusal fail-closed 但有 debounce：tmux `gone` 連續兩次才退出；`unknown` 要連續 8 次且跨 10 分鐘；`/api/events` 409 要連續 4 次且跨 120 秒。連線成功、網路錯、5xx 或短暫 server down 都重置 refusal，避免把抖動當成該自殺。
+- **斷線通知只在兩端，加上「我放棄了」**：一次 outage 只打擾 agent 兩次（第一次失敗、重新連上），中間每一次 retry 靜音。**這是 transcript 政策，不是退避政策**——backoff 常數不因此改動，重試頻率一格不變。重試迴圈真的停掉時必須另外印一行，否則「還在重試」與「已經放棄」在沉默裡無法分辨。重新連上那一行要自己講出站台有沒有換版，不要讓讀者去比對兩串 sha。codex 成員經 sidecar 的 forwarding filter 看同一套政策：只放行這三種通知，boot 的第一次連上改為開 post-boot wake 而不重複轉發。**`[ocagent] listen:` 這個開頭不可位移**（sidecar 有三個消費端靠它前綴匹配，其中一個是開機唯一一次的喚醒，漏掉不會報錯）。spawn 的 bare shim 由 `resolveOcAgentBin` 單點維護，順序是 home sibling → repo-relative dev binary（**沒有 `OC_AGENT_BIN` 這一段**——那個環境變數只在 `ocwarden install` 當複製來源，執行期的 warden 是找自己的 sibling）。它回的是**路徑＋那條路徑存不存在**，而且是**每次 spawn 重問一次**，不是開機時算一次：warden 起來的那一刻 sibling 還不在（**任何原因**都算——已知一條是「remote／手動安裝沒有複製 sibling」，由 self-update 的第一個 tick 事後補下來，見 `selfUpdateAgentPath` 的註解）⇒ 開機時算的那個值是一條當時不存在的路徑，而 `os.Symlink` 對不存在的目標照建不誤 ⇒ 成員拿到死捷徑、永遠連不上、沒有任何一層報錯。⚠️ **不要把它寫成「ocagent 是 warden 起來之後才下載的」**：`ocwarden install` 的順序是 `installOcAgent` → `writePlist` → `launchctlReinstall`，那條路上 ocagent 反而先落地。存在位是假時 `start()` 以 `ocagent_not_found` **拒絕這次 spawn**（理由帶回 server），不種死 symlink。
 - agent 不直接 `rm` working tree 內容；harness 的 dangerous-rm gate 會讓 headless agent 卡死。agent 把待刪內容移到 `<workdir>/trash/`，warden 在 spawn／teardown 以 best-effort purge；purge 失敗不可改變 spawn/stop 結果，但任一 containment guard 不過就拒絕並留下 `REFUSED` log。只准清精確的 workdir trash：root/workdir 必須是絕對 clean path、workdir 是 root 的直接子目錄、trash 不能是 symlink，且要比較 realpath 以防 workdir symlink 指到鄰居或 root 外。
 - 外包 worker 是臨時 session，不借道 member lifecycle；仍使用 `start`／`stop` member verbs、`member-<ow-id>` session 與 `ow-` id，並暫時清理舊 `worker-<id>` session。`worker_start` 已退役、`worker_stop` 只作過渡 alias；worker 沒有 member row，不走 command-result fold-back，成敗由 server 的 `report_waking` 觀察。
 

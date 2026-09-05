@@ -133,7 +133,7 @@ func TestChatIDs_TheSnapshotTheNotificationAndTheReReadNameTheSameMessage(t *tes
 	// ── ② the field the NOTIFICATION LINE reads, taken from the CLI source ───
 	key := notificationIDField(t)
 	var served []map[string]any
-	if err := json.Unmarshal(get("/api/chat?with=m-2"), &served); err != nil {
+	if err := json.Unmarshal(chatEnvelopeMessages(t, get("/api/chat?with=m-2")), &served); err != nil {
 		t.Fatalf("decode chat: %v", err)
 	}
 	var row map[string]any
@@ -161,7 +161,7 @@ func TestChatIDs_TheSnapshotTheNotificationAndTheReReadNameTheSameMessage(t *tes
 		ID   string `json:"id"`
 		Body string `json:"body"`
 	}
-	if err := json.Unmarshal(get("/api/chat?ids="+fromSnapshot), &reread); err != nil {
+	if err := json.Unmarshal(chatEnvelopeMessages(t, get("/api/chat?ids="+fromSnapshot)), &reread); err != nil {
 		t.Fatalf("decode by-id read: %v", err)
 	}
 	if len(reread) != 1 {
@@ -196,6 +196,15 @@ func TestChatIDs_TheSnapshotTheNotificationAndTheReReadNameTheSameMessage(t *tes
 	}
 }
 
+// notificationPrinters names the ocagent functions allowed to emit the "#" tag
+// on a chat notification line. Anything printing it from somewhere else is out
+// of contract; add it here deliberately, with a reason, rather than widening the
+// search to the whole file (see notificationIDField for why that is fail-open).
+var notificationPrinters = map[string]bool{
+	"drainChat":     true, // printed here until T-bb78
+	"printChatLine": true, // the helper drainChat calls per message since T-bb78
+}
+
 // notificationIDField derives, from the ocagent source itself, the chat-payload
 // field whose value is printed after the "#" on the notification line.
 //
@@ -204,11 +213,59 @@ func TestChatIDs_TheSnapshotTheNotificationAndTheReReadNameTheSameMessage(t *tes
 // field on the CLI side would edit their copy and leave ours agreeing with a
 // server that no longer matches them.
 //
-// The derivation is structural: find `"#" + <ident>` inside drainChat, then find
-// where that ident was assigned, and read the single string-literal map key in
-// that assignment. Anything it cannot resolve is a FATAL — the shape of the
-// line changed, and a human has to re-check this contract rather than have the
-// test quietly widen.
+// The derivation is structural: find `"#" + <ident>` inside a NAMED printer
+// (see notificationPrinters above), then find where that ident was assigned
+// INSIDE THE SAME FUNCTION, and read the single string-literal map key in that
+// assignment. Anything it cannot resolve is a FATAL — the shape of the line
+// changed, and a human has to re-check this contract rather than have the test
+// quietly widen.
+//
+// The search is scoped to notificationPrinters, a NAMED list of the functions
+// that may emit that line. It used to say drainChat and nothing else, and T-bb78
+// moved the printing into a printChatLine helper without changing one byte of
+// what is printed — so a red here can mean "re-point this list" rather than "the
+// contract broke", and the list is where you re-point it.
+//
+// The list is not decoration. Searching the WHOLE FILE instead was tried and is
+// FAIL-OPEN: with the real print writing something other than a bare identifier
+// (say `"#"+strOrEmpty(m["reply_to"])`) and ANY unrelated `"#" + ident` left
+// elsewhere in the file, the guard finds the decoy, derives a field nobody
+// prints, and passes green while the notification names the wrong message. An
+// independent review demonstrated exactly that mutant. Scoped to named printers,
+// the same mutant resolves nothing and this FATALs instead — the shape changed,
+// so a human re-checks it.
+//
+// THERE IS NO ESCAPE HATCH, ON PURPOSE, AND YOU WILL MEET IT BEFORE YOU MEET
+// THIS COMMENT. Across ALL the named printers together there may be AT MOST ONE
+// `"#" + <bare local>` and NO `"#" + <anything else>` — three separate FATALs,
+// and it is worth knowing all three because the third one is the one that
+// surprises people: >1 bare local in one printer, ANY opaque form in one
+// printer, and a bare local in TWO named printers. So adding a SECOND
+// "#"-prefixed tag INSIDE ONE OF THEM — a thread tag, a task tag — FATALs in
+// every spelling there is. That is not an oversight to be relaxed away: all
+// three branches are the
+// fix for a fail-open an independent review actually demonstrated (a real print
+// of the WRONG field passing green beside a never-printed decoy), and widening
+// any of them back puts that hole straight back.
+//
+// Two ways through, both demonstrated green by an independent review, and note
+// what each one does NOT solve:
+//
+//   - Teach this guard which of the tags is the message-id one. Solves the >1
+//     bare local branch only. It CANNOT be used to relax the opaque branch —
+//     that is where the demonstrated mutant lives.
+//   - Build the NEW tag outside the named printers and pass it in. "Outside"
+//     is literal twice over. drainChat is ITSELF in the list, so composing the
+//     tag in drainChat and passing it to printChatLine trips the two-printers
+//     FATAL. And the walk descends into function literals, so a closure inside
+//     the printer is not outside it either — it trips the >1 branch. What
+//     passes is a top-level helper func: a FuncDecl this list does not name.
+//     Note this is the way out for the NEW tag. Moving the MESSAGE-ID tag into
+//     a helper instead hits a fourth FATAL this paragraph is not about — no
+//     named printer prints a bare local at all — whose answer is to re-point
+//     notificationPrinters, not to widen anything.
+//
+// What is NOT a way through is loosening the match.
 func notificationIDField(t *testing.T) string {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -216,38 +273,74 @@ func notificationIDField(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("parse %s: %v", ocagentListenSource, err)
 	}
+	// Which NAMED printer emits the tag, and which local holds the value after "#"?
 	var drain *ast.FuncDecl
-	for _, d := range file.Decls {
-		if fn, ok := d.(*ast.FuncDecl); ok && fn.Name.Name == "drainChat" && fn.Recv == nil {
-			drain = fn
-			break
-		}
-	}
-	if drain == nil {
-		t.Fatalf("%s no longer declares drainChat — the notification line moved, "+
-			"and this contract has to be re-derived by hand", ocagentListenSource)
-	}
-
-	// Which local holds the value printed after the "#"?
 	printed := ""
-	ast.Inspect(drain.Body, func(n ast.Node) bool {
-		be, ok := n.(*ast.BinaryExpr)
-		if !ok || be.Op != token.ADD {
+	for _, d := range file.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || fn.Body == nil || !notificationPrinters[fn.Name.Name] {
+			continue
+		}
+		// COLLECT, never overwrite: two `"#" + ident` in ONE printer is the same
+		// ambiguity as two printers, and it used to resolve to whichever came
+		// LAST in source order. A review demonstrated the pair — a real print of
+		// the wrong field beside a never-printed decoy reading the right one —
+		// flipping between red and green purely by swapping the two lines. A
+		// guard whose verdict depends on line order is not a guard.
+		var hits []string
+		opaque := 0
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			be, ok := n.(*ast.BinaryExpr)
+			if !ok || be.Op != token.ADD {
+				return true
+			}
+			lit, ok := be.X.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING || lit.Value != `"#"` {
+				return true
+			}
+			if id, ok := be.Y.(*ast.Ident); ok {
+				hits = append(hits, id.Name)
+				return true
+			}
+			// `"#" + <anything that is not a bare local>`: this derivation
+			// cannot follow it to a payload key. Counting it is what keeps the
+			// guard closed — a print of the wrong field written as an inline
+			// call is INVISIBLE here, so without this an unrelated bare-ident
+			// line elsewhere in the same printer becomes the thing we verify,
+			// and the guard passes green while the notification names the wrong
+			// message. That exact mutant survived the first attempt at this fix.
+			opaque++
 			return true
+		})
+		if opaque > 0 {
+			t.Fatalf("%s builds `\"#\" + <expr>` in %s where <expr> is not a "+
+				"bare local (%d such), so the payload key it names cannot be "+
+				"derived — re-check it by hand", ocagentListenSource,
+				fn.Name.Name, opaque)
 		}
-		lit, ok := be.X.(*ast.BasicLit)
-		if !ok || lit.Kind != token.STRING || lit.Value != `"#"` {
-			return true
+		if len(hits) > 1 {
+			t.Fatalf("%s builds `\"#\" + <local>` %d times inside %s (%v) — "+
+				"which one names the notification tag cannot be derived; "+
+				"re-check it by hand", ocagentListenSource, len(hits),
+				fn.Name.Name, hits)
 		}
-		if id, ok := be.Y.(*ast.Ident); ok {
-			printed = id.Name
+		if len(hits) == 0 {
+			continue
 		}
-		return true
-	})
+		here := hits[0]
+		if printed != "" {
+			t.Fatalf("%s prints `\"#\" + <local>` in more than one named printer "+
+				"(%s and %s) — which one names the notification tag can no "+
+				"longer be derived; re-check it by hand",
+				ocagentListenSource, drain.Name.Name, fn.Name.Name)
+		}
+		drain, printed = fn, here
+	}
 	if printed == "" {
-		t.Fatalf("drainChat no longer prints `\"#\" + <local>` — the message-id "+
-			"tag changed shape, so which payload field it names can no longer "+
-			"be derived; re-check %s by hand", ocagentListenSource)
+		t.Fatalf("none of the named notification printers in %s prints "+
+			"`\"#\" + <local>` — either the tag changed shape or the printing "+
+			"moved to a function not in notificationPrinters; re-check it by "+
+			"hand and re-point that list", ocagentListenSource)
 	}
 
 	// Where did that local come from, and which payload key did it read?
@@ -281,9 +374,9 @@ func notificationIDField(t *testing.T) string {
 		return true
 	})
 	if len(keys) != 1 {
-		t.Fatalf("cannot tell which chat-payload key drainChat prints after the "+
+		t.Fatalf("cannot tell which chat-payload key %s prints after the "+
 			"'#': %q reads %v — re-check %s by hand",
-			printed, keys, ocagentListenSource)
+			drain.Name.Name, printed, keys, ocagentListenSource)
 	}
 	return keys[0]
 }

@@ -13,6 +13,8 @@ import (
 	"io/fs"
 	"net/http"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/SherClockHolmes/webpush-go"
 )
@@ -37,7 +39,24 @@ type apiServer struct {
 	// only, like the observation stores — a restart voids them, which reads
 	// exactly like expiry).
 	machineClaims *machineClaimStore
-	secret        []byte
+	// keys is the LIVE signing-key ring (keyring.go). It is a POINTER on
+	// purpose: buildHandler hands this same ring to every gated route, so a
+	// rotation is visible to every signer and verifier in the process without a
+	// restart. Read through keys.signingSecret() per mint — never cache the
+	// []byte it returns across requests.
+	keys *keyring
+	// tokenKeyObs is the process-local memo behind noteTokenKeyObservation
+	// (T-80): identity id → what this station last RECORDED and last ASKED FOR.
+	// It exists to keep work done on EVERY authenticated request off the write
+	// pool, which is one connection wide (server/CLAUDE.md §7), and off the
+	// warden command queue. Losing it on a restart costs one redundant write and
+	// at most one redundant renew per machine, which is why it is not durable.
+	tokenKeyObsMu sync.Mutex
+	tokenKeyObs   map[string]tokenKeyObservation
+	// keyRenewClock is the injectable clock for the renew re-ask interval. Nil —
+	// the production value — means time.Now; only this package's tests set it,
+	// so a test about the interval expiring does not have to spend the interval.
+	keyRenewClock func() time.Time
 	// settingsMu guards the LIVE settings snapshot below (passwordHash /
 	// passwordChangedAt / ownerTokenTTL / agentTokenTTL / ctxhigh): the boot-time DB snapshot is
 	// updated IN PLACE by the B3 owner endpoints (set-password /
@@ -53,8 +72,37 @@ type apiServer struct {
 	// revocation cut: owner-scope tokens with iat before it are refused at the
 	// auth gate (requireAuth) — stamped by change-password.
 	passwordChangedAt int64
-	ownerTokenTTL     int64
-	agentTokenTTL     int64
+	// totpSecret is the owner's ACTIVE TOTP secret ("" = MFA off). Its presence
+	// is what makes /api/login demand a second factor; totpLastStep is the
+	// replay floor (the highest step already spent). Both live under settingsMu
+	// with the rest of the auth snapshot — login reads them on every attempt.
+	// mfaOffered is the ship-dark feature flag (settings.go). It gates whether the
+	// factor can be SET UP; it is deliberately absent from every verification
+	// path, so withdrawing the feature can never disarm a live factor.
+	mfaOffered   bool
+	totpSecret   string
+	totpLastStep int64
+	// loginThrottle is the in-flight gate shared by every credential-guessing
+	// seam (throttle.go). In-memory and process-local: it holds no failure
+	// history at all, only how many verifications are running right now.
+	loginThrottle credentialThrottle
+	// credentialFailureFloor overrides throttleFailureFloor for THIS server.
+	// Zero — the production value — means the constant; only this package's own
+	// tests ever set it, so that a test which is not about the floor does not
+	// pay three seconds per refusal to walk past it. See failureFloor().
+	credentialFailureFloor time.Duration
+	// authAlert* throttle the 「password accepted, second factor refused」 alert
+	// to the assistant: at most one message per authAlertInterval, carrying the
+	// number of attempts folded into it. See noteFactorRefusedAfterCorrectPassword.
+	authAlertMu      sync.Mutex
+	authAlertLastAt  time.Time
+	authAlertPending int
+	// authAlertDeliver replaces the delivery step. nil — the production value —
+	// means deliverPasswordExposedAlert. It exists so a test can prove the
+	// dispatch is asynchronous; see dispatchAuthAlert.
+	authAlertDeliver func(count int)
+	ownerTokenTTL    int64
+	agentTokenTTL    int64
 	// outsourceMaxParallel is the global cap on concurrently live outsource
 	// workers (DB task.outsource_max_parallel; M3 owner ruling ③) — read by
 	// the Phase 2 assignment scheduler.
@@ -72,7 +120,7 @@ type apiServer struct {
 	docCapCharsManualLearnings int
 	// The two boot-context document kinds, editable since T-791e (DB
 	// doc.cap_chars.{system_interaction,boot_sequence}). bootSequence is ONE cap
-	// serving both runtimes. The 下線程序 document (T-c9c0) joins them with its
+	// serving both runtimes. The 〈停止〉 document (T-c9c0) joins them with its
 	// own knob, doc.cap_chars.offboard.
 	docCapCharsSystemInteraction int
 	docCapCharsBootSequence      int
@@ -82,6 +130,16 @@ type apiServer struct {
 	// resumeSnapshotParts — the ONE place the number enters the packer, which is
 	// why resume_summary and peek_resume_summary_size cannot disagree about it.
 	chatBudgetChars int
+	// backupRetain is N — how many database backup files rotation keeps PER POOL
+	// (DB backup.retain; T-8). This copy exists for the COCKPIT FACE only: GET
+	// /api/settings shows it and PATCH moves it.
+	//
+	// 🔴 It is NOT what rotation reads. backup.go holds no apiServer by design
+	// and reads the row itself (liveBackupRetain) at snapshot time, so this
+	// field being stale or wrong cannot change how many files get deleted — it
+	// can only make the settings page lie. Both sides are bounded by
+	// minBackupRetain/maxBackupRetain, which is what keeps them honest.
+	backupRetain int
 	// updaterReceiveBeta picks which GitHub releases the update check follows
 	// (false = official only, true = prereleases too); updaterAutoUpdate arms
 	// the background self-upgrade cadence (auto_update.go). Both default OFF
@@ -144,8 +202,26 @@ type apiServer struct {
 	// gate now reads and writes SQLite on a cache miss, and holding the shared
 	// settings lock across that I/O would stall every unrelated settings reader
 	// on a database round-trip. This lock protects one map and nothing else.
-	handoverNoticedMu        sync.Mutex
+	handoverNoticedMu sync.Mutex
+	// ctxGateDiagAt records, per actor id, WHEN stampContextHighRecycle last
+	// emitted its gate diagnostic for that actor AND WHICH gate it named — the
+	// throttle behind noteContextGateSkip (T-72dd 補觀測). Guarded by
+	// ctxGateDiagMu below; pruned on the session boundary by clearSessionBootTS,
+	// the same place handoverNoticed is pruned and for the same reason.
+	ctxGateDiagAt map[string]ctxGateDiagState
+	// ctxGateDiagMu guards the map above, and it is its OWN mutex for the same
+	// reason handoverNoticedMu is: it protects one map on the reconcile tick's
+	// hot path and must never make an unrelated reader wait.
+	ctxGateDiagMu            sync.Mutex
 	monitoringRefreshSeconds int
+	// acceleratedGraceSecs is the live 加速停止 grace in seconds
+	// (stop.accelerated_grace_secs; T-ed79), guarded by settingsMu like every
+	// other owner-adjustable number here. NOTHING reads this field directly:
+	// the ONE reader is reconcileConfigLive(), which folds it onto
+	// reconcileConfig.RecycleGrace so that every clocked cause keeps reaching it
+	// through the single recycleGraceFor pair. A second direct reader would be a
+	// second opinion about the same number, which is the split T-ed79 removed.
+	acceleratedGraceSecs int
 	// root anchors the repo-file assets (seeds / prebuilt binaries / frozen
 	// MCP catalog) — see assets.go.
 	root assetRoot
@@ -179,17 +255,24 @@ type apiServer struct {
 	// e.g. dependency-free test tables) → an honest -32603.
 	loopback http.Handler
 	// ── reconcile producer state (reconcile.go; lifecycle.md §3 inventory #7) ──
-	// reconcileMu serializes the 30s cadence tick with any event-driven
-	// immediate tick (the Python per-app tick lock) AND guards the store.
+	// reconcileMu serializes the RECONCILE HALF of the 30s cadence tick
+	// (runReconcileTick, called first by runLifecycleTick — lifecycle_tick.go)
+	// with any event-driven immediate tick (the Python per-app tick lock) AND
+	// guards the store. It is still never held at the same time as outsourceMu:
+	// the merged tick takes this lock, drops it, and only then enters the
+	// outsource half.
 	reconcileMu sync.Mutex
 	// reconcileStates is the in-memory per-member bookkeeping — restart
 	// amnesia is contract (the next tick re-decides from presence).
 	reconcileStates map[string]reconcileState
 	reconcileCfg    reconcileConfig
-	// noReconcile is the --no-reconcile serve flag: disables the cadence loop
-	// AND the event-driven warden-command dispatch the producer owns (the
-	// shadow-deployment kill-switch) while the rest of the server runs
-	// unchanged. Not a server-wide gate — see spec/lifecycle.md §4.1.
+	// noReconcile is the --no-reconcile serve flag: skips the RECONCILE HALF of
+	// the cadence tick AND disables the event-driven warden-command dispatch the
+	// producer owns (the shadow-deployment kill-switch) while the rest of the
+	// server runs unchanged. Since T-14 item 5 the cadence LOOP is mounted
+	// either way — the flag is read at the call site, runLifecycleTick — so this
+	// no longer means "no goroutine", it means "that half does no work". Not a
+	// server-wide gate — see spec/lifecycle.md §4.1.
 	//
 	// 🔴 SAY THE TRUE THING WHERE THE FALSE ONE STOOD (owner ruling, T-941e
 	// 2026-08-18). A SHADOW SERVER WITH THIS FLAG SET STILL COMMANDS REAL
@@ -222,13 +305,23 @@ type apiServer struct {
 	receiptMu      sync.Mutex
 	receiptPending map[string]pendingReceipt
 	// ── outsource assignment scheduler state (outsource_sched.go; M3 Phase 2) ──
-	// outsourceMu serializes the scheduler's 30s cadence tick with the
-	// event-driven create_task tick. There is no in-memory ledger to guard —
-	// the outsource_worker rows are the bookkeeping (every tick recounts).
+	// outsourceMu serializes the OUTSOURCE HALF of the 30s cadence tick
+	// (runOutsourceTick, called second by runLifecycleTick — lifecycle_tick.go)
+	// with the event-driven create_task tick. There is no in-memory ledger to
+	// guard — the outsource_worker rows are the bookkeeping (every tick
+	// recounts). Never held together with reconcileMu: the merged tick has
+	// dropped that lock before this half is entered.
 	outsourceMu sync.Mutex
-	// noOutsource is the --no-outsource serve flag: disables the scheduler
-	// wholesale (cadence AND the event-driven tick) — the --no-reconcile
-	// mirror for the outsource-assignment producer.
+	// noOutsource is the --no-outsource serve flag: skips the OUTSOURCE HALF of
+	// the cadence tick AND disables the event-driven create_task tick — the
+	// --no-reconcile mirror for the outsource-assignment producer.
+	//
+	// 🔴 WHERE THIS FIELD IS READ IS LOAD-BEARING. It is read at the call site
+	// (runLifecycleTick) and in outsourceTickNow, and deliberately NOT inside
+	// runOutsourceTick: 169 test sites across 34 files set it to true and then
+	// drive the scheduler by hand, so a read inside the tick body would turn
+	// them into silent no-ops. lifecycle_tick.go carries the full ruling and the
+	// commands behind those counts; lifecycle_tick_test.go pins it both ways.
 	noOutsource bool
 	// ── outsource worker wake/reclaim state (worker_spawn.go; M3 Phase 6) ────
 	// All three maps live under outsourceMu. IN-MEMORY ONLY by design: a
@@ -255,6 +348,17 @@ type apiServer struct {
 	// workerReclaimed; an extra or lost-after-restart stop is a no-op /
 	// re-parked on the next owner action).
 	workerStopPending map[string]string
+	// workerStopLanded (T-ed79 #6) → worker id → the worker_stop a warden
+	// ACCEPTED, and when. The sibling above covers the kill that never LEFT;
+	// this one covers the kill that left and never took EFFECT. A frame on a
+	// warden's FIFO is not a dead session — the drain deletes the whole FIFO
+	// before writing it and no ack exists anywhere on that path, so an empty
+	// backlog means "collected", not "delivered". The outsource tick judges the
+	// entry with the SAME robustStopRetryStep the member cadence uses and
+	// re-pushes the STOP while the killed session is still there. In-memory like
+	// its siblings: a restart forgets it (a lost retry is a no-op, and the next
+	// owner action re-arms).
+	workerStopLanded map[string]workerStopDispatch
 	// workerMachinePref is the per-worker spawn placement override a reassign
 	// carries (T-160e: the dialog picks model/effort/machine for the fresh
 	// worker; scheduler-minted workers read the manual instead). In-memory
@@ -281,6 +385,15 @@ type apiServer struct {
 	// its siblings — a restart forgets the bench (worst case one re-pick of a
 	// still-bad machine, which re-benches on its next failure).
 	workerMachineCooldown map[string]float64
+	// workerOfflineSince (T-ed79 #13) → worker id → the ts of the FIRST offline
+	// observation in the current continuous-offline run; absent = last seen
+	// online. It is the de-bounce anchor for the wind-down collect arms, the
+	// worker twin of reconcileState.OfflineSince — kept here rather than on the
+	// worker row because it describes what the SERVER has observed, not
+	// something the worker did, and a restart must forget it (the next tick
+	// re-arms and the worker gets the full window again, which errs toward
+	// waiting). See workerOfflineConfirmGraceSecs.
+	workerOfflineSince map[string]float64
 	// ── software update check state (update_check.go; GitHub Releases) ───────
 	// updateMu guards updateCheck — the cached result of the last GitHub
 	// releases probe; /api/version reads it lock-briefly and NEVER waits on
@@ -300,6 +413,14 @@ type apiServer struct {
 	// capture the restart instead of exec'ing the test process away.
 	upgradeExeOverride string
 	upgradeRestart     func(exePath string)
+	// stationShuttingDown is the process-lifecycle marker used by the SSE
+	// detach log. A peer cancellation and a station shutdown both surface as
+	// request-context cancellation, so the marker must be set at the server
+	// boundary before that context is cancelled. stationCancel is wired by
+	// cmdServe for signal shutdown; tests without a live server still get the
+	// marker-only seam.
+	stationShuttingDown atomic.Bool
+	stationCancel       func()
 }
 
 // ── the four public build-identity probes ────────────────────────────────────
@@ -366,6 +487,30 @@ func (s *apiServer) authPasswordHash() string {
 	return s.passwordHash
 }
 
+// authMFAOffered reports whether this server offers the second factor for
+// SET-UP. Never consult it when deciding whether to VERIFY a code — that is
+// driven by the presence of a secret and nothing else.
+func (s *apiServer) authMFAOffered() bool {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.mfaOffered
+}
+
+// authMFAEnrolled reports whether the second factor is armed.
+//
+// 🔴 There is deliberately NO read-only accessor that hands out the secret and
+// the replay floor together for a caller to verify against. Verification MUST
+// advance the floor, and a read-then-write pair is a replay window: two
+// concurrent logins presenting the SAME code would both read the old floor and
+// both pass, which is precisely the attack the floor exists to stop. The verify
+// and the spend live in one write-locked seam instead — verifyAndSpendTOTP
+// (api_auth_mfa.go).
+func (s *apiServer) authMFAEnrolled() bool {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.totpSecret != ""
+}
+
 // authPasswordChangedAt returns the owner-token iat floor (0 = no cut).
 func (s *apiServer) authPasswordChangedAt() int64 {
 	s.settingsMu.RLock()
@@ -383,6 +528,34 @@ func (s *apiServer) agentTokenTTLValue() int64 {
 	s.settingsMu.RLock()
 	defer s.settingsMu.RUnlock()
 	return s.agentTokenTTL
+}
+
+// reconcileConfigLive is the reconcile config as it stands RIGHT NOW: the
+// boot-time struct with the one owner-adjustable number folded in fresh on
+// every read.
+//
+// 🔴 EVERY read of s.reconcileCfg goes through here, and that is the whole
+// mechanism. reconcileConfig is a VALUE, copied at whatever moment it is read,
+// so a PATCH that only wrote the field would leave every already-copied config
+// quoting the old grace — the clock and the sentence would then disagree about
+// members that are mid-wind-down, which is exactly the failure this ticket
+// exists to make unreachable. Reading through one function means the deadline
+// the cockpit renders, the deadline quoted in the agent's notice and the
+// deadline the tick collects on are three reads of the same live number.
+//
+// It also keeps the PATCH write off s.reconcileCfg itself: that struct is read
+// from the cadence goroutine with no lock, and mutating it from an HTTP handler
+// would be a data race. The settings snapshot has its own lock and this is the
+// only place the two meet.
+func (s *apiServer) reconcileConfigLive() reconcileConfig {
+	cfg := s.reconcileCfg
+	s.settingsMu.RLock()
+	grace := s.acceleratedGraceSecs
+	s.settingsMu.RUnlock()
+	if grace > 0 {
+		cfg.RecycleGrace = float64(grace)
+	}
+	return cfg
 }
 
 // outsourceParallelCap returns the live outsource-worker concurrency cap.
@@ -457,6 +630,16 @@ func (s *apiServer) offboardCap() int {
 	return s.docCapCharsOffboard
 }
 
+// taskEventCap is the ceiling on each of the four task-event procedures
+// (T-3201). No lock and no settings read: it is a constant until the owner has
+// seen the interface change that turning it into a `doc.cap_chars.*` setting
+// would be (see taskEventCapCharsDefault). The accessor exists anyway so the
+// registry reads caps through ONE shape and the day it does become a setting
+// costs one function body, not nine call sites.
+func (s *apiServer) taskEventCap() int {
+	return taskEventCapCharsDefault
+}
+
 // chatBudget is the live wake-snapshot chat budget (chat.budget_chars;
 // T-c9b4). Read at request time like every cap above, so a PATCH takes effect
 // on the next snapshot with no restart.
@@ -471,6 +654,15 @@ func (s *apiServer) chatBudget() int {
 	s.settingsMu.RLock()
 	defer s.settingsMu.RUnlock()
 	return s.chatBudgetChars
+}
+
+// backupRetainSetting is the live cockpit view of N (backup.retain; T-8).
+// Read at request time like the caps above, so a PATCH shows up on the next GET
+// with no restart. See the field for why rotation does not go through here.
+func (s *apiServer) backupRetainSetting() int {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.backupRetain
 }
 
 // orgNameSnapshot returns the live studio display name (org.name; T-d693).

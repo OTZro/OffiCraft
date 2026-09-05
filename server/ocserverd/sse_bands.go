@@ -32,14 +32,16 @@ package main
 //     event-driven click seams, grace clocks, reconcile store) lives in
 //     reconcile.go.
 //
-//   * task-close (§8): the terminal-task nudge that asks an executor to write
-//     back its learnings and report closeout.
+//   * task-close (§8): RETIRED AS A BAND (T-91) — the terminal-task nudge is a
+//     DURABLE CHAT ROW now (closeTask → postTaskChat), not an SSE frame. The
+//     DECISION still lives in this file (decideTaskCloseNudge) because that is
+//     where its siblings live and where it is cheapest to test; nothing here
+//     pushes it. See spec/sse.md §8 for why it moved.
 
 import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"time"
 )
 
 // ── context-high band (service/sse/context_high.py) ─────────────────────────
@@ -242,166 +244,72 @@ type contextHighSignal struct {
 // learning / lesson 寫回去」. A notice that only says "you are running out"
 // tells the agent nothing it can act on.
 //
-// T-6bd2 adds ONE more thing to the same frame: the caller's long-lived
-// documents that are close to their character cap. It rides HERE, and nowhere
-// on the write path, because writing memory back is step 4 of the sequence this
-// notice carries — an agent told at step 4 that its task manual has 167
-// characters left has no time left to do anything but delete words until the
-// write fits. Told at the SOFT notice, it still has the whole close-out ahead
-// of it.
-//
-// ⚠️ `offboard` and `docCapacity` are closures so a tick that decides to stay
-// QUIET never pays for them — and that is ALL the closure buys. It does NOT
-// make them once-per-session: this function keeps no state, so once an agent is
-// past its notice point it returns non-nil on EVERY tick and runs both closures
-// on every one of them, until the session ends. Two comments here used to claim
-// the opposite ("must not run on the idle path of every connection to serve a
-// frame that fires once per session"); the independent review measured the tick
-// at 21.3µs → 574.2µs (26.9×, empty station) precisely because the claim was
-// false. What actually bounds the cost is the CALLER refusing to
-// call this once the session's one notice is spent — api_infra.go's
+// ⚠️ `notice` is a closure so a tick that decides to stay QUIET never pays
+// for it — and that is ALL the closure buys. It does NOT make it
+// once-per-session: this function keeps no state, so once an agent is past its
+// notice point it returns non-nil on EVERY tick and runs the closure on every
+// one of them, until the session ends. Two comments here used to claim the
+// opposite ("must not run on the idle path of every connection to serve a frame
+// that fires once per session"); an independent review measured the tick and
+// found the claim false. What actually bounds the cost is the CALLER refusing
+// to call this once the session's one notice is spent — api_infra.go's
 // handoverNoticeTick asks handoverNoticeSettled first, and
-// TestHandoverNoticeTick_ClosuresAreNotRunAfterTheClaim counts the calls.
+// TestHandoverNoticeTick_ClosureIsNotRunAfterTheClaim counts the calls.
 func decideHandoverNotice(
 	agentID, runtime string, record map[string]any,
 	cfg SseContextHighConfig, codexNoticeRound, codexThreshold int,
-	offboard func() string, docCapacity func() string,
+	notice func() string,
 ) *contextHighSignal {
 	pct := actionableContextPct(record, cfg.StaleGuard)
-	var where string
+	// 🔴 THE TWO ARMS DECIDE WHETHER TO SPEAK — THEY NO LONGER COMPOSE ANYTHING
+	// (T-6f44, owner's decision 4). Each used to build a position clause
+	// (「compaction round 3 (your limits: round 3 / round 4)」,「context 55%
+	// (your limits: 55% / 65%)」) and hand it to the notice closure to be pasted
+	// into the sentence. That clause is gone from both documents, so composing
+	// it here was work whose only remaining consumer discarded it.
+	//
+	// The GATES are untouched and are the whole reason this switch survives:
+	// which axis a runtime is judged on — compaction rounds for codex, context
+	// pct for everything else — is a real difference and still decides silence.
 	switch {
 	case NormalizeRuntime(runtime) == RuntimeCodex:
 		if !codexNoticeDue(record, pct, codexNoticeRound, codexThreshold) {
 			return nil
 		}
-		if codexThreshold < 1 {
-			codexThreshold = defaultCodexCompactionThreshold
-		}
-		if codexNoticeRound < 1 {
-			codexNoticeRound = codexThreshold - 1
-		}
-		where = fmt.Sprintf("compaction round %d (your limits: round %d / round %d)",
-			codexNoticeRound, codexNoticeRound, codexThreshold)
 	default:
 		if cfg.HandoverPct <= 0 || cfg.NoticePct <= 0 ||
 			pct == nil || *pct < float64(cfg.NoticePct) {
 			return nil
 		}
-		where = fmt.Sprintf("context %v%% (your limits: %d%% / %d%%)",
-			formatPct(*pct), cfg.NoticePct, cfg.HandoverPct)
 	}
 	// Read only once THIS tick has decided to speak — a quiet tick (below the
 	// notice point / wrong compaction round) pays nothing. It is NOT read once
 	// per session: every tick from here to the end of the session reaches this
 	// line, which is why the caller short-circuits before entering at all.
-	var text string
-	if offboard != nil {
-		text = offboard()
+	//
+	// 🔴 THE SOFT DOCUMENT, and this is the whole of the choice: the FIRST
+	// context threshold is an advance warning with no clock behind it — nothing
+	// collects this session at a named instant — so it reads 〈停止〉 rather
+	// than 加速停止. The second threshold is the one that carries a deadline,
+	// and it arrives through the member delta, not through this band.
+	//
+	// A notice that could not be rendered means this tick stays QUIET. Sending
+	// the frame with an empty reason would spend the session's one notice on a
+	// message that says nothing.
+	var reason string
+	if notice != nil {
+		reason = notice()
 	}
-	// Appended AFTER the document, never woven into the owner's sentence or the
-	// document's steps — both are carried verbatim by ruling (see
-	// offboardNotice). "" when nothing is near its cap, which is the ordinary
-	// case and leaves the notice byte-identical to what it was before T-6bd2.
-	if docCapacity != nil {
-		text += docCapacity()
+	if reason == "" {
+		return nil
 	}
 	return &contextHighSignal{
-		Topic: contextHighTopic,
-		To:    agentID,
-		Level: levelWarn,
-		Pct:   jsonFloat(*pct),
-		// A context-pressure notice always goes to a member that is still wanted
-		// online, so its sequence ends in a re-start.
-		// A context-pressure notice is never the final call, so it quotes no
-		// deadline (T-d6a7); 0 is passed rather than a value nobody reads.
-		Reason: offboardNotice(where, offboardCloserRestartSelf, false, 0, text),
+		Topic:  contextHighTopic,
+		To:     agentID,
+		Level:  levelWarn,
+		Pct:    jsonFloat(*pct),
+		Reason: reason,
 	}
-}
-
-// offboardNotice composes EVERY offboard notice this server sends, in the one
-// sentence the owner approved (2026-08-16, card rc-ec5859a4c384):
-//
-//	<where> — offboard now: work the sequence below, then call <closer> yourself.[ Your deadline is <RFC3339 UTC>.]
-//	<the 下線程序 document, verbatim>
-//
-// Three things about it are deliberate and must survive edits:
-//
-//   - ONE sentence for every situation. The owner cut four differently-worded
-//     notices down to this: 「不需要太多不同描述吧, 就請他按照步驟做好下線, 頂多
-//     告訴他剩下 120 秒」. What tells the situations apart is the FIELDS — the
-//     numbers in `where`, and whether the deadline clause is there — not tone.
-//     ⚠️ That clause names an INSTANT, never a span. It was "You have 120
-//     seconds left." until T-d6a7; the deadline runs from the first stamp and
-//     this notice is REPLAYED on every write to the row, so a duration told a
-//     later replay it had the full window when most of it was gone — and a
-//     LIVE duration would be worse still, since the client de-dupes on the
-//     whole sentence verbatim.
-//   - "work the sequence below, THEN call <closer> yourself" blocks both
-//     failure directions at once. Without the second half an agent idles until
-//     the server cuts it off (dead time the owner explicitly does not want);
-//     without the first, it stops mid-work — a predecessor read the old wording
-//     as "you are done" and announced its own end of life at 40%.
-//   - 🔴 <closer> is the tool that ACTUALLY works for this member, and the two
-//     arms differ. A handover (desired online) ends in restart_self. A 下線
-//     does NOT: restart_self refuses a member that is no longer wanted online,
-//     by design — it is a RE-start. Naming it there told the agent to do
-//     something that could only answer 409, and on that arm nothing collects it
-//     on a clock, so it would sit refused until the owner pressed force-stop.
-//     Its sequence ends at report_stopped, which is also step 6 of the document
-//     it is being shown.
-//   - The steps are the DOCUMENT's, carried verbatim, never a summary written
-//     here. A summary in code is a second source of truth that the owner cannot
-//     edit and nothing keeps in step (T-c382 shipped exactly that mistake).
-//
-// An empty document degrades to the sentence alone: losing the checklist is
-// survivable, losing the notice is not.
-// The two tools a session can end its own sequence with. Which one is TRUE for
-// a given member is decided by offboardCloserFor — naming the wrong one asks it
-// to make a call that can only be refused.
-const (
-	offboardCloserRestartSelf   = "restart_self"
-	offboardCloserReportStopped = "report_stopped"
-)
-
-func offboardNotice(where, closer string, finalCall bool, deadline float64, offboardText string) string {
-	reason := where + " — offboard now: work the sequence below, then call " +
-		closer + " yourself."
-	// T-d6a7 — the final call quotes an ABSOLUTE deadline, not a duration.
-	//
-	// It used to say a hardcoded "You have 120 seconds left." while the deadline
-	// runs from the FIRST stamp, and this notice is REPLAYED whenever the row is
-	// rewritten (the context pct is part of `where`, so a pct change re-sends
-	// it). Measured on a live station: two notices 46 s apart, both claiming
-	// 120 s — the second one telling an agent it had 120 s when it had ~74.
-	//
-	// 🔴 The intuitive fix — printing the seconds REMAINING — is the one thing
-	// this must not do. The client de-dupes notices by comparing the whole
-	// sentence verbatim (cli/ocagent listen_hooks), so a countdown makes every
-	// replay a different string, the de-dupe never matches again, and an agent
-	// working its close-out is woken and re-fed the whole document on every
-	// write to its row. An absolute deadline is CONSTANT within the epoch, so
-	// the sentence is stable and the number cannot go stale.
-	//
-	// The value comes from refocusDeadlineOf — the SAME expression that fills
-	// the cockpit's refocus_deadline — so there is no second source of truth to
-	// drift. deadline <= 0 means nothing collects this epoch on a clock, and
-	// then no time is quoted at all: offboardKindOf only returns "final" for a
-	// clocked arm (refocus_since > 0 and refocus_op != refocus), so a final call
-	// with no deadline is a contradiction, and printing epoch 0 formatted as
-	// 1970 would be worse than saying nothing.
-	if finalCall && deadline > 0 {
-		// .UTC() is not cosmetic. The reader is an AGENT, which need not be
-		// running on this host, and the whole point of the sentence is that the
-		// same epoch renders to the same characters on every replay — an
-		// implicit local zone makes the literal depend on the server process's
-		// TZ. Every other machine-read RFC3339 in this tree is explicit.
-		reason += " Your deadline is " +
-			time.Unix(int64(deadline), 0).UTC().Format(time.RFC3339) + "."
-	}
-	if offboardText != "" {
-		reason += "\n" + offboardText
-	}
-	return reason
 }
 
 // formatPct renders the pct for the human reason line (45 not 45.0 for whole
@@ -521,12 +429,26 @@ func directedFrameText(topic string, data any) ([]byte, error) {
 	return []byte("data: " + string(raw) + "\n\n"), nil
 }
 
-// ── task-close nudge band (§8): learnings write-back reminder ────────────────
+// ── task-close nudge (§8): the terminal-task notice ─────────────────────────
+//
+// 🔴 NO LONGER A BAND. The decision stays here; the DELIVERY is a durable chat
+// row written by closeTask. taskCloseTopic survives as the payload's self-label
+// (and as the name conformance and spec §8 still use for this notice), not as a
+// topic anything publishes.
 
 const taskCloseTopic = "task-close"
 
-// taskCloseSignal is the inner directed payload {topic,to,task_id,task_no,
-// type,status,reason} (the envelope duplicates topic, exactly like §6).
+// taskCloseSignal is the close-out nudge's decided payload: who it is owed to
+// and about which task.
+//
+// 🔴 IT IS NO LONGER AN SSE FRAME (T-91). The nudge used to be pushed down the
+// executor's own live connection and nowhere else; the previous version of the
+// comment below said so plainly — "an offline executor simply misses the
+// reminder" — which made the ONE notice about a task's death the only lifecycle
+// notice in the system with no durable copy. It is now a durable chat row, so
+// the executor reads it at its next wake whether or not it was connected when
+// the task closed. Topic/To/TaskID/TaskNo/Type/Status are kept because they are
+// the decision's facts; Reason carries the rendered document text.
 type taskCloseSignal struct {
 	Topic  string `json:"topic"`
 	To     string `json:"to"`
@@ -535,50 +457,77 @@ type taskCloseSignal struct {
 	Type   string `json:"type"`
 	Status string `json:"status"`
 	Reason string `json:"reason"`
+	// ClosedBy is the verified trigger of the write that closed the task — the
+	// owner, an admin agent, the executor itself, or "boot-reconcile" when the
+	// reconciler closed an all-done task with no caller present. There was no
+	// such field at all before T-91: the notice said a task ended and gave the
+	// recipient no way to tell its own last step report from somebody else
+	// terminating the work under it, which are opposite situations.
+	ClosedBy string `json:"closed_by"`
 }
 
-// decideTaskCloseNudge is the pure band decision, evaluated when a task lands
-// in a terminal status (closeTask — done AND terminated both count: a
-// terminated task's executor has lessons worth folding back too). The
-// reminder walks the WHOLE §6.3 close-out: learnings write-back, scratch
-// cleanup, then report_task_closeout. nil = stay quiet:
-//   - a DUPLICATED task carries no lessons (T-02c9 point 6): it is a duplicate
-//     of another ticket, so there is nothing to fold back into the manual;
-//   - an AD-HOC task (no type) has no manual to write learnings into;
-//   - an unassigned task has nobody to remind.
+// decideTaskCloseNudge is the pure band DECISION — whether a nudge is owed and
+// how it is addressed. It no longer composes the sentence: the words live in
+// the 〈任務收尾〉 document and are folded in at the send site (T-7870), the same
+// road the other nine lifecycle documents take. Evaluated when a task lands in
+// a terminal status (closeTask — done AND terminated both count: a terminated
+// task's executor has lessons worth folding back too). nil = stay quiet, and
+// there is now exactly ONE reason left:
+//   - an unassigned task has nobody to remind. That is a fact about ADDRESSING,
+//     not a judgement about whether the news matters.
 //
-// `manualLabel` is the type's human-facing label (manualDisplayLabel — the
-// display name with the key in parentheses, or the bare key): the SENTENCE
-// shows the human face, but the MCP ADDRESSING string stays the raw type_key
-// (T-fa76 — the agent must call write_task_learnings/get_task_manual by key,
-// never by display name).
+// 🔴 TWO GATES WERE REMOVED (T-91, owner ruling), AND THE REASONING THAT PUT
+// THEM THERE WAS SOUND — about a different question. Both asked "does this task
+// have learnings worth folding into a manual?": a DUPLICATED task is a
+// duplicate of another ticket (T-02c9 point 6), and an AD-HOC task has no
+// manual to fold into. Both true, and both beside the point once you ask what
+// the recipient actually loses by not being told: its ticket is CLOSED, so
+// every write it makes from here on is a 409. Filtering by "is there a manual"
+// silenced exactly the two shapes where the close is most likely to have been
+// somebody ELSE's decision rather than the executor's own last step report.
 //
-// Delivery is best-effort at-most-once down the executor's own live SSE
-// connection (hub.PushDirected) — an offline executor simply misses the
-// reminder; the learnings write-back stays reachable through the seed SOP.
-func decideTaskCloseNudge(t Task, manualLabel string) *taskCloseSignal {
-	if !TaskIsTerminal(t.Status) || t.Status == TaskStatusDuplicated ||
-		t.TypeKey == "" || t.ExecutorID == "" {
+// ⚠️ THE CONSEQUENCE FOR THE DOCUMENT IS REAL AND IS NOT A DEFECT. 〈任務收尾〉's
+// body walks the reader through patch_task_learnings, and an ad-hoc task's
+// type_key is "". The body already opens by telling the agent to read type_key
+// off the ticket, so it finds nothing to write back and skips that half; the
+// scratch cleanup and the close-out report are the parts that still apply.
+//
+// 🔴 WHY THE SENTENCE LEFT THIS FUNCTION. Being pure was the named reason this
+// one document never got wired: with no *apiServer there is no overlay to fold.
+// That was true of the FUNCTION and false of the PATH — closeTask is a method
+// and already reads the manual two lines above the call. So the decision stays
+// here (pure, cheaply testable) and the text is fetched by the caller, which is
+// exactly the split winddownNoticeText already uses. The Reason field is left
+// EMPTY here on purpose: a default sentence composed here would be a second
+// source of truth for the same words, which is the drift T-7870 exists to end.
+//
+// 🔴 DELIVERY IS NO LONGER BEST-EFFORT SSE. This comment used to end "an
+// offline executor simply misses the reminder", and that sentence was the whole
+// defect: the reminder was pushed down the executor's own live connection with
+// no durable copy and no replay, so whether an agent ever learned its task had
+// been closed depended on whether it happened to be connected at that instant —
+// and an agent that has just been stopped, or a worker minted afterwards, never
+// is. closeTask now writes it as a DURABLE chat row (postTaskChat), which is
+// the same persistence the dependency-release notice already uses and the same
+// row a wake snapshot folds in. The delivery guarantee is therefore "readable
+// at the recipient's next wake", not "delivered if connected".
+//
+// 🔴 WHY THIS ONE IS A MESSAGE WHILE THE BLOCKER NOTICE (T-91's other half) IS
+// NOT. 開機盤點 lists tasks that have NOT ended. A closed task is absent from it
+// by construction, so "write it on the ticket" — the answer the owner chose for
+// the blocking side — cannot reach anybody here: there is no ticket in the list
+// to read it off.
+func decideTaskCloseNudge(t Task) *taskCloseSignal {
+	if !TaskIsTerminal(t.Status) || t.ExecutorID == "" {
 		return nil
 	}
-	if manualLabel == "" {
-		manualLabel = t.TypeKey
-	}
-	no := TaskNo(t.ID)
 	return &taskCloseSignal{
 		Topic:  taskCloseTopic,
 		To:     t.ExecutorID,
 		TaskID: t.ID,
-		TaskNo: no,
+		TaskNo: TaskNo(t.ID),
 		Type:   t.TypeKey,
 		Status: t.Status,
-		Reason: "任務 " + no + " 已結束（" + t.Status + "）。請處理收尾事項：" +
-			"若這一趟有值得留下的經驗（踩坑、更好做法），用 write_task_learnings" +
-			"（type_key=`" + t.TypeKey + "`）整併回「" + manualLabel +
-			"」的任務手冊（先 get_task_manual 讀現況、同主題合併後整份寫回）；" +
-			"用 `ocagent clean <path>` 移除這個任務的暫存檔/資料夾、" +
-			"收掉臨時 branch/worktree 與跑著的臨時程序；" +
-			"最後用 report_task_closeout 回報後續已處理完。",
 	}
 }
 
@@ -593,7 +542,6 @@ type wardenStartArgs struct {
 	PersonaContext string `json:"persona_context"`
 	MemberToken    string `json:"member_token"`
 	Role           string `json:"role"`
-	TaskType       string `json:"task_type"`
 	Runtime        string `json:"runtime"`
 	Model          string `json:"model"`
 	Effort         string `json:"effort"`

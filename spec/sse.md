@@ -58,6 +58,18 @@ data: {"seq":42,"topic":"member","op":"patch","data":{"entity":"member","key":"o
   implements no replay), and MUST perform a full resync (refetch) on every reconnect.
 - A future implementation MUST NOT "helpfully" persist the counter — clients are contracted
   to tolerate rollback, and persistence would be an observable behaviour change.
+- **"Every reconnect" includes the ones the transport will not make for you.** A browser
+  `EventSource` retries a dropped stream by itself, but on a non-200 response, a `401`, or a
+  wrong `Content-Type` it FAILS the connection permanently and never retries. That is not a
+  server-side event and produces no frame, so a client that leans on the transport's own
+  retry simply stops receiving — indistinguishable, on screen, from an owner scope where
+  nothing is happening. A client MUST detect that terminal state, rebuild the connection
+  itself, and full-resync on the rebuilt one (a rebuild WITHOUT the resync is worse than no
+  rebuild: the gap is then silently permanent). A client that answered `401` by reconnecting
+  in a loop would be wrong twice over — the session is dead, so it MUST stop and re-
+  authenticate instead of retrying. Because the failure is invisible by construction, a
+  client SHOULD also surface the not-connected state to its user rather than recover in
+  silence.
 
 ### 2.2 Reconcile-by-refetch (the client contract)
 
@@ -69,8 +81,19 @@ data: {"seq":42,"topic":"member","op":"patch","data":{"entity":"member","key":"o
   straight off the delta:
   - `member`: `{id, name, status, desired_state, owner_id}`, plus `offboard_notice` on
     the deltas that carry a collection order (T-c9c0). That field is the sentence telling
-    the agent it is being collected, `\n`-joined with the WHOLE 下線程序 document as the
+    the agent it is being collected, `\n`-joined with the WHOLE 〈停止〉 document as the
     server holds it — the server PUSHES the checklist; the agent never fetches it back.
+    For an **outsource worker on a TYPED task** one more paragraph follows the document
+    (T-ed79): the 記憶回寫 order, naming that task type's 任務手冊 and the anchored
+    `get_task_manual` → `patch_task_learnings` pair by `type_key`. The 〈停止〉 says only
+    「回寫到長期記憶，位置看開機說明」; a worker lives one task and has no role to fall back
+    on, so the concrete address is resolved server-side and delivered with the order.
+    An **ad-hoc** (typeless) task carries NO such paragraph — no type, no manual to
+    write into. ⚠️ This used to cite the task-close nudge (§8) as the same criterion;
+    it no longer is. T-91 removed that criterion from the close notice, which now goes
+    out for a typeless task too, because its subject is 「你的票關掉了」 rather than
+    「去回寫手冊」. The rule HERE is unchanged and the shared-criterion claim is what was
+    withdrawn.
     Present ONLY while `offboardKindOf` says this member is being collected, and inside
     those states it rides **every** write to that row, not just the first — **the client is
     what de-duplicates**, by keying on the sentence it last printed (a server-side "only
@@ -101,9 +124,9 @@ data: {"seq":42,"topic":"member","op":"patch","data":{"entity":"member","key":"o
   parse them): `{owner}::{id}` for member/chat/reply_card/task/outsource_worker/role_def,
   `{owner}::{type_key}` for task_manual,
   `{owner}::{reader}::{peer}` for chat_read,
-  `{owner}::{role_key}::{task_type}` for lessons, the bare owner id for global_context, the bare agent id for context/monitoring signals.
+  `{owner}::{role_key}` for lessons, the bare owner id for global_context, the bare agent id for context/monitoring signals.
 
-### 2.3 `trigger` — actor attribution (and the client-side echo rule)
+### 2.3 `trigger` — actor attribution (and the client-side echo rules)
 
 - `trigger` is the verified identity of the principal whose action caused the durable
   write this delta reports. Closed vocabulary of forms:
@@ -125,11 +148,64 @@ data: {"seq":42,"topic":"member","op":"patch","data":{"entity":"member","key":"o
   `trigger == self` is by construction its own action echoed back (e.g. its own
   `update_step_status` fanning its own task delta), pure token burn. Frames triggered by
   the owner, the server, or ANY other member MUST still be processed; an absent/blank
-  trigger MUST be processed (fail-open — old producer, unknown actor). **Exemption: the
-  `member` topic is NOT suppressed** — a member delta naming self is a lifecycle NUDGE
-  (wind-down / recycle hooks), not printed content, and the self-requested recycle
-  (`restart_self`, T-4c71) deliberately rides a SELF-triggered member delta whose
-  handover wake must still land; suppressing it would break graceful handover for zero token gain.
+  trigger MUST be processed (fail-open — old producer, unknown actor). **TWO topics are
+  exempt from the frame-layer rule.**
+  - **`member`** — a member delta naming self is a lifecycle NUDGE (wind-down / recycle
+    hooks), not printed content, and the self-requested recycle (`restart_self`, T-4c71)
+    deliberately rides a SELF-triggered member delta whose handover wake must still land;
+    suppressing it would break graceful handover for zero token gain.
+  - **`chat`** (T-48, owner ruling 2026-09-03) — a self-triggered chat delta MUST still
+    drive the drain. Dropping the frame does not avoid the work, it POSTPONES it: the
+    message the delta announced stays unread server-side until some other actor's delta
+    happens to flush it, which is the defect the paragraph below already describes. The
+    token saving the frame rule was after is delivered by the message layer instead: the
+    drain declines to PRINT a message whose sender is the listener itself, while still
+    filing its read receipt — the one place in T-48 where something is marked read without
+    being shown, and it is deliberate because the reader wrote it. One self-send costs one
+    extra `GET /api/chat`, and the audience of a self-addressed write is a set, so it is
+    one frame and one drain, never a fan of them. Marking read fans only `chat_read`,
+    which this listener does not act on, so the two cannot form a loop.
+- **The echo rule has a SECOND layer, on the refetched message's `from`.** The frame layer
+  above is necessary but NOT sufficient, because on its own it can only ever DELAY a self
+  echo: a suppressed chat delta never drives the listener's chat drain, so the message that
+  delta announced is never marked seen. It stays in the unread window until something else
+  drives a drain — a chat delta from some OTHER actor, which then flushes the whole
+  self-sent backlog alongside the message that actually arrived, or the silent boot
+  baseline of a listener restart. Closing that half means applying the same predicate one
+  layer down, to the sender of each refetched message. A listener that suppresses at the
+  frame layer MUST therefore also suppress at this one — adopting half of the rule is the
+  bug above, not a partial fix:
+  - a message whose `from` equals the listener's own id MUST NOT be printed, and MUST NOT
+    count toward the unread total the drain reports;
+  - it MUST still **be recorded in the listener's persisted seen cursor**. This half is the
+    entire point: skipping without recording leaves the message permanently unread and merely
+    changes the bug's shape. The rule is stated as an outcome, not a mechanism — a listener
+    that rebuilds its seen set from the refetched authority satisfies it without a separate
+    assignment, provided the rebuild is keyed on the recipient and does NOT itself exclude
+    self-sent messages;
+  - the **silent boot baseline** obeys both halves — nothing prints, the cursor still
+    advances;
+  - **fail-open, exactly as at the frame layer**: a blank or missing sender is NEVER an echo.
+    Unknown attribution MUST cost a printed line, never a dropped message;
+  - it is the SAME predicate (case-insensitive on the id, both sides trimmed) applied to a
+    DIFFERENT field, because the two fields attribute different things: `trigger` attributes
+    a FRAME, `from` attributes a MESSAGE — and a self-sent message can reach the drain along
+    a frame somebody else triggered. The drain only ever sees messages already addressed to
+    the listener (`to == self`), so in practice this fires on self→self messages, such as the
+    handover baton an agent posts to itself;
+  - the cursor half is written MUST where the frame layer is only SHOULD, deliberately: frame
+    suppression is a pure token-burn optimisation, but a listener that skips a message without
+    marking it loses that message, which is a correctness failure. The not-printed and
+    not-counted halves are stated MUST because they come as one rule with the cursor half —
+    a listener cannot advance the cursor past a message and still print it as unread;
+  - the `member`-topic exemption above is frame-level ONLY. There is no message-level
+    exemption: a chat message is printed content, not a lifecycle nudge;
+  - *provenance* — this layer was implemented first (PR #24, in `drainChat`); the doc gap was
+    escalated rather than settled by whoever noticed it, per the M1-freeze note closing §3.1
+    below and `seeds/system_interaction.md` §4.1, and the owner adjudicated on 2026-07-29 that
+    it be written into this spec. The adjudication came over Slack and reached this edit
+    relayed, not first-hand, through task T-c98f — which is the record to follow back, as
+    there is no reply card to cite.
 
 ## 3. Topic and op vocabulary
 
@@ -389,11 +465,13 @@ warden's outbound SSE.
 - Frame shape — bare `data:` event, no `id:` line:
 
 ```
-data: {"topic":"warden-command","data":{"rpc":"start","args":{"member_id":"m-1a2b3c","persona_context":"…","member_token":"<jwt>","role":"assistant","task_type":"default","runtime":"claude","model":"","effort":"","session_name":""}}}
+data: {"topic":"warden-command","data":{"rpc":"start","args":{"member_id":"m-1a2b3c","persona_context":"…","member_token":"<jwt>","role":"assistant","runtime":"claude","model":"","effort":"","session_name":""}}}
 ```
 
 - `rpc` vocabulary and `args` shapes:
-  - `start`: `{member_id, persona_context, member_token, role, task_type, runtime, model, effort, session_name}`.
+  - `start`: `{member_id, persona_context, member_token, role, runtime, model, effort, session_name}`.
+    `task_type` was carried here until T-2 as a parity-only field sourced from the lessons
+    bucket; lessons no longer have buckets, so the server no longer sends it.
     `runtime` is the closed vocabulary `claude | codex`; absent/blank means `claude` for
     compatibility with older servers. Blank `effort`/`model`/`session_name` mean the
     selected runtime's defaults; `session_name` is always `""` today — the warden derives
@@ -410,10 +488,12 @@ data: {"topic":"warden-command","data":{"rpc":"start","args":{"member_id":"m-1a2
       and start the next idle turn. The listener must retain pending work across App
       Server/TUI reconnects.
     - Codex `item/tool/requestUserInput` never waits on the optional TUI. The sidecar
-      converts each question into the SAME durable OffiCraft reply card used by Claude
-      (`create_reply_card`; one question per card, with the first automatically bound to
-      the current task/step), immediately resolves the App Server request with a deferred
-      marker, and yields the turn. The existing directed `reply_card` delta on owner
+      does NOT open the card itself (T-18): it holds no task_id or step_id, and
+      `create_reply_card` requires an explicit `linked_task`, so it immediately resolves
+      the App Server request with text telling Codex to open its own card through the
+      tool — carrying the no-secret warning for an `isSecret` question — and yields the
+      turn. Codex opens the SAME durable OffiCraft reply card used by Claude, one
+      question per card, naming the step the question is about. The existing directed `reply_card` delta on owner
       answer/expiry wakes the next idle turn; Codex then reads the authoritative card(s)
       through MCP. A durable
       `(thread_id, turn_id, item_id) -> reply_card_ids[]` mapping makes reconnect/replay
@@ -432,6 +512,23 @@ data: {"topic":"warden-command","data":{"rpc":"start","args":{"member_id":"m-1a2
     warden's own connection). A warden build that predates this verb MUST treat it as any
     unknown rpc: log + skip, reader loop unharmed — which is what makes shipping the verb
     fleet-wide non-breaking.
+  - `renew` (T-80 — the station has observed this machine still presenting a credential
+    signed by a key that is no longer the signing key): `{member_id}` — the warden runs
+    its OWN credential renewal NOW (`POST /api/machines/renew-credential` → subject check
+    → present the candidate at a read-only endpoint → atomic 0600 write → exec-in-place)
+    instead of waiting for an expiry that will never arrive, because warden credentials
+    are minted without one.
+    🔴 **THE FRAME CARRIES NO CREDENTIAL AND MUST NEVER BE GIVEN ONE.** The server says
+    GO and nothing else; the machine asks for its own credential over its own
+    authenticated connection. A frame able to carry a credential would be a channel that
+    rewrites any host's identity on the server's say-so, and the whole point of this verb
+    is that no such channel exists (owner ruling, option A). `member_id` is informational
+    addressing only, as with `update`.
+    No receipt rides back, and that is not fire-and-forget carelessness but the stronger
+    evidence: what settles whether a machine converged is the KEY ID THE SERVER OBSERVES
+    on that machine's next authenticated request, which a warden that answered politely
+    and did nothing cannot forge. A warden build that predates this verb MUST treat it as
+    any unknown rpc: log + skip, reader loop unharmed.
   - **Outsource workers ride the SAME `start`/`stop` verbs** (A案 P5b naming
     convergence — the former `worker_start`/`worker_stop` verbs are RETIRED):
     a worker spawn is a plain `start` with `member_id == <ow-id>`,
@@ -522,36 +619,45 @@ data: {"topic":"warden-command","data":{"rpc":"start","args":{"member_id":"m-1a2
     (→ dispatch reports not-accepted → retry next tick) rather than grow a wedged backlog.
 - Band evaluation happens on quiet ticks only (buffered entity deltas drain first); relative priority among bands is an implementation detail.
 
-## 8. Task-close nudge band (directed signal, the executor's connection only)
+## 8. Task-close nudge — RETIRED AS AN SSE BAND (T-91)
 
-A directed reminder pushed down the **task executor's own** connection when its task lands
-in a terminal status (M3 Phase 6C): walk the §6.3 close-out — fold this run's learnings
-back into the type's manual (`write_task_learnings`), clean the task's scratch, then
-report the follow-ups done (`report_task_closeout`). Owner/dashboard connections MUST
-never receive it.
+🔴 **There is no `task-close` frame on the wire any more.** The nudge still exists; it is
+a **durable chat row** written to the task's executor by `closeTask`, not a directed SSE
+signal. This section is kept — rather than deleted — because the reason it moved is the
+reason nobody should put it back.
 
-- Frame shape — a bare `data:` event, **no `id:` line** (not part of the replayable delta
-  stream; same family as §6/§7):
+**What it was.** A directed reminder pushed down the task executor's own connection when
+its task landed in a terminal status: walk the §6.3 close-out (fold this run's learnings
+back into the type's manual with `patch_task_learnings`, clean the task's scratch, then
+`report_task_closeout`). Best-effort at-most-once, no queue, no replay.
 
-```
-data: {"topic":"task-close","data":{"topic":"task-close","to":"m-1a2b3c","task_id":"t-7d40aabbccdd","task_no":"T-7d40","type":"review-pr","status":"done","reason":"任務 T-7d40 已結束（done）。…write_task_learnings…report_task_closeout…"}}
-```
+**Why it moved.** "Best-effort at-most-once onto a live connection" means an executor that
+was not connected at the instant its task closed was never told — and an executor whose
+task somebody ELSE terminated is very often exactly that. It was the only lifecycle notice
+in the system with no durable copy, so the one thing an agent could silently miss was the
+news that every write it makes from now on will 409.
 
-  The inner payload duplicates `topic` and carries `{topic, to, task_id, task_no, type,
-  status, reason}`. `reason` wording is not contract; the envelope shape, `to` (the
-  executor id), `task_id`, `type` and `status` are.
-- Emission rules (all MUST hold):
-  - the task just entered a **terminal** status — `done` AND `terminated` both nudge
-    (a terminated run's lessons are worth folding back too);
-  - the task **has a type** (`type_key` non-blank) — an ad-hoc task has no manual to
-    write learnings into;
-  - the task **has an executor** — an unassigned task has nobody to remind.
-- Delivery is **best-effort at-most-once** onto the executor's live connection: no live
-  connection at close time → the frame is dropped, never queued (a nudge is a reminder,
-  not a command — contrast the §7 FIFO). No per-connection band state, no cooldown: one
-  close, at most one frame.
-- Fail-safe: a marshal fault or a missing listener MUST emit nothing and MUST NOT fail
-  the terminal-status write it follows.
+**What it is now.**
+- A server-authored chat row (`sender` = the system sender) addressed to the executor,
+  carrying the task linkage in `meta` (`task_id` / `task_title` / `task_type`) plus
+  `closed_by` — the verified trigger of the write that closed the task. It reaches the
+  recipient through the ordinary chat surfaces, including the wake snapshot, so the
+  delivery guarantee is **"readable at the recipient's next wake"**, not "delivered if
+  connected".
+- Its text is still **rendered from the 〈任務收尾〉 boot document**, not composed in Go
+  (T-7870), and a document that cannot be rendered still sends **nothing** rather than a
+  substitute.
+- Emission rules, both of which MUST hold:
+  - the task just entered a **terminal** status — `done`, `terminated` AND `duplicated`
+    all nudge;
+  - the task **has an executor** — an unassigned task has nobody to address.
+
+  ⚠️ The old rules also required a non-blank `type_key` and excluded `duplicated`. Both
+  were removed by owner ruling in T-91: they asked whether the task had LESSONS worth
+  folding into a manual, when what the recipient actually needs to know is that its ticket
+  is closed. They silenced the two shapes where the close is most likely to have been
+  somebody else's decision.
+- Fail-safe unchanged: the notice MUST NOT fail the terminal-status write it follows.
 
 ## 9. What is deliberately NOT in this contract
 

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -49,13 +50,36 @@ type listener struct {
 	refusalGraceSpan time.Duration    // wall-clock bound for the refusal run
 	selfTerminate    func()           // kill my own tmux session (default: `ocagent suicide`)
 
+	// DISCONNECT-NOTICE POLICY (owner, 2026-08-30): 「第一次斷線，跟連線回來的
+	// 時候發訊息給 agent，中間的 retry 我們不需要降低頻率，但是不需要打攪 agent」.
+	// These three fields carry the whole of it; the BACKOFF is deliberately not
+	// among them, because the ruling is about the transcript and not about the
+	// cadence — see noteDisconnect.
+	inOutage    bool   // an outage has been announced and has not yet ended
+	sawConnect  bool   // at least one connection has been established this process
+	lastStation string // the station sha the previous connection reported ("" = never known)
+
 	cursorPath string
 	winddown   *windDownHook
 	recycle    *recycleHook
-	seen       map[string]bool     // id-keyed unread cursor for drain_chat
-	replySeen  *replyCardSeen      // persisted answered-card dedup (drain + live delta)
-	taskSnaps  map[string]taskSnap // per-task last-seen state (the "what moved" diff)
-	once       bool                // single-connect test hook (mirrors --once)
+	// drainWarn holds the drain's two DIFFERENT latches — a mark-read receipt
+	// that did not land (once per PROCESS) and a total fetch fault (once per
+	// OUTAGE, with a line when it clears). The field was called markWarn back
+	// when there was only the first one; the second arrived and the name did
+	// not follow, which is how a reader ends up believing there is one latch
+	// with one lifetime. There are two, and their lifetimes differ on purpose —
+	// see warnMarkReadFailed and noteChatFetchFault for which is which and why.
+	//
+	// It is NOT a chat ledger: what this listener has already surfaced is the
+	// server's unread set and nothing else (T-48, rc-224dee5770dd).
+	drainWarn *drainWarner
+	// ack is the delivery gate for chat batches: non-nil ONLY when the parent
+	// asked for acks (the codex sidecar). nil ⇒ a printed line counts as
+	// delivered, which is the claude path and must stay byte-for-byte as it was.
+	ack       *ackGate
+	replySeen *replyCardSeen      // persisted answered-card dedup (drain + live delta)
+	taskSnaps map[string]taskSnap // per-task last-seen state (the "what moved" diff)
+	once      bool                // single-connect test hook (mirrors --once)
 }
 
 // newSSEStreamClient builds the long-lived HTTP client for the SSE downlink. Timeout
@@ -74,8 +98,42 @@ func newSSEStreamClient() *http.Client {
 	}
 }
 
+// agentLinePrefix opens EVERY line this binary writes into an agent's pane, and
+// the sidecar's three prefix checks start their match at column 0 with it. It is
+// a constant so the notice heads below can be spelled as whole prefixes.
+const agentLinePrefix = "[ocagent] "
+
+// The heads of the three transport notices the disconnect-notice policy (owner,
+// 2026-08-30) says must reach the agent. THEY ARE THE CONTRACT WITH THE CODEX
+// SIDECAR, which matches them with HasPrefix from column 0
+// (cli/ocwarden/codex_session.go's notice*Prefix constants).
+//
+// 🔴 WHY THEY ARE CONSTANTS AND NOT INLINE STRINGS. Independent review shifted
+// ONE of these heads rightward — `"listen: disconnected — "` →
+// `"net listen: disconnected — "` — and both Go modules stayed green while every
+// codex member went permanently silent about its transport. Nothing in the
+// tests looked at column 0: they asked `strings.Contains`, which cannot see
+// anything INSERTED in front. Naming the head once means the printf can no
+// longer carry a head of its own, and listen_notice_contract_test.go requires
+// the sidecar's copy of these same bytes to still exist on the other side.
+const (
+	noticeDisconnected = "listen: disconnected"
+	noticeConnected    = "listen: connected"
+	noticeGivingUp     = "listen: giving up"
+
+	// noticeBatch is the END-OF-BATCH marker of the ack protocol (T-48), and it
+	// is deliberately spelled with the same `listen:` head as the three notices
+	// above — for the OPPOSITE reason. Those are carved OUT of the sidecar's
+	// blanket transport filter so they reach the agent; this one must be
+	// swallowed BY it, because it is a line the two processes say to each other
+	// and not a line anybody should read. The head is what guarantees that: any
+	// `[ocagent] listen: …` line the sidecar does not recognise is dropped, so a
+	// marker can never become a turn on the model.
+	noticeBatch = "listen: batch"
+)
+
 func (l *listener) logf(format string, args ...any) {
-	fmt.Fprintf(l.out, "[ocagent] "+format+"\n", args...)
+	fmt.Fprintf(l.out, agentLinePrefix+format+"\n", args...)
 }
 
 // foldProbe runs ONE session-existence probe and folds its tri-state verdict
@@ -150,6 +208,81 @@ func (l *listener) resetRefusals() {
 	l.firstRefusalAt = time.Time{}
 }
 
+// ---------------------------------------------------------------------------
+// the disconnect-notice policy (owner ruling, 2026-08-30)
+//
+//	「應該是在第一次斷線，跟連線回來的時候發訊息給 agent，中間的 retry 我們不需要
+//	 降低頻率，但是不需要打攪 agent。」
+//
+// 🔴 THIS IS NOT A BACKOFF CHANGE, AND MUST NEVER BECOME ONE. An earlier
+// proposal answered the same complaint by widening the retry interval; the
+// owner replaced it with this. The loop keeps re-dialling at exactly the rhythm
+// listenBackoffStart/listenBackoffCap already give it — a member is trying just
+// as hard to get back online as it ever was. What changes is only how much of
+// that effort is narrated INTO THE AGENT'S TRANSCRIPT, where every line is an
+// interruption that costs a turn.
+//
+// Measured before this existed: one station changeover produced THREE lines for
+// ONE event on a claude member — `stream ended`, `connect failed: unexpected
+// status 502`, `connected`. The middle one is the whole complaint.
+//
+// 🔴 AND SILENCE MAY MEAN ONLY ONE THING. Reporting just the two endpoints
+// leaves the transcript reading `斷線 → 沉默 → 連上`, and in that silence
+// 「還在重試」 and 「已經放棄」 are indistinguishable — the agent cannot tell
+// whether waiting is a plan or a mistake. So every exit from the retry loop
+// prints too (stopRetrying); the silence between the two notices then means
+// exactly one thing, and it is the good one.
+// ---------------------------------------------------------------------------
+
+// noteDisconnect announces an outage ONCE. The first failure of a run prints;
+// every later failure inside the SAME uninterrupted outage is folded away. The
+// dial itself already happened before this is called and happens again after —
+// this function has no say in the cadence at all.
+func (l *listener) noteDisconnect(format string, args ...any) {
+	if l.inOutage {
+		return // the agent has already been told; retries are its own business
+	}
+	l.inOutage = true
+	l.logf(noticeDisconnected+" — "+format+
+		" (retrying on the same schedule, quietly; the next transport line you see "+
+		"is either the reconnect or a give-up)", args...)
+}
+
+// stopRetrying prints the give-up line when the retry loop terminates while an
+// outage is still open, and returns the process exit code (always 0 — listen
+// degrades gracefully). Called at EVERY exit of run(): a loop that stops during
+// an outage and says nothing turns the disconnect notice into a lie by omission.
+// Exiting while CONNECTED prints nothing — nothing was ambiguous there.
+func (l *listener) stopRetrying(reason string) int {
+	if l.inOutage {
+		l.inOutage = false
+		l.logf(noticeGivingUp+" — %s. No further reconnect attempts from THIS "+
+			"listener; I am NOT still retrying.", reason)
+	}
+	return 0
+}
+
+// stationVerdict answers 「是不是換了一台」 on the reconnect line, so the reader
+// is told rather than left to diff two shas by eye. It is a pure function of
+// (previous sha, this sha, is-this-the-first-connect) and returns the segment to
+// APPEND — never a claim it cannot support:
+//   - first connect of the process: "" (there is no previous station; claiming
+//     "same" would be a fabrication and claiming "new" would fire on every boot).
+//   - either side unknown: "" (a station that sent no sha cannot be compared;
+//     the same rule the sha segment itself follows — nothing is invented).
+//
+// The wording deliberately avoids the bytes "[station", which the sha segment
+// owns, so the two can never be confused by a reader or by a test.
+func stationVerdict(prev, cur string, firstConnect bool) string {
+	if firstConnect || prev == "" || cur == "" {
+		return ""
+	}
+	if prev == cur {
+		return " [same station]"
+	}
+	return " [new station — was " + prev + "]"
+}
+
 // dispatch is the bridge from ONE completed SSE data payload to the agent's downlink
 // behaviour: parse → echo gate → topic demux. A chat delta drives an R7 refetch (never
 // reads the payload); a reply_card delta refetches the card and wakes the session when
@@ -165,11 +298,31 @@ func (l *listener) resetRefusals() {
 // this session just DID — drop it silently. Owner-/server-/other-member-triggered
 // frames always process; a blank/absent trigger processes too (fail-open — an older
 // server or an unknown actor must not lose wakes). Directed band frames carry no
-// trigger and are untouched by construction. EXEMPTION (spec §2.3): the `member`
-// topic is never suppressed — a member delta naming self is a lifecycle NUDGE for the
-// hooks below (prints nothing by itself), and the self-requested recycle
-// (restart_self, T-4c71) rides a SELF-triggered member delta whose recycle wake
-// must still land.
+// trigger and are untouched by construction.
+//
+// EXEMPTION ① (spec §2.3): the `member` topic is never suppressed — a member delta
+// naming self is a lifecycle NUDGE for the hooks below (prints nothing by itself),
+// and the self-requested recycle (restart_self, T-4c71) rides a SELF-triggered
+// member delta whose recycle wake must still land.
+//
+// EXEMPTION ② — `chat` (c-75113935a255, ruled by the owner). A self-triggered chat
+// delta now DOES drive the refetch. It still prints nothing: drainChat drops
+// `sender == self` rows, so what this buys is not a line but a RECEIPT — the
+// self-addressed note (in practice a hand-off a member writes to itself) is marked
+// read at the moment it is written, on the same path as everybody else's mail,
+// instead of waiting for whatever reconnect happens next.
+//
+// 🔴 ITS PRICE, PAID KNOWINGLY: every message this member sends to ITSELF now costs
+// one extra GET /api/chat, which usually comes back empty or holding only that one
+// row. One post fans exactly one chat frame to this listener (the audience is a
+// SET, and self-send collapses sender and recipient into one member), so it is one
+// refetch per self-sent message and not a multiple; the read receipt this drain
+// files fans a `chat_read` frame, which this switch has no case for, so nothing
+// cascades. The owner chose consistency between the two paths over that request.
+//
+// Suppression is unchanged for every OTHER topic, and that matters: without it a
+// member starts receiving a delta for every reply card it answers and every task it
+// moves — its own work read back to it, one line at a time.
 func (l *listener) dispatch(payload []byte) {
 	frame, _ := safeJSON(string(payload)).(map[string]any)
 	// Every line printed below belongs to THIS frame, so it reports the
@@ -179,14 +332,21 @@ func (l *listener) dispatch(payload []byte) {
 	defer l.stamp.enter(frame)()
 	topic, _ := frame["topic"].(string)
 	trigger := frameTrigger(frame)
-	if isSelfEcho(trigger, l.cfg.ID) && topic != memberTopic {
+	if isSelfEcho(trigger, l.cfg.ID) && topic != memberTopic && topic != chatTopic {
 		return // my own echo — recipient==self ∧ actor==self (spec §2.3)
 	}
 	switch topic {
-	case "chat":
+	case chatTopic:
 		// R7 HARD CONSTRAINT: the chat delta payload is convenience — NEVER merged.
 		// The delta is a pure NUDGE ⇒ REFETCH /api/chat and print the unread-for-me.
-		drainChat(l.api, l.cfg, l.seen, l.out, false)
+		//
+		// Same entrance as the connect drain, and there is nothing left to
+		// decide at either: the drain prints the server's unread set, so a delta
+		// that arrives while the connect drain is still in flight can at worst
+		// print the same window twice — and it cannot even do that, because the
+		// first of them receipts what it printed and takes it out of the unread
+		// set.
+		l.drainChatNow()
 	case replyCardTopic:
 		// R7 again: the payload ({id, from, status}) only routes — the printed
 		// answer comes from a refetch of GET /api/reply-cards/{id}.
@@ -203,7 +363,7 @@ func (l *listener) dispatch(payload []byte) {
 		// Graceful self-stop (desired_state=offline) + recycle (desired_state=online ∧ refocus) are
 		// mutually exclusive, so both are safe to call on every member delta. Side-effect
 		// only: the listener keeps HOLDING the stream — BOTH hooks merely WAKE the
-		// session with the server-composed 下線程序 notice, and the server-
+		// session with the server-composed 〈停止〉 notice, and the server-
 		// dispatched warden kill is the real drop (see listen_hooks.go).
 		l.winddown.maybeWindDown(frame)
 		l.recycle.maybeRecycle(frame)
@@ -218,6 +378,47 @@ func (l *listener) dispatch(payload []byte) {
 		if shouldDispatch(frame) {
 			handleEvent(frame, trigger, l.out)
 		}
+	}
+}
+
+// authoritativeRefusal names WHY a non-200 on /api/events is a STANDING "you
+// must not be online here" — the only kind of failure that may accumulate
+// toward the fail-closed self-terminate — or returns "" when it is not one.
+//
+// 🔴 THIS FUNCTION IS THE WHOLE TRADE-OFF, so it is worth being explicit about
+// what it must NOT do. The listener's default for a non-200 is to reconnect with
+// backoff forever, and that default is RIGHT for a server that is restarting,
+// mid-deploy, briefly 5xx, or answering 401 because its secret is not loaded yet
+// — killing the agent's tmux session in any of those cases would turn a blip
+// into fleet-wide data loss. It is WRONG for exactly the refusals the server
+// will keep making until someone intervenes:
+//
+//   - 409 — the zombie stop gate, or the dual-SSE single-session guard.
+//   - 401 CARRYING X-OC-Auth-Refusal: agent-superseded — this member's newer
+//     generation has reported waking, so this session's token is below the
+//     member's credential floor (server authz.go agentIatFloorRefusal). The
+//     floor only ever rises, so this can never resolve itself. Without this
+//     arm the superseded session re-dials every ≤15s forever, holding a tmux
+//     session and the model session under it, none of which the cockpit can
+//     show (the member's presence belongs to the successor now) — the exact
+//     orphan the 409 ladder exists to prevent, reached through a different
+//     status code.
+//
+// 🔴 A BARE 401 IS DELIBERATELY NOT AUTHORITATIVE. Status alone cannot separate
+// "I have been replaced" from "the server is having a moment" or "my token just
+// expired", and guessing wrong in that direction kills healthy agents. Only the
+// server knows which refusal it made, so only the server's own marker counts.
+// Pinned in both directions: TestListener_SelfTerminatesWhenSupersededByANewerGeneration
+// and TestListener_APlain401NeverTripsFailClosed.
+func authoritativeRefusal(resp *http.Response) string {
+	switch {
+	case resp.StatusCode == http.StatusConflict:
+		return "409 stop gate / dual-SSE guard"
+	case resp.StatusCode == http.StatusUnauthorized &&
+		strings.TrimSpace(resp.Header.Get(authRefusalHeader)) == refusalAgentSuperseded:
+		return "401 superseded — a newer generation of this member has reported waking"
+	default:
+		return ""
 	}
 }
 
@@ -258,15 +459,14 @@ func (l *listener) connectOnce(ctx context.Context) (opened, activity, selfExit 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		if resp.StatusCode == http.StatusConflict {
-			// An AUTHORITATIVE pre-stream refusal (the server's zombie stop gate
-			// or the dual-SSE guard) — surfaced as the errSSERefused sentinel so
-			// the run loop can fold it fail-closed. The (bounded) body carries
-			// the server's reason for the honest log line.
+		if reason := authoritativeRefusal(resp); reason != "" {
+			// An AUTHORITATIVE pre-stream refusal — surfaced as the errSSERefused
+			// sentinel so the run loop can fold it fail-closed. The (bounded)
+			// body carries the server's reason for the honest log line.
 			snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 			_, _ = io.Copy(io.Discard, resp.Body)
-			return false, false, false, fmt.Errorf("%w: %s",
-				errSSERefused, strings.TrimSpace(string(snippet)))
+			return false, false, false, fmt.Errorf("%w [%s]: %s",
+				errSSERefused, reason, strings.TrimSpace(string(snippet)))
 		}
 		_, _ = io.Copy(io.Discard, resp.Body)
 		return false, false, false, fmt.Errorf("unexpected status %d", resp.StatusCode)
@@ -313,8 +513,9 @@ func (l *listener) connectOnce(ctx context.Context) (opened, activity, selfExit 
 	// Absent header ⇒ the line is emitted byte-identical to what it was before
 	// this change. Nothing is fabricated and no earlier value is reused: each
 	// connection reads only its own response.
-	station := ""
+	station, stationSHA := "", ""
 	if sha := strings.TrimSpace(resp.Header.Get(stationSHAHeader)); sha != "" {
+		stationSHA = sha
 		station = " [station " + sha + "]"
 	}
 	// ── AND WHICH OCAGENT IS SAYING IT ──────────────────────────────────────
@@ -338,13 +539,52 @@ func (l *listener) connectOnce(ctx context.Context) (opened, activity, selfExit 
 	if sha := strings.TrimSpace(buildSHA); sha != "" {
 		agent = " [agent " + sha + "]"
 	}
-	l.logf("listen: connected — streaming %s%s (⇒ online while held)%s%s", l.cfg.Base, eventsPath, station, agent)
+	// ── AND WHETHER IT IS THE SAME ONE AS LAST TIME ─────────────────────────
+	// The sha above NAMES the peer; this SAYS WHAT CHANGED. Both segments were
+	// already on the line before this — a reader who wanted to know whether a
+	// changeover had happened had to scroll back to the previous connection and
+	// compare two hex strings by eye, which nobody does. This is the owner's
+	// second ask on the reconnect notice (2026-08-30) and it costs no request:
+	// the comparison is against what this same process saw last time.
+	//
+	// ⚠️ POSITION: this sits BEFORE the sha segments, not after. The two
+	// existing station-sha tests assert the line ENDS with " [station <sha>]"
+	// (the agent segment is empty in any unstamped build, tests included), and
+	// appending past them would break both. Anywhere after the prefix is equally
+	// safe for the three sidecar prefix consumers, which read only the head.
+	verdict := stationVerdict(l.lastStation, stationSHA, !l.sawConnect)
+	l.sawConnect = true
+	if stationSHA != "" {
+		l.lastStation = stationSHA // an unknown sha never overwrites a known one
+	}
+	// The stream is up: whatever outage was being announced is over, and the
+	// line below IS the second of the owner's two notices.
+	l.inOutage = false
+	l.logf(noticeConnected+" — streaming %s%s (⇒ online while held)%s%s%s",
+		l.cfg.Base, eventsPath, verdict, station, agent)
 
-	// Boot/reconnect drain: /api/events has no replay, so any reply_card delta
+	// Connect drain: /api/events has no replay, so any reply_card delta
 	// fanned while this listener held no stream is lost — catch up from the
 	// answered-pane authority NOW, before the live stream takes over (the
 	// shared seen state collapses a drain/delta race to one printed line).
 	drainReplyCards(l.api, l.cfg, l.replySeen, l.out)
+	// …and CHAT, for exactly the same reason. A chat message fanned during the
+	// outage window is gone from the stream too, and the only thing that used to
+	// surface it was the NEXT chat delta — so if nobody spoke again, the agent
+	// was never told anyone had called. Draining here, before the live stream
+	// takes over, is what makes "reconnected" mean "caught up".
+	//
+	// 🔴 THIS IS THE ONLY SCHEDULED CHAT DRAIN — there is none at process start
+	// (owner, 2026-09-02). Including the FIRST one of the process: a virgin
+	// machine's very first backfill happens right here, and it PRINTS (T-48 —
+	// the old silent baseline is gone with the local ledger). Tying it to the
+	// connect is what keeps an inbox from being printed into a session that is
+	// about to receive no events at all.
+	//
+	// This cannot re-print history: whichever drain surfaced a line receipted it,
+	// which took it out of the server's unread set, so a re-drain of the same
+	// window fetches nothing.
+	l.drainChatNow()
 
 	onAct := func() { activity = true }
 	if l.idleReadTimeout > 0 {
@@ -365,41 +605,75 @@ func (l *listener) connectOnce(ctx context.Context) (opened, activity, selfExit 
 	return true, activity, false, err
 }
 
+// drainChatNow is THE way this listener drains chat. Both entrances go through
+// it: every connect/reconnect (connectOnce, before the live stream takes over)
+// and every inbound chat delta (dispatch). There is deliberately no third one at
+// process start — see run().
+//
+// 🔴 NOBODY DECIDES SILENCE ANY MORE, BECAUSE THERE IS NOTHING TO DECIDE. The
+// old drain took a `silent` flag fed from a persisted local ledger, so that a
+// machine's first listen swallowed the whole inbox without printing it. That
+// ledger is gone (owner, rc-224dee5770dd): the server's unread set is the only
+// answer to "have I seen this", the drain prints everything in it, and the read
+// receipt is the only thing that takes a row out of it. A caller therefore has
+// no answer left to pass in and no way to get it wrong.
+func (l *listener) drainChatNow() int {
+	if l.drainWarn == nil {
+		l.drainWarn = &drainWarner{}
+	}
+	return drainChat(l.api, l.cfg, l.out, l.drainWarn, l.ack)
+}
+
 // run is the always-online listen loop. It blocks until ctx is cancelled or a self-exit
 // fires, re-dialing whenever the stream drops (exponential + jittered backoff, floor
 // reset when a healthy connection dropped). Returns the process exit code (always 0 —
 // listen degrades gracefully; a mis-wire / self-exit / signal is a clean 0). Mirrors
 // cmd_listen.
 func (l *listener) run(ctx context.Context) int {
-	// Boot BASELINE: advance the unread cursor to 'now' (silent refetch) so connecting
-	// does NOT re-print the whole chat history — only NEW messages print thereafter.
-	drainChat(l.api, l.cfg, l.seen, l.out, true)
-
+	// 🔴 NOTHING IS DRAINED HERE. Chat catch-up hangs off the CONNECT, not off
+	// process start (owner, 2026-09-02:「啟動的時候好像不用做，就連上 SSE 的
+	// 時候統一做就好，包含 codex 應該也是類似的機制」).
+	//
+	// A boot drain runs in exactly one state the connect drain does not cover:
+	// the API answers but the stream will not open. That state is BROKEN, and
+	// printing an inbox into a session that is about to receive no events is not
+	// a rescue — it makes a machine that cannot hear anything look like one that
+	// is working, which is the failure this codebase keeps paying for. The one
+	// window a boot drain legitimately covered (messages fanned while this agent
+	// held no stream) is covered by the connect drain anyway, moments later and
+	// only once the session can actually act on what follows.
+	//
+	// Everything the boot drain used to be responsible for now happens in
+	// connectOnce: the connect drain fetches the server's unread set and prints
+	// all of it, so a listener that never got a stream also never reads — and
+	// never receipts — a single line.
 	backoff := l.backoffStart
 	for {
 		if ctx.Err() != nil {
-			return 0
+			return l.stopRetrying("this process is shutting down")
 		}
 		// Lifecycle tie, probe point #1: never (re)connect an orphan.
 		if l.foldProbe() {
-			return 0
+			return l.stopRetrying("the session probe says I should no longer be here")
 		}
 
 		opened, activity, selfExit, err := l.connectOnce(ctx)
 		if selfExit {
-			return 0 // the heartbeat-line probe self-exited (probe point #2)
+			// the heartbeat-line probe self-exited (probe point #2)
+			return l.stopRetrying("the server told this listener to stand down")
 		}
 		if ctx.Err() != nil {
-			return 0 // cancelled while connected/dialing → clean exit
+			// cancelled while connected/dialing → clean exit
+			return l.stopRetrying("this process is shutting down")
 		}
 		if opened {
 			if activity {
 				backoff = l.backoffStart // a byte proved health → reconnect fast
 			}
 			l.resetRefusals() // an opened stream breaks any refusal run
-			l.logf("listen: stream ended: %v", err)
+			l.noteDisconnect("stream ended: %v", err)
 		} else if errors.Is(err, errSSERefused) {
-			l.logf("listen: connect refused: %v", err)
+			l.noteDisconnect("connect refused: %v", err)
 			if l.foldRefusal() {
 				// FAIL-CLOSED (zombie defence line B): the server has refused this
 				// listener authoritatively for the whole grace window — I am a
@@ -411,24 +685,35 @@ func (l *listener) run(ctx context.Context) int {
 					"fail-closed: self-terminating instead of retrying forever "+
 					"(a refused listener is a zombie, not a client with bad luck).",
 					l.refusals, l.clock().Sub(l.firstRefusalAt).Round(time.Second))
+				// 🔴 SAY IT BEFORE THE KILL, NOT AFTER. selfTerminate kills my own
+				// tmux session, and suicide.go states outright that a successful
+				// kill SIGHUPs this process and never returns — so a give-up line
+				// printed after it is dead code on the path that matters most.
+				// seeds/boot_sequence.md promises the whole fleet that the absence
+				// of that line means「還在試」; on this path that promise was false,
+				// and the member left behind reads an unfinished outage as a retry
+				// still in flight. Printing first costs nothing and the ordering is
+				// the entire content of the fix.
+				rc := l.stopRetrying("the server refused this listener authoritatively " +
+					"for the whole grace window")
 				if l.selfTerminate != nil {
 					l.selfTerminate()
 				}
-				return 0
+				return rc
 			}
 		} else {
 			// A network fault / non-409 status (server down, 5xx, …) is NOT an
 			// authoritative refusal — reset the run so a briefly-unavailable
 			// server can never accumulate toward the fail-closed kill.
 			l.resetRefusals()
-			l.logf("listen: connect failed: %v", err)
+			l.noteDisconnect("connect failed: %v", err)
 		}
 
 		if l.once {
-			return 0 // single-connect test hook
+			return l.stopRetrying("--once was set: this run makes a single attempt")
 		}
 		if !sleepCtx(ctx, l.sleep, backoff) {
-			return 0
+			return l.stopRetrying("this process is shutting down")
 		}
 		backoff = nextBackoff(backoff, l.backoffStart, l.backoffCap, l.jitter())
 	}
@@ -487,7 +772,8 @@ func cmdListen(cfg Config, env func(string) string, once bool, out io.Writer) in
 		cursorPath:       cursorPath(cfg),
 		winddown:         newWindDownHook(api, cfg, out),
 		recycle:          newRecycleHook(api, cfg, out),
-		seen:             map[string]bool{},
+		drainWarn:        &drainWarner{},
+		ack:              newAckGate(env, os.Stdin),
 		replySeen:        loadReplyCardSeen(replyCardSeenPath(cfg)),
 		taskSnaps:        map[string]taskSnap{},
 		once:             once,

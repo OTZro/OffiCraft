@@ -339,7 +339,7 @@ func TestEventsHandler_DeliveredWardenCommandsLeaveNoResidue(t *testing.T) {
 // ── ITEM 1(b)/ITEM 2: the wake diagnosis stops blaming the wrong machine ────
 
 // TestReconcile_UndeliveredStartBlamesTheStreamNotTheMachine: when the START
-// frame never reached the machine, the 90s wake_timeout text "the START was
+// frame never reached the machine, the wake_timeout text "the START was
 // dispatched but the agent never came online — check that claude runs ... on the
 // target machine" is FALSE in its first clause and sends the owner to the wrong
 // machine. It must name the delivery failure instead.
@@ -470,7 +470,7 @@ func wakeTimedOutMember(t *testing.T, dal *DAL, id string) {
 	t.Helper()
 	no := false
 	putGateMember(t, dal, Member{
-		ID: id, Kind: KindAssistant, DesiredState: DesiredStateOnline,
+		ID: id, Kind: KindStaff, DesiredState: DesiredStateOnline,
 		LastOp: reconcileCmdStart, LastOpOK: &no, LastOpAt: 1000,
 		LastOpReason: wakeTimeoutReasonCode + ": the START never reached machine " +
 			"\"mach-a\" — its SSE stream failed mid-delivery",
@@ -493,7 +493,7 @@ func TestFoldCommandResult_CarriesSupersededDispatchClue(t *testing.T) {
 		"reason": "spawn_failed: tmux new-session exited 1",
 		"log":    "tmux: server exited unexpectedly",
 		"at":     2000.0,
-	}, triggerServer)
+	}, triggerServer, "")
 
 	got, err := dal.GetMember("m-1")
 	if err != nil || got == nil {
@@ -524,7 +524,7 @@ func TestFoldCommandResult_SupersededClueDoesNotChain(t *testing.T) {
 		api.foldCommandResult(map[string]any{
 			"member_id": "m-1", "rpc": "start", "ok": false,
 			"reason": "spawn_failed: again", "log": "boom", "at": 2000.0,
-		}, triggerServer)
+		}, triggerServer, "")
 	}
 	got, _ := dal.GetMember("m-1")
 	if n := strings.Count(got.LastOpLog, "superseded dispatch diagnosis"); n != 0 {
@@ -543,7 +543,7 @@ func TestFoldCommandResult_SupersededClueSurvivesTheLogClamp(t *testing.T) {
 		"reason": "spawn_failed: x",
 		"log":    strings.Repeat("z", 4*commandResultLogMax),
 		"at":     2000.0,
-	}, triggerServer)
+	}, triggerServer, "")
 
 	got, _ := dal.GetMember("m-1")
 	if len(got.LastOpLog) > commandResultLogMax {
@@ -560,7 +560,7 @@ func TestFoldCommandResult_OrdinaryReceiptUnchanged(t *testing.T) {
 	api, dal := newGateTestAPI(t)
 	no := false
 	putGateMember(t, dal, Member{
-		ID: "m-1", Kind: KindAssistant, DesiredState: DesiredStateOnline,
+		ID: "m-1", Kind: KindStaff, DesiredState: DesiredStateOnline,
 		LastOp: "start", LastOpOK: &no, LastOpAt: 1000,
 		LastOpReason: "spawn_failed: earlier failure", LastOpLog: "earlier log",
 	})
@@ -568,7 +568,7 @@ func TestFoldCommandResult_OrdinaryReceiptUnchanged(t *testing.T) {
 	api.foldCommandResult(map[string]any{
 		"member_id": "m-1", "rpc": "start", "ok": true,
 		"reason": "", "log": "spawned", "at": 2000.0,
-	}, triggerServer)
+	}, triggerServer, "")
 
 	got, _ := dal.GetMember("m-1")
 	if got.LastOpLog != "spawned" {

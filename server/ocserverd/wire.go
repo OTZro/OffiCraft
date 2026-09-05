@@ -18,6 +18,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -41,8 +42,30 @@ const wireSystemSender = "system"
 const wireSchemaVersion = 3
 
 // authStatusDTO is the PUBLIC first-run probe body (GET /api/auth/status).
+//
+// MFARequired is ALWAYS emitted (no omitempty): the schema marks it optional so
+// an older client keeps working, but a server that speaks this field must say
+// `false` out loud rather than leave the login wall to guess from an absence.
 type authStatusDTO struct {
 	PasswordSet bool `json:"password_set"`
+	MFARequired bool `json:"mfa_required"`
+}
+
+// mfaStateDTO is the answer to every /api/auth/mfa/* write.
+//
+// Secret / OtpauthURI are pointers because null and "" are DIFFERENT facts on
+// this wire: null = "there is no pending secret to show you", which is what
+// activate and disable answer. They are populated ONLY by enroll, and only for
+// a pending (unproven) secret — an ACTIVE secret is never echoed back, so a
+// stolen owner token cannot read out an existing enrolment and clone it.
+type mfaStateDTO struct {
+	// Offered is the ship-dark feature flag — whether the factor may be SET UP.
+	// NOT a second opinion on whether one is armed (that is Enrolled), and never
+	// consulted when deciding to verify a code.
+	Offered    bool    `json:"offered"`
+	Enrolled   bool    `json:"enrolled"`
+	Secret     *string `json:"secret"`
+	OtpauthURI *string `json:"otpauth_uri"`
 }
 
 // settingsDTO is the owner-adjustable settings surface (GET/PATCH
@@ -61,6 +84,15 @@ type settingsDTO struct {
 	CodexNoticeRound         int `json:"codex_notice_round"`
 	MonitoringRefreshSeconds int `json:"monitoring_refresh_seconds"`
 	OutsourceMaxParallel     int `json:"outsource_max_parallel"`
+	// AcceleratedGraceSecs is the 加速停止 grace in seconds
+	// (stop.accelerated_grace_secs; T-ed79) — how long a CLOCKED wind-down waits
+	// before the collection is forced. It is ONE number on purpose: every clocked
+	// cause reads it through recycleGraceFor, so the countdown quoted in the
+	// agent's notice and the deadline the reconcile tick collects on are the same
+	// value by construction rather than by two settings that happen to agree.
+	// It cannot put a clock on a soft cause — winddownKindFor still decides WHO
+	// is clocked, and this only says HOW LONG.
+	AcceleratedGraceSecs int `json:"accelerated_grace_secs"`
 	// DocCapChars* are the live size caps on the accumulating context
 	// documents, in CHARACTERS (runes) — the same unit the patch receipts and
 	// the refusal message speak (T-3aeb). FIVE independent knobs: a role's
@@ -85,6 +117,11 @@ type settingsDTO struct {
 	// the seven above it may be lowered as well as raised, and its ceiling is its
 	// own (tied to resumeChatFetch, see domain.go).
 	ChatBudgetChars int `json:"chat_budget_chars"`
+	// BackupRetain is N — how many database backup files rotation KEEPS
+	// (backup.retain; T-8). Two things about this number that its type does not
+	// carry, and that the settings page therefore has to say out loud:
+	// it counts VERSIONS, not days, and it is PER POOL, not per directory.
+	BackupRetain int `json:"backup_retain"`
 	// UpdaterReceiveBeta / UpdaterAutoUpdate are the two software-update
 	// toggles (default false): follow GitHub prereleases too / self-upgrade
 	// in the background when a newer release exists.
@@ -126,8 +163,13 @@ type settingsDTO struct {
 // the whole point of the report is that a new owner can read WHY the assistant
 // is not awake instead of staring at an unexplained grey member.
 type onboardingStepDTO struct {
-	Name   string `json:"name"`
-	OK     bool   `json:"ok"`
+	Name string `json:"name"`
+	OK   bool   `json:"ok"`
+	// Code is the CLOSED failure vocabulary (T-0648) — see onboarding.go's
+	// onboardingCode* constants. Set on every failing step, empty on success.
+	// It is what lets the cockpit write the owner's sentence itself; Reason
+	// stays as the English fallback for a code the client does not know.
+	Code   string `json:"code"`
 	Reason string `json:"reason"`
 	Detail string `json:"detail"`
 }
@@ -137,6 +179,14 @@ type onboardingReportDTO struct {
 	StartedAt  float64             `json:"started_at"`
 	FinishedAt float64             `json:"finished_at"`
 	Steps      []onboardingStepDTO `json:"steps"`
+	// DismissedAt is when the owner pressed 「不再顯示」 on the cockpit banner
+	// (T-0648): unix seconds, 0 = never dismissed. It lives on the REPORT, not
+	// in the browser, which is the whole point — a per-tab dismissal came back
+	// on the next tab. Absent in the JSON means 0 means never dismissed: every
+	// report row written before this field existed reads that way, and there is
+	// no migration, so the honest reading of the absence is the one that keeps
+	// the warning visible.
+	DismissedAt float64 `json:"dismissed_at"`
 }
 
 // themeFetchResultDTO carries a link-fetched theme bundle back to the cockpit
@@ -247,6 +297,28 @@ type machineDTO struct {
 	// "effective"; collapsing it into green is the exact defect being retired.
 	// nil = this warden build does not report the verdict at all.
 	CutoverEffect *string `json:"cutover_effect"`
+	// TokenKeyID / TokenKeyCurrent are T-80's answer to the one question that
+	// stands between the owner and pressing 「移除」 on a retired signing key —
+	// an act with no grace period at all: has this machine come back on the
+	// current key yet?
+	//
+	// 🔴 BOTH ARE OBSERVATIONS THIS STATION MADE, NOT ANYTHING A MACHINE SAID.
+	// TokenKeyID is the id of the key whose HMAC actually verified this
+	// machine's credential at the auth gate (member.token_key_id). There is no
+	// claim, no header and no telemetry block a warden could use to assert it,
+	// and adding one would defeat the point: the value gates a destructive,
+	// immediate action, so it must not be assertable by the very machines being
+	// counted. nil = this station has never verified a credential of that
+	// machine's — for a machine that has not authenticated since the rotation
+	// the value simply stays where it was, which is the honest reading.
+	//
+	// TokenKeyCurrent is that id compared against the LIVE ring's signing key,
+	// computed here for hardware_stale's reason: a client doing the comparison
+	// would need the active key id on the wire too, and that is a second home
+	// for the same fact that can disagree with this one. nil exactly when
+	// TokenKeyID is nil.
+	TokenKeyID      *string `json:"token_key_id"`
+	TokenKeyCurrent *bool   `json:"token_key_current"`
 }
 
 type machineOnboardResultDTO struct {
@@ -335,15 +407,19 @@ type chatAttachmentUploadDTO struct {
 // ChatMessageID), so a second top-level `cards` section would carry the same
 // decision twice in one payload.
 //
-// It carries the DECISION only — options offered, which was picked, the free
-// text, and when. Summary / body / kind / attachments are deliberately absent:
-// the message this rides on already carries the ask, and get_reply_card serves
-// the rest.
+// It carries the DECISION only — options offered, which ones were circled, the
+// free text, and when. Summary / body / kind / attachments are deliberately
+// absent: the message this rides on already carries the ask, and
+// get_reply_card serves the rest.
 type chatInlineReplyCardDTO struct {
-	Options         []string `json:"options"`
-	AnswerOptionIdx *int     `json:"answer_option_idx"`
-	AnswerText      string   `json:"answer_text"`
-	AnsweredTS      float64  `json:"answered_ts"`
+	Options []ReplyCardOption `json:"options"`
+	// AnswerOptionIdxs is the circled options' indices (deduped, ascending);
+	// null when no option was circled. This is one of the AI's two read paths
+	// for an answer — the other is the ocagent line — so a card answered with
+	// two options must show both here.
+	AnswerOptionIdxs []int   `json:"answer_option_idxs"`
+	AnswerText       string  `json:"answer_text"`
+	AnsweredTS       float64 `json:"answered_ts"`
 	// AnsweredAtDisplay is AnsweredTS in the same full date+time+offset form as
 	// chatMessageDTO.TSDisplay; "" while the card is unanswered.
 	AnsweredAtDisplay string `json:"answered_at_display"`
@@ -393,6 +469,130 @@ type chatMessageDTO struct {
 	// answered cards. See ChatMessageDTO in the spec.
 	ReplyCardStatus string              `json:"reply_card_status"`
 	Attachments     []chatAttachmentDTO `json:"attachments"`
+	// ReplyTo is the id of the message this one is REPLYING TO, "" when it
+	// replies to nothing. Stamped once at post time from ChatPostDTO.reply_to
+	// and never rewritten. It is the ONE fact about whether this message is a
+	// reply, and it never goes away — not even when the message it names does.
+	//
+	// It may point OUT of this conversation (owner ruling, 2026-08-21): the
+	// owner replies to a line two other members exchanged in order to step in
+	// and ask about it. The post-time same-conversation refusal that used to
+	// live here is gone.
+	ReplyTo string `json:"reply_to"`
+	// ReplyToChat is the QUOTED MESSAGE, snapshotted at read time — nil (key
+	// omitted) when this message replies to nothing, and nil ALSO when the
+	// message it names is no longer there.
+	//
+	// 🔴 BUILT UNCONDITIONALLY ON EVERY READ, and the absence of any condition
+	// is the design (T-4e95, owner ruling 2026-08-21, replacing the id-only
+	// wire). The previous shape shipped the id alone and left the reader to
+	// fetch what it named when it was not already on screen — which meant the
+	// reader had a fetch that could fail, a failure it had to render, and a
+	// story about healing that failure later. Every one of those was a branch,
+	// and a branch here looks IDENTICAL on screen whether it is right or wrong.
+	// There is deliberately no "the target is already in this batch" skip and
+	// no "only if asked" flag: the cheapest thing to get right is the thing
+	// that has one behaviour.
+	//
+	// nil-with-ReplyTo-set is a settled, permanent answer ("the original is
+	// gone"), NOT a miss to retry. Nothing on either side of this wire retries.
+	ReplyToChat *chatReplyQuoteDTO `json:"reply_to_chat,omitempty"`
+}
+
+// chatReplyQuoteDTO is the quoted message reduced to what a quote line draws:
+// who said it, WHO THEY SAID IT TO, and a short piece of what they said
+// (ChatMessageDTO.reply_to_chat).
+//
+// From / FromName and To / ToName are chatMessageDTO's OWN convention, copied
+// rather than reinvented: the bare id is the ADDRESS and always carried, the
+// Name beside it is the display name carried IN ADDITION to it and left "" on
+// the reads that do not resolve names at all — exactly as chatMessageDTO's own
+// pairs behave, and for the same reason (a name that is really an id is worse
+// than no name). chatGalleryEntryDTO carries the same pair for the same reason.
+//
+// 🔴 THE ADDRESSEE IS HERE BECAUSE A QUOTE CAN COME FROM ANOTHER CONVERSATION
+// (owner ruling 2026-08-21, the same ruling that removed the same-conversation
+// gate on reply_to). With From alone the quote line reads as if the quoted
+// sentence had been said in the thread it is drawn in — which is precisely
+// wrong for the case the ruling exists for, the owner stepping into two other
+// members' thread. To is the QUOTED message's own recipient; it is NOT the peer
+// of the thread carrying the reply, and the two differ exactly when it matters.
+type chatReplyQuoteDTO struct {
+	ID       string `json:"id"`
+	From     string `json:"from"`
+	FromName string `json:"from_name"`
+	To       string `json:"to"`
+	ToName   string `json:"to_name"`
+	// Content is the quoted body as ONE line, shortened HERE — see
+	// chatReplyQuoteContent. "" is ordinary and legal: an attachment-only
+	// message has no text to quote.
+	Content string `json:"content"`
+}
+
+// chatReplyQuoteMaxChars is how much of a quoted message a quote line carries,
+// in runes. It is the length the PRODUCT ships: the browser no longer cuts
+// anything of its own (ChatArea's QUOTE_EXCERPT_CHARS is deleted) and the one
+// line the reader sees is whatever this produces.
+//
+// 🔴 THIS NUMBER HAS A SECOND, BEHAVIOUR-DEFINING COPY, AND IT IS NOT DEAD.
+// An earlier version of this comment said "THE ONLY DEFINITION OF THAT LENGTH
+// ANYWHERE", which was false on the day it was written: frontend/src/api/mock.ts
+// holds MOCK_REPLY_QUOTE_MAX_CHARS for the offline preview, which has no server
+// to ask. Whoever changes this constant MUST change that one too, or offline
+// preview silently cuts at a different point from the live product — the exact
+// thing the mock exists to prevent.
+//
+// That is not left to this comment. frontend/src/api/mock.reply-to.test.ts reads
+// THIS LINE out of this file and fails if the two numbers differ, the way
+// errorCodes.test.ts pins the frontend to the shared error-code table. Keep the
+// `chatReplyQuoteMaxChars = <n>` spelling on one line; that guard matches it.
+//
+// 60 is the number the deleted browser copy already used, kept so the rendered
+// quote line does not change size under the owner as this ships.
+const chatReplyQuoteMaxChars = 60
+
+// chatReplyQuoteContent renders a quoted body as ONE quote line: runs of
+// whitespace (newlines included) collapse to single spaces, and the result is
+// cut to chatReplyQuoteMaxChars runes with an ellipsis standing in for what was
+// taken. A quote is a POINTER to a message, not a rendering of it — a
+// multi-line excerpt would push the reader's layout around for no gain.
+//
+// Cut by RUNES, never by bytes: a byte cut lands mid-codepoint on the very
+// content this studio is mostly written in.
+func chatReplyQuoteContent(body string) string {
+	oneLine := strings.Join(strings.Fields(body), " ")
+	r := []rune(oneLine)
+	if len(r) <= chatReplyQuoteMaxChars {
+		return oneLine
+	}
+	return string(r[:chatReplyQuoteMaxChars]) + "…"
+}
+
+// newChatReplyQuoteDTO projects the quoted MESSAGE into the quote line's view.
+//
+// names is nil on every read that does not resolve display names (the ordinary
+// listing, the by-ids read, the POST echo) and FromName/ToName are then "" —
+// the SAME answer chatMessageDTO's own name fields give on those reads,
+// deliberately, so the quote and the message it hangs under never disagree
+// about whether this payload carries names. Only the wake snapshot passes a
+// map, and there the owner's special case rides along with it.
+//
+// Both ADDRESSES are unconditional, exactly as on chatMessageDTO: the two names
+// are the optional half, never the ids.
+func newChatReplyQuoteDTO(m ChatMessage, names map[string]string) *chatReplyQuoteDTO {
+	fromName, toName := "", ""
+	if names != nil {
+		fromName = resumeDisplayName(m.Sender, names)
+		toName = resumeDisplayName(m.Recipient, names)
+	}
+	return &chatReplyQuoteDTO{
+		ID:       m.ID,
+		From:     m.Sender,
+		FromName: fromName,
+		To:       m.Recipient,
+		ToName:   toName,
+		Content:  chatReplyQuoteContent(m.Body),
+	}
 }
 
 type chatGalleryEntryDTO struct {
@@ -461,6 +661,40 @@ type monitoringSessionDTO struct {
 	Cost            *float64       `json:"cost"`
 	BankedCost      *float64       `json:"banked_cost"`
 	Tokens          map[string]any `json:"tokens"`
+}
+
+// costResetDTO is the receipt of POST /api/members/{member_id}/cost/reset:
+// WHAT WAS DESTROYED, read immediately before the write.
+//
+// 🔴 It carries the PRE-reset figures on purpose. Spend lives in exactly two
+// accumulators and there is no per-charge ledger behind them, so once they are
+// cleared the discarded amount is not recoverable from any other record — this
+// response is the last moment it exists. A receipt of the post-reset state
+// would say nothing at all about an irreversible operation.
+//
+// It is a receipt, NOT an undo: nothing is retained and no route puts the
+// figure back (owner ruling rc-7dea0deefa63, option 0「最小、不可逆」).
+//
+// The two fields mirror monitoringSessionDTO field-for-field, null semantics
+// included: null means there was nothing to clear on that half, not that zero
+// was cleared. A client therefore reuses ONE summing rule rather than growing a
+// second one.
+type costResetDTO struct {
+	MemberID          string   `json:"member_id"`
+	ClearedCost       *float64 `json:"cleared_cost"`
+	ClearedBankedCost *float64 `json:"cleared_banked_cost"`
+}
+
+// accountCostResetDTO is the receipt of POST /api/accounts/cost/reset: the
+// ACCOUNT's own accumulated spend as it stood immediately before the write
+// (owner ruling rc-5c5d7c7c6dcd 「分開：帳號卡自己一份數字，清它不動成員」).
+//
+// Nothing about any member appears here because nothing about any member
+// changed. Null means there was nothing to clear — not that zero was cleared —
+// mirroring costResetDTO and the read side so a client keeps one rule.
+type accountCostResetDTO struct {
+	Account     string   `json:"account"`
+	ClearedCost *float64 `json:"cleared_cost"`
 }
 
 type monitoringMachineDTO struct {
@@ -613,7 +847,7 @@ type globalContextDTO struct {
 }
 
 // bootDocDTO is ONE editable boot-context block on the wire (T-791e): the
-// 系統互動 block, or one runtime's 啟動程序 block.
+// 系統互動 block, or one runtime's 啟動步驟 block.
 //
 // The four judgement fields are the pair the capped documents already carry
 // (SizeChars/CapChars — the settings surface holding the cap is admin-only, so
@@ -630,15 +864,39 @@ type globalContextDTO struct {
 // not staged answers false, and a cockpit that offered 還原 anyway would hand the
 // owner a button that 404s at the one moment it matters.
 type bootDocDTO struct {
-	SizeChars     int    `json:"size_chars"`
-	CapChars      int    `json:"cap_chars"`
-	Kind          string `json:"kind"`
-	Key           string `json:"key"`
-	Text          string `json:"text"`
+	SizeChars int    `json:"size_chars"`
+	CapChars  int    `json:"cap_chars"`
+	Kind      string `json:"kind"`
+	Key       string `json:"key"`
+	// Text is the WHOLE stored document, marker line and all. It is what the
+	// version history retains and diffs against, and what SizeChars counts.
+	Text string `json:"text"`
+	// ReadOnlyHead / Body are the two halves, named on the READ face only
+	// (owner's ruling 2026-08-23: 「讀取有這個 key，回寫沒有這個 key」).
+	//
+	// 🔴 Body IS THE WRITE FACE'S FIELD, BYTE FOR BYTE. BootDocumentReplaceDTO
+	// takes exactly this value back, so a caller edits what it was handed and
+	// sends it — it never has to know that a marker exists, what separates the
+	// halves, or how they are joined. ReadOnlyHead is the half it may look at
+	// and can no longer send: "" on a document that carries none.
+	//
+	// Not omitempty. An empty head is the honest answer for a document with no
+	// read-only half, and a reader that could not tell that apart from "this
+	// build is too old to say" would have to guess which.
+	ReadOnlyHead  string `json:"read_only_head"`
+	Body          string `json:"body"`
 	OwnerID       string `json:"owner_id"`
 	SchemaVersion int    `json:"schema_version"`
 	IsDefault     bool   `json:"is_default"`
 	HasSeed       bool   `json:"has_seed"`
+	// ReadOnly is what a cockpit needs BEFORE it renders an editor: this
+	// document is shown so the owner can read what an agent is sent, and every
+	// write face refuses it. Without it the only way to learn that is to type
+	// an edit and be told 405 on save, which is where the effort has already
+	// been spent. Not omitempty — false is the answer for every editable
+	// document, and a reader that cannot tell "editable" from "this build is
+	// too old to know" would offer the editor either way.
+	ReadOnly bool `json:"read_only"`
 }
 
 type roleDefDTO struct {
@@ -717,9 +975,19 @@ type docSizeDTO struct {
 // roleDocSizesDTO is one role's three capped documents, sizes only. Measured on
 // the FOLDED doc (overlay ⊕ seed) — the same text the per-document GETs report,
 // because the sizes come from the very same fold* helpers those handlers use.
-// Lessons is the DEFAULT bucket only: the write side does not constrain the
-// task_type, so lessons under another bucket name spend the same cap and are
-// not on this wire (see api_doc_sizes.go).
+// Lessons is one row per role, whole: T-2 removed the task_type axis, so there
+// is no longer a second BUCKET a write could spend the same cap under while
+// staying off this wire.
+//
+// 🔴 THAT IS NOT THE SAME AS "everything capped is on this wire", and the
+// distinction is worth a line because an earlier draft of peek_doc_sizes' tool
+// description collapsed the two into a promise a single call falsifies. This
+// DTO is keyed by ROLE: the handler walks listRoleKeys(). The lessons write
+// face never compares role_key against that roster (see replace_lessons, whose
+// own description says so), so an admin or the owner can create a lessons
+// document under a name no role carries — it spends the same cap and has no
+// role to hang off, so it never appears here. Measured in
+// TestPeekDocSizesDescriptionDoesNotPromiseCoverageItCannotGive.
 type roleDocSizesDTO struct {
 	RoleKey string     `json:"role_key"`
 	Duty    docSizeDTO `json:"duty"`
@@ -759,7 +1027,6 @@ type lessonsDTO struct {
 	SizeChars     int    `json:"size_chars"`
 	CapChars      int    `json:"cap_chars"`
 	RoleKey       string `json:"role_key"`
-	TaskType      string `json:"task_type"`
 	Text          string `json:"text"`
 	OwnerID       string `json:"owner_id"`
 	SchemaVersion int    `json:"schema_version"`
@@ -778,8 +1045,7 @@ type lessonsDTO struct {
 // insightDTO is the per-role INSIGHT doc on the wire (T-3809) — the third block
 // of the role journal, beside Duty (role_def) and Learning (lessons).
 //
-// Deliberately NOT lessonsDTO minus a field: there is no task_type (that axis
-// belongs to lessons alone), and the seed — added by T-e1e3 — is PER-ROLE
+// Deliberately NOT lessonsDTO minus a field: the seed — added by T-e1e3 — is PER-ROLE
 // (`seeds/insight_<roleKey>.md`), never lessons' one-shared-file.
 //
 // IsDefault means "this role has never written its own insight". 🔴 It no
@@ -825,7 +1091,7 @@ type insightDTO struct {
 }
 
 // insightPatchResultDTO is the patch_insight receipt — the insight twin of
-// lessonsPatchResultDTO, minus task_type. SizeChars is CHARACTERS (runes), the
+// lessonsPatchResultDTO. SizeChars is CHARACTERS (runes), the
 // cap's unit, per the owner's 2026-07-31 ruling that a size field must carry
 // its unit in its name.
 type insightPatchResultDTO struct {
@@ -841,7 +1107,6 @@ type insightPatchResultDTO struct {
 
 type lessonsPatchResultDTO struct {
 	RoleKey       string `json:"role_key"`
-	TaskType      string `json:"task_type"`
 	AppliedEdits  int    `json:"applied_edits"`
 	SizeChars     int    `json:"size_chars"`
 	CapChars      int    `json:"cap_chars"`
@@ -902,20 +1167,25 @@ type taskStepNotePatchResultDTO struct {
 }
 
 type replyCardAnswerDTO struct {
-	OptionIdx   *int                `json:"option_idx"` // null = free text only
+	// OptionIdxs: the circled options' indices, deduped + ascending; null when
+	// the answer was free text / attachments only.
+	OptionIdxs  []int               `json:"option_idxs"`
 	Text        string              `json:"text"`
 	Attachments []chatAttachmentDTO `json:"attachments"`
 }
 
 type replyCardDTO struct {
-	ID        string   `json:"id"`
-	From      string   `json:"from"`
-	Kind      string   `json:"kind"`
-	Summary   string   `json:"summary"`
-	Body      string   `json:"body"`
-	Options   []string `json:"options"`
-	Status    string   `json:"status"`
-	CreatedTS float64  `json:"created_ts"`
+	ID      string            `json:"id"`
+	From    string            `json:"from"`
+	Kind    string            `json:"kind"`
+	Summary string            `json:"summary"`
+	Body    string            `json:"body"`
+	Options []ReplyCardOption `json:"options"`
+	// SelectMode: "single" | "multi" — how many of the options the owner may
+	// circle. A separate axis from Kind (which says what the owner must DO).
+	SelectMode string  `json:"select_mode"`
+	Status     string  `json:"status"`
+	CreatedTS  float64 `json:"created_ts"`
 	// Attachments are the QUESTION-side attachments the initiator opened the
 	// card with (T-5e8a) — served refs incl. download url, always an array
 	// ([] when none), the same projection the answer side rides.
@@ -946,13 +1216,15 @@ type replyCardListItemDTO struct {
 }
 
 // replyCardAnswerBriefDTO is the decision digest on a light answered list row:
-// the picked option's index + ORIGINAL wording, the answer text truncated to a
-// preview, and the attachment COUNT (refs ride get_reply_card only).
+// EVERY circled option's index + ORIGINAL wording, the answer text truncated to
+// a preview, and the attachment COUNT (refs ride get_reply_card only).
 type replyCardAnswerBriefDTO struct {
-	OptionIdx   *int   `json:"option_idx"` // null = free text only
-	Option      string `json:"option"`     // the picked option's original wording
-	Text        string `json:"text"`       // preview-truncated
-	Attachments int    `json:"attachments"`
+	OptionIdxs []int `json:"option_idxs"` // null = free text only
+	// Options: the circled options' original wording, one entry per OptionIdxs
+	// entry, same order.
+	Options     []string `json:"options"`
+	Text        string   `json:"text"` // preview-truncated
+	Attachments int      `json:"attachments"`
 }
 
 type replyCardCountDTO struct {
@@ -962,6 +1234,25 @@ type replyCardCountDTO struct {
 	// 近期已處理 header (and hide the pane at zero) without fetching the lists.
 	Answered int `json:"answered"`
 	Expired  int `json:"expired"`
+}
+
+// chatListDTO is the envelope EVERY path of GET /api/chat answers (T-48).
+//
+// It replaced a bare []chatMessageDTO. The array had nowhere to say "there is
+// more in this direction": a caller could only infer exhaustion from a page
+// shorter than `limit`, and a page is short for reasons that have nothing to do
+// with exhaustion — a participant filter, `caller_only`, an unread set spread
+// across senders. The inference was wrong exactly when it mattered, and wrong
+// silently.
+//
+// NextCursor is OPAQUE (see encodeChatCursor) and omitted when the walk has
+// ended — `omitempty`, so "no more" is the ABSENCE of the field rather than a
+// value a client has to remember to compare against. Messages is never null:
+// an empty page is `[]`, because a client that has to handle both null and []
+// for the same fact will eventually handle only one.
+type chatListDTO struct {
+	Messages   []chatMessageDTO `json:"messages"`
+	NextCursor string           `json:"next_cursor,omitempty"`
 }
 
 type chatUnreadCountDTO struct {
@@ -994,13 +1285,7 @@ type resumeSummaryDTO struct {
 	Roster             []resumeRosterMemberDTO `json:"roster"`
 	Machines           *resumeMachinesDTO      `json:"machines"`
 	Overview           resumeOverviewDTO       `json:"overview"`
-	// DocCapacity lists the long-lived documents in the caller's reach that are
-	// CLOSE to their character cap (T-6bd2), each with the two numbers and what
-	// THIS reader can do about it. `omitempty` is the whole point of the field:
-	// nothing near its cap → the key is absent, so the block never becomes
-	// something an agent learns to skip past on every wake. See doc_capacity.go.
-	DocCapacity []docCapacityRow `json:"doc_capacity,omitempty"`
-	Note        string           `json:"note"`
+	Note               string                  `json:"note"`
 }
 
 // resumeRosterMemberDTO is one entry of the studio floor a waking agent lands
@@ -1114,24 +1399,19 @@ type resumeOverviewDTO struct {
 	// carries (T-f278) — the peek's whole point: an agent that has not pulled
 	// resume_summary yet still learns from the size-only payload that N of its
 	// steps are sitting on an answer nobody has picked up.
-	// StepsOnAnsweredCardChars sizes the text those rows carry, and it is a
-	// FIFTH addend of estimated_total_chars — it counts text the snapshot DOES
+	// StepsOnAnsweredCardChars sizes the text those rows carry, and it is the
+	// LAST addend of estimated_total_chars — it counts text the snapshot DOES
 	// carry, like roster_chars, not text it omits like tasks_detail_chars.
+	//
+	// 🔴 THE SAME OMISSION HAS HAD TO BE FIXED TWICE. T-1b09 added
+	// roster/machines after the peek understated the payload by the whole studio
+	// floor; T-f278 added the answered-card pointers and said in this very file
+	// that it was "the same mistake". The rule the two share is one line long
+	// and is the only test worth writing: if the payload CARRIES the text, it is
+	// an addend; if the caller would have to go and FETCH it
+	// (tasks_detail_chars), it is not.
 	StepsOnAnsweredCard      int `json:"steps_on_answered_card"`
 	StepsOnAnsweredCardChars int `json:"steps_on_answered_card_chars"`
-	// DocCapacityChars sizes the doc_capacity block (T-6bd2) and is the SIXTH
-	// addend of estimated_total_chars.
-	//
-	// 🔴 THIS IS THE THIRD TIME THE SAME OMISSION HAS HAD TO BE FIXED. T-1b09
-	// added roster/machines after the peek understated the payload by the whole
-	// studio floor; T-f278 added the answered-card pointers and said in this
-	// very file that it was "the same mistake"; T-6bd2 then shipped a block the
-	// payload CARRIES and did not count it — measured, the peek reported 872
-	// while that block was 1350 bytes on the wire. The rule the three share is
-	// one line long and is the only test worth writing: if the payload CARRIES
-	// the text, it is an addend; if the caller would have to go and FETCH it
-	// (tasks_detail_chars), it is not.
-	DocCapacityChars int `json:"doc_capacity_chars"`
 }
 
 // resumeSummarySizeDTO is the size-only PEEK of the wake snapshot (T-7974
@@ -1167,6 +1447,27 @@ type resumeTaskDTO struct {
 	ProgressTotal   int     `json:"progress_total"`
 	DetailChars     int     `json:"detail_chars"` // runes of the omitted plan text
 	UpdatedTS       float64 `json:"updated_ts"`
+	// Lock / ReassignedFrom / ReassignedFromKind carry the HANDOVER HOLD onto
+	// the wake snapshot (T-91). The full taskDTO and the light list row have
+	// carried all three for a while; this projection was the one that did not,
+	// which is exactly the projection an agent reads at 開機盤點 — so a task
+	// under the `reassigning` lock looked like any other open task, and the only
+	// thing that said otherwise was a chat notice that is posted ONCE and, for
+	// an outsource successor, is not posted at all (there is no worker id to
+	// address until the scheduler mints one).
+	//
+	// 🔴 THE POINT IS THAT THE TICKET, NOT THE MESSAGE, IS THE PATH. The notice
+	// still goes out; it is now a reminder rather than the only way to find out.
+	// A member who was offline when the handover happened, and a worker minted
+	// after it, both land on this row.
+	Lock               string `json:"lock"`
+	ReassignedFrom     string `json:"reassigned_from"`
+	ReassignedFromKind string `json:"reassigned_from_kind"`
+	// Blocking is the ids of the non-terminal tasks waiting on THIS one (T-91)
+	// — the wake-snapshot half of taskDTO.Blocking, ids only. Always present.
+	// Ids and not rows because a task id IS its task_no (T-5291), so an id names
+	// the ticket without a join, and this snapshot is size-capped.
+	Blocking []string `json:"blocking"`
 	// AnsweredCardSteps names the steps of THIS task that sit on a reply card
 	// the owner has ALREADY answered while the step itself is still
 	// in_progress — the answer landed and nobody has acted on it yet (T-f278).
@@ -1204,12 +1505,25 @@ type taskStepStatusReceiptDTO struct {
 // taskArtifactReceiptDTO is the bounded confirmation returned after pinning or
 // un-pinning ONE deliverable (T-a98d). Same posture as taskStepStatusReceiptDTO:
 // the write answers with what the write did — the artifact it touched and the
-// resulting set size — not with the whole task. Full task detail, artifact list
-// included, remains available through get_task.
+// resulting set size — not with the whole task. Full task detail remains
+// available through get_task, and the artifact SET through list_task_artifacts
+// — since T-66 get_task carries only an id+label index of the artifacts.
 type taskArtifactReceiptDTO struct {
 	TaskID        string `json:"task_id"`
 	ArtifactID    string `json:"artifact_id"`
 	ArtifactCount int    `json:"artifact_count"`
+}
+
+// taskArtifactReplaceReceiptDTO is the replace verb's receipt: the add/remove
+// receipt's three fields plus how many versions the artifact now has. A
+// separate type rather than an optional field on the shared one, because
+// version_count is only ever meaningful for the write that MAKES a version —
+// remove's answer names an artifact that no longer has any.
+type taskArtifactReplaceReceiptDTO struct {
+	TaskID        string `json:"task_id"`
+	ArtifactID    string `json:"artifact_id"`
+	ArtifactCount int    `json:"artifact_count"`
+	VersionCount  int    `json:"version_count"`
 }
 
 // taskPlanReceiptDTO is the bounded confirmation returned after submit_plan.
@@ -1269,11 +1583,10 @@ type taskStepNoteReceiptDTO struct {
 }
 
 type bootstrapDTO struct {
-	Role     string  `json:"role"`
-	Name     string  `json:"name"`
-	TaskType string  `json:"task_type"`
-	Context  string  `json:"context"`
-	Token    *string `json:"token"`
+	Role    string  `json:"role"`
+	Name    string  `json:"name"`
+	Context string  `json:"context"`
+	Token   *string `json:"token"`
 }
 
 // ── tasks (M3) ───────────────────────────────────────────────────────────────
@@ -1305,12 +1618,24 @@ type taskStepDTO struct {
 	// WaitingReason: non-empty only while the step is waiting_external (T-9ca5 —
 	// the task-level waiting_reason moved down to the step here).
 	WaitingReason string `json:"waiting_reason"`
-	// Note: the step's free-text working note — what this step got to and what
-	// comes next (T-cc3e). Bound to no status: writable in every one of them,
-	// unlike WaitingReason. This is the field the handover SOP has always meant
-	// by "把還在進行中的工作寫回 task step note"; before T-cc3e that instruction
-	// named nothing that existed. See TaskStepDTO in the spec.
-	Note string `json:"note"`
+	// 🔴 THERE IS NO `Note` FIELD HERE, AND ITS ABSENCE IS THE DELIVERABLE
+	// (T-66, owner card rc-4c8065fb30a5: 「整個拿掉，做在組裝票那一層（九個介面
+	// 一起瘦），座艙改成點開才抓」). The note text used to ride EVERY response
+	// built from this struct — get_task, terminate, reassign, claim, duplicate,
+	// deps, the create dedupe hit, description, title — nine exits carrying a
+	// 4,000-rune-capped free-text field per step for callers that wanted one of
+	// them or none.
+	//
+	// It was removed from the SCHEMA rather than left declared-and-empty on
+	// purpose. A field that is present on the wire and always blank is a silent
+	// lie: every existing reader keeps compiling and starts reading "" as "this
+	// step has no note". Deleting it makes the cockpit's TypeScript fail to
+	// build, which is the loud failure the owner asked for. Do not reinstate it
+	// "for compatibility" — that IS the failure mode this removal exists to
+	// prevent. The text is served by taskStepDetailDTO (GET
+	// /api/tasks/{task_id}/steps/{step_id}, MCP get_task_step), one step at a
+	// time.
+	//
 	// NoteSizeChars / NoteCapChars are the note's two numbers, the same pair
 	// every other capped document on this station reports on its own read
 	// (T-6bd2). Until this ticket the step note was the ONE capped document
@@ -1332,6 +1657,65 @@ type taskStepDTO struct {
 	FinishedTS    float64 `json:"finished_ts"`
 }
 
+// taskStepDetailDTO is ONE step served IN FULL (T-66) — the other half of the
+// split taskStepDTO's missing Note opens. It is deliberately a SEPARATE type
+// rather than taskStepDTO plus a field, because the two are answers to two
+// different questions and one struct with a sometimes-filled Note is exactly
+// the shape that makes "" ambiguous again.
+//
+// It carries NO task fields and NO sibling steps. A caller that wanted one
+// note and got the ticket is what this ticket is about; answering with the
+// task's other 30 fields "while we are here" reinstates the cost on a smaller
+// scale.
+//
+// DetailLevel is the self-description AC: a reader tells this response apart
+// from taskDTO's steps by what the payload SAYS, not by inspecting which fields
+// happen to be present.
+type taskStepDetailDTO struct {
+	DetailLevel     string  `json:"detail_level"`
+	ID              string  `json:"id"`
+	TaskID          string  `json:"task_id"`
+	OrderIdx        int     `json:"order_idx"`
+	Name            string  `json:"name"`
+	DoD             string  `json:"dod"`
+	Status          string  `json:"status"`
+	ParallelGroup   string  `json:"parallel_group"`
+	IsGate          bool    `json:"is_gate"`
+	ReplyCardID     string  `json:"reply_card_id"`
+	ReplyCardStatus string  `json:"reply_card_status"`
+	WaitingReason   string  `json:"waiting_reason"`
+	Note            string  `json:"note"`
+	NoteSizeChars   int     `json:"note_size_chars"`
+	NoteCapChars    int     `json:"note_cap_chars"`
+	StartedTS       float64 `json:"started_ts"`
+	FinishedTS      float64 `json:"finished_ts"`
+}
+
+// taskDetailLevelSummary / taskDetailLevelFull are the two values of the
+// self-description pair. They are constants rather than literals at the two
+// build sites so the pairing cannot drift into three spellings.
+const (
+	taskDetailLevelSummary = "summary"
+	taskDetailLevelFull    = "full"
+)
+
+// taskArtifactsDetailLevelIndex / ...Full are the two values of the ARTIFACT
+// half of the self-description (T-66, owner c-cd063427fb2f:「我覺得任務產物，只
+// 需要預設給標題跟ID, 有需要再透過另一隻去拿就好了」). Same reason the pair above
+// are constants: the two build sites (the shared task projection and
+// list_task_artifacts) must not drift into three spellings.
+//
+// 🔴 THE VALUE IS A NAME, NOT A BOOLEAN, and that is deliberate. A flag like
+// `artifacts_included: false` would be a permanently-false marker, and this
+// repo's hard lesson is that a guard which never fires reads exactly like a
+// green one. "index" is a positive statement that is TRUE of every payload that
+// carries it — this response's artifact rows are an INDEX (id + label) — and its
+// counterpart "full" is likewise true of every payload that carries THAT one.
+const (
+	taskArtifactsDetailLevelIndex = "index"
+	taskArtifactsDetailLevelFull  = "full"
+)
+
 // taskArtifactDTO is one pinned deliverable on a task's artifact set (T-3dc5).
 // For a link: URL is the external url, AttachmentID/Mime/Filename empty,
 // IsImage false. For file/image: URL is the blob serve path, AttachmentID/
@@ -1348,6 +1732,93 @@ type taskArtifactDTO struct {
 	AttachmentID string  `json:"attachment_id"`
 	CreatedTS    float64 `json:"created_ts"`
 	CreatedBy    string  `json:"created_by"`
+	// VersionCount counts the versions of this deliverable WITH the live one
+	// (T-60), so a never-replaced artifact reads 1 rather than 0 — the reader
+	// asks "how many versions are there", and there is always this one.
+	VersionCount int `json:"version_count"`
+}
+
+// taskArtifactVersionDTO is one RETAINED previous version of an artifact. It
+// carries the version whole rather than a size summary the way
+// DocumentHistoryDTO does: an artifact version is a pointer plus a label, so
+// there is no prose a listing would have to hold back.
+type taskArtifactVersionDTO struct {
+	ID           int64   `json:"id"`
+	Kind         string  `json:"kind"`
+	URL          string  `json:"url"`
+	Label        string  `json:"label"`
+	Filename     string  `json:"filename"`
+	Mime         string  `json:"mime"`
+	IsImage      bool    `json:"is_image"`
+	AttachmentID string  `json:"attachment_id"`
+	CreatedTS    float64 `json:"created_ts"`
+	CreatedBy    string  `json:"created_by"`
+}
+
+// newTaskArtifactVersionDTO projects one retained version onto the wire. att is
+// the resolved chat_attachment for a file/image version (nil for a link, or
+// when the blob is gone) — its url/mime/filename/is_image ride along through
+// artifactBlobFacts, the SAME resolution the live projection does, honest-empty
+// when absent and never fabricated.
+//
+// 🔴 The url has to be rewritten here, not copied. `task_artifact.url` is the
+// external link for a link kind and the EMPTY STRING for a file/image, so a
+// version that carried the row's url handed the cockpit nothing to fetch and
+// every file version read as gone.
+//
+// 🔴 The filename is here because a reader deciding whether a version's bytes
+// are TEXT asks the name when the mime cannot say, and `application/octet-stream`
+// is what the agent upload path says about the .md reports this journal mostly
+// holds. Without it a version whose label is empty has no name at all, and that
+// deliverable class could never reach the diff.
+func newTaskArtifactVersionDTO(h TaskArtifactHistory, att *ChatAttachment) taskArtifactVersionDTO {
+	dto := taskArtifactVersionDTO{
+		ID:           h.ID,
+		Kind:         h.Kind,
+		URL:          h.URL,
+		Label:        h.Label,
+		AttachmentID: h.AttachmentID,
+		CreatedTS:    h.CreatedTS,
+		CreatedBy:    h.CreatedBy,
+	}
+	if b, ok := artifactBlobFacts(att); ok && h.Kind != ArtifactKindLink {
+		dto.URL, dto.Mime, dto.Filename, dto.IsImage = b.url, b.mime, b.filename, b.isImage
+	}
+	return dto
+}
+
+// taskArtifactRefDTO is ONE artifact reduced to the two things a caller needs
+// in order to decide whether it wants the artifact at all: WHICH one it is (ID
+// — the handle every other artifact call takes) and WHAT it is called (Label).
+// It is what the shared task projection serves; the full row above is served
+// by GET /api/tasks/{task_id}/artifacts (MCP list_task_artifacts).
+//
+// 🔴 WHY THE SPLIT IS BY TASK AND NOT BY ARTIFACT. The obvious symmetry with
+// get_task_step would be a get_task_artifact taking one id. The owner ruled
+// against it (c-f2d0fecb1168:「應該是指名任務？」): the cockpit's artifact panel
+// opens onto the WHOLE set at once, so a per-artifact door would cost one call
+// per row — 32 calls for a 32-artifact ticket — whereas a step note is read one
+// at a time, which is why THAT split is per-step and this one is per-task.
+//
+// Label is honest-empty when the artifact was pinned without one; it is NOT
+// backfilled from the filename or the url here, because those live on the full
+// row and inventing a display name in the index would make the index look like
+// it carried more than it does. Deciding what to SHOW for a nameless artifact
+// is the renderer's job, on the full row it fetched.
+type taskArtifactRefDTO struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
+// taskArtifactListDTO is the answer of GET /api/tasks/{task_id}/artifacts: one
+// task's artifact set IN FULL, oldest→newest. It is a wrapped list rather than
+// a bare array so the response can say what it is — ArtifactsDetailLevel here
+// is "full", the counterpart of the "index" the task projection declares, the
+// same way taskStepDetailDTO answers "full" against taskDTO's "summary".
+type taskArtifactListDTO struct {
+	TaskID               string            `json:"task_id"`
+	ArtifactsDetailLevel string            `json:"artifacts_detail_level"`
+	Artifacts            []taskArtifactDTO `json:"artifacts"`
 }
 
 type taskDTO struct {
@@ -1378,15 +1849,56 @@ type taskDTO struct {
 	ClosedTS           *float64      `json:"closed_ts"` // null while open
 	Deps               []string      `json:"deps"`
 	Steps              []taskStepDTO `json:"steps"`
-	ProgressDone       int           `json:"progress_done"`
-	ProgressTotal      int           `json:"progress_total"`
+	// DetailLevel / NotesIncluded are the response DESCRIBING ITSELF (T-66).
+	// The AC is verbatim「成功的回應不得看起來像完整的 task」: a caller must be
+	// able to tell FROM THE PAYLOAD that something was left out, without
+	// knowing which fields a full task used to carry.
+	//
+	// Always "summary" / false — constants on THIS type, not a mode switch.
+	// There is no ?detail=full and there is not meant to be one: the counterpart
+	// read is get_task_step, whose taskStepDetailDTO answers "full".
+	//
+	// 🔴 THERE IS NO third "the step LIST may be cut" marker, and that is an
+	// executor judgement backed by evidence, not an oversight. resume_summary
+	// carries exactly such a pair (resumeChatCutDTO{Omitted, Hint}) because its
+	// chat block IS budget-packed, so the marker has a trigger. This face has
+	// none: taskDTOOf's steps come from DAL.ListTaskSteps — one unbounded
+	// `SELECT ... WHERE task_id = ? ORDER BY order_idx, id`, no LIMIT, no
+	// cursor, no caller-supplied cap — and newTaskDTO appends every row it is
+	// handed. A marker here would be a guard that can never fire, and a guard
+	// that can never fire reads exactly like a green one. The completeness is
+	// stated in the tool description instead, where a caller can act on it.
+	DetailLevel   string `json:"detail_level"`
+	NotesIncluded bool   `json:"notes_included"`
+	// ArtifactsDetailLevel is the ARTIFACT half of the same self-description
+	// (T-66, owner c-cd063427fb2f). Always "index" on this type: the Artifacts
+	// rows below carry id + label and nothing else, and
+	// GET /api/tasks/{task_id}/artifacts (list_task_artifacts) answers "full".
+	//
+	// It is a NAME rather than an `artifacts_included: false` flag on purpose —
+	// see taskArtifactsDetailLevelIndex. And it is a separate field from
+	// DetailLevel rather than folded into it because the two abridgements are
+	// undone by two DIFFERENT calls: a caller reading "summary" is told to go to
+	// get_task_step, a caller reading "index" is told to go to
+	// list_task_artifacts, and one string cannot name both destinations.
+	ArtifactsDetailLevel string `json:"artifacts_detail_level"`
+	ProgressDone         int    `json:"progress_done"`
+	ProgressTotal        int    `json:"progress_total"`
 	// CloseoutReported flips true once the executor reports the close-out
 	// follow-ups done (report_task_closeout; §6.3 — terminal tasks only).
 	CloseoutReported bool `json:"closeout_reported"`
 	// Artifacts is the task's curated deliverable set (T-3dc5), oldest→newest;
 	// always present ([] when none). Optional in the spec (§12) but always
-	// serialised — the FE popover reads it, the light list reads only the count.
-	Artifacts []taskArtifactDTO `json:"artifacts"`
+	// serialised — the light list reads only the count.
+	//
+	// 🔴 SINCE T-66 THESE ARE INDEX ROWS (id + label), not the full artifact.
+	// Owner c-cd063427fb2f:「我覺得任務產物，只需要預設給標題跟ID, 有需要再透過
+	// 另一隻去拿就好了」. url / filename / mime / kind / is_image / attachment_id
+	// / created_by / created_ts are served by list_task_artifacts, one call per
+	// TASK (owner c-f2d0fecb1168) — never per artifact. ArtifactsDetailLevel
+	// above says so in the payload, so a caller does not have to know which
+	// fields a full row used to carry in order to notice the difference.
+	Artifacts []taskArtifactRefDTO `json:"artifacts"`
 	// Handoff / HandoffNote / HandoffTaskID: the DECLARED destination of the
 	// ball at close (T-74f8). "" = never declared (every task whose creator IS
 	// its executor, and every pre-column row); otherwise return_to_creator |
@@ -1395,6 +1907,22 @@ type taskDTO struct {
 	Handoff       string `json:"handoff"`
 	HandoffNote   string `json:"handoff_note"`
 	HandoffTaskID string `json:"handoff_task_id"`
+	// Blocking is the REVERSE of Deps (T-91): the NON-TERMINAL tasks that name
+	// THIS task in their own blocked_by. Always present ([] when nobody waits).
+	//
+	// 🔴 IT EXISTS BECAUSE THE BLOCKING SIDE HAD NO CHANNEL AT ALL. set_task_deps
+	// publishes the delta of the BLOCKED task only, so hanging a ticket off
+	// someone else's told that someone else nothing — not a message, not a
+	// field, not a badge. The owner ruled the fix is written ON THE TICKET and
+	// is NEVER a message (deliberately the opposite of the close notice), so
+	// this field and its wake-snapshot twin (resumeTaskDTO.Blocking) are the
+	// whole delivery: there is no notification to look for, and adding one
+	// would be reversing the ruling rather than completing it.
+	//
+	// Terminal waiters are dropped: a closed ticket is not waiting for anything,
+	// and a blocker's executor reading "3 tickets are waiting" wants the 3 that
+	// still are.
+	Blocking []taskDepRefDTO `json:"blocking"`
 	// FrozenBy names WHO put this task into the frozen priority (T-6020):
 	// "owner" for the owner's own click, else the member / outsource-worker id.
 	// "" whenever priority != frozen (and on pre-column rows). Served because
@@ -1434,7 +1962,7 @@ type taskListItemDTO struct {
 	Deps               []string `json:"deps"`
 	// DepTasks carries the DISPLAY facts of every id in Deps (T-a3e4), resolved
 	// against the whole task table by the ONE ListTasks read the handler already
-	// does — one entry per dep, same order. The card's 「等 T-xxxx <標題>」 row
+	// does — one entry per dep, same order. The card's 「等 <task id> <標題>」 row
 	// renders straight from this, so a dep that has already CLOSED no longer
 	// forces the client to download the closed population to name it. Never nil
 	// (an empty list is honest for a task with no deps); a dep whose task is
@@ -1442,6 +1970,18 @@ type taskListItemDTO struct {
 	DepTasks      []taskDepRefDTO `json:"dep_tasks"`
 	ProgressDone  int             `json:"progress_done"`
 	ProgressTotal int             `json:"progress_total"`
+	// CurrentStepID / CurrentStepName point at the step the task is ON right
+	// now — the FIRST non-terminal step in timeline order (domain.CurrentStep,
+	// the same rule the wake snapshot's resumeTaskDTO uses). Both are "" when
+	// the plan is empty or every step has finished; that empty is honest and
+	// must not be read as "the first step". The pair is an id and a name and
+	// nothing else about the step — where this belongs on the light list is
+	// still open (owner c-2823f0ff85b5:「我覺得這不屬於 list task 的範疇」;
+	// c-1648d14be429:「先不動這個 之後要調再說」), so nothing here or in the tool
+	// description recommends it as a route. The light list still carries no
+	// step ROWS (no dod text) — only these two display fields.
+	CurrentStepID   string `json:"current_step_id"`
+	CurrentStepName string `json:"current_step_name"`
 	// ArtifactCount is the number of pinned deliverables (T-3dc5) — the collapsed
 	// card's 「產物 N」 badge; 0 (the zero value) when none, so the badge hides.
 	// The light list never loads the artifact rows themselves (get_task folds
@@ -1450,8 +1990,9 @@ type taskListItemDTO struct {
 }
 
 // taskDepRefDTO is one entry of taskListItemDTO.DepTasks: a dep id resolved to
-// what the row actually prints (T-a3e4). TaskNo is the pure projection of the
-// id, so it is filled even when the dep's task row is GONE — Status/Title are
+// what the row actually prints (T-a3e4). TaskNo IS the id (T-5291 — no
+// transform at all), so it is filled even when the dep's task row is GONE
+// (naming the dep never required loading it) — Status/Title are
 // "" in exactly that case, which is the client's honest 查無此任務 row. Nothing
 // is ever defaulted to a plausible-looking status: the absence of one IS the
 // signal.
@@ -1708,6 +2249,18 @@ type outsourceWorkerDTO struct {
 	RefocusOp       string  `json:"refocus_op"`
 	RefocusDeadline float64 `json:"refocus_deadline"`
 	DesiredState    string  `json:"desired_state"`
+	// The three RESPONSE-ONLY pending signals an owner verb owes its caller
+	// (T-ed79 #5/#12) — the worker twins of the MemberDTO fields of the same
+	// names, and pointers-with-omitempty for the same reason: they are absent on
+	// every read face and on every verb that has nothing to defer, so a consumer
+	// can tell "this answer does not carry the signal" from "the signal is false".
+	//
+	// RelocationPending/RelocationDeferred appear only on the relocate response,
+	// ActivationPending only on the restart response. The panel-parity doc listed
+	// their absence as A9 「外包端根本沒有訊號可顯示」.
+	RelocationPending  *bool `json:"relocation_pending,omitempty"`
+	RelocationDeferred *bool `json:"relocation_deferred,omitempty"`
+	ActivationPending  *bool `json:"activation_pending,omitempty"`
 }
 
 // outsourceWorkerProjection carries the per-worker runtime facts the DTO folds
@@ -1735,10 +2288,6 @@ type outsourceWorkerProjection struct {
 	// observedWorkerHost). "" = nothing observed — the panel renders
 	// 「尚未分配」.
 	spawnTarget string
-	// spawnAt is the last start-dispatch timestamp (workerSpawnAt) — the wake
-	// anchor of the presence projection (waking while fresh). 0 = never
-	// dispatched this server run (the row's CreatedTS anchors instead).
-	spawnAt float64
 	// accountDisplay resolves the raw telemetry account key to its readable
 	// name (alias → owner-gated reported label → "") via the SHARED
 	// resolveAccountDisplay fold. "" ⇒ the DTO serves null → the panel's
@@ -1757,6 +2306,33 @@ type outsourceWorkerProjection struct {
 // (or an id absent from the map) serialises reply_card_status "".
 func newTaskStepDTO(st TaskStep, cardStatus map[string]string) taskStepDTO {
 	return taskStepDTO{
+		ID:              st.ID,
+		TaskID:          st.TaskID,
+		OrderIdx:        st.OrderIdx,
+		Name:            st.Name,
+		DoD:             st.DoD,
+		Status:          st.Status,
+		ParallelGroup:   st.ParallelGroup,
+		IsGate:          st.IsGate,
+		ReplyCardID:     st.ReplyCardID,
+		ReplyCardStatus: cardStatus[st.ReplyCardID],
+		WaitingReason:   st.WaitingReason,
+		// 🔴 st.Note is measured here and NOT carried (T-66). The size is the
+		// whole statement the summary row makes about the note: a caller reads
+		// note_size_chars and decides whether to spend a get_task_step.
+		NoteSizeChars: utf8.RuneCountInString(st.Note),
+		NoteCapChars:  chatBodyMaxChars,
+		StartedTS:     st.StartedTS,
+		FinishedTS:    st.FinishedTS,
+	}
+}
+
+// newTaskStepDetailDTO projects ONE step onto the single-step wire (T-66),
+// note text included. cardStatus is the same read-time join newTaskStepDTO
+// takes, so the two faces of a step can never disagree about a bound card.
+func newTaskStepDetailDTO(st TaskStep, cardStatus map[string]string) taskStepDetailDTO {
+	return taskStepDetailDTO{
+		DetailLevel:     taskDetailLevelFull,
 		ID:              st.ID,
 		TaskID:          st.TaskID,
 		OrderIdx:        st.OrderIdx,
@@ -1818,13 +2394,34 @@ func newTaskDTO(t Task, steps []TaskStep, deps []string, cardStatus map[string]s
 		UpdatedTS:          t.UpdatedTS,
 		Deps:               deps,
 		Steps:              stepDTOs,
-		ProgressDone:       done,
-		ProgressTotal:      total,
-		CloseoutReported:   t.CloseoutTS > 0,
+		// T-66: every exit built through here says what it is. Nine responses
+		// share this builder (get_task, terminate, reassign, claim, duplicate,
+		// deps, the create dedupe hit, description, title), so the declaration
+		// lands on all of them at once — which is the point of doing the
+		// slimming HERE rather than in each handler.
+		DetailLevel:   taskDetailLevelSummary,
+		NotesIncluded: false,
+		// T-66 / owner c-cd063427fb2f: the artifact rows are an INDEX on every
+		// one of those same nine responses. EXECUTOR JUDGEMENT, not an owner
+		// ruling: the owner said what the default payload should carry, not
+		// which layer should do the slimming. It is done HERE, on the shared
+		// builder, for the same reason the step note was — a per-handler
+		// projection is nine copies of one rule, and the copy nobody watches is
+		// the one that keeps serving the fat rows.
+		ArtifactsDetailLevel: taskArtifactsDetailLevelIndex,
+		ProgressDone:         done,
+		ProgressTotal:        total,
+		CloseoutReported:     t.CloseoutTS > 0,
 		// Artifacts default to [] — the handler (taskDTOOf) folds the resolved
 		// set in after this pure projection, since resolving file/image blob
 		// metadata needs a DAL lookup that does not belong in a pure builder.
-		Artifacts:     []taskArtifactDTO{},
+		Artifacts: []taskArtifactRefDTO{},
+		// Blocking defaults to [] for the same reason Artifacts does: resolving
+		// the reverse edge is a DAL read, and this builder is pure. taskDTOOf
+		// folds the real set in; a projection built without it (the create
+		// result) honestly says "nobody is waiting", which is true of a task
+		// that was born one line ago.
+		Blocking:      []taskDepRefDTO{},
 		Handoff:       t.Handoff,
 		HandoffNote:   t.HandoffNote,
 		HandoffTaskID: t.HandoffTaskID,
@@ -1842,8 +2439,12 @@ func newTaskDTO(t Task, steps []TaskStep, deps []string, cardStatus map[string]s
 // referenced blob is gone) — its mime/filename/is_image ride along honest-empty
 // when absent, never fabricated. A link's url is the row's own external url; a
 // file/image's url is the blob serve path (the chatAttachmentDTO convention).
-func newTaskArtifactDTO(a TaskArtifact, att *ChatAttachment) taskArtifactDTO {
+// versionCount is the retained-version count of THIS artifact plus the live
+// row (the caller counts the history rows; the +1 is here so no caller can
+// forget it).
+func newTaskArtifactDTO(a TaskArtifact, att *ChatAttachment, retained int) taskArtifactDTO {
 	dto := taskArtifactDTO{
+		VersionCount: retained + 1,
 		ID:           a.ID,
 		Kind:         a.Kind,
 		URL:          a.URL,
@@ -1852,31 +2453,85 @@ func newTaskArtifactDTO(a TaskArtifact, att *ChatAttachment) taskArtifactDTO {
 		CreatedTS:    a.CreatedTS,
 		CreatedBy:    a.CreatedBy,
 	}
-	if a.Kind != ArtifactKindLink && att != nil {
-		dto.URL = "/api/chat/attachment/" + att.ID
-		dto.Mime = att.Mime
-		if att.Filename != nil {
-			dto.Filename = *att.Filename
-		}
-		dto.IsImage = len(att.Mime) >= 6 && att.Mime[:6] == "image/"
+	if b, ok := artifactBlobFacts(att); ok && a.Kind != ArtifactKindLink {
+		dto.URL, dto.Mime, dto.Filename, dto.IsImage = b.url, b.mime, b.filename, b.isImage
 	}
 	return dto
 }
 
+// artifactBlobFields is the half of an artifact projection that comes from the
+// referenced blob rather than from the row.
+type artifactBlobFields struct {
+	url      string
+	mime     string
+	filename string
+	isImage  bool
+}
+
+// artifactBlobFacts resolves that half: the serve path, the mime, the blob's
+// own name and whether it is an image. ok is false for a link kind and for a
+// file/image whose blob is gone, and the caller then keeps the row's own values
+// — honest-empty, never fabricated.
+//
+// 🔴 IT IS SHARED BECAUSE THE TWO PROJECTIONS ARE ONE FACT. The live artifact
+// and a retained version of it are the same deliverable read at two moments; a
+// reader that can open one must be able to open the other. When the version
+// side had its own (shorter) answer it served the ROW's url, which for a
+// file/image is the empty string by construction — so every file version was
+// unreachable and unreadable on the real wire, while both sides' tests passed
+// against fixtures that carried a url of their own.
+// The artifact-kind test deliberately lives at each CALL SITE rather than in
+// here. The identity scanners (authz_surface_gate_test's mentionsIdentity and
+// lifecycle_identity_gate_t170e) recognise a `.Kind` SELECTOR inside a
+// comparison and are blind to a bare `kind` ident, so folding the predicate
+// into this helper deleted it from both ledgers with nothing going red — the
+// exact reshape this package's own gate header forbids. Visibility to the
+// scanners beats saving the repeated line.
+func artifactBlobFacts(att *ChatAttachment) (artifactBlobFields, bool) {
+	if att == nil {
+		return artifactBlobFields{}, false
+	}
+	b := artifactBlobFields{
+		url:     "/api/chat/attachment/" + att.ID,
+		mime:    att.Mime,
+		isImage: len(att.Mime) >= 6 && att.Mime[:6] == "image/",
+	}
+	if att.Filename != nil {
+		b.filename = *att.Filename
+	}
+	return b, true
+}
+
+// newTaskArtifactRefDTO projects one artifact row onto the INDEX wire (T-66):
+// the id and the label, and deliberately nothing that would need a second read.
+//
+// 🔴 IT TAKES NO ChatAttachment, and that is the point rather than an omission.
+// newTaskArtifactDTO above needs one lookup PER file/image artifact to resolve
+// mime/filename/is_image, so the shared task projection used to pay a
+// GetChatAttachment per pinned blob on all nine of its exits. The index needs
+// none of those fields, so the whole join leaves the task read; it is paid once,
+// on the artifacts call, by a caller that actually asked for the blob metadata.
+func newTaskArtifactRefDTO(a TaskArtifact) taskArtifactRefDTO {
+	return taskArtifactRefDTO{ID: a.ID, Label: a.Label}
+}
+
 // newTaskListItemDTO projects one task + its deps + pre-counted step progress
-// onto the LIGHT list wire (GET /api/tasks). done/total come from
-// dal.AllTaskStepProgress (a grouped COUNT) so the list never loads step rows;
+// + its pre-resolved current step onto the LIGHT list wire (GET /api/tasks).
+// done/total come from dal.AllTaskStepProgress (a grouped COUNT) and current
+// from dal.AllTaskCurrentStep (one grouped window query, id/name only), so the
+// list still never loads step rows;
 // closed_ts serialises null while open, exactly like newTaskDTO.
 //
 // byID is the caller's map of the WHOLE task population (the handler builds it
 // from the single ListTasks read it already does) — it resolves each dep into
-// the display facts the card's 「等 T-xxxx」 row needs. Pass nil ONLY where the
+// the display facts the card's 「等 <task id>」 row needs. Pass nil ONLY where the
 // population is genuinely not in hand; deps then serve as unresolvable entries,
 // which the client reads as 查無此任務. There is deliberately no per-dep lookup
 // here: this endpoint is the payload/latency hot path, so dep resolution must
 // cost zero extra queries (T-a3e4).
 func newTaskListItemDTO(
 	t Task, deps []string, done, total, artifactCount int, byID map[string]Task,
+	current TaskCurrentStep,
 ) taskListItemDTO {
 	if deps == nil {
 		deps = []string{}
@@ -1904,6 +2559,11 @@ func newTaskListItemDTO(
 		DepTasks:           newTaskDepRefDTOs(deps, byID),
 		ProgressDone:       done,
 		ProgressTotal:      total,
+		// current comes from dal.AllTaskCurrentStep (one grouped query for the
+		// whole population) — its zero value IS "no current step", which is the
+		// right answer for an empty or fully-finished plan.
+		CurrentStepID:   current.ID,
+		CurrentStepName: current.Name,
 	}
 	if t.ClosedTS > 0 {
 		ts := t.ClosedTS
@@ -1913,8 +2573,9 @@ func newTaskListItemDTO(
 }
 
 // newTaskDepRefDTOs resolves each dep id against an already-loaded task
-// population. Never nil. A dep missing from byID keeps its derived TaskNo and
-// leaves Title/Status "" — the client's 查無此任務 row; inventing a status here
+// population. Never nil. A dep missing from byID still carries its TaskNo (it
+// is the id, T-5291) and leaves Title/Status "" — the client's 查無此任務 row;
+// inventing a status here
 // would launder "this task is gone" into "this task has not started".
 func newTaskDepRefDTOs(deps []string, byID map[string]Task) []taskDepRefDTO {
 	out := make([]taskDepRefDTO, 0, len(deps))
@@ -2065,7 +2726,7 @@ func newOutsourceWorkerDTO(w OutsourceWorker, task *Task, p outsourceWorkerProje
 		TaskID:        w.TaskID,
 		CreatedTS:     w.CreatedTS,
 		UnreadCount:   p.unread,
-		Presence:      workerPresence(w, p.now, p.online, p.spawnAt),
+		Presence:      workerPresence(w, p.now, p.online),
 		// Machine = the worker's OBSERVED host (dispatch target, or the
 		// restart-proof fallback folded upstream in projectWorker — T-c23a)
 		// resolved to a display label; "" when nothing is observed — the panel
@@ -2127,39 +2788,46 @@ func newOutsourceWorkerDTO(w OutsourceWorker, task *Task, p outsourceWorkerProje
 	// outsource workers either — the cockpit maps 0 → null → renders nothing).
 	// Reading StoppingTimeoutSecs straight reported a ceiling for every op,
 	// including the one arm that is not on a clock.
-	dto.RefocusDeadline = refocusDeadlineOf(w.RefocusSince, p.cfg, w.RefocusOp)
+	//
+	// 🔴 winddownDeadlineOf, THE SAME FUNCTION MemberDTO READS (api_helpers.go),
+	// on the SAME projection workerPresence already goes through. It used to be
+	// refocusDeadlineOf(w.RefocusSince, …) — only the 換手 axis — so the 下線
+	// axis, whose clock anchors on stopping_since, reported 0 for an epoch the
+	// tick DOES collect: the stop arm of runOutsourceTick fires at
+	// StoppingSince+grace on recycleGraceFor + gracefulStopEpochOpen — which is
+	// what winddownDeadlineOf evaluates — plus that site's own StoppedSince<=0
+	// term, and a session already confirmed gone collects EARLIER still. Both
+	// only make the tick stricter than this ceiling, which is why a ceiling is
+	// the honest word for it. An owner pressing 加速停止 on
+	// a worker started a countdown that neither the cockpit nor the agent's own
+	// notice was told about; staff never had the gap because they always read
+	// the two-axis expression. Do NOT re-inline the 下線 arm here — one
+	// expression, two callers, is the whole point.
+	dto.RefocusDeadline = winddownDeadlineOf(memberFromWorker(w), p.cfg)
 	dto.DesiredState = w.DesiredState
 	return dto
 }
 
-// workerPresence projects a worker's liveness onto the ONE member presence
-// vocabulary (deriveLiveness — A案 P6; see the DTO field doc for the closed
-// set). PURE function of the row + wall clock + the caller-supplied SSE-presence
-// fact (online == hub.IsOnline(w.ID) — the SAME single online authority
-// PresenceState reads for members; a worker holds its SSE via `ocagent listen`,
-// so a died-after-claim session flips offline exactly like a member's would) +
-// the in-memory last-start-dispatch anchor (spawnAt; 0 = never dispatched this
-// server run, the row's birth anchors the wake window instead).
-func workerPresence(w OutsourceWorker, now float64, online bool, spawnAt float64) string {
+// workerPresence answers 「喚醒中／上線中／停止中…」 for an outsource worker by
+// calling PresenceState — the SAME function the staff roster calls, on the SAME
+// row (memberFromWorker is the projection, not a copy of the rules). T-14: this
+// used to assemble its own livenessInput from the in-memory spawn anchor, which
+// is how the two kinds came to answer 「喚醒中」 differently — a re-exec forgot
+// that map, so a long-lived worker mid-wake fell to 「離線」.
+//
+// What is left here is the ONE thing that is genuinely outsource-only and is not
+// a presence rule at all: a released worker is off-panel, so it has no presence
+// word rather than a wrong one. Everything below that line is the member's.
+//
+// PURE function of the row + wall clock + the caller-supplied SSE-presence fact
+// (online == hub.IsOnline(w.ID) — the SAME single online authority PresenceState
+// reads for members; a worker holds its SSE via `ocagent listen`, so a
+// died-after-claim session flips offline exactly like a member's would).
+func workerPresence(w OutsourceWorker, now float64, online bool) string {
 	if w.Status == WorkerStatusReleased {
 		return "" // released / off-panel — never a live row
 	}
-	anchor := spawnAt
-	if anchor <= 0 {
-		anchor = w.CreatedTS
-	}
-	return deriveLiveness(livenessInput{
-		Online: online,
-		// Owner-explicit stop intent dominates (desired_state mirrors member):
-		// stopping while the session winds down, stopped once it is gone —
-		// never a fake-green latch (T-f190 lifecycle).
-		StopIntent: w.DesiredState == DesiredStateOffline,
-		// A fresh wake in flight: the last start dispatch (or the just-minted
-		// row awaiting placement) within the member waking TTL. Stale ⇒ the
-		// wake failed ⇒ offline — the exact member posture; the FSM rescue
-		// (reconcileWorkerLiveness), not the projection, owns recovery.
-		WakePending: anchor > 0 && now-anchor <= WakingTTLSecs,
-	})
+	return PresenceState(memberFromWorker(w), now, online)
 }
 
 // ── builders ─────────────────────────────────────────────────────────────────
@@ -2207,7 +2875,22 @@ func newChatMessageDTO(m ChatMessage) chatMessageDTO {
 		TS:          m.TS,
 		Meta:        meta,
 		Attachments: attachments,
+		ReplyTo:     replyToFromMeta(meta),
 	}
+}
+
+// replyToFromMeta returns the id of the message this one replies to ("" when
+// it replies to nothing). It reads the same open meta map every other client
+// can write to, so it is a READ of a value only the POST handler is allowed to
+// put there: HandlePostChatApiChatPost deletes any caller-supplied reply_to
+// before validation and writes its own. Without that deletion this getter
+// would happily serve a forged link — the meta map is copied through wholesale.
+func replyToFromMeta(meta map[string]any) string {
+	if meta == nil {
+		return ""
+	}
+	id, _ := meta[chatReplyToMetaKey].(string)
+	return id
 }
 
 // replyCardIDFromMeta returns the reply_card_id a chat message carries in its
@@ -2225,7 +2908,11 @@ func replyCardIDFromMeta(meta map[string]any) string {
 func newReplyCardDTO(c ReplyCard) replyCardDTO {
 	options := c.Options
 	if options == nil {
-		options = []string{}
+		options = []ReplyCardOption{}
+	}
+	selectMode := c.SelectMode
+	if selectMode == "" {
+		selectMode = replyCardSelectModeSingle
 	}
 	dto := replyCardDTO{
 		ID:            c.ID,
@@ -2234,6 +2921,7 @@ func newReplyCardDTO(c ReplyCard) replyCardDTO {
 		Summary:       c.Summary,
 		Body:          c.Body,
 		Options:       options,
+		SelectMode:    selectMode,
 		Status:        c.Status,
 		CreatedTS:     c.CreatedTS,
 		Attachments:   attachmentDTOsFromRefs(c.Attachments),
@@ -2247,7 +2935,7 @@ func newReplyCardDTO(c ReplyCard) replyCardDTO {
 		ts := c.AnsweredTS
 		dto.AnsweredTS = &ts
 		dto.Answer = &replyCardAnswerDTO{
-			OptionIdx:   c.AnswerOptionIdx,
+			OptionIdxs:  c.AnswerOptionIdxs,
 			Text:        c.AnswerText,
 			Attachments: attachmentDTOsFromRefs(c.AnswerAttachments),
 		}

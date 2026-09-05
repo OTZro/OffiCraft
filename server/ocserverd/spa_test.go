@@ -29,7 +29,12 @@ func TestFallbackServesStagedSPA(t *testing.T) {
 	h := newFallbackHandler(defaultRouteSpecs(), spaFS())
 
 	// "/" and any client-side route answer the shell (the SPA catch-all).
-	for _, path := range []string{"/", "/settings", "/members/kyle"} {
+	// "/diff" is not decoration in that list: it is the product's ONE
+	// path-level route (T-59), and a comparison link pasted to someone who is
+	// not signed in is a plain browser GET for it. Serve anything but the shell
+	// there and the whole external flavour is a 404 for exactly the reader it
+	// was minted for.
+	for _, path := range []string{"/", "/settings", "/members/kyle", "/diff"} {
 		status, body, _ := fetch(t, h, "GET", path)
 		if status != 200 || !strings.Contains(body, "SPA SHELL") {
 			t.Fatalf("%s: want the SPA shell, got %d %q", path, status, body)
@@ -94,7 +99,7 @@ func TestPathMatchesTemplate(t *testing.T) {
 		{"/api/members/{member_id}", "/api/members/kyle", true},
 		{"/api/members/{member_id}", "/api/members/", false},
 		{"/api/members/{member_id}", "/api/members/kyle/activate", false},
-		{"/api/lessons/{role_key}/{task_type}", "/api/lessons/writer/build", true},
+		{"/api/document-history/{kind}/{key}", "/api/document-history/lessons/writer", true},
 		{"/api/machines/{machine_id}/boot-command", "/api/machines/mac1/boot-command", true},
 		{"/api/machines/{machine_id}/boot-command", "/api/machines/mac1/uninstall", false},
 	}

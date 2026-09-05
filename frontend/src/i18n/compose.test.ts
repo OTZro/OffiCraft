@@ -30,6 +30,12 @@ const EVERY_FIVE = Array.from({ length: 12 }, (_, i) => i * 5);
 
 /** [language, message, arguments, the text that must appear on screen]. */
 const EXPECTED: [Lang, string, (string | number | string[] | number[])[], string][] = [
+    // The 429 credential brake. Pinned in BOTH languages because the space
+    // after the number is language-specific and is the opposite of `sp`: zh
+    // wants it, en does not. Getting that backwards yields "請於 42秒後再試。"
+    // or "in 42 s." — which typecheck and the drift gate both accept happily.
+    ["zh", "loginThrottled", [42], "目前同時處理的登入太多，請於 42 秒後再試。"],
+    ["en", "loginThrottled", [42], "Too many logins in flight. Try again in 42s."],
     ["zh", "taskProgress", [3,7], "步驟 3/7"],
     ["zh", "taskElapsed", ["2 小時"], "已歷時 2 小時"],
     ["zh", "taskPlanningBy", ["Mira"], "等待 Mira 建立 Steps"],
@@ -40,11 +46,27 @@ const EXPECTED: [Lang, string, (string | number | string[] | number[])[], string
     ["zh", "taskMarkDuplicateBody", ["T-1234"], "把「T-1234」標記為某張原票的重複?任務將移入已結束區、無法恢復。請選擇原票:"],
     ["zh", "taskDuplicateOf", ["T-9999"], "重複於 T-9999"],
     ["zh", "taskReassignTitle", ["T-1234"], "轉派 T-1234"],
+    // T-60 — the artifact version reader's four. The count is the `sp` case
+    // again (zh runs the characters together, en needs the space), and it is
+    // only ever printed for n > 1, so there is no singular rendering to pin.
+    ["zh", "taskArtifactVersionCount", [3], "3版"],
+    ["en", "taskArtifactVersionCount", [3], "3 versions"],
+    ["zh", "taskArtifactVersionLabel", ["7/13 09:05"], "版本 7/13 09:05"],
+    ["en", "taskArtifactVersionLabel", ["7/13 09:05"], "Version 7/13 09:05"],
+    ["zh", "taskArtifactVersionBy", ["mira"], "修改者 mira"],
+    ["en", "taskArtifactVersionBy", ["mira"], "by mira"],
+    ["zh", "taskArtifactOpaque", ["image/png"], "這不是文字檔(image/png),只能切換前後各看一次。"],
+    ["en", "taskArtifactOpaque", ["image/png"], "Not a text file (image/png) — look at the two versions one at a time instead."],
     ["zh", "replyWaited", ["3 小時"], "已等你 3 小時"],
     ["zh", "replyOpenedAt", ["7/13 09:05"], "開卡 7/13 09:05"],
     ["zh", "replyAnsweredAt", ["7/13 09:05"], "已回覆 7/13 09:05"],
     ["zh", "replyExpiredAt", ["7/13 09:05"], "已過期 7/13 09:05"],
     ["zh", "replyExpireConfirmBody", ["要不要買新的"], "要把「要不要買新的」標為過期嗎?此動作不可復原、也不算回答——成員會收到通知,問題還在的話他會重新開一張新卡。"],
+    ["zh", "replySelectedCount", [0], "已選 0 項"],
+    ["zh", "replySelectedCount", [1], "已選 1 項"],
+    ["zh", "replySelectedCount", [2], "已選 2 項"],
+    ["zh", "replyPickedOptions", [["寄出"]], "寄出"],
+    ["zh", "replyPickedOptions", [["寄出", "先不要"]], "寄出、先不要"],
     ["zh", "outsourceLabel", ["O-7"], "外包 · O-7"],
     ["zh", "workerRefocusSince", ["2 天"], "上次換手 2 天"],
     // 🔴 折疊,不是截斷。這一句只可以講「這則還在、只是折起來了」;
@@ -70,6 +92,12 @@ const EXPECTED: [Lang, string, (string | number | string[] | number[])[], string
       ["14:32"],
       "正在收尾以套用你的改動·最晚 14:32 生效",
     ],
+    [
+      "zh",
+      "agentWindDownOnDeadline",
+      ["14:32"],
+      "正在收尾，已給死線·最晚 14:32 生效",
+    ],
     ["zh", "machineOfflineOption", ["Alpha"], "Alpha（離線）"],
     ["zh", "machineBootstrapErrorDetail", ["ocwarden binary missing"], "安裝請求失敗:ocwarden binary missing"],
     ["zh", "machineBootstrapFailed", [3], "安裝失敗(結束碼 3),原因如下:"],
@@ -78,6 +106,8 @@ const EXPECTED: [Lang, string, (string | number | string[] | number[])[], string
     ["zh", "machineUninstallWarnBody", ["Alpha",1], "「Alpha」上還有 1 位成員在線上。現在解除安裝會在成員仍在這台機器上時把 warden 拆除 —— 建議先將相關成員下線。仍要繼續嗎?"],
     ["zh", "machineUninstallWarnBody", ["Alpha",4], "「Alpha」上還有 4 位成員在線上。現在解除安裝會在成員仍在這台機器上時把 warden 拆除 —— 建議先將相關成員下線。仍要繼續嗎?"],
     ["zh", "machineDeleteConfirmBody", ["Alpha"], "確定要刪除「Alpha」嗎?該機器的憑證會立刻失效:機器無法再回報,還指派在這台機器上的 agent 也會一起失去存取權。機器上的 warden 不會被拆除(那是「解除安裝」),而且這個動作無法復原 —— 要恢復只能重新安裝。"],
+    ["zh", "costResetConfirmBody", ["$37"], "這會把目前累計的 $37 歸零，從 0 重新開始累積。這個數字沒有留在任何其他地方，清掉就回不來了。"],
+    ["zh", "accountCostResetConfirmBody", ["$37"], "這會把這個帳號累計的 $37 歸零，從 0 重新開始累積。底下成員各自的數字不會被動到。這個數字沒有留在任何其他地方，清掉就回不來了。"],
     ["zh", "themeImportSkipped", [2, ["nav.tasks", "profile.themeOffice"]], "已匯入,但有2個用詞代碼不認得、已略過:nav.tasks、profile.themeOffice"],
     ["zh", "themeImportSkipped", [30, ["a.b", "c.d", "e.f"]], "已匯入,但有30個用詞代碼不認得、已略過:a.b、c.d、e.f等"],
     ["zh", "themeDeleteConfirm", ["精靈村"], "刪除主題「精靈村」?此動作無法復原。"],
@@ -153,6 +183,12 @@ const EXPECTED: [Lang, string, (string | number | string[] | number[])[], string
     ["en", "replyAnsweredAt", ["7/13 09:05"], "Answered 7/13 09:05"],
     ["en", "replyExpiredAt", ["7/13 09:05"], "Expired 7/13 09:05"],
     ["en", "replyExpireConfirmBody", ["要不要買新的"], "Mark \"要不要買新的\" as expired? This cannot be undone and does not count as an answer — the member is notified and will open a fresh card if the question still matters."],
+    ["en", "replySelectedCount", [0], "Selected 0 options"],
+    // n=1 is its own row: en inflects and the other two rows cannot see it.
+    ["en", "replySelectedCount", [1], "Selected 1 option"],
+    ["en", "replySelectedCount", [2], "Selected 2 options"],
+    ["en", "replyPickedOptions", [["Send it"]], "Send it"],
+    ["en", "replyPickedOptions", [["Send it", "Not yet"]], "Send it, Not yet"],
     ["en", "outsourceLabel", ["O-7"], "Outsource · O-7"],
     ["en", "workerRefocusSince", ["2 天"], "Last handover 2 天"],
     ["en", "resumeBodyOmitted", [1284], "folded 1284"],
@@ -181,6 +217,12 @@ const EXPECTED: [Lang, string, (string | number | string[] | number[])[], string
       ["14:32"],
       "Winding down to apply your change · by 14:32 at the latest",
     ],
+    [
+      "en",
+      "agentWindDownOnDeadline",
+      ["14:32"],
+      "Winding down on a deadline · by 14:32 at the latest",
+    ],
     ["en", "machineOfflineOption", ["Alpha"], "Alpha (offline)"],
     ["en", "machineBootstrapErrorDetail", ["ocwarden binary missing"], "Install request failed: ocwarden binary missing"],
     ["en", "machineBootstrapFailed", [3], "Install failed (exit code 3). Reason:"],
@@ -189,6 +231,8 @@ const EXPECTED: [Lang, string, (string | number | string[] | number[])[], string
     ["en", "machineUninstallWarnBody", ["Alpha",1], "“Alpha” still has 1 member(s) online on it. Uninstalling now tears the warden off the machine while they are still on it — take the related members offline first. Proceed anyway?"],
     ["en", "machineUninstallWarnBody", ["Alpha",4], "“Alpha” still has 4 member(s) online on it. Uninstalling now tears the warden off the machine while they are still on it — take the related members offline first. Proceed anyway?"],
     ["en", "machineDeleteConfirmBody", ["Alpha"], "Delete “Alpha”? Its credentials stop working immediately: the machine can no longer report in, and any agent still assigned to it loses access too. Nothing is torn down on the machine itself (that is “Uninstall”), and this cannot be undone — bringing it back means installing it again."],
+    ["en", "costResetConfirmBody", ["$37"], "This resets the accumulated $37 to zero and starts counting again from 0. The figure is not kept anywhere else, so it cannot be recovered."],
+    ["en", "accountCostResetConfirmBody", ["$37"], "This resets the account's accumulated $37 to zero and starts counting again from 0. No member's own figure is touched. The figure is not kept anywhere else, so it cannot be recovered."],
     ["en", "themeImportSkipped", [2, ["nav.tasks", "profile.themeOffice"]], "Imported, but 2 wording code(s) were not recognised and were skipped: nav.tasks, profile.themeOffice"],
     ["en", "themeImportSkipped", [30, ["a.b", "c.d", "e.f"]], "Imported, but 30 wording code(s) were not recognised and were skipped: a.b, c.d, e.f …"],
     ["en", "themeDeleteConfirm", ["精靈村"], "Delete theme \"精靈村\"? This cannot be undone."],

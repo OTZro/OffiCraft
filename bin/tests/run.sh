@@ -74,6 +74,23 @@ else
   bad "bin/tests/install-guard.sh is missing"
 fi
 
+# ── bin/ocserver bootstrap→kickstart blame (T-908d) ─────────────────────────
+# Own file, own launchctl shim, own tempdir. It drives `bootstrap_and_confirm`
+# through bin/ocserver's hidden `bootstrap-and-confirm` seam — until it existed,
+# drop_and_load's load step had NO unit coverage at all, only a one-line grep in
+# install-claude-stamp.sh whose own comment calls itself the last unguarded link.
+OCSLOAD="$HERE/ocserver-load-guard.sh"
+echo
+if [[ -f "$OCSLOAD" ]]; then
+  if run_guard "$OCSLOAD"; then
+    ok "ocserver bootstrap-blame suite passed"
+  else
+    bad "ocserver bootstrap-blame suite FAILED (see output above)"
+  fi
+else
+  bad "bin/tests/ocserver-load-guard.sh is missing"
+fi
+
 # ── default-port contract (oc.toml.example ↔ bin/ocserver render guard) ─────
 # Own file, own tempdir. The template and render_oc_toml's literal guard are a
 # contract with no compiler behind it: drift in either direction is invisible
@@ -211,6 +228,30 @@ if [[ -f "$NSMIRROR" ]]; then
   fi
 else
   bad "bin/tests/namespace-mirror-guard.sh is missing"
+fi
+
+# ── http/https rule mirrored across three Go modules (T-78) ────────────────
+# The rule that decides http vs https lives in THREE copies — server/ocserverd,
+# cli/ocwarden, cli/ocagent — because those are three separate Go modules with
+# no module in common. Each copy is exercised only by its own module's suite, so
+# a rule changed in two places out of three leaves every suite green: MEASURED
+# 2026-09-04, a one-word drift inside the block left both `go test` runs at ok
+# while the copies had diverged. The maintained file list and the three planted
+# mutants are in the header of base-scheme-mirror-guard.sh.
+#
+# The consequence of drift is not a cosmetic mismatch: the server hands a new
+# machine one base, the agent on that machine believes another, and the machine
+# cannot call home — discovered hours later, on someone else's computer.
+SCHEMEMIRROR="$HERE/base-scheme-mirror-guard.sh"
+echo
+if [[ -f "$SCHEMEMIRROR" ]]; then
+  if run_guard "$SCHEMEMIRROR"; then
+    ok "http/https rule identical across the three Go modules"
+  else
+    bad "http/https rule MIRROR DRIFT (see output above)"
+  fi
+else
+  bad "bin/tests/base-scheme-mirror-guard.sh is missing"
 fi
 
 # ── install.sh EXIT-time stdin drain (T-fa39) ──────────────────────────────
@@ -375,27 +416,6 @@ else
   bad "bin/tests/auto-beta-guard.sh is missing"
 fi
 
-# ── retired image overlay stays retired (T-f014) ────────────────────────────
-# The cockpit used to carry two full-size overlays for the same click: the
-# shared preview shell (filename, share link, download, close) and a bare
-# `Lightbox` backdrop. Which one a user got depended on the call site, and the
-# split rotted invisibly — AttachmentStrip stopped reading its `onOpenImage`
-# prop, so five call sites passed a handler into a component that ignored it and
-# mounted a second overlay that could never open, with nothing red. The
-# component and its stylesheet block are gone; this keeps them gone. A green
-# does NOT mean there is only one image surface — see the guard's header.
-LIGHTBOX="$HERE/lightbox-retired-guard.sh"
-echo
-if [[ -f "$LIGHTBOX" ]]; then
-  if run_guard "$LIGHTBOX"; then
-    ok "retired-Lightbox suite passed"
-  else
-    bad "retired-Lightbox suite FAILED (see output above)"
-  fi
-else
-  bad "bin/tests/lightbox-retired-guard.sh is missing"
-fi
-
 
 # ── single-source rule review digest (T-c19c) ────────────────────────────────
 # The "兩份權威打架" rule has one operational paragraph in
@@ -413,6 +433,26 @@ if [[ -f "$RULEDEFER" ]]; then
   fi
 else
   bad "bin/tests/rule-defer-guard.sh is missing"
+fi
+
+# ── gen-migration-lock closing signal (T-75) ─────────────────────────────────
+# bin/gen-migration-lock used to end with an unconditional "migration.lock is up
+# to date." printed AFTER the generator had rewritten the file — it had compared
+# nothing, and on 2026-09-04 a reader believed it. Nothing else here looks at the
+# sentence a human reads: the wrapper only greps for the generator's end marker,
+# and migration_lock_t75_test.go only checks the lock's content. This guard
+# drives the script's reporting stage through its --report-state seam against
+# clean / dirty / untracked / no-git fixtures, so it needs no Go toolchain.
+GENLOCKSIGNAL="$HERE/gen-migration-lock-signal-guard.sh"
+echo
+if [[ -f "$GENLOCKSIGNAL" ]]; then
+  if run_guard "$GENLOCKSIGNAL"; then
+    ok "gen-migration-lock closing-signal suite passed"
+  else
+    bad "gen-migration-lock closing-signal suite FAILED (see output above)"
+  fi
+else
+  bad "bin/tests/gen-migration-lock-signal-guard.sh is missing"
 fi
 
 # ── ps field support (T-1ac8) ────────────────────────────────────────────────

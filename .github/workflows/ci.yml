@@ -146,6 +146,21 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
+        with:
+          # LOAD-BEARING (T-64, and since T-75 for a second check too). The
+          # default shallow checkout leaves this job with exactly one ref —
+          # refs/remotes/pull/N/merge — and `git rev-parse origin/main` exits
+          # 128, measured on this workflow rather than inferred. TWO checks read
+          # origin/main as their baseline and both stand down without it:
+          # TestAStationAtTheReleasedVersionCanUpgradeToThisTree (replays the
+          # ALREADY-RELEASED migration versions and boots a station on them) and
+          # TestMigrationLockGrowsOnlyAtItsTail (requires main's migration.lock
+          # lines to be an exact PREFIX of this tree's — the only thing that
+          # says NO when someone edits a released migration and then simply
+          # regenerates the lock, which turns the tree-internal check green).
+          # Deleting this line does not go red; it silently removes the baseline
+          # from both.
+          fetch-depth: 0
       # Pinned to what the repo develops against (go.mod says 1.26.4).
       # check-latest:false + an exact version keeps the runner from silently
       # drifting ahead of the developer.
@@ -195,7 +210,13 @@ jobs:
           go-version: '1.26.4'
           check-latest: false
           cache-dependency-path: server/ocserverd/go.sum
-      - run: bash bin/run-checks.sh lint-ts lint-css-tokens lint-css-token-roles test-frontend-unit
+      # ⚠️ lint-async-landing / lint-chat-area-key were added to bin/ci.sh by T-48
+      # and to no cell here — so for a while they ran on a developer's machine and
+      # on NOTHING in the merge path. That gap is worse than having no guard at
+      # all: ChatArea's own comments name `check-chat-area-key.mjs` as THE thing
+      # holding a latent cross-room bug shut, so a PR that deleted the key would
+      # have gone green and the next reader would have stopped suspecting it.
+      - run: bash bin/run-checks.sh lint-ts lint-css-tokens lint-css-token-roles lint-async-landing lint-chat-area-key test-frontend-unit
 
   # ---------------------------------------------------------------------------
   # frontend-ct — real-browser layout + paint guards. Separate from
@@ -259,7 +280,12 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
-      - run: bash bin/run-checks.sh lint-uplink-contract lint-effort-vocab lint-shadow-claim
+        with:
+          # The user-operation guard compares every changed contract block with
+          # the PR base; a shallow checkout would turn that provenance check into
+          # an unverified guess.
+          fetch-depth: 0
+      - run: bash bin/run-checks.sh lint-uplink-contract lint-effort-vocab lint-shadow-claim lint-user-operation-contract
 
   # ---------------------------------------------------------------------------
   # conformance — the black-box import lint (fast, static) and then the full
@@ -366,6 +392,16 @@ jobs:
           check-latest: false
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+
+      # e2e_test/setup.sh deliberately uses tmux as the cross-exec lifecycle
+      # carrier. GitHub's macOS image does not provide it by default; install
+      # the same prerequisite explicitly so CI exercises the shipped path.
+      - name: install tmux for isolated e2e
+        run: |
+          if ! command -v tmux >/dev/null 2>&1; then
+            brew install tmux
+          fi
+          tmux -V
 
       # setup.sh refuses to run without an oc.toml that binds the non-prod port
       # and names a repo-local DSN — those refusals ARE the prod guards, so a
@@ -579,8 +615,19 @@ jobs:
     # The ONLY elevated permission in this workflow, and it lives on this job
     # alone — the workflow default stays read-only, so the gate cells cannot write
     # anything even by mistake. Built-in GITHUB_TOKEN only: no PAT, no secret.
+    #
+    # ⚠️ A JOB-LEVEL `permissions:` BLOCK REPLACES THE SET WHOLESALE — every key
+    # not listed here is `none` for this job, whatever the workflow default says.
+    # So both keys are load-bearing and neither may be dropped while "the other
+    # one is the important one":
+    #   • contents: write — creating the release.
+    #   • actions:  read  — bin/release's CI gate reads THIS run's own verdict
+    #     from /actions/runs/<id> and .../jobs. Without this key the token is
+    #     rejected, the gate fails closed, and NO beta can be published at all.
+    #     (It is read-only, and it is scoped to this job like the write is.)
     permissions:
       contents: write
+      actions: read
     steps:
       # BOTH inputs are load-bearing. fetch-depth: 0 is needed twice over —
       # bin/release cuts a staging worktree with `git worktree add --detach <sha>`,
@@ -653,8 +700,13 @@ jobs:
 
       # --target is the commit this run was triggered by, NOT whatever main points
       # at when the job finally starts. --no-settle is the owner's ruling 1. This
-      # command still runs the full CI gate inside the staging worktree and still
-      # reads back what GitHub stored; neither is skippable.
+      # command still applies the full CI gate and still reads back what GitHub
+      # stored; neither is skippable. The gate reads THIS run's own job
+      # conclusions from the Actions API, which is why `GH_TOKEN` below is
+      # load-bearing for more than `gh`: bin/release authenticates that read with
+      # it (and the job's `actions: read` is what makes the token acceptable).
+      # Anonymous still works for a hand-run publish, but a hosted runner shares
+      # its egress IP and the anonymous quota is 60/hour per IP.
       #
       # ⚠️ THE RELEASE IS CREATED BEFORE IT IS VERIFIED, AND NOTHING ROLLS IT BACK.
       # bin/release uploads and only then reads back what GitHub stored; there is

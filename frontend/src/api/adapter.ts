@@ -7,6 +7,7 @@
 // All methods return view-model shapes (`Member` / `ChatMessage`), never wire
 // DTOs: the wire→view mapping is the adapter's job (see mappers.ts).
 
+import type { DiffParams } from "../lib/diffLink";
 import type { ThemeBundle } from "../lib/themeBundle";
 import type {
   Member,
@@ -17,6 +18,10 @@ import type {
   VersionView,
   ReleaseCheckView,
   BackupHealthView,
+  SigningKeyView,
+  AuthStatusView,
+  MfaEnrollView,
+  MfaStateView,
   GlobalContextView,
   BootDocKind,
   BootDocView,
@@ -25,6 +30,7 @@ import type {
   DocumentHistoryView,
   DocumentRevisionView,
   DocumentSeedView,
+  DiffPairView,
   RoleSummaryView,
   RoleDefView,
   BootstrapView,
@@ -61,9 +67,16 @@ export interface ChatMessage {
   replyCardId: string | null;
   /** Read-time join of the carried card's CURRENT status (`reply_card_status`):
    * `"waiting"` | `"answered"` | `"expired"`, or null when the message carries no card. Lets
-   * the inline ChatReplyCard decide AT MOUNT whether to load eagerly (waiting)
-   * or lazily (answered — collapse, fetch only on expand) WITHOUT a per-card
-   * GET. OPTIONAL so hand-built test fixtures stay valid (same precedent as
+   * the inline ChatReplyCard label its COLLAPSED row (待回覆 / 已回覆 / 已過期)
+   * WITHOUT a per-card GET.
+   *
+   * ⚠️ It used to say this field decides AT MOUNT whether to load eagerly
+   * (waiting) or lazily (answered). It does not any more: since T-48
+   * (`rc-d8844e709f42`) EVERY chat card mounts collapsed regardless of status
+   * and fetches only on expand, so what this field decides is what the row SAYS
+   * while nothing has been fetched. `TaskReplyCard` is unchanged.
+   *
+   * OPTIONAL so hand-built test fixtures stay valid (same precedent as
    * `ReplyCard.task`); the mapper always sets it (null when the wire carries
    * ""). */
   replyCardStatus?: "waiting" | "answered" | "expired" | null;
@@ -101,6 +114,49 @@ export interface ChatMessage {
    * that opened it (wire `card`) — so the decision reads IN the chat stream
    * rather than in a second, separately-joined card list. null ⇒ no card. */
   card?: ChatInlineReplyCardView | null;
+  /** The id of the message this one is REPLYING TO (wire `reply_to`), or null
+   * when it replies to nothing. It is the ONE fact about whether this message
+   * is a reply, and it never goes away. It may name a message in ANOTHER
+   * conversation (owner ruling, 2026-08-21). */
+  replyTo?: string | null;
+  /** WHAT this message is replying to (wire `reply_to_chat`) — the quoted
+   * sender and a server-shortened line of what they said, rebuilt by the server
+   * on every read. null when `replyTo` is null, and null ALSO when `replyTo` is
+   * set but the quoted message no longer exists.
+   *
+   * 🔴 THE UI READS THIS AND NOTHING ELSE (T-4e95, owner ruling 2026-08-21).
+   * There is no lookup, no fallback to the loaded window, no re-fetch and no
+   * retry: either the snapshot is here or the original is gone, and "gone" is a
+   * settled answer that renders as one fixed sentence. The shape this replaced
+   * shipped the id alone and made the browser go and find the rest, which meant
+   * a request that could fail, a temporary lie on screen while it had failed,
+   * and a story about healing that lie later — three states that look identical
+   * to the eye whether they are right or wrong. */
+  replyToChat?: ChatReplyQuote | null;
+}
+
+/** The quoted message a reply carries with it (wire `ChatReplyQuoteDTO`).
+ *
+ * `from` / `fromName` and `to` / `toName` are `ChatMessage`'s own convention:
+ * the bare id is the ADDRESS and always present, the name beside it is `""` on
+ * the reads that resolve no names (everything but the wake snapshot) — so the
+ * thread resolves the name from its roster exactly as it does for any other
+ * participant rather than trusting this one to be filled.
+ *
+ * 🔴 `to` IS THE QUOTED MESSAGE'S OWN ADDRESSEE, never the peer of the thread
+ * the reply is drawn in. A quote may come out of another conversation entirely
+ * (owner ruling 2026-08-21), and that is exactly when the two differ — which is
+ * the case the field exists for. */
+export interface ChatReplyQuote {
+  id: string;
+  from: string;
+  fromName: string;
+  to: string;
+  toName: string;
+  /** One line of the quoted body, already whitespace-collapsed and shortened BY
+   * THE SERVER (the length is defined there and nowhere else). `""` is an
+   * ordinary value — an attachment-only message has no text to quote. */
+  content: string;
 }
 
 /** One reply card folded onto the chat message that opened it (view model of
@@ -109,12 +165,13 @@ export interface ChatMessage {
  * summary/body/kind/attachments are deliberately NOT here (the message this
  * rides on already carries the ask). */
 export interface ChatInlineReplyCardView {
-  /** The frozen quick-reply wording as offered (`options[0]` is the AI pick).
-   * Empty for a card opened without options. */
-  options: string[];
-  /** Index into `options` of the option that was picked; null when answered
-   * with free text only, or not answered yet. */
-  answerOptionIdx: number | null;
+  /** The frozen quick-reply choices as offered, each carrying its OWN
+   * `aiPick`. Empty for a card opened without options. */
+  options: ReplyCardOption[];
+  /** Indices into `options` of EVERY option that was circled; null when
+   * answered with free text only, or not answered yet. Deduped + ascending as
+   * the server stored it. */
+  answerOptionIdxs: number[] | null;
   /** The free-text answer; "" when none was given. */
   answerText: string;
   /** Epoch seconds the card was answered; 0 while still waiting. */
@@ -185,6 +242,26 @@ export interface ChatCursor {
   beforeId: string;
 }
 
+/** The T-48 anchor window: locate ONE message by its id and page outwards from
+ * it. Both ends are INCLUSIVE and both take a message id (not a (ts, id)
+ * keyset), which is what makes them usable from a link that only carries an id.
+ *
+ * `startId` walks TOWARDS THE NEWEST — the anchor plus the `limit`-1 messages
+ * that FOLLOW it. That direction is the one `before_ts`/`before_id` cannot
+ * express at all, and its absence is why "跳到原訊息" used to have to guess.
+ * `endId` walks TOWARDS THE OLDEST — the anchor plus the `limit`-1 before it.
+ * Either answer still comes back oldest→newest.
+ *
+ * Given TOGETHER the pair bounds one window; `limit` still caps it and the
+ * truncation happens at the `startId` (older) end, i.e. the window stays
+ * anchored on `endId`. Contradictory pairs, an unknown id, mixing these with
+ * `before_ts`/`before_id`, and a `limit` outside 1..200 are all errors on the
+ * server — never a quietly empty page. */
+export interface ChatAnchor {
+  startId?: string;
+  endId?: string;
+}
+
 /** A staged attachment carried on a posted chat message (a pasted image OR an
  * uploaded file). `dataB64` is a data-URI (`data:<mime>;base64,…`) OR bare
  * base64 — the server accepts either. `filename` / `mime` are optional (the
@@ -203,12 +280,22 @@ export interface PushSubscriptionInput {
   keys: { p256dh: string; auth: string };
 }
 
+/** ONE frozen quick-reply choice, in view-model form. `aiPick` is the ONLY
+ * carrier of "the AI recommends this one" — it replaced the positional
+ * `options[0]` convention, so a chip must read THIS flag and never its own
+ * index. */
+export interface ReplyCardOption {
+  text: string;
+  aiPick: boolean;
+}
+
 /** The stored answer on an ANSWERED reply card, in view-model form.
- * `optionIdx` is null for a pure free-text answer (index into the card's
- * `options` otherwise); `attachments` are served refs into the shared
- * chat-attachment store (render like chat attachments). */
+ * `optionIdxs` is null for a pure free-text answer, otherwise the deduped,
+ * ascending indices into the card's `options` of EVERY circled option;
+ * `attachments` are served refs into the shared chat-attachment store (render
+ * like chat attachments). */
 export interface ReplyCardAnswer {
-  optionIdx: number | null;
+  optionIdxs: number[] | null;
   text: string;
   attachments: ChatAttachmentView[];
 }
@@ -220,8 +307,9 @@ export interface ReplyCardAnswer {
  * close/skip surface anywhere) and waiting→expired via the expire action, open to
  * the card's own author as well as the owner / an admin agent (標為過期 — NOT an
  * answer; terminal, no reopen; T-1b88 widened T-6020's admin floor); a revised answer
- * (重新決定) keeps `answered`. `options[0]` is ALWAYS the AI's own
- * recommendation. `chatMessageId` links the chat message the card rides in —
+ * (重新決定) keeps `answered`. Each entry of `options` carries its own
+ * `aiPick` (position means nothing) and `selectMode` says how many of them the
+ * owner may circle. `chatMessageId` links the chat message the card rides in —
  * the jump-to-origin anchor (B3 uses it to locate + highlight the message in
  * the member's chat; B2 only navigates to the chat room). `answeredTs`/
  * `answer` are null unless answered; `expiredTs` is null unless expired.
@@ -234,7 +322,11 @@ export interface ReplyCard {
   kind: string;
   summary: string;
   body: string;
-  options: string[];
+  options: ReplyCardOption[];
+  /** How many options the owner may circle: "single" (at most one — a second
+   * pick REPLACES the first) | "multi" (toggle any number). A separate axis
+   * from `kind`, which says what the owner must DO. */
+  selectMode: "single" | "multi";
   status: "waiting" | "answered" | "expired";
   /** QUESTION-side attachments the initiator opened the card with (T-5e8a) —
    * served refs into the shared chat-attachment store, rendered like chat
@@ -268,12 +360,17 @@ export interface TaskRefView {
   title: string;
 }
 
-/** The owner's answer to a reply card: a quick-reply `optionIdx` and/or free
- * `text`, plus optional staged `attachments` (same input shape + limits as
+/** The owner's answer to a reply card: the quick-reply `optionIdxs` and/or
+ * free `text`, plus optional staged `attachments` (same input shape + limits as
  * chat attachments). At least one of the three must be present — the server
- * rejects an empty answer (400). */
+ * rejects an empty answer (400), and an EMPTY `optionIdxs` list counts as empty
+ * rather than as an answer, so a caller with nothing circled omits the field
+ * instead of sending `[]`. Order and duplicates do not matter to the server
+ * (it stores the list deduped + ascending), but the cockpit sends it already
+ * sorted so two owners who ticked the same boxes in different orders produce a
+ * byte-identical body. */
 export interface ReplyCardAnswerInput {
-  optionIdx?: number;
+  optionIdxs?: number[];
   text?: string;
   attachments?: ChatAttachmentInput[];
 }
@@ -319,19 +416,40 @@ export interface TaskStepView {
    * waiting step's reason. OPTIONAL so hand-built fixtures stay valid (the
    * replyCardStatus precedent); the mapper always sets it. */
   waitingReason?: string;
-  /** The step's free-text working note — what it got to and what comes next
-   * (T-cc3e). The field the handover SOP means by "把還在進行中的工作寫回 task
-   * step note"; unlike `waitingReason` it is bound to no status, so it carries
-   * progress at whatever moment a handover lands. OPTIONAL so hand-built
-   * fixtures stay valid (the replyCardStatus precedent); the mapper always
-   * sets it. */
-  note?: string;
+  /** How many characters of working note this step has ON THE SERVER (T-66).
+   *
+   * 🔴 THE NOTE TEXT IS NOT ON THIS VIEW MODEL, and that is the whole shape of
+   * the ticket (owner rc-4c8065fb30a5:「整個拿掉…座艙改成點開才抓」). The task
+   * read no longer carries it, so this number is what the card has to work
+   * from: `> 0` draws the 備註 entry, `0` draws nothing because the step
+   * genuinely has none. The text arrives from `getTaskStep` when someone opens
+   * it. A component that wants to SHOW a note and finds only this number is
+   * being told, correctly, to go and fetch it.
+   *
+   * OPTIONAL so hand-built fixtures stay valid (the replyCardStatus
+   * precedent); the mapper always sets it. */
+  noteSizeChars?: number;
   /** Non-empty ⇒ this leaf runs inside a parallel stage (同時進行 · N 項並行);
    * consecutive steps sharing the group render as one parallel block. */
   parallelGroup: string;
   orderIdx: number;
   startedTs: number;
   finishedTs: number;
+}
+
+/** ONE step in FULL (T-66) — what `getTaskStep` answers, and the only place the
+ * cockpit ever holds a step note's text. Everything a `TaskStepView` carries,
+ * plus the `note` itself and the two size numbers.
+ *
+ * `detailLevel` is carried across from the wire rather than dropped: it is the
+ * payload's own statement that this is the whole step, the mirror of the task
+ * view's `"summary"`. Keeping it means a caller that somehow received the wrong
+ * projection can say so instead of silently rendering a blank note. */
+export interface TaskStepDetailView extends TaskStepView {
+  detailLevel: string;
+  note: string;
+  noteSizeChars: number;
+  noteCapChars: number;
 }
 
 /**
@@ -348,9 +466,9 @@ export interface TaskStepView {
  */
 /** One entry of {@link TaskView.depTasks} — a blocking task resolved to what the
  * dep row shows (wire `TaskDepRefDTO`, T-a3e4). `taskNo` is filled even for a
- * dep whose task is gone (it is a pure projection of the id); `title`/`status`
- * are "" in exactly that case, and the row then says 查無此任務 rather than
- * inventing a status. */
+ * dep whose task is gone — it IS the id (T-5291), so naming the dep never
+ * needed the dep's row to exist; `title`/`status` are "" in exactly that case,
+ * and the row then says 查無此任務 rather than inventing a status. */
 export interface TaskDepRefView {
   id: string;
   taskNo: string;
@@ -367,7 +485,12 @@ export interface TaskCountView {
 
 export interface TaskView {
   id: string;
-  /** Display number (e.g. "T-7d40") — presentation only, never a lookup key. */
+  /** The task NUMBER, which IS `id` (T-5291): the wire sends it and the card
+   * shows it verbatim, so what a human copies off the screen is exactly what
+   * `#tasks/<id>` and MCP `get_task(task_id)` accept. It used to be a four-hex
+   * projection ("T-7d40") that was display-only and could never be pasted
+   * back; that projection is gone. Kept as its own field because it is what
+   * the SERVER sends (`task_no`) — not because it differs from `id`. */
   taskNo: string;
   title: string;
   /** The task type / playbook key; "" ⇒ 自由代辦 (ad-hoc). */
@@ -403,11 +526,12 @@ export interface TaskView {
   /** The manual-derived identity key value (dedupe key); "" for ad-hoc. When
    * the value is a URL the badge renders an external link (spec 識別鍵). */
   dedupeKey: string;
-  /** Blocking task IDS (被 T-xxx 擋住, 可多筆) — resolved to task_no for display. */
+  /** Blocking task IDS (被依賴擋住, 可多筆). The card prints each id as-is —
+   * task_no IS the id (T-5291), so there is no display conversion. */
   deps: string[];
   /** The SERVER's resolution of every id in {@link deps} (wire `dep_tasks`,
-   * T-a3e4): one entry per dep, same order, carrying what the 「等 T-xxxx
-   * <標題>」 row prints. The card renders straight from this — it no longer
+   * T-a3e4): one entry per dep, same order, carrying what the 「等 <task id> <標題>」
+   * row prints. The card renders straight from this — it no longer
    * looks deps up in the loaded task list, which is why the page no longer has
    * to download the closed population just so a finished blocker can be named.
    *
@@ -423,7 +547,7 @@ export interface TaskView {
   /** One-line reason while status is waiting_external; "" otherwise. */
   waitingReason: string;
   /** The ORIGINAL task's id this one duplicates; "" unless status is
-   * "duplicated". The card renders "重複於 T-xxxx" as a link that jumps to it —
+   * "duplicated". The card renders "重複於 <task id>" as a link that jumps to it —
    * depth-1 by construction, so the link always resolves in one hop. */
   duplicateOf: string;
   createdTs: number;
@@ -433,18 +557,40 @@ export interface TaskView {
   progressDone: number;
   progressTotal: number;
   steps: TaskStepView[];
-  /** The task's curated deliverable set (T-3dc5), oldest→newest. Only the FULL
-   * task (getTask) carries these; the LIGHT list leaves it [] (it carries only
-   * `artifactCount` for the collapsed card's 「產物 N」 badge). The popover
-   * hydrates the full task to render them. OPTIONAL so hand-built test fixtures
-   * stay valid (the replyCardStatus precedent); the mapper always sets it. */
-  artifacts?: TaskArtifactView[];
+  /** The task's curated deliverable set (T-3dc5), oldest→newest, as an INDEX:
+   * each entry is `{ id, label }` and NOTHING else.
+   *
+   * 🔴 THE ARTIFACT DETAIL IS NOT ON THIS VIEW MODEL (T-66, owner
+   * c-cd063427fb2f:「我覺得任務產物，只需要預設給標題跟ID, 有需要再透過另一隻去
+   * 拿就好了」). url / filename / mime / kind / isImage / attachmentId /
+   * createdTs / createdBy arrive from `listTaskArtifacts`, one call for the
+   * whole ticket. A component that wants to RENDER an artifact and finds only
+   * these two fields is being told, correctly, to go and fetch it.
+   *
+   * Only the FULL task (getTask) carries even the index; the LIGHT list leaves
+   * it [] (it carries only `artifactCount` for the collapsed card's 「產物 N」
+   * badge). OPTIONAL so hand-built test fixtures stay valid (the
+   * replyCardStatus precedent); the mapper always sets it. */
+  artifacts?: TaskArtifactRefView[];
   /** Number of pinned deliverables — the collapsed card's 「產物 N」 badge (0 ⇒
    * badge hidden). On the light list it is the SERVER count (`artifact_count`);
    * on a hydrated full task it equals `artifacts.length` (kept consistent so a
    * post-hydrate card keeps the same badge). OPTIONAL so hand-built fixtures
    * stay valid; the mapper always sets it. */
   artifactCount?: number;
+}
+
+/** ONE pinned deliverable as an INDEX ROW (T-66): which one it is and what it
+ * is called, and nothing that would need a second read. This is what a
+ * `TaskView.artifacts` entry is.
+ *
+ * `label` is honest-empty when the deliverable was pinned without one — it is
+ * NOT backfilled from a filename or a url here, because those live on the full
+ * row. Deciding what to SHOW for a nameless artifact is the renderer's job, on
+ * the full row it fetched. */
+export interface TaskArtifactRefView {
+  id: string;
+  label: string;
 }
 
 /** ONE pinned deliverable on a task's artifact set (T-3dc5), in view-model
@@ -456,6 +602,38 @@ export interface TaskView {
  * filename override). Honest passthrough — never fabricated. */
 export interface TaskArtifactView {
   id: string;
+  kind: "file" | "image" | "link";
+  url: string;
+  label: string;
+  filename: string;
+  mime: string;
+  isImage: boolean;
+  attachmentId: string;
+  createdTs: number;
+  createdBy: string;
+  /** How many versions this deliverable has, the LIVE one INCLUDED (T-60) — 1
+   * for one that has never been replaced, and bounded above because only the
+   * most recent few replaced versions are retained.
+   *
+   * 0 is NOT "no versions": it is what an older server that never sends the
+   * field reads as (the wire default). Both readings say the same thing to the
+   * screen — there is nothing to list — so the versions entry keys on `> 1`,
+   * never on `!== 1`. */
+  versionCount: number;
+}
+
+/** ONE retained PREVIOUS version of a pinned deliverable (T-60), in view-model
+ * form — what the artifact pointed at before a replace, newest first.
+ *
+ * It carries the version WHOLE (a blob id or a url, plus a label); `id` is the
+ * version's own row id and `kind` always equals the live artifact's, which
+ * cannot change across versions. `url`, `mime`, `filename` and `isImage` are
+ * that version's OWN facts, resolved by the server from the retained blob the
+ * same way the live artifact's are — a file/image version's `url` is the blob
+ * serve path (never empty while the blob is alive), and the mime is this
+ * version's, never the live row's. */
+export interface TaskArtifactVersionView {
+  id: number;
   kind: "file" | "image" | "link";
   url: string;
   label: string;
@@ -503,9 +681,11 @@ export interface OutsourceWorkerView {
   /** Worker mint epoch (wire created_ts; 0 when absent) — the panel's
    * fallback sort key when the bound task cannot be resolved. */
   createdTs?: number;
-  /** The bound task's display number (T-xxxx) and type — the panel row is 名稱 /
-   * task type + presence 點 / 可點的 T-xxxx (owner report 2026-07-14, aligned
-   * with the member card's three-line shape). WIRE FIELDS since T-a3e4
+  /** The bound task's number and type — the panel row is 名稱 / task type +
+   * presence 點 / 可點的任務編號 (owner report 2026-07-14, aligned with the
+   * member card's three-line shape). The number IS the task id since T-5291
+   * (it used to be a four-hex short form), so the row's chip is the string a
+   * human can paste straight back into `#tasks/<id>`. WIRE FIELDS since T-a3e4
    * (`task_no` / `task_type_key`): they used to be a CLIENT-side join against
    * the unfiltered `GET /api/tasks`, i.e. the whole task history downloaded on
    * every worker/chat delta to label a handful of rows. Honest "" when the
@@ -594,6 +774,22 @@ export interface OutsourceWorkerView {
    * worker panel's identity action row. "" from a
    * pre-column row reads as online. */
   desiredState?: string;
+  /**
+   * RESPONSE-ONLY signals an owner verb leaves on its own answer (T-ed79 #5/#12,
+   * wire `relocation_pending` / `relocation_deferred` / `activation_pending`) —
+   * the worker twins of {@link MemberRelocateResult} / {@link MemberActivateResult}.
+   *
+   * `undefined` on every list/GET and on every verb that has nothing to defer, so
+   * "this answer does not carry the signal" stays distinguishable from "false".
+   *
+   * `relocationPending` is true for BOTH a deliberate deferral and a move that
+   * could not be dispatched at all; `relocationDeferred` is what tells them
+   * apart, and a consumer must NOT raise a "nothing was dispatched" alert while
+   * it is true.
+   */
+  relocationPending?: boolean;
+  relocationDeferred?: boolean;
+  activationPending?: boolean;
 }
 
 /** One task type (任務手冊) in the LIGHT list shape the tasks page needs for
@@ -789,6 +985,13 @@ export interface ServerSettingsView {
   codexCompactionThreshold: number;
   /** Minimum seconds between telemetry-triggered monitoring refreshes (1..60). */
   monitoringRefreshSeconds: number;
+  /** 加速停止 grace in seconds (10..3600; default 120) — how long a CLOCKED
+   * wind-down waits before the server forces the collection. ONE number for BOTH
+   * clocked causes (the second context threshold and the owner-pressed
+   * 加速停止), so the countdown an agent is quoted and the deadline the server
+   * collects on cannot be two different values. It says HOW LONG, never WHO: a
+   * soft cause stays uncollected at any value. */
+  acceleratedGraceSecs: number;
   /** M3: the GLOBAL cap on concurrently live outsource workers (-1..20;
    * **-1 ⇒ 無限 (unlimited — no global cap)**; 0 ⇒ outsource assignment is
    * PAUSED — the panel annotates it). */
@@ -813,13 +1016,19 @@ export interface ServerSettingsView {
    * (docCap.ts); same floor-is-the-default, ceiling-100000 rule as above. */
   docCapCharsSystemInteraction: number;
   docCapCharsBootSequence: number;
-  /** T-c9c0: the 下線程序 document's cap, same surface and same rule. */
+  /** T-c9c0: the 〈停止〉 document's cap, same surface and same rule. */
   docCapCharsOffboard: number;
   /** T-c9b4: the wake snapshot's chat block budget, in the same rune unit.
    * NOT a document cap — it bounds a block the server repacks on every read, so
    * it may be lowered as well as raised, and it has its own ceiling. Default and
    * range in `chatBudget.ts` (mirroring server/ocserverd/domain.go). */
   chatBudgetChars: number;
+  /** T-8: N — how many database backup files rotation KEEPS. Everything past N
+   * is DELETED from disk. Two things the number does not carry and the settings
+   * copy therefore has to say: it counts VERSIONS, not days, and it is PER POOL
+   * (routine vs pre-migration), so the directory holds up to 2 × N files.
+   * Default and range in `backupRetain.ts` (mirroring server/ocserverd/backup.go). */
+  backupRetain: number;
   /** Whether the GitHub-release update check also admits prereleases
    * (false = official releases only, the default). */
   updaterReceiveBeta: boolean;
@@ -862,6 +1071,10 @@ export interface ServerSettingsView {
 export interface OnboardingStepView {
   name: string;
   ok: boolean;
+  /** The CLOSED failure vocabulary (T-0648) the cockpit translates — see
+   * `onboardingReasonText`. "" on success, and on any report a server wrote
+   * before the field existed; that case renders `reason` verbatim. */
+  code: string;
   reason: string;
   detail: string;
 }
@@ -873,6 +1086,11 @@ export interface OnboardingReportView {
   startedAt: number;
   finishedAt: number;
   steps: OnboardingStepView[];
+  /** When the owner pressed 「不再顯示」 on the banner (unix seconds; 0 = never;
+   * T-0648). It rides on the REPORT, not on the browser, which is what makes
+   * the dismissal survive a new tab. A report row written before this field
+   * existed has no stamp, and that absence reads as 0 — never dismissed. */
+  dismissedAt: number;
 }
 
 /** Partial settings edit — only supplied fields change (server 422s a
@@ -886,6 +1104,8 @@ export interface ServerSettingsPatch {
   codexNoticeRound?: number;
   codexCompactionThreshold?: number;
   monitoringRefreshSeconds?: number;
+  /** 加速停止 grace in seconds. Must be 10..3600. */
+  acceleratedGraceSecs?: number;
   outsourceMaxParallel?: number;
   /** T-ae38 document size caps, in characters. Each must be between THAT
    * segment's shipped default (`DOC_CAP_CHARS_DEFAULTS`) and 100000. */
@@ -904,6 +1124,9 @@ export interface ServerSettingsPatch {
   /** T-c9b4 wake-snapshot chat budget; range 1000..13000 (chatBudget.ts). The
    * floor is NOT the shipped default — this one may be turned down. */
   chatBudgetChars?: number;
+  /** T-8 backup retention N; range 1..20 (backupRetain.ts). Lowering it DELETES
+   * the files it puts out of range on the next backup. */
+  backupRetain?: number;
   /** Also admit GitHub prereleases in update checks (default false). */
   updaterReceiveBeta?: boolean;
   /** Arm unattended background self-upgrade (default false = manual-only). */
@@ -925,6 +1148,25 @@ export interface ServerSettingsPatch {
   /** Turn the WIDE cockpit layout on/off (T-756f). Omit to leave it
    * unchanged — a plain bool, so there is nothing to "clear" it to. */
   displayWide?: boolean;
+  /** Dismiss (true) or un-dismiss (false) the first-run onboarding banner
+   * (T-0648) — it stamps / clears `dismissedAt` on the ONE onboarding report,
+   * so 「不再顯示」 outlives the tab it was pressed in. 409 when there is no
+   * banner to close: no onboarding report at all, or a report whose state is
+   * not `failed`.
+   *
+   * 🔴 THE `running` REFUSAL IS ABOUT THE WRITE, NOT ABOUT THE STAMP. A stamp
+   * laid on a still-`running` report could not silence anything anyway — both
+   * paths that reach a terminal state rewrite the row with `dismissedAt` back
+   * at 0. What is permanent is the write itself: server-side this is an
+   * unlocked read-modify-write of the WHOLE report row, and the only writer
+   * that can run CONCURRENTLY with the run (kick, finish and recoverStale are
+   * three different goroutines that never run in parallel — boot, the
+   * set-password request, and the goroutine that request spawns form one
+   * happens-before chain), so interleaved with the run reaching its verdict it
+   * writes back its pre-verdict copy — the failure is ERASED, the report is
+   * stranded in `running` (non-terminal, so no banner draws) and first-run
+   * onboarding never re-runs, because a report exists. */
+  onboardingDismissed?: boolean;
 }
 
 /** Fields the owner may edit on a member (PATCH; every field optional).
@@ -1297,6 +1539,19 @@ export interface ResumeTaskView {
   /** Steps whose answered reply card has not yet been acted on. Empty is the
    * honest normal case; non-empty is a pointer, never a done state. */
   answeredCardSteps: ResumeAnsweredCardStepView[];
+  /** The handover hold (T-91): "" or "reassigning". The wake snapshot was the
+   * one task projection that dropped it, so a ticket handed to this member
+   * looked like a ticket it had been working on. */
+  lock: string;
+  /** The predecessor this ticket was last handed over from, "" when never
+   * reassigned; `reassignedFromKind` says whether that id is a roster member
+   * or an outsource worker. */
+  reassignedFrom: string;
+  reassignedFromKind: string;
+  /** Ids of the still-open tickets waiting on THIS one (T-91) — the reverse of
+   * `deps`. Nothing is messaged about it by owner ruling, so this row is the
+   * whole delivery. */
+  blocking: string[];
 }
 
 /** The RESUME SUMMARY panel section's snapshot for a TARGET member — the SAME
@@ -1359,6 +1614,48 @@ export interface SseDeltaNames {
   reader?: string;
   peer?: string;
 }
+
+/**
+ * The health of the delta downlink itself, as the UI is allowed to see it.
+ *
+ * This exists because a dead downlink is otherwise INDISTINGUISHABLE from a
+ * quiet one: both render as "no new anything". Publishing the state is what
+ * turns a frozen cockpit from a silent lie into something the owner can see and
+ * act on. See the shared-downlink block in api/http.ts for the transitions.
+ *
+ *   "idle"         — nobody subscribed (logged out / torn down). Not a fault.
+ *   "connecting"   — no open stream right now; what is on screen may be stale.
+ *   "live"         — open and delivering.
+ *   "unauthorized" — the session is dead; retrying has STOPPED on purpose.
+ */
+/**
+ * What a 成本歸零 destroyed, as the server read it immediately before the write.
+ *
+ * Null on a half means there was nothing to clear there — NOT that zero was
+ * cleared. The distinction matters because it is the same null semantics the
+ * cost READ side uses, so a caller keeps one rule for both.
+ */
+export type CostResetReceipt = {
+  memberId: string;
+  clearedCost: number | null;
+  clearedBankedCost: number | null;
+};
+
+/**
+ * What an ACCOUNT 歸零 destroyed: the account's OWN accumulated spend as it
+ * stood immediately before the write.
+ *
+ * Nothing about any member appears here because nothing about any member
+ * changed — the account figure and the per-member figures are cleared
+ * independently (owner ruling rc-5c5d7c7c6dcd). Null means there was nothing to
+ * clear, NOT that zero was cleared, the same rule the read side uses.
+ */
+export type AccountCostResetReceipt = {
+  account: string;
+  clearedCost: number | null;
+};
+
+export type SseConnectionState = "idle" | "connecting" | "live" | "unauthorized";
 
 export interface SseDelta {
   topic: string;
@@ -1444,12 +1741,69 @@ export interface Api {
   /**
    * Force-stop (immediate kill): POST /api/members/{id}/force-stop → the server
    * dispatches the robust STOP straight to the warden NOW (the warden SIGKILLs the
-   * session). Not a shortcut past a countdown — the offboard arm runs none, so
-   * apart from the agent's own report_stopped this is the only collection. Backs the cockpit's
-   * "Force stop" escalation, surfaced once a member is already *stopping*. Does
-   * NOT flip online — the caller refetches; presence surfaces stopped.
+   * session). Not a shortcut past a countdown — the server arms none on this arm.
+   * It is the LAST of the three things that end a soft offboard: the agent's own
+   * report_stopped, the deadline the owner opens with acceleratedStopMember, and
+   * this. Backs the cockpit's "Force stop" escalation, surfaced once a member is
+   * already *stopping*. Does NOT flip online — the caller refetches; presence
+   * surfaces stopped.
    */
   forceStopMember(id: string): Promise<void>;
+  /**
+   * 成本歸零: POST /api/members/{id}/cost/reset → clear ONE actor's estimated
+   * spend, both halves at once (the durable banked figure AND the live
+   * telemetry figure). Serves staff and outsource workers alike, a RELEASED
+   * worker included (owner ruling rc-1344cc76a24a) — a worker that has left
+   * still has a figure on screen, and the button beside it has to be able to
+   * clear it. Only an id that resolves to nobody is a 404.
+   *
+   * It does NOT move the account card: since rc-5c5d7c7c6dcd that figure is an
+   * accumulator of its own with its own button (resetAccountCost), which is why
+   * the ruling above reads as being about account totals — that was true of the
+   * model it was written under, one day earlier.
+   *
+   * 🔴 IRREVERSIBLE (owner ruling rc-7dea0deefa63). Nothing is retained and
+   * there is no undo route — call it behind a confirm, never optimistically.
+   *
+   * Resolves with a RECEIPT of what was destroyed, read immediately before the
+   * write, because that response is the last moment those numbers exist
+   * anywhere. Null on a half means there was nothing to clear there, NOT that
+   * zero was cleared — the same null semantics the read side uses, so the
+   * caller reuses one summing rule. After the reset the 估計$ cell falls back
+   * to the dash on its own; the caller refetches.
+   */
+  resetMemberCost(id: string): Promise<CostResetReceipt>;
+  /**
+   * 帳號歸零: POST /api/accounts/cost/reset → set ONE account's own accumulated
+   * spend back to 0 (owner ruling rc-5c5d7c7c6dcd「分開：帳號卡自己一份數字，清它
+   * 不動成員」).
+   *
+   * 🔴 It touches NO member or worker figure. Since that ruling the account card
+   * is not a fold over the actors on the account — it is an accumulator of its
+   * own, fed by the increase each telemetry report brings — so this clears the
+   * card and leaves every 估計$ underneath it exactly where it was.
+   *
+   * IRREVERSIBLE: nothing is retained and there is no undo route, so call it
+   * behind a confirm. Resolves with a RECEIPT of the figure destroyed, which is
+   * the last moment it exists; null means there was nothing to clear. An account
+   * nobody has reported under is not an error — the same 200 with null — so a
+   * second press reads as honest rather than broken. Refetch monitoring after
+   * it: the card is folded from that read.
+   */
+  resetAccountCost(account: string): Promise<AccountCostResetReceipt>;
+  /**
+   * 加速停止 (accelerated stop): POST /api/members/{id}/accelerated-stop → put a
+   * wind-down that is ALREADY OPEN on the server's stop.accelerated_grace_secs
+   * clock and TELL the member (the write fans an offboard notice whose sentence
+   * now quotes a deadline).
+   *
+   * The MIDDLE rung of 停止 → 加速停止 → 強制停止 (owner 2026-08-21). It
+   * ESCALATES; it does not initiate: a member nobody has asked to stop is a 409,
+   * because a clock on a member that was told nothing is a deadline it never
+   * heard about. So is a member with no live session, and one already cut off by
+   * 強制停止. Does NOT flip online — the caller refetches.
+   */
+  acceleratedStopMember(id: string): Promise<void>;
   /**
    * Dismiss (soft delete): DELETE the member → status=removed + desired_state=offline.
    * PURE SEAM, no UI entry — the 解散 button was removed from MemberDetailPanel
@@ -1527,36 +1881,83 @@ export interface Api {
    * `before` (T-bf82 scrollback) is the composite keyset cursor
    * (`?before_ts=&before_id=`, both together): the page becomes the `limit`
    * messages strictly OLDER than that (ts, id) point, still oldest→newest.
-   * A page shorter than `limit` means the history is exhausted. A HISTORY
-   * PAGE NEVER ADVANCES THE READ WATERMARK — the "list 即讀" auto-mark fires
-   * only on a cursorless list of the newest window. */
+   * A page shorter than `limit` means the history is exhausted.
+   *
+   * READ-ONLY ON EVERY PATH (T-48): listing a conversation advances NO read
+   * watermark — not the newest window, not a history page. Marking a
+   * conversation read is `markChatRead` and nothing else, so a caller that
+   * must keep the thread fresh WITHOUT consuming the unread badge (a
+   * backgrounded window) just calls this. The `peekChat` twin that used to
+   * carry that case was merged into this method in T-48. */
   listChat(
     withId: string,
     limit?: number,
     before?: ChatCursor,
   ): Promise<ChatMessage[]>;
-  /** READ-ONLY view of the same conversation: identical shape/order/window as
-   * `listChat`, but WITHOUT the "list 即讀" read-watermark side effect. Used
-   * when the thread must stay fresh while the owner is NOT actually looking
-   * (window backgrounded / tab hidden) — the unread badge must keep counting
-   * until the owner really reads. Rides the EXISTING wire surface only:
-   * `GET /api/chat` with NO `?with=` never advances a watermark (the server's
-   * auto-mark fires only when a specific conversation is requested), so the
-   * http adapter fetches the unfiltered stream (`limit=-1`) and applies the
-   * same participant filter + recent-window cap client-side. */
-  peekChat(withId: string, limit?: number): Promise<ChatMessage[]>;
+  /** One ANCHOR WINDOW of the conversation (`?start_id=` / `?end_id=`,
+   * T-48 ③), oldest→newest, READ-ONLY like every other read door here.
+   *
+   * 🔴 WHY THIS EXISTS AND `listChat` COULD NOT DO IT. "跳到原訊息" is handed a
+   * message id and nothing else. The only cursor this API used to have walks
+   * BACKWARDS from a (ts, id) the caller must already hold, so a target older
+   * than the loaded window was unreachable: the cockpit looked for the row in
+   * the DOM, did not find it, and scrolled to the bottom — which is exactly
+   * what a successful jump to a recent message looks like. The two ends here
+   * are the two halves of that jump: `endId` fetches the context ABOVE the
+   * target, `startId` the context BELOW it, and neither pulls the whole
+   * history to get there.
+   *
+   * REJECTS on an id no message carries (404 — deliberately NOT an empty page,
+   * because an empty page is what a real window at the end of the stream
+   * returns and the two must stay distinguishable). See {@link ChatAnchor}. */
+  listChatWindow(
+    withId: string,
+    anchor: ChatAnchor,
+    limit: number,
+  ): Promise<ChatMessage[]>;
+  /** Read back ONE named message in full (`GET /api/chat?ids=<id>`), with NO
+   * read-watermark side effect. Rejects when the id names nothing (the server
+   * refuses the whole call) and when the read fails.
+   *
+   * 🔴 THIS IS NOT THE MACHINE THAT WAS DELETED, AND THE DIFFERENCE IS THE WHOLE
+   * POINT. Until 2026-08-21 the thread carried a background REFETCHER for quoted
+   * messages: it ran on its own, decided for itself which ids were still owed,
+   * kept that debt across renders and peers, retried, and repaired an earlier
+   * wrong answer when a later event arrived. That shape is gone and must not
+   * come back — three of its states ("fetched", "missing", "not asked yet") drew
+   * the same pixels, so a wrong answer looked exactly like a right one.
+   *
+   * What this is instead:
+   *   • it happens ONLY because a person clicked something;
+   *   • it asks for ONE message, once, and the answer is used immediately;
+   *   • a failure is said out loud where the click happened and then forgotten
+   *     — no retry, no queue, no state that outlives the click.
+   * There is deliberately no batching, no cache and no id set. If you find
+   * yourself adding one, you are rebuilding the deleted machine.
+   *
+   * "One click, one call" is pinned by `ChatArea.quote-no-fetch.test.tsx`'s
+   * "a click on the quote costs exactly one request, and repainting costs none";
+   * the failure half — said once, never retried — is
+   * `ChatArea.reply-to.test.tsx`'s "says so, in place and once, when that one
+   * read fails". (`quote-no-fetch`'s api proxy deliberately registers no failure
+   * state, which is why the two halves live apart.) Together they are what stands
+   * between this and the thing it replaced. */
+  getChatMessage(id: string): Promise<ChatMessage>;
   /** The M2 gallery query (`GET /api/chat/attachments?with=<memberId>`): every
    * attachment of the member's conversations, flattened newest→oldest —
    * owner↔member BOTH directions AND the member's inter-agent threads — each
    * row carrying the sender id + server-resolved display name + send time.
-   * READ-ONLY (no read-watermark side effect, unlike listChat's auto-mark). */
+   * READ-ONLY, like every read door on this API since T-48 — the only thing
+   * that advances a read watermark is `markChatRead`. */
   listChatAttachments(withId: string): Promise<GalleryAttachment[]>;
-  /** Mint the PERMANENT share link for one attachment
+  /** Mint the share link for one attachment
    * (`GET /api/chat/attachments/{id}/share-link`): resolves to the blob's
    * server-relative serve path carrying its `?sig=` file-level HMAC credential
    * — anyone holding the URL may read exactly this one blob, nothing else, no
-   * expiry. Callers prefix the page origin to form the absolute, sendable URL.
-   * Unknown id → 404 (throws). */
+   * expiry. It is NOT permanent: the sig is derived from the key that signs at
+   * mint time, so removing that key from the signing-key ring voids it, along
+   * with every other link that key signed (T-62). Callers prefix the page
+   * origin to form the absolute, sendable URL. Unknown id → 404 (throws). */
   getChatAttachmentShareLink(attachmentId: string): Promise<string>;
   /** Post a chat message. May carry text and/or MULTIPLE generic `attachments`
    * (pasted images AND/OR uploaded files, mixed), sent to the server as the
@@ -1567,6 +1968,12 @@ export interface Api {
     to: string;
     body: string;
     attachments?: ChatAttachmentInput[];
+    /** The id of the message this post REPLIES TO, when it is a reply. The
+     * server checks it EXISTS — and nothing else: a reply may quote a message
+     * out of another conversation (owner ruling, 2026-08-21). The server is the
+     * only writer of the stored link; a forged `meta.reply_to` is dropped.
+     * Omitted on an ordinary post. */
+    replyTo?: string;
   }): Promise<ChatMessage>;
   /** Mark a conversation (with `peer`) read up to `lastReadTs` — the caller's own
    * read watermark (reader = the verified JWT sub server-side; anti-spoof). The
@@ -1615,8 +2022,9 @@ export interface Api {
   /**
    * Answer a WAITING card (`POST /api/reply-cards/{id}/answer`) — the ONLY way
    * a card ever closes (no close/skip verb exists). The answer is an option
-   * and/or free text (+ attachments); empty → 400, out-of-range optionIdx →
-   * 400, already answered → 409 (all reject as ApiError). Returns the answered
+   * LIST and/or free text (+ attachments); empty → 400 (and `optionIdxs: []`
+   * IS empty), an out-of-range index → 400, more than one index on a `single`
+   * card → 400, already answered → 409 (all reject as ApiError). Returns the answered
    * card; the caller refetches lists + count (the SSE delta also fans).
    */
   answerReplyCard(id: string, answer: ReplyCardAnswerInput): Promise<ReplyCard>;
@@ -1675,6 +2083,36 @@ export interface Api {
    * updatedTs moves while expanded) to hydrate the workflow timeline.
    */
   getTask(id: string): Promise<TaskView>;
+  /**
+   * Fetch ONE step in full (`GET /api/tasks/{task_id}/steps/{step_id}`, T-66) —
+   * the only read that carries a step's working-note TEXT.
+   *
+   * 🔴 It exists because `getTask` stopped carrying it. The task read reports
+   * each step's `noteSizeChars` and nothing else, so the 任務卡 draws the 備註
+   * entry from that number and calls this ONLY when the reader opens one —
+   * owner rc-4c8065fb30a5:「座艙改成點開才抓」. Do not call it per step while
+   * rendering a timeline; that is the cost the split removed.
+   *
+   * A step id that belongs to a different task is a 404 (ApiError), not another
+   * task's step.
+   */
+  getTaskStep(taskId: string, stepId: string): Promise<TaskStepDetailView>;
+  /**
+   * Fetch ONE task's pinned deliverables in full
+   * (`GET /api/tasks/{task_id}/artifacts`, T-66) — the only read that carries
+   * an artifact's url / filename / mime / kind / isImage / attachmentId /
+   * createdTs / createdBy.
+   *
+   * 🔴 It exists because `getTask` stopped carrying them: a task's `artifacts`
+   * are an id+label INDEX now (owner c-cd063427fb2f), so anything that DRAWS an
+   * artifact calls this. ONE call answers the WHOLE ticket — there is
+   * deliberately no per-artifact read (owner c-f2d0fecb1168:「應該是指名任務？」),
+   * because the cockpit's deliverables panel opens onto the entire set and a
+   * per-artifact door would cost one call per row.
+   *
+   * An unknown task id is a 404 (ApiError); a task with nothing pinned is [].
+   */
+  listTaskArtifacts(taskId: string): Promise<TaskArtifactView[]>;
   /** The task counts behind the nav badge (`GET /api/tasks/count`) — a cheap
    * dedicated endpoint so the badge can refetch on every "task" SSE delta
    * without pulling the list. `open` = non-terminal (the badge). `total` = every
@@ -1789,9 +2227,28 @@ export interface Api {
    * agent PINS via MCP but does not remove). The write answers with a bounded
    * receipt (T-a98d), so nothing is returned here — refetch, or take the SSE
    * delta. Unknown task/artifact → 404, wrong-task → 400 (both throw
-   * ApiError). The referenced blob is left intact.
+   * ApiError). The live blob is left intact, but every retained version of the
+   * artifact is deleted with it, along with the blobs only those versions used.
    */
   removeTaskArtifact(taskId: string, artifactId: string): Promise<void>;
+
+  /**
+   * List the retained PREVIOUS versions of one pinned deliverable, newest
+   * first (`GET /api/tasks/{taskId}/artifact/{artifactId}/history`, T-60) —
+   * cockpit-only, and deliberately not an MCP tool.
+   *
+   * READ-ONLY BY DESIGN: there is no restore face anywhere on this seam. An
+   * older version comes back by replacing FORWARD with it, which is the
+   * executing agent's write, not the cockpit's.
+   *
+   * An artifact that has never been replaced answers with an empty list — the
+   * honest "nothing has been replaced here". Unknown task/artifact → 404,
+   * wrong-task → 400 (both throw through the shared envelope).
+   */
+  listTaskArtifactVersions(
+    taskId: string,
+    artifactId: string,
+  ): Promise<TaskArtifactVersionView[]>;
   /**
    * The task-card message box (`POST /api/tasks/{id}/message`): the server
    * posts ONE ordinary chat message owner → the task's executor with the task
@@ -1826,10 +2283,26 @@ export interface Api {
    * otherwise); stopped → 409; unknown/released → 404. Returns the freshly
    * projected worker. (T-32e1) */
   refocusWorker(id: string): Promise<OutsourceWorkerView>;
-  /** Stop a worker (`POST /api/outsource-workers/{id}/stop`, owner/admin-agent) — kill
-   * the session and hold it down (presence "stopping"/"stopped"); no auto-revival. The
-   * bound task stays put. Idempotent; unknown/released → 404. (T-f190) */
+  /** Stop a worker (`POST /api/outsource-workers/{id}/stop`, owner/admin-agent) — the
+   * FIRST rung of 停止 → 加速停止 → 強制停止 and, since T-ed79, a GRACEFUL
+   * CLOSE-OUT rather than a kill (owner 2026-08-21 「往正職靠：外包那顆改成優雅
+   * 停止」): it holds the worker down (desired offline, presence
+   * "stopping"/"stopped", no auto-revival), shows it the 〈停止〉 and WAITS for
+   * its own report_stopped. No deadline unless the owner escalates. The bound
+   * task stays put. Idempotent; unknown/released → 404. (T-f190, T-ed79) */
   stopWorker(id: string): Promise<OutsourceWorkerView>;
+  /** 加速停止 a worker (`POST /api/outsource-workers/{id}/accelerated-stop`,
+   * owner/admin-agent) — the MIDDLE rung. Puts the wind-down that is ALREADY open
+   * (a 停止 or a 換手) on the server's `stop.accelerated_grace_secs` clock and
+   * TELLS the worker; it is not a kill, so the worker can still finish early.
+   * 409 when nothing is winding down, when the worker is offline/released, or
+   * when it was force-stopped. (T-ed79) */
+  acceleratedStopWorker(id: string): Promise<OutsourceWorkerView>;
+  /** 強制停止 a worker (`POST /api/outsource-workers/{id}/force-stop`,
+   * owner/admin-agent) — the THIRD rung, and the body /stop used to have: kill the
+   * session NOW and hold it down. It says NOTHING to the worker (the recipient is
+   * about to stop existing). Idempotent; unknown/released → 404. (T-ed79) */
+  forceStopWorker(id: string): Promise<OutsourceWorkerView>;
   /** WAKE a worker with no live session (`POST /api/outsource-workers/{id}/restart`,
    * owner/admin-agent) — clear the stop and re-dispatch. ⚠️ The owner-facing word
    * is 喚醒 since T-7526 (「重啟」 retired, one verb across both panels); the
@@ -1997,6 +2470,15 @@ export interface Api {
    * `healthy`.
    */
   getBackupHealth(): Promise<BackupHealthView>;
+  /** GET /api/auth/signing-keys — the ring, oldest first (T-62, owner-gated). */
+  getSigningKeys(): Promise<SigningKeyView[]>;
+  /** POST /api/auth/signing-keys/rotate — add a key and hand signing to it.
+   * Nothing is revoked; every existing key keeps verifying. Answers the ring
+   * AFTER the rotation, so no caller re-fetches to learn where it stands. */
+  rotateSigningKey(): Promise<SigningKeyView[]>;
+  /** POST /api/auth/signing-keys/{keyId}/remove — REVOKE everything that key
+   * signed. No undo, no grace period. Answers the ring after the removal. */
+  removeSigningKey(keyId: string): Promise<SigningKeyView[]>;
   /** The folded global-context doc (owner overlay ⊕ file seed). */
   getGlobalContext(): Promise<GlobalContextView>;
   /** Whole-doc replace of the global context → returns the folded doc
@@ -2005,28 +2487,37 @@ export interface Api {
   /** Reset the global context to seed (idempotent tombstone → `isDefault` true). */
   resetGlobalContext(): Promise<GlobalContextView>;
   /**
-   * The folded boot-context block (T-791e) — one of THREE independent document
-   * streams, addressed by (kind, key):
-   *
-   *   system_interaction / global   — the studio's how-the-system-works block
-   *   boot_sequence      / claude   — the Claude Code boot SOP
-   *   boot_sequence      / codex    — the Codex CLI boot SOP
+   * The folded boot-context / lifecycle document (T-791e, widened by T-3201),
+   * addressed by (kind, key). Every kind serves exactly one key, "global",
+   * except `boot_sequence`, which serves "claude" and "codex".
    *
    * 🔴 The two boot_sequence keys are DIFFERENT DOCUMENTS whose third step
    * means opposite things. `key` is required rather than defaulted for exactly
    * that reason: there is no "the boot sequence", so there is nothing sensible
    * for a default to pick, and an omitted key would silently address one
    * runtime while the caller meant the other.
+   *
+   * `readOnly` on the answer says the server SHOWS this document but refuses
+   * every write to it (405). It is a property of the document, read here — the
+   * cockpit keeps no list of which ones those are.
    */
   getBootDoc(kind: BootDocKind, key: string): Promise<BootDocView>;
-  /** Whole-document replace of ONE boot-context block → the folded doc
-   * (`isDefault` flips false). Rejects with a 400 ApiError when `text` is over
-   * that kind's `cap_chars` and not getting shorter — the cockpit blocks first,
-   * this is the server's own floor. Requires admin or above. */
+  /** Replace the EDITABLE HALF of ONE boot-context block → the folded doc
+   * (`isDefault` flips false).
+   *
+   * 🔴 IT TAKES `body`, NOT THE DOCUMENT (T-3201). The read-only head is not
+   * something this call can get wrong — there is no field for it, and the
+   * server joins the shipped one back on. Send back the `body` the read gave
+   * you, changed; never `text`.
+   *
+   * Rejects with a 400 ApiError when the STORED result is over that kind's
+   * `cap_chars` and not getting shorter — the cockpit blocks first, this is the
+   * server's own floor — and with a 405 for a read-only document. Requires
+   * admin or above. */
   saveBootDoc(
     kind: BootDocKind,
     key: string,
-    text: string
+    body: string
   ): Promise<BootDocView>;
   /**
    * Restore ONE boot-context block to its FACTORY version → the folded doc
@@ -2067,35 +2558,35 @@ export interface Api {
   deleteRole(key: string): Promise<void>;
 
   /**
-   * Preview a member's initial boot prompt — the assembled persona (role
-   * definition ⊕ global context ⊕ lessons) from /api/bootstrap. Pass the ROLE
-   * key (NOT a member_id) so the server mints NO token: a UI preview must never
-   * receive an agent credential (§3.4 #29 — member_id is the warden-spawn path).
+   * Preview a member's initial boot prompt from /api/bootstrap — 系統互動 ⊕
+   * global context ⊕ role definition ⊕ insight ⊕ lessons ⊕ 啟動步驟, every
+   * document FOLDED (the owner's edit wins, the seed is what an unedited
+   * installation folds to). Pass the ROLE key (NOT a member_id) so the server
+   * mints NO token: a UI preview must never receive an agent credential
+   * (§3.4 #29 — member_id is the warden-spawn path). ⚠️ That same omission is
+   * why the reply carries the CLAUDE 啟動步驟 whatever runtime the member on
+   * screen runs: with no member the server has no runtime to resolve (T-30e4).
    */
   getBootstrap(role: string): Promise<BootstrapView>;
   /**
-   * The folded PER-ROLE lessons doc for a `roleKey` + `task_type` (the single
-   * fixed task_type key is "general"). Per-role-learnings step1: scoped to a
-   * role_key — agents sharing a role share the accumulated lessons.
+   * The folded PER-ROLE lessons doc for a `roleKey`. `roleKey` is the WHOLE
+   * address — T-2 removed the `task_type` axis. Agents sharing a role share
+   * the accumulated lessons.
    */
-  getLessons(roleKey: string, taskType: string): Promise<LessonsView>;
+  getLessons(roleKey: string): Promise<LessonsView>;
   /**
-   * Whole-doc replace of the PER-ROLE lessons for a `roleKey` + `task_type` →
+   * Whole-doc replace of the PER-ROLE lessons for a `roleKey` →
    * returns the folded doc (`isDefault` flips false). Backend contract is POST
    * (NOT the PUT/DELETE the global-context save uses). WRITE authz is per-role
    * and keyed on the PRINCIPAL CLASS, not the token scope (T-5336): a caller at
    * or above admin_agent — the owner (this UI's scope) and the admin agent —
    * may write ANY role; every other agent may write only its own role.
    */
-  saveLessons(
-    roleKey: string,
-    taskType: string,
-    text: string,
-  ): Promise<LessonsView>;
+  saveLessons(roleKey: string, text: string): Promise<LessonsView>;
   /**
    * The folded PER-ROLE insight doc for a `roleKey` (T-3809) — the role
-   * journal's third block, beside Duty and Learning. No `task_type` axis and no
-   * file seed, so an untouched doc reads as genuinely empty.
+   * journal's third block, beside Duty and Learning. No file seed, so an
+   * untouched doc reads as genuinely empty.
    *
    * READ IS UNRESTRICTED and that is deliberate: any authenticated identity may
    * read ANY role's insight. Insight is SEPARATE, not private — this release
@@ -2165,6 +2656,38 @@ export interface Api {
    */
   getDocumentSeed(kind: DocumentKind, key: string): Promise<DocumentSeedView>;
   /**
+   * BOTH SIDES of one comparison, in ONE answer (`GET /api/diff`, T-59).
+   *
+   * The compare screen is addressed by a URL now, not by an attachment, and
+   * this is the read behind it: hand it the two addresses the URL spelled and
+   * it answers each side's text, the heading for its column, and whether the
+   * address resolved to nothing at all.
+   *
+   * ONE call, not two, and no per-side resolution on this side of the wire:
+   * a reader that resolved "current" itself would be a second authority on
+   * what a side IS, and the two would drift.
+   *
+   * `params.sig` is the server-minted signature the EXTERNAL flavour of the URL
+   * carries; with it the call is answered with no session at all, which is why
+   * its 401 must not be read as an expired login (see api/diff.ts).
+   */
+  getDiff(params: DiffParams): Promise<DiffPairView>;
+  /**
+   * Mint the EXTERNAL link to one comparison (`GET /api/diff/share-link`,
+   * T-59) — the same `/diff` page url plus the server's `?sig=`, which opens it
+   * for a reader who has no account at all.
+   *
+   * Server-RELATIVE, exactly like `getChatAttachmentShareLink`: only the
+   * browser knows the public origin, so the caller absolutizes
+   * (`lib/shareLink.ts`).
+   *
+   * `params.sig` is IGNORED — a signature is what this call produces, never an
+   * input to it. Requires a session: it is gated like every other route here,
+   * which is why the control that calls it is only ever drawn where one is
+   * certain (see components/DiffShareLinkButton.tsx).
+   */
+  getDiffShareLink(params: DiffParams): Promise<string>;
+  /**
    * Restore ONE retained revision over the LIVE document (destructive — the
    * current text becomes just another retained revision). Returns the restored
    * revision DTO; the caller re-reads the document itself, which is the only
@@ -2176,10 +2699,58 @@ export interface Api {
     id: number,
   ): Promise<DocumentHistoryView>;
   /**
-   * PUBLIC first-run probe (`GET /api/auth/status`): true once an owner
-   * password is set. AuthGate branches first-run setup vs login on it.
+   * PUBLIC pre-auth probe (`GET /api/auth/status`). `passwordSet` branches
+   * first-run setup vs login; `mfaRequired` tells the login wall whether to
+   * collect a TOTP code.
+   *
+   * It returns BOTH bits rather than just the first because the wall has to
+   * render the right fields before anyone holds a token. The alternative — a
+   * distinguishable "password ok, code missing" refusal from /api/login —
+   * would leak strictly more (it confirms a correct password).
    */
-  getAuthStatus(): Promise<boolean>;
+  getAuthStatus(): Promise<AuthStatusView>;
+  /**
+   * Read the owner's second-factor state (`GET /api/auth/mfa`, owner-gated):
+   * whether this server OFFERS the factor, and whether one is armed.
+   *
+   * Deliberately NOT a field on `getSettings`: that route's floor is
+   * admin_agent and its GET is an MCP tool, so the owner's credential posture
+   * would be readable by every agent in the office.
+   */
+  getMfaState(): Promise<MfaStateView>;
+  /**
+   * Turn the second-factor FEATURE on or off (`POST /api/auth/mfa/offer`,
+   * owner-gated). A rollout switch only: turning it off hides the set-up path
+   * but never disarms an armed factor, never stops login demanding a code, and
+   * never blocks `disableMfa`.
+   */
+  setMfaOffered(offered: boolean): Promise<MfaStateView>;
+  /**
+   * Begin TOTP enrolment (`POST /api/auth/mfa/enroll`, owner-gated). Returns
+   * the PENDING secret + otpauth URI once; nothing is armed until
+   * `activateMfa` proves a code from it. Rejects 409 if a factor is already
+   * active (rotation must disable first).
+   */
+  enrollMfa(): Promise<MfaEnrollView>;
+  /**
+   * Arm the second factor (`POST /api/auth/mfa/activate`, owner-gated) by
+   * proving BOTH the current password and a code from the pending secret.
+   *
+   * The password is required because ARMING is as destructive as removing: a
+   * stolen owner token alone could otherwise enrol a secret the attacker
+   * controls and activate it, locking the real owner out until someone runs
+   * `ocserverd mfa-disable` on the host. Rejects 401 on a wrong password OR
+   * code — indistinguishably, so callers must name both — and 409 when a factor
+   * is already active or nothing is pending.
+   */
+  activateMfa(password: string, code: string): Promise<void>;
+  /**
+   * Disarm the second factor (`POST /api/auth/mfa/disable`, owner-gated).
+   * Requires BOTH the current password and a live code — an owner-gated
+   * session alone must not be able to strip the factor. Rejects 401 on either,
+   * 409 when nothing is armed.
+   */
+  disableMfa(password: string, code: string): Promise<void>;
   /**
    * First-run owner-password claim (`POST /api/auth/set-password`). The
    * claim token comes from the server's local serve log / installer banner.
@@ -2300,5 +2871,18 @@ export interface Api {
    */
   subscribeEvents(
     onTopic: (topic: string, delta?: SseDelta) => void
+  ): () => void;
+  /**
+   * Watch the health of the delta downlink (see `SseConnectionState`). Fires
+   * IMMEDIATELY with the current state, then on every change. Returns an
+   * unsubscribe function.
+   *
+   * The UI's contract with this is the point of the whole method: when the
+   * downlink is not live, SAY SO. A transport that cannot go down (the mock)
+   * reports "live" once and never calls back — a subscriber must therefore work
+   * from a single synchronous call and never wait for a second one.
+   */
+  subscribeConnection(
+    onState: (state: SseConnectionState) => void
   ): () => void;
 }

@@ -6,7 +6,7 @@ package main
 //
 //   * reconcileDecide — the PURE per-member state machine (machine.py decide):
 //     desired_state × observed-online → the ONE command to dispatch (or none),
-//     with the frozen timers (§4.4): start_timeout 90s, stop_grace 120s,
+//     with the frozen timers (§4.4): start_timeout WakingTTLSecs, stop_grace 120s,
 //     stop_retry 90s, recycle_grace 120s, backoff 5/300s, circuit 5/120s.
 //   * the in-memory reconcile store (lifecycle.md §3 inventory #7): per-member
 //     bookkeeping keyed by member id; restart amnesia IS the contract — a lost
@@ -18,7 +18,9 @@ package main
 //     the fail-closed START payload fold+mint. A refused dispatch keeps the
 //     PRIOR state so the next tick retries (never record an undelivered
 //     command).
-//   * the 30s cadence tick (runReconcileTick) with the four pre-decide roster
+//   * the RECONCILE HALF of the 30s cadence tick (runReconcileTick — since
+//     T-14 item 5 one loop runs both halves in order, startLifecycleCadence in
+//     lifecycle_tick.go), with the four pre-decide roster
 //     passes (auto-recycle stamp / recycle loop-break / stale-stopping clear /
 //     offline-warden uninstall-intent consumption)
 //     and the event-driven single-member tick (reconcileMemberNow — the
@@ -35,8 +37,8 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"strconv"
 	"strings"
-	"time"
 )
 
 // ── config (spec/lifecycle.md §4.4 — defaults are contract) ──────────────────
@@ -74,9 +76,11 @@ type reconcileConfig struct {
 	// converged arm resets OfflineSince). BOUNDED by construction: once the
 	// window lapses with no reconnect the STOP fires — a true zombie is still
 	// reaped, just later; this can never degrade into "never kill".
-	// Sized 2×StartTimeout (180s): covers the agent's worst honest reconnect
-	// (backoff cap 15s + 45s idle-read watchdog + one 30s cadence tick ≈ 90s)
-	// with a full extra START-window of slack.
+	// Sized 2×StartTimeout — DERIVED, so the seconds are deliberately not spelled
+	// out here (T-20: this line said "(180s)" and StartTimeout then moved). It
+	// covers the agent's worst honest reconnect (backoff cap 15s + 45s idle-read
+	// watchdog + one 30s cadence tick ≈ 90s — those three ARE fixed constants,
+	// independent of StartTimeout) with a full extra START-window of slack.
 	ZombieConfirmGrace float64
 }
 
@@ -96,10 +100,6 @@ func defaultReconcileConfig() reconcileConfig {
 	}
 }
 
-// reconcileCadenceSecs is the producer tick period (§4.1) — sized to the
-// runtime's 30s presence heartbeat.
-const reconcileCadenceSecs = 30.0
-
 // ── vocabulary ───────────────────────────────────────────────────────────────
 
 // The server→warden command a decision selects (machine.py CommandKind). STOP
@@ -114,12 +114,42 @@ const (
 	// dispatched straight from POST /api/machines/{id}/upgrade — listed here
 	// so the warden-command verb vocabulary stays in one place.
 	reconcileCmdUpdate = "update"
+	// reconcileCmdRenew is likewise NOT a reconcile decision (T-80): it is the
+	// station telling ONE machine「去換一張憑證」after observing that the
+	// credential it keeps presenting is signed by a key that is no longer the
+	// signing one. Listed here so the warden-command verb vocabulary stays in
+	// one place.
+	//
+	// 🔴 IT CARRIES NOTHING BUT AN ADDRESS. The args are wardenTargetArgs, the
+	// same member_id-only shape STOP and UNINSTALL use, and that is owner ruling
+	// A: the station RECORDS and SUMMONS, it never writes a file on a machine
+	// and never pushes a credential down this pipe. A token in these args would
+	// be a credential handed to whoever can read the frame.
+	reconcileCmdRenew = "renew"
 )
 
 // spawnClobberReasonPrefix is the prefix of the warden SpawnOutcome.Reason
 // (cli/ocwarden/spawn.go start clobber-guard) folded onto member.last_op_reason
 // when a START bounced off a live-but-presence-deaf local session. decideUp
 // reads it to reap that zombie instead of respawning into it forever.
+// The FSM's STOP flavours (T-72dd) — see reconcileDecision.StopKind.
+const (
+	// stopKindRecycle: a wind-down epoch is being collected (refocus / 換手 /
+	// the context thresholds). The session dies and is EXPECTED to come back on
+	// the same machine — nothing about it says the machine is bad.
+	stopKindRecycle = "recycle"
+	// stopKindZombieTakeover: a START bounced off the warden clobber-guard, so a
+	// presence-deaf session squats the slot. THIS is the one that justifies
+	// benching the machine: the slot there is known-wedged.
+	stopKindZombieTakeover = "zombie_takeover"
+	// stopKindRelocate: the session must die because it is on the WRONG machine.
+	stopKindRelocate = "relocate"
+	// stopKindWinddown: desired_state=offline — the graceful 下線 / 加速停止 kill.
+	stopKindWinddown = "winddown"
+	// stopKindRobustResend: the out-of-band STOP that never landed, re-sent.
+	stopKindRobustResend = "robust_resend"
+)
+
 const spawnClobberReasonPrefix = "session_already_exists"
 
 // The observability phase projection (machine.py Phase).
@@ -157,6 +187,29 @@ type reconcileState struct {
 	LastCommand          string
 	LastCommandAt        float64
 	StopDeadline         float64
+	// RobustStopPendingAt (T-ed79) is when an OUT-OF-BAND robust STOP was last
+	// dispatched for this member by dispatchRobustStopNow — the force-stop
+	// button, the cancel-wake kill, and the report_stopped collect. 0 means none
+	// is outstanding.
+	//
+	// 🔴 WHY IT EXISTS. That dispatch is raw and best-effort: enqueueToWarden is
+	// fail-closed on a warden holding no live SSE downstream, so the frame is
+	// simply dropped. For the report_stopped collect that drop is terminal —
+	// decideUp's recycle arm is gated on refocus_since > 0 and decideDown's soft
+	// arm returns decisionNone for the whole window, so NO arm re-sends it. The
+	// member is left online on a session it has already declared finished, and
+	// nothing will ever kill and respawn it.
+	//
+	// 🔴 WHY THE ANCHOR IS THE DISPATCH AND NOT THE MEMBER'S LATCH. Re-deriving
+	// "this one needs collecting" from stopped_since would re-open the harm the
+	// first commit of this branch closed: 下線 → 活化 leaves a PREDECESSOR's
+	// stopped_since on a brand-new session with no epoch
+	// (TestWindDownKind_APredecessorsLatchDoesNotSilenceTheThresholds), and that
+	// session would be robust-stopped on its first tick with no close-out. A
+	// dispatch marker cannot say that: it is written only when a STOP was really
+	// sent for THIS session, and it is dropped the moment the session goes
+	// offline, so it can never be inherited by the next generation.
+	RobustStopPendingAt float64
 	// OfflineSince (T-9adc) is the first tick a desired-online member was
 	// OBSERVED offline (0 while online / never observed offline). It feeds the
 	// zombie-takeover second-confirmation window ONLY: the takeover STOP needs
@@ -180,12 +233,28 @@ type memberObservation struct {
 	Online       bool
 	RefocusSince float64
 	// RefocusOp is the CAUSE of that epoch (member.refocus_op). decideUp reads
-	// it for one reason only: an owner-pressed 重新聚焦 opens with the SOFT
-	// notice and is collected on NO clock at all, so this arm must never time
-	// it out. Every other cause is already a final call when it lands and gets
-	// its 120s. See recycleGraceFor.
-	RefocusOp    string
-	AgentStopped bool // stopped_since > 0 (the graceful dump-done fact)
+	// it for one reason only: to ask recycleGraceFor whether this epoch is on a
+	// clock AT ALL. Since T-ed79 almost none are — the clocked causes are the two
+	// 加速停止 arms, the SECOND context threshold (context_high) and the owner's
+	// own press (accelerated_stop); 重新聚焦, 改機器, a model/runtime change,
+	// restart_self, the FIRST context threshold and token expiry are all
+	// collected by the agent's own stopped report or the owner's force-stop. This used to say
+	// "every other cause is already a final call when it lands and gets its
+	// 120s", i.e. the exact inverse of today's rule — and it sits ~100 lines
+	// from recycleGraceFor, which says the correct thing. The ruling lives in
+	// ONE place (winddownKindFor); this arm must never re-derive it.
+	RefocusOp string
+	// StoppingSince is the 下線 arm's own anchor (member.stopping_since), and it
+	// is here for exactly ONE reader: the owner-pressed 加速停止 (T-ed79), whose
+	// grace runs from the press. decideDown had no durable anchor before — the
+	// pre-T-a9d6 timed path armed st.StopDeadline from the OBSERVATION, which is
+	// process-local and forgotten on restart. That was tolerable for a fallback
+	// nobody announced; it is not tolerable for a deadline the agent has been
+	// TOLD, because the sentence is composed from the durable row and would
+	// outlive a clock that lives only in memory. Reading the row keeps the two
+	// on the same fact across a station re-exec.
+	StoppingSince float64
+	AgentStopped  bool // stopped_since > 0 (the graceful dump-done fact)
 	// The last warden command_result folded onto this member (api_monitoring.go
 	// foldCommandResult → member.last_op*): the executed op kind + its structured
 	// cause. decideUp reads them to detect a START that bounced off the local
@@ -202,6 +271,21 @@ type memberObservation struct {
 	// a claim-less/booting member out of the relocation recycle.
 	TargetMachine  string
 	RunningMachine string
+	// HandoverArmable is "armMemberOwnerOpHandover(m, relocate) would succeed"
+	// — asked by memberOwnerOpHandoverArmable, which runs the real gates against
+	// a throwaway copy rather than re-listing them (T-14 #4).
+	//
+	// 🔴 IT IS HERE TO KEEP THE RELOCATION BACKSTOP CONVERGENT. That arm no
+	// longer kills on sight; it asks the caller to open a wind-down and lets the
+	// refocus arm collect it. But a wind-down can be REFUSED — a warden row has
+	// no ocagent to hand anything over, and a member already on the 強制停止 rung
+	// may not be walked back down the ladder — and a decision that asks for a
+	// stamp nobody writes is a tick that changes nothing and re-decides
+	// identically forever, leaving a session running on the wrong machine with
+	// no path off it. Reading the answer BEFORE choosing the branch is what lets
+	// the arm fall back to the original first-pass STOP in exactly the cases
+	// where there is no hand-off to wait for.
+	HandoverArmable bool
 }
 
 // reconcileDecision is one decision: the command to dispatch (or none), a
@@ -235,6 +319,86 @@ type reconcileDecision struct {
 	// tick turns this flag into a durable last_op receipt so the two are
 	// distinguishable in the UI.
 	StartTimedOut bool
+	// ConvergedOnline (T-39) is true on the tick that finds a member the owner
+	// wants running ALREADY RUNNING — decideUp's "online: converged" arm, and
+	// only that arm. It is the exact opposite signal to StartTimedOut, and the
+	// two are mutually exclusive by construction (that one is reached only when
+	// the member is NOT online).
+	//
+	// 🔴 IT EXISTS BECAUSE "THE FAILURE IS OVER" HAD NO WRITER. Every arm that
+	// stamps a failure receipt runs while the member is broken; the only arm that
+	// could clear a WARDEN receipt was gated on `Command == start`, i.e. on the
+	// server having just tried AGAIN. (Narrowed on purpose: two other clearing
+	// arms exist — that same arm's placement-stamp clear and worker_spawn.go's
+	// clearWorkerPlacementBlock — but both are ALSO gated on a fresh dispatch and
+	// neither touches a warden receipt, so the same trap holds for all three.) So a receipt could only be cleared by a further attempt,
+	// never by the member simply coming back — and a member that recovered on its
+	// own kept its red 「最近操作」 line for as long as it stayed healthy (field
+	// evidence: 10.6 days). The recovery is a fact the DECIDER knows and nothing
+	// downstream could re-derive without copying decideUp's converged conditions,
+	// which is the two-copies-of-one-ruling failure StopKind's comment describes.
+	// Same shape as StopKind and ArmHandoverOp: decided where the branch lives,
+	// read verbatim by the caller (reconcileTickMemberLocked for staff,
+	// reconcileWorkerLiveness for outsource — one flag, both producers).
+	//
+	// ⚠️ KNOWN REMAINING CASE, declared rather than discovered later: only
+	// decideUp sets this. decideDown and decideUninstall never do, so a FAILED
+	// STOP or UNINSTALL receipt on a member that has since converged OFFLINE is
+	// still shown forever — the same disease on the other side of the FSM. That
+	// is the owner's ruling honoured literally (「他回來了」 is the online
+	// direction) and not an oversight; it needs its own ruling because "the
+	// member is gone" is not obviously the moment to forget why stopping it
+	// failed.
+	ConvergedOnline bool
+	// StopKind names WHICH of the FSM's STOPs this is (T-72dd). "" on every
+	// decision that is not a STOP.
+	//
+	// 🔴 It exists because a caller CANNOT tell them apart from the outside
+	// without re-deriving the decider's own branch conditions — and the moment a
+	// caller re-derives them, there are two copies of one ruling and they drift.
+	// reconcileWorkerLiveness had exactly that problem: its STOP arm was written
+	// for the zombie takeover and BENCHED the target machine, which is right for
+	// a ghost-squatted slot and wrong for a recycle — a 換手 is supposed to come
+	// back up on the SAME machine, so benching it means the worker is killed and
+	// then cannot return until the cooldown lapses. The distinction is made HERE,
+	// where the branch is chosen, and read verbatim by the caller.
+	StopKind string
+	// ReasonCode (T-ed79 #14) is the STRUCTURED half of Reason: one of the
+	// spawnReason* / placementReason* codes when this decision is a STALL the
+	// owner is owed an explanation for, "" when it is not.
+	//
+	// 🔴 "" IS THE DEFAULT AND IT MEANS 'OWES NOBODY ANYTHING'. Most decisions
+	// are converged states (online: converged, offline: converged, uninstall:
+	// converged) or steps in a wind-down that is proceeding normally. Stamping a
+	// receipt for those would turn every healthy member into a permanent SSE
+	// event stream and make the receipt meaningless — the field exists to name
+	// the cases where the member wants to be online and is NOT, and the reason
+	// was previously reachable only on the server's stderr.
+	ReasonCode string
+	// ArmHandoverOp (T-14 #4) is the owner-op cause of a wind-down epoch the
+	// DECIDER wants opened on this member's row, "" on every decision that wants
+	// none. Today exactly one arm sets it: decideUp's relocation backstop, with
+	// memberOpRelocate.
+	//
+	// 🔴 WHY A DECISION FIELD AND NOT A WRITE. reconcileDecide is pure — obs / st
+	// / cfg / now in, a decision out — while opening an epoch is a durable row
+	// write. The alternative shapes were both worse:
+	//
+	//   - have the CALLER decide whether to arm, before deciding. It would have
+	//     to re-derive this arm's guard (pinned target, known running machine, an
+	//     actual mismatch, no epoch already open) outside the decider, which is
+	//     the two-copies-of-one-ruling failure StopKind's comment above exists to
+	//     describe — and the copies would sit in different files.
+	//   - a new Command kind. Command means "the frame to hand a warden";
+	//     reconcileOne's switch dispatches every value of it, and a member of that
+	//     set that no warden ever sees would make the field mean two things.
+	//
+	// This field is the same shape as StopKind and DispatchWarden: the branch is
+	// chosen where the branch conditions live, and the caller reads the answer
+	// verbatim. The caller is reconcileTickMemberLocked (it holds reconcileMu,
+	// and the arm is a whole-row write); Command is reconcileCmdNone on the same
+	// decision, so the arm never races a frame this tick also dispatched.
+	ArmHandoverOp string
 }
 
 func decisionNone(obs memberObservation, st reconcileState, reason string) reconcileDecision {
@@ -244,6 +408,51 @@ func decisionNone(obs memberObservation, st reconcileState, reason string) recon
 }
 
 // ── the pure decision function (machine.py decide) ───────────────────────────
+
+// ── the at-least-once robust STOP judgment (T-ed79, shared) ──────────────────
+//
+// ONE armed out-of-band robust STOP, three possible answers. The judgment behind
+// them — what arms it, how long a warden gets before the frame is presumed lost,
+// and what counts as "the session we killed is still running" — is the SAME for
+// a roster member and for an outsource worker, so BOTH producers read this one
+// function rather than each carrying a private copy of the rule. That is the
+// whole point of the ticket: a second parallel implementation on the outsource
+// side would be exactly the thing this change exists to delete.
+//
+// Producers:
+//   - member: dispatchRobustStopNow arms reconcileState.RobustStopPendingAt, the
+//     cadence judges it at the top of reconcileDecide (obs.Online is its `alive`).
+//   - worker: stopWorkerSessionOrPark arms workerStopLanded, the outsource tick
+//     judges it in retryUnlandedWorkerStop.
+type robustStopStep int
+
+const (
+	// robustStopDone — the killed session can no longer be shown to be running.
+	// Disarm: the marker must never outlive the session it was dispatched for.
+	robustStopDone robustStopStep = iota
+	// robustStopWait — still running, inside the retry window. A warden is
+	// entitled to its kill ladder; re-pushing here is frame spam, not safety.
+	robustStopWait
+	// robustStopResend — still running past the retry window. The one thing that
+	// can be true is that the kill never took: push it again.
+	robustStopResend
+)
+
+// robustStopRetryStep answers for one armed dispatch. `alive` is the caller's
+// evidence that the session THIS STOP was aimed at is still running — the member
+// producer reads obs.Online; the worker producer narrows that to "online AND
+// still claiming the machine the kill was addressed to", because a respawn puts
+// the same worker id back online on a session this STOP never addressed.
+func robustStopRetryStep(dispatchedAt float64, alive bool, stopRetry, now float64) robustStopStep {
+	switch {
+	case dispatchedAt <= 0.0 || !alive:
+		return robustStopDone
+	case now-dispatchedAt >= stopRetry:
+		return robustStopResend
+	default:
+		return robustStopWait
+	}
+}
 
 // reconcileDecide decides the single command for one member. Pure: a function
 // of (observation, state, config, now) — the dispatch IO lives in reconcileOne.
@@ -257,6 +466,43 @@ func reconcileDecide(
 		st.Attempts = 0
 		st.BackoffUntil = 0.0
 	}
+	// ── the unlanded out-of-band robust STOP (T-ed79) ────────────────────────
+	// At-least-once for the ONE dispatch path that had no backstop at all. Runs
+	// BEFORE the desired-state switch because the member it describes is being
+	// collected regardless of which arm would otherwise own it, and because
+	// decideUp's converged arm would otherwise wipe the stop bookkeeping every
+	// tick.
+	//
+	// Cleared on the first offline observation: that is both the success signal
+	// (the warden killed the session) and the guarantee that the marker can
+	// never outlive the session it was dispatched for.
+	if st.RobustStopPendingAt > 0.0 {
+		switch robustStopRetryStep(st.RobustStopPendingAt, obs.Online, cfg.StopRetry, now) {
+		case robustStopDone:
+			st.RobustStopPendingAt = 0.0
+		case robustStopResend:
+			st.RobustStopPendingAt = now
+			st.Phase = reconcilePhaseStopping
+			st.LastCommand = reconcileCmdStop
+			st.LastCommandAt = now
+			return reconcileDecision{
+				Command: reconcileCmdStop, MemberID: obs.MemberID,
+				StopKind: stopKindRobustResend,
+				Reason: "robust stop: re-dispatch (out-of-band STOP unlanded — " +
+					"still online past stop_retry)",
+				State: st,
+				// Kill where the session ACTUALLY is, exactly as
+				// dispatchRobustStopNow addressed it (memberKillTargetWarden);
+				// "" falls back to wardenTargetOf in reconcileOne.
+				DispatchWarden: obs.RunningMachine,
+			}
+		default: // robustStopWait
+			st.Phase = reconcilePhaseStopping
+			return decisionNone(obs, st,
+				"robust stop dispatched out-of-band — awaiting warden kill "+
+					"(within stop_retry)")
+		}
+	}
 	switch obs.Desired {
 	case DesiredStateUninstall:
 		return decideUninstall(obs, st, cfg, now)
@@ -269,12 +515,14 @@ func reconcileDecide(
 // recycleGraceFor is the one place that says how long a refocus epoch waits
 // before the collection is forced — and whether it is on a clock AT ALL.
 //
-// An owner-pressed 重新聚焦 is NOT (owner 2026-08-19, card rc-c540367065ad:
-// 「連時鐘一起拿掉」). It has the same shape as 下線: the agent is shown the
-// sequence, and the collection is its own stopped report or the owner pressing
-// force-stop. Nothing collects it on time. Every other cause (context pressure,
-// 改機器, model change, the agent's own restart_self) arrives already saying
-// 120 seconds, and gets exactly that.
+// Almost nothing is (T-ed79). 重新聚焦, 改機器, model change, the agent's own
+// restart_self, the FIRST context threshold and token expiry all have the same
+// shape as 下線: the agent is shown the sequence, and the collection is its own
+// stopped report or the owner pressing force-stop. Nothing collects them on
+// time. The clocked causes are the TWO 加速停止 arms — the SECOND context
+// threshold (context_high) and the owner's own press (accelerated_stop) — and
+// they get exactly their RecycleGrace seconds, from the SAME setting, because
+// winddownKindFor answers for both.
 //
 // 🔴 The bool is why this returns two values instead of a big number: it and
 // offboardKindOf are ONE judgement read from two places — the clock and the
@@ -285,7 +533,13 @@ func reconcileDecide(
 // all. If you ever put a clock back on this arm, offboardKindOf has to start
 // saying so in the same change.
 func recycleGraceFor(refocusOp string, cfg reconcileConfig) (grace float64, clocked bool) {
-	if refocusOp == refocusOpRefocus {
+	// 🔴 The WHICH-ARM question is not answered here any more (T-ed79). This
+	// function used to fall through to "clocked" for every op except 重新聚焦,
+	// while offboardKindOf answered the same question from its own list — two
+	// copies of one ruling, in two files, and the split this comment warns
+	// about is what happens the day they disagree. winddownKindFor is now the
+	// single read; all that is left here is HOW LONG a clocked arm gets.
+	if _, clocked := winddownKindFor(refocusOp); !clocked {
 		return 0, false
 	}
 	return cfg.RecycleGrace, true
@@ -329,7 +583,8 @@ func decideUp(
 				st.LastCommandAt = now
 				return reconcileDecision{
 					Command: reconcileCmdStop, MemberID: obs.MemberID,
-					Reason: reason, State: st,
+					StopKind: stopKindRecycle,
+					Reason:   reason, State: st,
 					// Kill where the session ACTUALLY is, not where it is wanted.
 					// For a plain 重新聚焦 these are the same machine, so nothing
 					// changes; T-b6d9 made them differ, because a 改機器 now stamps
@@ -348,27 +603,60 @@ func decideUp(
 	}
 	if obs.Online {
 		// RELOCATION (§ owner re-pinned a LIVE member's desired_machine): an online,
-		// refocus-free member whose running machine no longer matches its target is
-		// robust-STOPped NOW, desired_state stays online, so the next tick's plain
-		// START re-mints the boot token on the NEW machine (wardenTargetOf routes
-		// START by desired_machine). ⚠️ THIS ARM DOES NOT WAIT — do not read it as
-		// "recycled exactly like refocus" (it said so until T-b6d9, and that
-		// sentence was false: the refocus arm above waits for the agent's dump or
-		// RecycleGrace, this one kills on the first pass). The graceful path for an
-		// owner 改機器 is upstream, in the relocate HANDLER, which stamps
-		// refocus_since so the arm ABOVE owns the move (armMemberOwnerOpHandover,
-		// T-b6d9). What is left here is the BACKSTOP for a divergence nobody
-		// stamped for: a member re-pinned while offline that later booted on the
-		// old machine, or a pin written by something other than that handler.
-		// The STOP is
-		// routed to the RUNNING machine's warden (DispatchWarden), not the target's,
-		// because that is where the session to kill actually lives. Guarded to the
-		// SAFE cases ONLY: a pinned target, a KNOWN running machine (never "" — a
-		// claim-less/booting member must never be flapped into a STOP→START loop),
-		// and an actual mismatch. refocus never reaches here (handled above), so the
-		// two recycles never stack.
+		// refocus-free member whose running machine no longer matches its target has
+		// to be moved. desired_state stays online the whole time, so once the old
+		// session is gone the next tick's plain START re-mints the boot token on the
+		// NEW machine (wardenTargetOf routes START by desired_machine).
+		//
+		// 🔴 THIS ARM WAITS (T-14 #4). It did NOT until this ticket: it robust-
+		// STOPped the session on the FIRST pass, with no 預告 and no chance to hand
+		// anything over — the exact behaviour T-b6d9 removed from the relocate
+		// HANDLER and left standing here, so the front door was graceful and the
+		// backstop was not. Owner ruling (2026-08-28/29): 「refocus 怎麼做的 這邊就
+		// 怎麼做」,「三種下線都是同一種方案…他們都是不急著下線，等它自然交接完」,
+		// 「下線以後再挑機器與 model」. So this arm now opens the SAME wind-down the
+		// handler opens (ArmHandoverOp → armMemberOwnerOpHandover, which stamps
+		// refocus_since) and hands the member to the refocus arm ABOVE, which waits
+		// for the agent's own stopped report and then issues the STOP addressed to
+		// the running machine. A 改機器 epoch is UNCLOCKED (winddownKindFor), so the
+		// wait is the agent's to end — or the owner's, via 加速停止 / 強制停止.
+		//
+		// It is still the BACKSTOP, for the divergence nobody stamped for: a member
+		// re-pinned while offline that later booted on the old machine, or a pin
+		// written by something other than that handler. What changed is only WHAT
+		// the backstop does about it.
+		//
+		// 🔴 AND IT STILL KILLS ON THE FIRST PASS WHEN THERE IS NOTHING TO WAIT FOR.
+		// A wind-down can be refused — a warden row runs no ocagent and would never
+		// read the marker, and a member already on the 強制停止 rung may not be
+		// walked back down the ladder — and asking for a stamp nobody writes would
+		// re-decide identically every 30s forever, stranding a live session on the
+		// wrong machine with no path off it. obs.HandoverArmable is that question,
+		// asked by the real gates (memberOwnerOpHandoverArmable), and the immediate
+		// STOP below is the answer when they say no. Waiting for a hand-off that
+		// cannot happen is not gentler than killing — it is just never converging.
+		//
+		// The STOP is routed to the RUNNING machine's warden (DispatchWarden), not
+		// the target's, because that is where the session to kill actually lives.
+		// Guarded to the SAFE cases ONLY: a pinned target, a KNOWN running machine
+		// (never "" — a claim-less/booting member must never be flapped into a
+		// STOP→START loop), and an actual mismatch. refocus never reaches here
+		// (handled above), so the two recycles never stack.
 		if obs.TargetMachine != "" && obs.RunningMachine != "" &&
 			obs.RunningMachine != obs.TargetMachine {
+			if obs.HandoverArmable {
+				// Nothing is dispatched and st.LastCommand is deliberately NOT
+				// advanced: the collection is the refocus arm's, and its own
+				// first-dispatch/stop_retry bookkeeping must start clean when it
+				// takes over on the next tick.
+				st.Phase = reconcilePhaseStopping
+				dec := decisionNone(obs, st,
+					"relocate: desired_machine changed (running "+obs.RunningMachine+
+						" != target "+obs.TargetMachine+") — opening a wind-down; "+
+						"the refocus arm collects it on the agent's hand-off")
+				dec.ArmHandoverOp = memberOpRelocate
+				return dec
+			}
 			firstDispatch := st.LastCommand != reconcileCmdStop
 			if firstDispatch || (now-st.LastCommandAt) >= cfg.StopRetry {
 				reason := "relocate: re-dispatch robust stop (still on old machine " +
@@ -383,7 +671,8 @@ func decideUp(
 				st.LastCommandAt = now
 				return reconcileDecision{
 					Command: reconcileCmdStop, MemberID: obs.MemberID,
-					Reason: reason, State: st, DispatchWarden: obs.RunningMachine,
+					StopKind: stopKindRelocate,
+					Reason:   reason, State: st, DispatchWarden: obs.RunningMachine,
 				}
 			}
 			st.Phase = reconcilePhaseStopping
@@ -399,7 +688,12 @@ func decideUp(
 		st.LastCommand = reconcileCmdNone
 		st.LastCommandAt = 0.0
 		st.StopDeadline = 0.0
-		return decisionNone(obs, st, "online: converged")
+		dec := decisionNone(obs, st, "online: converged")
+		// T-39: the ONE producer of ConvergedOnline. Anything the member's row
+		// still says about a FAILED operation is describing an attempt this tick
+		// has just outlived; the callers clear it here and nowhere else.
+		dec.ConvergedOnline = true
+		return dec
 	}
 
 	// Not online. A START may be in flight — give it the start window.
@@ -430,15 +724,21 @@ func decideUp(
 			// the STOP unconditionally — a true zombie is still reaped.
 			if now-st.OfflineSince < cfg.ZombieConfirmGrace {
 				st.Phase = reconcilePhaseStarting
-				return decisionNone(obs, st,
+				dec := decisionNone(obs, st,
 					"zombie suspect: START clobbered a live presence-deaf session — "+
 						"withholding takeover stop inside the reconnect-confirm grace")
+				dec.ReasonCode = spawnReasonZombieSuspect + ": a session for this member " +
+					"is still alive on its machine but is not answering, so the start " +
+					"bounced off it. The server waits to be sure it is not simply " +
+					"reconnecting before it takes the slot back"
+				return dec
 			}
 			st.Phase = reconcilePhaseStopping
 			st.LastCommand = reconcileCmdStop
 			st.LastCommandAt = now
 			return reconcileDecision{
 				Command: reconcileCmdStop, MemberID: obs.MemberID,
+				StopKind: stopKindZombieTakeover,
 				Reason: "zombie takeover: START clobbered a live presence-deaf " +
 					"session — robust stop to reap it before respawn",
 				State: st,
@@ -457,12 +757,18 @@ func decideUp(
 	if st.CircuitOpen {
 		st.Phase = reconcilePhaseCircuitOpen
 		dec := decisionNone(obs, st, "circuit open: respawn disabled")
+		dec.ReasonCode = spawnReasonCircuitOpen + ": too many failed starts in a row, so " +
+			"the server has stopped retrying this member for now — it will try again " +
+			"by itself; fix what is failing on its machine, or 停止 and 活化 to start over"
 		dec.StartTimedOut = startTimedOut
 		return dec
 	}
 	if now < st.BackoffUntil {
 		st.Phase = reconcilePhaseBackoff
 		dec := decisionNone(obs, st, "backoff: awaiting retry window")
+		dec.ReasonCode = spawnReasonBackoff + ": the last start did not come up, so the " +
+			"next attempt is waiting out a back-off window — nothing is wrong with the " +
+			"button you pressed, the retry has not come round yet"
 		dec.StartTimedOut = startTimedOut
 		return dec
 	}
@@ -512,13 +818,37 @@ func decideDown(
 	// The collection still happens the instant the agent says it is done: its
 	// stopped report dispatches the robust STOP (HandleReportStopped). What is
 	// gone is the server deciding that time is up.
-	if cfg.SoftOffboardGrace > 0 {
+	// 🔴 …UNLESS THE OWNER PRESSED 加速停止 ON THIS STOP (T-ed79). Everything the
+	// paragraph above says is about the SERVER starting a clock nobody asked for.
+	// This one is started by the owner, on the middle rung of his own escalation
+	// (停止 → 加速停止 → 強制停止), and the member has ALREADY been told about it:
+	// the same winddownKindFor answer makes offboardKindOf return `final`, so the
+	// notice quotes exactly this deadline. Asking one function is why the clock
+	// and the sentence cannot come apart here the way they used to on the 換手
+	// arm.
+	//
+	// The anchor is stopping_since, which the 加速停止 handler re-stamps as it
+	// writes the cause — the owner's grace runs from HIS press, not from a 停止 he
+	// may have pressed hours earlier. Past the deadline this falls THROUGH to the
+	// robust-stop dispatch at the bottom of this function (including its
+	// stop_retry de-dupe), rather than dispatching a second, parallel kill path.
+	acceleratedGrace, accelerated := recycleGraceFor(obs.RefocusOp, cfg)
+	accelerated = accelerated && obs.StoppingSince > 0.0
+	switch {
+	case accelerated && now < obs.StoppingSince+acceleratedGrace:
+		st.Phase = reconcilePhaseStopping
+		return decisionNone(obs, st,
+			"stopping: 加速停止 — within the grace the owner opened; collection is "+
+				"the agent's stopped report, or this deadline")
+	case accelerated:
+		// deadline lapsed → fall through to the robust stop below
+	case cfg.SoftOffboardGrace > 0:
 		st.Phase = reconcilePhaseStopping
 		return decisionNone(obs, st,
 			"stopping: agent is working its offboard sequence — collection is the "+
 				"agent's stopped report, or the owner's force-stop")
 	}
-	if st.StopDeadline == 0.0 {
+	if !accelerated && st.StopDeadline == 0.0 {
 		// The pre-T-a9d6 timed wind-down, reached by SoftOffboardGrace = 0 (a
 		// compile-time constant today, not an owner-facing setting): arm the
 		// grace clock from OBSERVING the intent, never from a dispatched
@@ -528,7 +858,7 @@ func decideDown(
 		return decisionNone(obs, st,
 			"stopping: grace window opened — awaiting agent selfstop")
 	}
-	if now < st.StopDeadline {
+	if !accelerated && now < st.StopDeadline {
 		st.Phase = reconcilePhaseStopping
 		return decisionNone(obs, st,
 			"stopping: within grace window — awaiting agent selfstop")
@@ -539,13 +869,17 @@ func decideDown(
 			"prior STOP unlanded)"
 		if firstDispatch {
 			reason = "robust stop: grace elapsed, still online"
+			if accelerated {
+				reason = "robust stop: 加速停止 grace elapsed, still online"
+			}
 		}
 		st.Phase = reconcilePhaseStopping
 		st.LastCommand = reconcileCmdStop
 		st.LastCommandAt = now
 		return reconcileDecision{
 			Command: reconcileCmdStop, MemberID: obs.MemberID,
-			Reason: reason, State: st,
+			StopKind: stopKindWinddown,
+			Reason:   reason, State: st,
 		}
 	}
 	st.Phase = reconcilePhaseStopping
@@ -708,10 +1042,10 @@ func (s *apiServer) buildStartFrame(m Member) ([]byte, bool) {
 	if m.RosterStatus != RosterStatusActive {
 		return nil, false
 	}
-	if len(s.secret) == 0 {
+	if len(s.keys.signingSecret()) == 0 {
 		return nil, false
 	}
-	boot, err := s.buildBootContext("", &m, "")
+	boot, err := s.buildBootContext("", &m)
 	if err != nil || boot == nil {
 		if err != nil {
 			reconcileLog("START fold failed for %q: %v", m.ID, err)
@@ -730,7 +1064,6 @@ func (s *apiServer) buildStartFrame(m Member) ([]byte, bool) {
 			PersonaContext: boot.Context,
 			MemberToken:    token,
 			Role:           boot.RoleKey,
-			TaskType:       boot.TaskType,
 			Runtime:        NormalizeRuntime(m.Runtime),
 			Model:          m.Model,
 			Effort:         m.Effort,
@@ -764,6 +1097,200 @@ type wardenTargetArgs struct {
 	MemberID string `json:"member_id"`
 }
 
+// machineLacksClaudeButHasCodex answers, from what the machine ITSELF reported,
+// whether "install/log into claude here" is a dead end on it while Codex is a
+// live option. Three separate positives are required, and every unknown answers
+// false:
+//
+//   - the machine has reported capabilities at all (a pre-capability warden, or
+//     one that has not heartbeat yet, tells us nothing);
+//   - it reported a claude entry whose `installed` is MEASURED false — the shape
+//     cli/ocwarden/runtimeprobe.go emits on a codex-only box, which always sends
+//     the claude key. A missing entry is not a measurement;
+//   - codex on that same machine is actually ready (runtimeCapabilityReady), so
+//     the option we are about to name can really be taken.
+//
+// The asymmetry is deliberate. Telling the owner of a codex-only box to go check
+// claude is a DEAD END — they can follow it forever and never arrive. Telling
+// the owner of a box that does have claude to go change the member's 執行環境 is
+// an ACTIVE MISDIRECTION: it asks them to abandon a runtime that is present and
+// to make a roster change that was never the problem. So the Codex sentence is
+// spoken only on positive evidence, and everything else keeps today's wording.
+func (s *apiServer) machineLacksClaudeButHasCodex(machineID string) bool {
+	if machineID == "" {
+		return false
+	}
+	capabilities := s.machineRuntimeCapabilities(machineID)
+	if len(capabilities) == 0 {
+		return false
+	}
+	claude, reported := capabilities[RuntimeClaude]
+	if !reported || claude.Installed == nil || *claude.Installed {
+		return false
+	}
+	return runtimeCapabilityReady(capabilities[RuntimeCodex])
+}
+
+// wakeTimeoutReason is the sentence stampWakeObservability writes when a START
+// lapsed its start window — the LAST thing an owner reads on 「最近操作」 for a
+// member that will not boot.
+//
+// T-b3d0 taught the spawn-time refusal to name three exits (switch this member
+// to Codex / install Claude Code / re-point OC_CLAUDE_BIN). That refusal is an
+// EXECUTION receipt, and this stamp OVERWRITES it the moment the window lapses:
+// on a codex-only machine the owner's final on-screen sentence went back to
+// "check that claude runs and is logged in", a road that has no end on a box
+// with no claude. Naming the third exit here is what makes the sentence the
+// owner actually keeps a sentence they can act on.
+//
+// The runtime is named rather than hardcoded to "claude" for the same reason:
+// a Codex member that fails to boot must not be sent to inspect a runtime it
+// does not use. NormalizeRuntime("") is claude, so an unset member reads exactly
+// as it does today.
+func (s *apiServer) wakeTimeoutReason(m Member) string {
+	runtime := NormalizeRuntime(m.Runtime)
+	if runtime == RuntimeClaude && s.machineLacksClaudeButHasCodex(m.DesiredMachineID) {
+		return wakeTimeoutReasonCode + ": the START was dispatched but the agent never " +
+			"came online within the start window — machine '" + m.DesiredMachineID +
+			"' reports no Claude Code installed, so this member cannot boot there. " +
+			"Fix any one: set this member's 執行環境 to Codex (that machine has it " +
+			"ready); or install Claude Code on that machine " +
+			"(warden log: ocwarden.out.log)"
+	}
+	return wakeTimeoutReasonCode + ": the START was dispatched but the agent never " +
+		"came online within the start window — check that " + runtime + " runs and is " +
+		"logged in on the target machine (warden log: ocwarden.out.log)"
+}
+
+// runtimeCapabilityReady is the HONEST readiness read of ONE reported runtime
+// entry: installed, and not known-logged-out.
+//
+// Deliberately NOT machineSupportsRuntime. That gate's Claude arm is
+// permissive by contract (it returns true for any reported claude entry, so the
+// OC_CLAUDE_CRED_CHECK=0 escape hatch keeps working), and a codex-only box does
+// report one: cli/ocwarden/runtimeprobe.go ALWAYS emits the claude key, as
+// {"installed": false}. Choosing a runtime off that permissive read would pick
+// claude on exactly the machines this resolution exists to serve.
+func runtimeCapabilityReady(c RuntimeCapabilityDTO) bool {
+	if c.Installed == nil || !*c.Installed {
+		return false
+	}
+	return c.LoggedIn == nil || *c.LoggedIn
+}
+
+// resolveEmptyRuntimeForPlacement fills a member's UNSET runtime from what the
+// target machine reports, and persists the choice on the roster row.
+//
+// WHY HERE. The out-of-box assistant is seeded with no runtime at all
+// (seedOutOfBox), and it must not be born hard-wired to Claude: it should run
+// whatever the box it is placed on actually has. The seed cannot make that
+// call — seedOutOfBox runs at migrate and at serve start, before any warden has
+// ever reported capabilities, so there is nothing to read. Placement is the
+// first moment BOTH facts exist (which machine, and what that machine has) and
+// the last moment before buildStartFrame stamps the runtime onto the wire.
+//
+// A member whose runtime is already set is never touched: this resolves an
+// ABSENT choice, it never overrides the owner's.
+//
+// NO HEARTBEAT YET (len(capabilities) == 0) => LEAVE IT UNSET, i.e. keep
+// today's behaviour exactly (NormalizeRuntime("") == claude, and
+// machineSupportsRuntime's legacy-warden arm lets it through). The two possible
+// mistakes are not equivalent. Refusing here would make a machine that was just
+// installed and has not reported yet unusable for every member — a NEW way to
+// be stuck. Letting it through only returns to the path that already exists
+// today, and that path's spawn-time failure now names the third option
+// (switch this member to Codex) instead of only telling the owner to go get
+// claude.
+func (s *apiServer) resolveEmptyRuntimeForPlacement(m *Member, warden string) {
+	if m.Kind == KindWarden || strings.TrimSpace(m.Runtime) != "" {
+		return
+	}
+	capabilities := s.machineRuntimeCapabilities(warden)
+	if len(capabilities) == 0 {
+		return
+	}
+	// LEGACY-WARDEN CLAUDE SHAPE => UNKNOWN, NOT "NO".
+	//
+	// `claude: {installed:true, logged_in:false}` is a shape no current warden
+	// can produce. collectRuntimeCapabilities (cli/ocwarden/runtimeprobe.go) is
+	// evidence-only for Claude: it has no login probe, only two presence checks
+	// (credential file, keychain item), so finding neither OMITS the key rather
+	// than asserting false. An explicit false on the claude entry therefore
+	// dates the reporter — it can only come from a warden older than the
+	// evidence-only fix, which shipped in v0.5.211-beta.1.
+	//
+	// Reading that stale guess as "this box cannot run Claude" is exactly the
+	// mistake that already happened once, and the probe's own comment records
+	// it: the spawn-side gate honours FOUR env-carried credential sources this
+	// probe never looks at (two direct keys plus the Bedrock / Vertex
+	// managed-auth flags, where no local claude login exists at all), so hosts
+	// on Bedrock or Vertex reported logged_in:false and were PERSISTED as
+	// codex — "a machine that could have run claude perfectly well, pinned to
+	// the other runtime with no way back". Before T-ae8b that cost one member
+	// (the out-of-box assistant, the only row ever born UNSET). T-ae8b makes
+	// EVERY hire and EVERY new role born UNSET, so the same stale false would
+	// now silently pin every future member on that machine.
+	//
+	// So: decline to choose, and leave the runtime unset. That is not a
+	// refusal — unset normalizes to claude and machineSupportsRuntime's claude
+	// arm is permissive by contract, so the START still goes out. Either it
+	// launches (env-carried credential, or OC_CLAUDE_CRED_CHECK=0) and the
+	// stale false is revealed as the guess it was, or it fails at spawn with
+	// claude_not_logged_in, which names the escape routes including "set this
+	// member's 執行環境 to Codex". A visible, reversible failure beats an
+	// invisible irreversible guess; the owner keeps the choice either way.
+	//
+	// Codex gets no such grace and must not: `codex login status` is a real
+	// command, so its false is a MEASUREMENT, not an absence of evidence.
+	if claude := capabilities[RuntimeClaude]; claude.Installed != nil && *claude.Installed &&
+		claude.LoggedIn != nil && !*claude.LoggedIn {
+		reconcileLog("%s: machine %q reports claude installed with logged_in:false — a shape only a "+
+			"warden older than v0.5.211-beta.1 emits, where it means \"no credential evidence found\", "+
+			"NOT \"signed out\". Declining to auto-resolve this member to codex, because persisting "+
+			"that choice is irreversible and this machine may well run claude (env-carried key, "+
+			"Bedrock/Vertex managed auth, or OC_CLAUDE_CRED_CHECK=0). Leaving 執行環境 unset: the "+
+			"start still goes out as claude, and if it really is signed out the spawn will say so and "+
+			"name the Codex exit. To choose deliberately instead: upgrade that machine's warden, or "+
+			"set this member's 執行環境 by hand.", m.ID, warden)
+		return
+	}
+	resolved := ""
+	switch {
+	case runtimeCapabilityReady(capabilities[RuntimeClaude]):
+		resolved = RuntimeClaude
+	case runtimeCapabilityReady(capabilities[RuntimeCodex]):
+		resolved = RuntimeCodex
+	default:
+		// Nothing on this box is ready. Persisting a guess would freeze the
+		// wrong answer onto the roster row forever; leave it unset and let the
+		// placement gate right below refuse and stamp the reason.
+		return
+	}
+	fresh, err := s.dal.GetMember(m.ID)
+	if err != nil || fresh == nil || fresh.RosterStatus != RosterStatusActive {
+		return
+	}
+	if strings.TrimSpace(fresh.Runtime) != "" {
+		// A concurrent owner edit picked one mid-tick; theirs wins.
+		m.Runtime = fresh.Runtime
+		return
+	}
+	m.Runtime = resolved
+	fresh.Runtime = resolved
+	// runtime left PutMember's DO UPDATE SET in T-55, so a whole-row write here
+	// would persist nothing at all. It should not be one anyway: this runs on
+	// the reconcile tick, next to HTTP faces writing member rows from their own
+	// snapshots, and it only ever means to move this one column. The member
+	// delta putMember used to fan for free is re-issued explicitly — without it
+	// the cockpit would keep showing the unresolved runtime until some unrelated
+	// write happened to land.
+	if err := s.dal.SetMemberRuntime(m.ID, resolved); err != nil {
+		reconcileLog("%s: runtime resolution persist failed: %v", m.ID, err)
+		return
+	}
+	s.publishMemberPatch(*fresh, triggerServer)
+}
+
 // ── decide → dispatch (controller.py ServerReconciler.reconcile_one) ─────────
 
 // reconcileOne runs one member's decide → dispatch. A dispatch that is not
@@ -771,19 +1298,30 @@ type wardenTargetArgs struct {
 // decision whose state is NOT advanced, so the next tick retries — the
 // producer never records a command it did not deliver.
 func (s *apiServer) reconcileOne(m Member, st reconcileState, now float64) reconcileDecision {
+	// 下線 → 重啟, spent (T-14 項目 7). BEFORE the observation is built, because
+	// flipping desired_state back to online is what makes this tick take the
+	// decideUp arm and START the member — the same tick the stop converged on,
+	// not the one after it. A no-op for every member with nothing queued.
+	s.consumeRestartAfterStop(&m, now)
 	obs := memberObservation{
 		MemberID:       m.ID,
 		Desired:        parseDesired(m.DesiredState),
 		Online:         s.hub.IsOnline(m.ID),
 		RefocusSince:   m.RefocusSince,
 		RefocusOp:      m.RefocusOp,
+		StoppingSince:  m.StoppingSince,
 		AgentStopped:   m.StoppedSince > 0.0,
 		LastOpKind:     m.LastOp,
 		LastOpReason:   m.LastOpReason,
 		TargetMachine:  m.DesiredMachineID,
 		RunningMachine: s.hub.MachineOf(m.ID),
+		// Asked here, not inside the decider, for the reason every other field on
+		// this struct is: the decider is pure and this question needs the hub and
+		// the row. The relocation backstop reads it to choose between opening a
+		// wind-down and killing on the spot — see memberObservation.HandoverArmable.
+		HandoverArmable: s.memberOwnerOpHandoverArmable(m, memberOpRelocate),
 	}
-	decision := reconcileDecide(obs, st, s.reconcileCfg, now)
+	decision := reconcileDecide(obs, st, s.reconcileConfigLive(), now)
 	switch decision.Command {
 	case reconcileCmdNone:
 		return decision
@@ -802,6 +1340,10 @@ func (s *apiServer) reconcileOne(m Member, st reconcileState, now float64) recon
 			decision.DispatchUnlanded = true
 			return decision
 		}
+		// The target machine is now known and the START frame is not built
+		// yet: this is the last point that can still choose a runtime, and the
+		// first one that knows what this box actually reports (T-b3d0).
+		s.resolveEmptyRuntimeForPlacement(&m, warden)
 		if m.Kind != KindWarden && !s.machineSupportsRuntime(warden, m.Runtime) {
 			reconcileLog("%s: target warden %q does not report runtime %q ready — fail-closed",
 				m.ID, warden, NormalizeRuntime(m.Runtime))
@@ -886,8 +1428,275 @@ func (s *apiServer) reconcileTickMemberLocked(m Member, now float64) reconcileDe
 	s.reconcileStates[m.ID] = decision.State
 	reconcileLog("%s: desired=%s command=%s — %s",
 		m.ID, parseDesired(m.DesiredState), decision.Command, decision.Reason)
+	s.armDecidedHandover(m.ID, decision)
 	s.stampWakeObservability(&m, decision, now)
+	// AFTER the wake receipt, and it yields to it: stampWakeObservability owns the
+	// EXECUTION-level diagnosis ("the start went out and the agent never came
+	// up"), which is strictly more informative than this tick's DISPATCH-level one
+	// ("we are in back-off"). They collide on the very tick a lapse turns into
+	// back-off, and the single last_op_reason slot can hold only one.
+	if !decision.StartTimedOut {
+		s.stampMemberOpBlocked(m.ID, decision.ReasonCode, now)
+	}
 	return decision
+}
+
+// armDecidedHandover executes the ONE durable write a reconcile decision can
+// ask for: opening a wind-down epoch on the member's row (T-14 #4). It is the
+// dispatch half of reconcileDecision.ArmHandoverOp, and it does nothing at all
+// on the decisions — nearly all of them — that ask for none.
+//
+// It re-reads before writing, for the reason every other stamp in this file
+// does: this is a whole-row write and the HTTP faces (activate / relocate /
+// deactivate) write member rows without holding reconcileMu, so persisting the
+// tick's snapshot would silently revert a change that landed mid-tick — here on
+// desired_machine_id itself, the very field the epoch is being opened about.
+//
+// 🔴 A REFUSAL HERE IS SAFE, and that is a property of the arm that asked, not
+// of this function. The decider only asks when obs.HandoverArmable said the
+// same gates would pass; if the re-read row has moved on and they now refuse,
+// nothing is written and the NEXT tick re-decides from that fresher row — which
+// is the row the gates just answered about, so the two agree and the member
+// takes whichever arm it now belongs on (the immediate STOP, or none at all).
+// The loop cannot repeat with the same answer twice.
+//
+// Best-effort by the stampWakeObservability rule: a persistence failure is
+// logged and changes no decision. It takes no `now`: armMemberOwnerOpHandover
+// stamps from nowSecs() like every other epoch site, and threading the tick's
+// clock in would create a second one. Caller MUST hold reconcileMu.
+func (s *apiServer) armDecidedHandover(memberID string, decision reconcileDecision) {
+	if decision.ArmHandoverOp == "" {
+		return
+	}
+	fresh, err := s.dal.GetMember(memberID)
+	if err != nil || fresh == nil || fresh.RosterStatus != RosterStatusActive {
+		return
+	}
+	if !s.armMemberOwnerOpHandover(fresh, decision.ArmHandoverOp) {
+		return // it logged which gate refused; the next tick re-decides
+	}
+	if err := s.persistMemberWindDownAnchors(*fresh); err != nil {
+		reconcileLog("%s: %s wind-down ANCHOR write failed, row write not attempted: %v",
+			memberID, decision.ArmHandoverOp, err)
+		// 🔴 THE RETURN IS THE POINT, and this site is the one that needed it
+		// spelled out: the four sibling sites are inside loops and `continue` on
+		// the same failure, so the guard there is structural. Here it is not.
+		// Falling through would run the whole-row write, which FANS THE MEMBER
+		// DELTA — and the recycle hook in cli/ocagent keys on that delta to go
+		// read refocus_since. It would read 0, conclude no wind-down was armed,
+		// and the arm would silently evaporate. The next tick re-decides, so
+		// bailing here costs one tick; fanning a delta for an epoch that is not
+		// on the row costs the arm.
+		return
+	}
+	if err := s.putMember(*fresh, triggerServer); err != nil {
+		reconcileLog("%s: %s wind-down arm persist failed: %v",
+			memberID, decision.ArmHandoverOp, err)
+	}
+}
+
+// stampOpReceipt is THE five-column receipt a failed-or-deferred op leaves on a
+// row. A Member and an OutsourceWorker carry those five columns under the same
+// names, so every writer of them was the same five assignments written out by
+// hand; what is left at each site is which struct the columns come off, and the
+// guards around the write.
+//
+// 🔴 IT IS NOT "THE ONLY SPELLING OF THE RECEIPT" — an earlier draft of this
+// comment said that and it was false, which is the failure this paragraph exists
+// to stop repeating. The draft AFTER that one then said "every production writer
+// of the five columns either calls this function or carries a RECEIPT-CORE-AUDIT
+// anchor", and it was false in exactly the same over-wide way: foldCommandResult
+// and foldWorkerCommandResult (api_monitoring.go) each write all five, call
+// nothing here, and carry no anchor. Worse, the recipe that draft handed out for
+// re-checking (`OpOK = &ok` / `OpOK: &ok`) could not have found them at all —
+// both spell their bool okPtr/okVal, so the recipe's reach was narrower than the
+// claim it was supposed to back. A guard whose claimed range exceeds its actual
+// range is the disease, not the cure.
+//
+// What this function IS the single source of is narrower: the SERVER-AUTHORED
+// REFUSAL receipt — "the change was saved and nothing was started" — a non-nil
+// FALSE the server decided on its own, with last_op_log cleared. The two folds
+// are a DIFFERENT CLASS and must not be routed through here: they carry the
+// AGENT's own verdict off the wire (three-valued, and a success as readily as a
+// failure) together with the log that came with it. A core that hard-writes false
+// and blanks the log would destroy the exact thing they exist to record.
+//
+// RECEIPT-CORE-AUDIT is the grep anchor for exceptions WITHIN the refusal class.
+// Today exactly one carries it — stampWakeObservability, below — and its anchor
+// says why.
+//
+// To re-check, grep `LastOpOK` over non-test .go — the COLUMN name, because the
+// `&ok` spelling is incidental and the next writer is free to name its bool
+// anything. Over the tree this comment lives in that is 41 hits, 3 of them
+// inside this comment block (the recipe finds its own subject).
+//
+// ⚠️ THE ARITHMETIC HISTORY THAT USED TO SIT HERE IS GONE ON PURPOSE. It said
+// 31; by the time anyone re-ran the grep it was 33, and it derived that figure
+// from a "two lines each" that was three. A remembered count is a claim nothing
+// re-checks: it decays silently while reading as precise, which is the exact
+// defect this ticket exists to remove. Re-run the grep. Do not trust the last
+// number anyone wrote down, this one included.
+//
+// Of the rest, the hits that WRITE the column are:
+//   - seven `stampOpReceipt(&….LastOpOK, …)` call sites — reconcile.go ×3,
+//     receipt_watch.go ×2, worker_spawn.go ×2: the refusal class, all of it here;
+//   - stampWakeObservability below — refusal class, standing apart, anchored;
+//   - api_monitoring.go ×2 — the agent-verdict class described above;
+//   - seven `dal.SetMemberOpReceipt(…, ….LastOpOK, …)` call sites (T-55) —
+//     worker_spawn.go ×3, api_monitoring.go, api_members.go, receipt_watch.go,
+//     api_outsource.go. NOT a fourth class of receipt: they are the PERSISTENCE
+//     of the three above, which used to be a whole-row write. The five columns
+//     left PutMember's DO UPDATE SET, so stamping onto a struct stores nothing
+//     by itself — every stamp above now ends in one of these, and a stamp that
+//     does not is a receipt nobody will ever read;
+//   - one line that COPIES an already-stamped receipt onto a freshly re-read
+//     row — stampWakeObservability's persist below. It writes the column
+//     without deciding anything, which is why it sits in neither the refusal
+//     class nor the agent-verdict one;
+//   - three lines that clear back to nil rather than stamping —
+//     worker_spawn.go's clearWorkerPlacementBlock and
+//     clearWorkerConvergedFailureReceipt, plus this file's
+//     clearMemberConvergedFailureReceipt: each reads the column to test for a
+//     FAILURE and then writes nil.
+//
+// 🔴 A CLEAR IS NOT A RECEIPT, and it must not be routed through this core: the
+// core always leaves a non-nil FALSE with a reason, the clears leave nil with
+// none. That is a different operation, not an exception to this one.
+//
+// Everything else the grep returns is a read or a struct field declaration. That
+// enumeration is the claim, and re-running the grep is what checks it. It does
+// NOT claim a future writer will announce itself: nothing here executes, so a new
+// hand-written receipt can appear and this paragraph will not notice. Making the
+// recipe executable is a later stage's work, not this one's.
+//
+// 🔴 IT TAKES FIELD POINTERS, NOT A ROW, ON PURPOSE. The obvious tidier shape —
+// lift the five columns into an embedded struct both rows share — reaches the
+// DAL: scanMember/PutMember and their outsource twins list these columns
+// positionally, so the embedding would have to be threaded through every scan
+// and put site to remove five duplicated assignments. The pointer core buys the
+// single source at the cost of one long signature, and touches no persistence
+// code at all.
+//
+// The OP VERB is a parameter, not a constant: the reconcile-side writers all
+// stamp a START, and stampReceiptMissing (receipt_watch.go) stamps whichever RPC
+// the lapsed watch was waiting on. That was the whole of the difference between
+// those two families, and it is why folding the watch's two arms in was possible
+// at all — they were the same five lines twice inside ONE function, once for the
+// member row and once for the worker row.
+//
+// last_op_ok is three-valued on both rows (nil = nothing folded yet) and this
+// always leaves a non-nil FALSE: what this function stamps is a refusal or a
+// deferral — "the change was saved and nothing was started" — never a success.
+// last_op_log is cleared with it, because the log belongs to the op being
+// replaced and reading a fresh reason beside a stale log is worse than reading
+// neither. Sentinels: one per calling site, each pinned to ABSOLUTE values
+// rather than to another site's values, so a change here reddens all of them —
+// TestStampMemberOpReceipt_WritesTheFiveReceiptFields,
+// TestStampWorkerOpReceipt_WritesTheFiveReceiptFields, and the
+// receipt_core_sites_t170e_test.go family for the stamps that persist.
+func stampOpReceipt(lastOp *string, lastOpOK **bool, lastOpLog, lastOpReason *string,
+	lastOpAt *float64, op, reason string, now float64) {
+	ok := false
+	*lastOp = op
+	*lastOpOK = &ok
+	*lastOpLog = ""
+	*lastOpReason = reason
+	*lastOpAt = now
+}
+
+// stampMemberOpReceipt writes one op receipt onto an IN-MEMORY member the caller
+// is about to persist itself — the same reason armRefocusEpoch mutates instead
+// of persisting. The receipt itself is stampOpReceipt's; this is the staff shell.
+//
+// ⚠️ IT NO LONGER MAKES THE EXPLANATION AND THE CHANGE ONE WRITE (T-55), which
+// is what this comment used to promise. The five receipt columns became
+// insert-only, so a caller's whole-row write carries the change
+// and a separate dal.SetMemberOpReceipt carries the explanation. STAMPING ALONE
+// STORES NOTHING — a caller that forgets the second write leaves a receipt that
+// exists only in memory, and nothing goes red.
+//
+// Where the two writes go relative to each other is a per-site decision with a
+// real failure mode behind it, not a style choice: see HandleUpdateMember, where
+// the receipt has to land BEFORE the launch-intent setters because the gate that
+// decides whether to stamp at all compares against the STORED value.
+func stampMemberOpReceipt(m *Member, reason string, now float64) {
+	stampOpReceipt(&m.LastOp, &m.LastOpOK, &m.LastOpLog, &m.LastOpReason, &m.LastOpAt,
+		reconcileCmdStart, reason, now)
+}
+
+// isStopgapRetryReason reports whether a reason code is the retry loop
+// DESCRIBING ITS OWN WAIT rather than diagnosing anything — the only class the
+// single-slot precedence rule in stampMemberOpBlocked yields to. Both members
+// are produced by decideUp's pacing arms and both re-derive every 30s for as
+// long as the stall lasts, which is what makes them able to blank a diagnosis
+// they know nothing about.
+func isStopgapRetryReason(reason string) bool {
+	return strings.HasPrefix(reason, spawnReasonBackoff+":") ||
+		strings.HasPrefix(reason, spawnReasonCircuitOpen+":")
+}
+
+// stampMemberOpBlocked records WHY a staff member the owner wants running is not
+// running, on the row the cockpit already reads — the staff twin of
+// stampWorkerPlacementBlocked, and the production end of T-ed79 #14.
+//
+// The contract-level parts (the last_op* fields, the isPlacementBlockedReason
+// clearing seam, the cockpit renderer) were ALREADY shared between the two
+// sides; what staff never had was anybody writing. decideUp reached "circuit
+// open", "backoff" and "zombie suspect" and reconcileLog'd each one to the
+// server's stderr, where no owner has ever looked. From the cockpit all three
+// were the same picture: a grey row.
+//
+// A BLANK code is a no-op, deliberately — see reconcileDecision.ReasonCode. This
+// function never clears: clearing belongs to stampWakeObservability's landed-START
+// path, which already drops any placement-blocked reason, and a converged tick
+// silently blanking the row would erase the diagnosis one tick after it appeared.
+//
+// Written only when the cause CHANGES (the anti-churn rule the worker stamp
+// documents at length: the cadence re-decides the same stall every 30s, so an
+// unconditional write would re-stamp last_op_at and fan a delta on every tick).
+// Re-read before the whole-row write, for the reason every other stamp here does.
+// Best-effort: a persist failure is logged and changes no decision.
+
+func (s *apiServer) stampMemberOpBlocked(memberID, reason string, now float64) {
+	if reason == "" {
+		return
+	}
+	fresh, err := s.dal.GetMember(memberID)
+	if err != nil || fresh == nil || fresh.RosterStatus != RosterStatusActive {
+		return
+	}
+	if fresh.LastOp == reconcileCmdStart && fresh.LastOpReason == reason {
+		return // already stamped with this exact cause — do not churn the row
+	}
+	// 🔴 THE ONE PRECEDENCE RULE, and it is the family's own (worker_spawn.go, the
+	// codes deliberately outside spawnBlockedReasonCodes): a diagnosis of the
+	// PREVIOUS attempt must not be erased by a description of the current wait.
+	// wake_timeout says the start was dispatched and the agent never came up; it
+	// is followed, one tick later, by exactly the back-off this function would
+	// stamp — so without this rule the retry loop would blank the only sentence
+	// that says what actually went wrong, every time, which is the trap 31751ae
+	// fixed for workers.
+	//
+	// 🔴 IT TURNS ON THE INCOMING CODE, NOT ONLY ON WHAT IS ON THE ROW. The rule
+	// is about the RETRY LOOP, and only backoff/circuit_open are the retry loop
+	// describing its own wait. zombie_suspect and the activate handler's
+	// warden_unreachable are fresh, actionable findings about what is wrong NOW —
+	// strictly more informative than a wake_timeout from an attempt that has
+	// already failed — and a guard that read only the row swallowed those too,
+	// leaving the owner a stale sentence while the live fault went unsaid.
+	if isStopgapRetryReason(reason) &&
+		strings.HasPrefix(fresh.LastOpReason, wakeTimeoutReasonCode+":") {
+		return
+	}
+	stampOpReceipt(&fresh.LastOp, &fresh.LastOpOK, &fresh.LastOpLog, &fresh.LastOpReason,
+		&fresh.LastOpAt, reconcileCmdStart, reason, now)
+	// SINGLE WRITE, not two (T-55): the re-read above changed nothing but the
+	// receipt, so this whole-row write existed only to carry those five columns.
+	// Replacing it outright means there is no window between two writes here at
+	// all — see the ticket's 2.1a.
+	if err := s.persistMemberOpReceipt(*fresh, triggerServer); err != nil {
+		reconcileLog("%s: op-blocked stamp persist failed: %v", memberID, err)
+	}
 }
 
 // stampMemberPlacementBlocked names, on the member row the cockpit reads, the one
@@ -926,13 +1735,10 @@ func (s *apiServer) stampMemberPlacementBlocked(m *Member, now float64) {
 	if fresh.LastOp == reconcileCmdStart && fresh.LastOpReason == reason {
 		return
 	}
-	ok := false
-	fresh.LastOp = reconcileCmdStart
-	fresh.LastOpOK = &ok
-	fresh.LastOpLog = ""
-	fresh.LastOpReason = reason
-	fresh.LastOpAt = now
-	if err := s.putMember(*fresh, triggerServer); err != nil {
+	stampOpReceipt(&fresh.LastOp, &fresh.LastOpOK, &fresh.LastOpLog, &fresh.LastOpReason,
+		&fresh.LastOpAt, reconcileCmdStart, reason, now)
+	// Single write — same reason as stampMemberOpBlocked above.
+	if err := s.persistMemberOpReceipt(*fresh, triggerServer); err != nil {
 		reconcileLog("%s: placement-blocked stamp persist failed: %v", m.ID, err)
 	}
 }
@@ -946,26 +1752,38 @@ func (s *apiServer) stampMemberPlacementBlocked(m *Member, now float64) {
 //	    agents that successfully booted. An agent that never came up left it at
 //	    zero, so PresenceState projected plain "offline": the failed wake and the
 //	    member nobody ever woke rendered IDENTICALLY. Stamping at dispatch means
-//	    "waking" now means what it says — the server asked, and the 90s
+//	    "waking" now means what it says — the server asked, and the
 //	    WakingTTLSecs window is the honest deadline. Only stamped when the frame
 //	    was actually accepted by a warden: an undispatched START must not claim
 //	    the member is waking.
 //	(b) a START that lapsed its start_timeout writes a last_op receipt, which is
 //	    what the cockpit's 「最近操作」 reads. Without it the lapse only ever
 //	    existed as exponential backoff inside the reconcile state.
+//	(c) a member that has CONVERGED back online CLEARS a failure receipt (T-39).
+//	    The counterpart to (b), and it was missing: (b) writes while the member
+//	    is broken and nothing was watching for it becoming un-broken, so the red
+//	    line the owner sees had no way to end except a second failure.
 //
 // Best-effort by contract: a persistence failure is logged and never changes the
 // reconcile decision — observability must not be able to stall the control loop.
 func (s *apiServer) stampWakeObservability(m *Member, decision reconcileDecision, now float64) {
 	changed := false
 	if decision.StartTimedOut {
+		// RECEIPT-CORE-AUDIT: deliberately NOT stampOpReceipt, and this is not an
+		// oversight. This writer touches FOUR of the five receipt columns — it
+		// never clears last_op_log. Routing it through the core would add that
+		// clear, which is a BEHAVIOUR CHANGE (a wake that lapses would blank the
+		// previous op's log instead of leaving it standing) and therefore outside
+		// a convergence-only change. It also composes last_op_reason further down
+		// (the T-66a2 undelivered-frame rewrite) after the stamp, so the "one
+		// reason in, one reason out" shape the core assumes does not hold here.
+		// Whether the log SHOULD be cleared here is a real question and a
+		// behaviour decision — it belongs to a later stage, not to this one.
 		ok := false
 		m.LastOp = reconcileCmdStart
 		m.LastOpOK = &ok
 		m.LastOpAt = now
-		m.LastOpReason = wakeTimeoutReasonCode + ": the START was dispatched but the agent never " +
-			"came online within the start window — check that claude runs and is " +
-			"logged in on the target machine (warden log: ocwarden.err.log)"
+		m.LastOpReason = s.wakeTimeoutReason(*m)
 		// T-66a2: the sentence above is only true when the frame actually
 		// reached the machine. If the warden's stream died mid-delivery the
 		// frame was dropped server-side and NOTHING on the target machine was
@@ -1000,13 +1818,37 @@ func (s *apiServer) stampWakeObservability(m *Member, decision reconcileDecision
 		changed = true
 		// The START landed, so a PLACEMENT-blocked explanation is now history —
 		// leaving it would make the next block look like the still-standing first
-		// one. Only a placement stamp is cleared: the wake_timeout receipt written
-		// above, and a warden's own refused-start receipt, are the record of why a
-		// boot failed and survive the retry that follows them.
+		// one. Only a placement stamp is cleared HERE: the wake_timeout receipt
+		// written above, and a warden's own refused-start receipt, are the record
+		// of why a boot failed and survive the retry that follows them — a retry
+		// is not an outcome, and blanking them on dispatch would delete the only
+		// sentence saying what went wrong while it is still going wrong.
+		//
+		// 🔴 THEY NO LONGER SURVIVE FOREVER, and this sentence used to say they
+		// did by omission (T-39). What ends them is the arm below: the member
+		// actually coming back. That is the difference the old shape could not
+		// express — it had exactly one clearing gate, "we tried again", so
+		// "cleared" and "healthy" were mutually exclusive and the receipt could
+		// outlive its failure indefinitely (10.6 days, on a member that was
+		// online the whole time). Dispatch still does not clear them; CONVERGENCE
+		// does.
 		if isPlacementBlockedReason(m.LastOpReason) {
 			m.LastOpReason = ""
 			m.LastOpLog = ""
 		}
+	}
+	// T-39 — THE MEMBER CAME BACK, SO THE FAILURE RECEIPT GOES.
+	//
+	// 🔴 IT RETURNS. Both arms above are UNREACHABLE on a converged tick and that
+	// is structural, not luck: StartTimedOut is only ever observed on the
+	// not-online path, and a decision that carries ConvergedOnline is by
+	// construction Command == none. So there is never a wake stamp to persist
+	// alongside this clear, and the whole-row copy below — which would otherwise
+	// splat this tick's SNAPSHOT of all five receipt columns onto a freshly re-read
+	// row — must not run for it. The clear does its own re-read and its own put.
+	if decision.ConvergedOnline {
+		s.clearMemberConvergedFailureReceipt(m.ID, *m)
+		return
 	}
 	if !changed {
 		return
@@ -1027,8 +1869,112 @@ func (s *apiServer) stampWakeObservability(m *Member, decision reconcileDecision
 	fresh.LastOpLog = m.LastOpLog
 	fresh.LastOpReason = m.LastOpReason
 	fresh.LastOpAt = m.LastOpAt
+	// 🔴 SIX COLUMNS, NOT FIVE — and that is why this site is still two writes
+	// (T-55). waking_since travels with the receipt here, and it has NOT left
+	// PutMember's SET list, so the whole-row write stays for it while the five
+	// receipt columns go through their sole writer. When waking_since is migrated
+	// in its own batch, this becomes two single-column writes and the whole-row
+	// write disappears; until then, deleting either half loses a column.
+	//
+	// Order: the whole-row write first, the receipt second — both halves are
+	// recomputed and re-attempted by the next reconcile tick, so a failure
+	// between them is visible to a retry either way; this order simply matches
+	// the rest of the ticket.
 	if err := s.putMember(*fresh, triggerServer); err != nil {
 		reconcileLog("%s: wake observability persist failed: %v", m.ID, err)
+		return
+	}
+	if err := s.persistMemberOpReceipt(*fresh, triggerServer); err != nil {
+		reconcileLog("%s: wake observability receipt persist failed: %v", m.ID, err)
+	}
+}
+
+// receiptRendersAsFailure answers the ONE question the T-39 clears are allowed
+// to turn on: WOULD THE COCKPIT PAINT THIS ROW AS A FAILED OPERATION RIGHT NOW.
+//
+// 🔴 IT MIRRORS THE PANEL, NOT THE COLUMN, and that is the whole point of the
+// ticket. The owner's ruling (rc-f2e963132fc5 [1]) is 「他回來了就把那行字直接
+// 拿掉」 — the thing to remove is the RED LINE ON THE SCREEN, not "a row whose
+// last_op_ok happens to equal false". Gating on the column instead of on the
+// render was the same category of mistake this ticket exists to fix, and it left
+// a reachable hole: `last_op_ok = nil` with last_op/last_op_at populated is a
+// WORDLESS RED BLOCK, because the panel's verdict arm is `vm.lastOpOk ? "ok" :
+// "fail"` (AgentDetailPanel.tsx) and nil takes the ✗ branch. That shape is
+// PRODUCED BY THIS SERVER — clearWorkerPlacementBlock deliberately writes ok
+// back to nil while leaving last_op and last_op_at standing.
+//
+// The two halves are the panel's two conditions, verbatim:
+//
+//	last_op != "" && last_op_at > 0   — `hasLastOp` (AgentDetailPanel.tsx:412),
+//	                                    with last_op_at 0 mapped to null in
+//	                                    mappers.ts before the panel sees it;
+//	!(last_op_ok == true)             — the ✗ arm, which nil falls into.
+//
+// ⚠️ A SUCCESS RECEIPT IS NOT A FAILURE and this returns false for it. That
+// boundary does not move: the owner asked for the red line to go, and deleting a
+// green one would silently widen a narrow ruling.
+//
+// It is also what makes the clears non-churning: after one runs, last_op is ""
+// and last_op_at is 0, so every later converged tick answers false and writes
+// nothing.
+func receiptRendersAsFailure(lastOp string, lastOpAt float64, lastOpOK *bool) bool {
+	if lastOp == "" || lastOpAt <= 0 {
+		return false // the panel hides the block entirely — nothing on screen
+	}
+	return lastOpOK == nil || !*lastOpOK
+}
+
+// clearMemberConvergedFailureReceipt removes the cockpit's red 「最近操作」 line
+// from a staff member that has converged back ONLINE (T-39). The outsource twin
+// is clearWorkerConvergedFailureReceipt (worker_spawn.go); they are two functions
+// because they write two different row types, and they say the same thing because
+// both turn on receiptRendersAsFailure and on the one decider's ConvergedOnline.
+//
+// 🔴 THE RULING IS MADE ON THE RE-READ ROW, NOT ON THE TICK SNAPSHOT. This is a
+// whole-row write and the HTTP faces (activate / relocate / deactivate) write
+// member rows without holding reconcileMu — the same hazard every stamp in this
+// file re-reads for. Judging the snapshot and then blanking the fresh row would
+// be strictly worse than the bug being fixed: it would delete a receipt an owner
+// action wrote microseconds ago, which is destructive rather than merely stale.
+//
+// The snapshot IS used, but only as a short-circuit before the query, so a
+// healthy member with a clean row costs nothing on every one of its converged
+// ticks (the cadence is 30s per member, forever). The two ways the two answers
+// can differ are both safe, and deliberately asymmetric:
+//
+//   - snapshot says "nothing to clear", fresh has a receipt → skipped this tick.
+//     That receipt was written DURING this tick, so it is newer than the
+//     convergence and keeping it is the honest answer; the next tick sees it in
+//     its own snapshot and clears it then.
+//   - snapshot says "clear it", fresh disagrees → the second check refuses and
+//     nothing is written.
+//
+// Best-effort by the stampWakeObservability rule: a persistence failure is logged
+// and never changes a reconcile decision. Caller holds reconcileMu.
+func (s *apiServer) clearMemberConvergedFailureReceipt(memberID string, snapshot Member) {
+	if !receiptRendersAsFailure(snapshot.LastOp, snapshot.LastOpAt, snapshot.LastOpOK) {
+		return
+	}
+	fresh, err := s.dal.GetMember(memberID)
+	if err != nil || fresh == nil || fresh.RosterStatus != RosterStatusActive {
+		return
+	}
+	if !receiptRendersAsFailure(fresh.LastOp, fresh.LastOpAt, fresh.LastOpOK) {
+		return
+	}
+	// All five columns, because clearing only the reason leaves the block on
+	// screen with nothing written in it. last_op_ok goes back to nil — its
+	// three-valued "nothing folded yet" — which is invisible precisely BECAUSE
+	// the other four are blank; a nil beside a populated last_op is the wordless
+	// red block above.
+	fresh.LastOp = ""
+	fresh.LastOpOK = nil
+	fresh.LastOpLog = ""
+	fresh.LastOpReason = ""
+	fresh.LastOpAt = 0.0
+	// Single write — the clear touches nothing but these five.
+	if err := s.persistMemberOpReceipt(*fresh, triggerServer); err != nil {
+		reconcileLog("%s: converged receipt clear failed: %v", memberID, err)
 	}
 }
 
@@ -1064,33 +2010,330 @@ func shouldAutoRefocus(runtime string, record map[string]any, cfg SseContextHigh
 // 🔴 announceSoftOffboardEscalation used to live here: the frame that told an
 // agent its soft 重新聚焦 had become the final call, 120 seconds out. It is gone
 // with the clock that justified it (owner 2026-08-19, card rc-c540367065ad) —
-// 重新聚焦 no longer escalates, so there is no promotion to announce. Its
-// de-duplication state (softEscalated / softOffboardEpoch) went with it. If a
-// clock ever comes back to that arm, this frame has to come back in the same
-// change, or the agent is collected having last been told there was no
-// countdown.
+// 重新聚焦 no longer escalates. Its de-duplication state (softEscalated /
+// softOffboardEpoch) went with it.
+//
+// ⚠️ T-ed79 brought a promotion back — context_notice → context_high — and it
+// deliberately did NOT bring this frame back. It is not needed: the notice
+// rides EVERY write to the member row (offboardDeltaPayload), and the promotion
+// IS a write, so the putMember that changes refocus_op carries the FINAL
+// sentence to the agent's own stream in the same delta. A second frame would be
+// a second copy of one event, de-duplicated by nothing. What the removed
+// function was really compensating for was an escalation that changed NO field
+// — a soft→final flip decided from the clock alone, invisible on the row. The
+// promotion changes refocus_op and refocus_since, so the row says it happened.
+// Pinned by TestContextThresholds_PromotionDeltaCarriesTheFinalSentence.
+
+// canPromoteToAcceleratedStop is the ONE exception to "an in-flight epoch is its
+// own cooldown": a member the FIRST context threshold put on a plain 停止 has
+// crossed the SECOND, so the same wind-down becomes 加速停止.
+//
+// 🔴 ONE DIRECTION, ONE CAUSE. An epoch the OWNER opened (重新聚焦, 改機器,
+// 換 model) or the agent opened for itself (restart_self) is never promoted, at
+// any pct: the owner deliberately asked for a stop with no clock, and quietly
+// turning it into one with a deadline would take that decision away from him in
+// the one place he cannot see it happen. Only context_notice → context_high.
+//
+// The stopped-report check is not tidiness either: a member that has already
+// reported stopped is collected by decideUp's recycle arm on this very tick, so
+// re-stamping refocus_since would move the deadline of a wind-down that is
+// already over, and the promotion notice would reach a session that has said it
+// is finished.
+func canPromoteToAcceleratedStop(m Member, op string) bool {
+	return op == refocusOpContextHigh &&
+		m.RefocusOp == refocusOpContextNotice &&
+		m.StoppedSince <= 0.0
+}
+
+// shouldNoticeRefocus is the FIRST threshold's actionable signal — the soft twin
+// of shouldAutoRefocus, reading the SAME gauge through the same stale guard so
+// the two thresholds can never disagree about where the session is.
+//
+// The codex arm asks codexNoticeDue rather than inventing a second rule: a codex
+// session hands over on compaction ROUNDS, so "the first threshold" means the
+// notice round, 60% through it — the same predicate the SSE advance notice fires
+// on. Reusing it is what keeps one runtime's two thresholds on one axis.
+func shouldNoticeRefocus(
+	runtime string, record map[string]any, cfg SseContextHighConfig,
+	codexNoticeRound, codexThreshold int,
+) bool {
+	pct := actionableContextPct(record, cfg.StaleGuard)
+	if NormalizeRuntime(runtime) == RuntimeCodex {
+		return codexNoticeDue(record, pct, codexNoticeRound, codexThreshold)
+	}
+	return cfg.NoticePct > 0 && pct != nil && *pct >= float64(cfg.NoticePct)
+}
+
+// ── the context-gate diagnostic (T-72dd 補觀測) ───────────────────────────────
+
+// ctxGateDiagThrottleSecs bounds the gate diagnostic to ONE line per ACTOR per
+// five minutes.
+//
+// 🔴 THE THROTTLE IS NOT POLISH, IT IS THE FEATURE. The pass runs on the 30 s
+// reconcile/outsource cadence and every live actor takes one of these gates on
+// almost every tick, so an unthrottled line is not observability — it is the
+// 1.26-million-line serve.log this ticket was diagnosed inside, and it would
+// bury the very line it exists to surface. Five minutes is the owner's number.
+const ctxGateDiagThrottleSecs = 300.0
+
+// ctxGateDiagState is one actor's throttle cell: WHEN the diagnostic last spoke
+// for it, and WHICH gate it named. The gate is half the key on purpose — see
+// noteContextGateSkip for why a change of gate is not made to wait.
+type ctxGateDiagState struct {
+	ts   float64
+	gate string
+}
+
+// noteContextGateSkip emits the ONE line that tells 「這一輪跑了，這個 actor 被
+// 某道 gate 擋掉」 apart from 「這個 actor 根本沒被看過」.
+//
+// 🔴 THIS IS THE WHOLE POINT OF THE TICKET'S LAST STEP. Every quiet path out of
+// stampContextHighRecycle was a bare `continue`, so "the pass ran and decided
+// nothing" and "the pass never reached this actor at all" produced byte-identical
+// logs — nothing. That ambiguity is why the original symptom took as long as it
+// did to localise, and no amount of reading the code afterwards replaces a line
+// that says which gate was closed and on what numbers.
+//
+// WHAT IS ACTUALLY KEYED, precisely — the two halves are different and both
+// matter. The MAP is keyed on the ACTOR: one cell, holding ONE timestamp and
+// the ONE gate that timestamp belongs to. That is the memory bound, and the
+// reason the prune in clearSessionBootTS is per actor. But the SILENCING test
+// compares the remembered gate for EQUALITY, so what decides whether a line is
+// suppressed is the actor+gate PAIR: same actor on the same gate is throttled,
+// same actor on a different gate speaks immediately (the rule set out under A
+// CHANGE OF GATE IS NOT THROTTLED below). The line answers "what is this
+// actor's gate state right now", and a change of gate IS a change of that
+// answer.
+//
+// That is NOT the same design as the one rejected further down. There, "keying
+// the window on actor+gate" means one INDEPENDENT window per pair, each with
+// its own timestamp, several alive at once — which really would multiply a
+// quiet actor's budget. Here there is only ever ONE window, and a change of
+// gate does not open a second one, it TAKES OVER the only one.
+//
+// 🔴 THIS PARAGRAPH USED TO SAY THE OPPOSITE, AND MEASUREMENT KILLED IT. It
+// claimed the key was "the ACTOR, not the actor+gate pair", and that keying it
+// that way was what stopped an actor drifting between two closed gates from
+// doubling its own budget — "the flooding the throttle exists to stop". Neither
+// half of that survives. The suppression test reads the pair, not the actor
+// alone; and a drifting actor is not held to double its budget, it is held to
+// NO budget — it speaks on every tick. The claim was not merely imprecise, it
+// named this design as the defence against exactly the case the design does not
+// defend against. The flapping bound below is the measurement that settles it,
+// and it and this paragraph are ONE statement, not two competing ones.
+//
+// 🔴 THREE OF THIS PASS'S SEVEN QUIET PATHS ARE STILL SILENT, and the reason
+// originally given for that here was WRONG. It said their state "is readable on
+// the wire anyway". An independent review checked each one, and it is not:
+//
+//   - aRefocusStampWouldReachTheAgent — reads DesiredState. On the wire. ✅
+//   - canPromoteToAcceleratedStop — reads RefocusOp (on the wire) and
+//     StoppedSince (NOT on the wire). Half. ⚠️
+//   - the stale stopped_since latch — reads StoppedSince and the gauge's
+//     boot_ts. NEITHER is on the wire. ❌
+//
+// Checked, not assumed: no Go struct tag exports stopped_since (the only two
+// mentions of the name in spec/openapi.json are prose inside the report_stopped
+// / report_waking descriptions, not schema properties), and the gauge's boot_ts
+// has no wire exit in wire.go or api_monitoring.go. And the latch guard's own
+// comment (a few lines below) says a wrong verdict there excludes the member
+// "from BOTH thresholds for the rest of its life" — a PERMANENT silent no-op,
+// the exact class this ticket chased, on two inputs an operator cannot see.
+// It is left uninstrumented only because the ticket scoped this to three gates,
+// and it is a known gap, not a justified omission. A seventh path — the
+// armRefocusEpoch refusal — already logs itself, so four of the seven are
+// observable today.
+//
+// 🔴 A CHANGE OF GATE IS NOT THROTTLED. The window is per actor, but the cell
+// also remembers WHICH gate it last named, and a different gate speaks
+// immediately. An actor crossing from "no-actionable-pct" to "offline" does so
+// once in its life and that instant is the most informative one the line will
+// ever carry; making it wait out the remaining 290 s of somebody else's window
+// would drop exactly the transition a reader is looking for. Steady-state cost
+// is unchanged — a settled actor keeps taking the SAME gate every tick, so it
+// still emits once per window — which is why this is cheaper than keying the
+// window on actor+gate (that would triple the budget of every quiet actor).
+//
+// ⚠️ "STEADY-STATE" THERE MEANS A SETTLED ACTOR, AND ONLY A SETTLED ACTOR. The
+// remembered gate is compared for EQUALITY, so an actor that FLAPS between two
+// closed gates — a pct oscillating across the handover threshold while the
+// boot-storm guard is still armed is the ordinary way to produce that — names a
+// different gate on every tick and therefore speaks on every tick: for as long
+// as the flap lasts the throttle is not reduced, it is GONE. The upper bound is
+// consequently ONE LINE PER TICK PER ACTOR, i.e. the reconcile/outsource cadence
+// itself (~2 lines per minute per actor at the 30 s tick), against a budget of
+// one line per five minutes.
+//
+// Measured, not reasoned: an online actor driven across the threshold on every
+// tick emitted a line on every one of them, sustained for as long as both gates
+// stayed shut. Under stock settings the flap ends itself when the boot-storm
+// window closes and the high pct starts being ACTED on instead of skipped, which
+// held that same actor to one line per tick only until then.
+//
+// This is the ACCEPTED PRICE of the rule above, not an oversight. The transition
+// is the most informative instant this line will ever carry, so it is
+// deliberately not made to serve out a window; the cost of that choice lands
+// exactly on the actor that keeps transitioning. It stays acceptable because a
+// flap is self-limiting (the pct that keeps crossing either settles or the pass
+// finally acts on it). If it ever stops being self-limiting, damp the flap or
+// widen the key to remember MORE history — do not make the transition wait,
+// because that gives back the one line the diagnostic exists to print.
+//
+// ⚠️ PURELY OBSERVATIONAL. It reads the gauge, asks the hub, and writes stderr.
+// It must never alter what the pass decides, and it is called only on paths that
+// have ALREADY decided to skip.
+//
+// Bound: one cell per actor, pruned on the session boundary
+// (clearSessionBootTS) — the same treatment handoverNoticed gets one line over,
+// and for the reason written there: not "one record per agent id alive for the
+// process's lifetime". The prune doubles as the right behaviour, since a fresh
+// session deserves to be described again rather than inheriting its
+// predecessor's window.
+func (s *apiServer) noteContextGateSkip(id, gate string, record map[string]any, now float64) {
+	s.ctxGateDiagMu.Lock()
+	if last, seen := s.ctxGateDiagAt[id]; seen && last.gate == gate &&
+		now-last.ts < ctxGateDiagThrottleSecs {
+		s.ctxGateDiagMu.Unlock()
+		return
+	}
+	if s.ctxGateDiagAt == nil {
+		s.ctxGateDiagAt = map[string]ctxGateDiagState{}
+	}
+	s.ctxGateDiagAt[id] = ctxGateDiagState{ts: now, gate: gate}
+	s.ctxGateDiagMu.Unlock()
+	reconcileLog("recycle: gate skip %s gate=%s pct=%s pct_ts=%s boot_ts=%s "+
+		"boot_secs=%s online=%t", id, gate,
+		gaugeNumForDiag(record, "context_pct"),
+		gaugeNumForDiag(record, "context_pct_ts"),
+		gaugeNumForDiag(record, "boot_ts"),
+		secsSinceBootForDiag(record, now),
+		s.hub.IsOnline(id))
+}
+
+// gaugeNumForDiag renders one numeric gauge key for the diagnostic line, or the
+// literal "-" when the key is absent / non-numeric / the gauge entry is nil.
+// "-" is not decoration: WHICH of the five inputs is missing is most of what
+// the line is for (a missing context_pct_ts and a stale one fail the same gate
+// but mean completely different things).
+func gaugeNumForDiag(record map[string]any, key string) string {
+	if record == nil {
+		return "-"
+	}
+	v, ok := asNumber(record[key])
+	if !ok {
+		return "-"
+	}
+	return strconv.FormatFloat(v, 'f', -1, 64)
+}
+
+// secsSinceBootForDiag renders the boot-storm loop-guard's own input, through
+// gaugeSecsSinceBoot so the number on the line is the number the guard saw —
+// "-" when there is no usable boot_ts (the guard's fail-open case).
+func secsSinceBootForDiag(record map[string]any, now float64) string {
+	secs := gaugeSecsSinceBoot(record, now)
+	if secs == nil {
+		return "-"
+	}
+	return strconv.FormatFloat(*secs, 'f', 1, 64)
+}
 
 // stampContextHighRecycle auto-stamps refocus_since on any candidate whose
 // runtime-specific handover signal is actionable — the
 // automatic counterpart of the manual refocus button, reusing the SSE band's
 // stale-pct + boot-storm guards so an unreliable gauge never auto-recycles.
 // Mutates the in-slice member so the SAME tick's observation sees the marker.
+//
+// 🔴 BOTH thresholds open a wind-down now (T-ed79), and they open DIFFERENT
+// kinds. The first (notice_pct) opens a plain 停止 — refocus_op=context_notice,
+// no clock, no deadline in the sentence — because the owner's model is that an
+// agent near its limit is ASKED to wind down before it is collected on one. It
+// used to open nothing at all: the first threshold sent one SSE band and the
+// wind-down began only at the second, so an agent that missed the frame met the
+// final call with no close-out started.
+//
+// 🔴 …which is why the de-dup below has exactly ONE exception. `refocus_since >
+// 0 ⇒ skip` is the cooldown that stops this loop re-stamping every 30 s, and
+// with the first threshold now stamping, that same rule would have made the
+// SECOND threshold unreachable for the rest of the session: the promotion path
+// would be dead code and the notice epoch would be the last word, on an agent
+// that has since gone past the line where the owner wants it collected.
 func (s *apiServer) stampContextHighRecycle(members []Member, now float64) {
 	ctxhigh := s.ctxHighConfig()
+	codexNoticeRound := s.codexNoticeRoundSetting()
 	for i := range members {
 		m := &members[i]
-		if m.RefocusSince > 0.0 {
-			continue // already recycling — the marker IS the cooldown
-		}
 		record := s.gauge.Get(m.ID)
-		if !shouldAutoRefocus(m.Runtime, record, ctxhigh, s.codexCompactionThreshold) {
+		op := ""
+		switch {
+		case shouldAutoRefocus(m.Runtime, record, ctxhigh, s.codexCompactionThreshold):
+			op = refocusOpContextHigh
+		case shouldNoticeRefocus(m.Runtime, record, ctxhigh, codexNoticeRound, s.codexCompactionThreshold):
+			op = refocusOpContextNotice
+		default:
+			// GATE 1/3 (T-72dd 補觀測): no actionable signal. This is the gate
+			// that swallows a STALE pct — actionableContextPct returns nil when
+			// context_pct_ts <= boot_ts — which is exactly the case the cockpit
+			// still renders a number for (foldActorRuntime reads the raw key).
+			s.noteContextGateSkip(m.ID, "no-actionable-pct", record, now)
 			continue
 		}
+		// 🔴 AN AGENT THAT HAS ALREADY SAID 「我收完了」 IS NOT ASKED AGAIN.
+		// report_stopped latches stopped_since on ANY staff member, epoch or not
+		// (owner rc-b08d49dc3b03), and then fires ONE best-effort
+		// dispatchRobustStopNow. A warden that is unreachable at that instant
+		// drops it, and nothing sweeps the row while the session is still up:
+		// clearRecycleMarkersOnRespawn skips anything online, and
+		// clearStaleStoppingOnOnline only ever zeroes stopping_since. So the
+		// member sits at desired-online ∧ online ∧ stopped_since>0 ∧ no epoch.
+		//
+		// Opening a wind-down there does two wrong things at once. armRefocusEpoch
+		// zeroes the anchors BY DESIGN — it cannot tell a fresh report from a
+		// stale latch and must keep zeroing them, because a stale one turns the
+		// next epoch into an immediate kill — so the stamp DESTROYS the agent's
+		// finished close-out; and the notice it fans asks a session that is
+		// already done to do it all again. Before T-ed79 the first threshold
+		// stamped nothing at all, so this door did not exist; giving it a
+		// wind-down is what opened it.
+		//
+		// Same ruling canPromoteToAcceleratedStop already makes a few lines up
+		// ("the promotion notice would reach a session that has said it is
+		// finished") — this is the arm that was missed, not a new policy.
+		//
+		// 🔴 THE BOOT_TS TEST IS LOAD-BEARING, not belt-and-braces. A latch can
+		// legitimately be a PREDECESSOR's: activate clears stopping_since and
+		// waking_since but NOT stopped_since, so 下線 → 活化 puts a brand-new
+		// session online carrying the previous generation's report with no epoch
+		// — exactly the fixture
+		// TestRefocusEpoch_NoStampSiteInheritsAStaleWindDownLatch pins. Skipping
+		// on that would exclude the member from BOTH thresholds for the rest of
+		// its life, which is a worse bug than the one this guard removes. The
+		// question is therefore not "is there a latch" but "did THIS connection
+		// file it", and that is the same question — and the same answer —
+		// actionableContextPct's stale guard already uses one field over: a
+		// predecessor session's leftover never triggers. No boot_ts means the
+		// question cannot be answered, and then the pre-existing path (stamp)
+		// stands.
+		if bootTS, ok := gaugeBootTS(record); ok && m.StoppedSince >= bootTS {
+			continue
+		}
+		promoting := false
+		if m.RefocusSince > 0.0 {
+			if !canPromoteToAcceleratedStop(*m, op) {
+				continue // already winding down — the marker IS the cooldown
+			}
+			promoting = true
+		}
 		if bootStormTripped(gaugeSecsSinceBoot(record, now), ctxhigh.MinBootSecs) {
-			continue // fresh boot already over the line → suppress (loop-guard)
+			// GATE 2/3 (T-72dd 補觀測) — fresh boot already over the line →
+			// suppress (loop-guard).
+			s.noteContextGateSkip(m.ID, "boot-storm", record, now)
+			continue
 		}
 		if !s.hub.IsOnline(m.ID) {
-			continue // only-online (symmetric with the manual refocus gate)
+			// GATE 3/3 (T-72dd 補觀測) — only-online (symmetric with the manual
+			// refocus gate).
+			s.noteContextGateSkip(m.ID, "offline", record, now)
+			continue
 		}
 		// …and only when the server still WANTS it online (T-ccc7). hub.IsOnline
 		// is a live-socket fact, not an intent: a member deactivated seconds ago
@@ -1101,13 +2344,193 @@ func (s *apiServer) stampContextHighRecycle(members []Member, now float64) {
 		if !aRefocusStampWouldReachTheAgent(*m) {
 			continue
 		}
-		m.RefocusSince = now
-		m.RefocusOp = refocusOpContextHigh
+		if promoting {
+			// PROMOTION, not a new epoch: the member is already winding down and
+			// keeps whatever it has reported. Only the kind and the clock change.
+			//
+			// ⚠️ RefocusSince is re-stamped, and that is the whole point. The
+			// deadline is refocus_since + grace, so promoting in place would put
+			// the deadline at the FIRST threshold's stamp — minutes in the past
+			// on any session that took the notice seriously — and `now >=
+			// refocus_since + grace` would be true on the very tick that
+			// announced it. The agent would be told "your deadline is <a moment
+			// already gone>" and collected in the same tick: a zero-second
+			// deadline, which is the exact harm this ticket exists to remove.
+			//
+			// armRefocusEpoch is deliberately NOT used: it clears the wind-down
+			// anchors, and here they belong to the close-out ALREADY IN FLIGHT.
+			// Clearing stopped_since would be worse than untidy — it would erase
+			// the agent's own "I am done" and cancel the collection this same
+			// tick was about to make.
+			m.RefocusSince = now
+			m.RefocusOp = refocusOpContextHigh
+		} else if !armRefocusEpoch(m, op, now) {
+			// Unreachable as the loop stands (the guard above already skips a
+			// member with a live epoch unless this is the promotion). Handled
+			// anyway, and LOUDLY: the failure mode it replaces is a putMember
+			// that persists nothing and a log line claiming a stamp that never
+			// happened — which is the exact silent shape this whole ticket is
+			// about.
+			reconcileLog("recycle: auto-stamp for %s refused — %s would move the "+
+				"wind-down ladder backwards from %s", m.ID, op, m.RefocusOp)
+			continue
+		}
+		if err := s.persistMemberWindDownAnchors(*m); err != nil {
+			reconcileLog("recycle: auto-stamp ANCHOR write failed for %s: %v", m.ID, err)
+			continue
+		}
 		if err := s.putMember(*m, triggerServer); err != nil {
 			reconcileLog("recycle: auto-stamp persist failed for %s: %v", m.ID, err)
 			continue
 		}
-		reconcileLog("recycle: auto-stamp refocus_since for %s (%s)", m.ID, NormalizeRuntime(m.Runtime))
+		if promoting {
+			// The FINAL sentence needs no frame of its own: offboardDeltaPayload
+			// composes the notice from refocus_op on EVERY write to the row, so
+			// the putMember above already carried it. (This is what the removed
+			// announceSoftOffboardEscalation used to do by hand; pinned by
+			// TestContextThresholds_PromotionDeltaCarriesTheFinalSentence.)
+			reconcileLog("recycle: promoted %s to %s (%s)", m.ID, refocusOpContextHigh,
+				NormalizeRuntime(m.Runtime))
+		} else {
+			reconcileLog("recycle: auto-stamp refocus_since for %s (%s, %s)", m.ID,
+				NormalizeRuntime(m.Runtime), op)
+		}
+	}
+}
+
+// tokenExpiryLeadSecs is how long BEFORE its agent token expires a live session
+// is asked to wind down (owner 2026-08-21: refocus／改 model／改機器「就是呼叫
+// 軟下線，然後等他 report_stopped 以後再呼叫上線」, and token renewal is the same
+// shape — the session has to end and be re-minted, so it may as well end the way
+// every other cause ends). One hour is the lead the owner named.
+const tokenExpiryLeadSecs = 3600.0
+
+// tokenExpiryOf derives WHEN a live session's agent token stops working, from
+// the two facts the server already stores. It returns 0 when the question
+// cannot be answered, and every caller must treat 0 as "do nothing".
+//
+// 🔴 THIS IS A DERIVATION, NOT A RECORD, AND THE ERROR TERM IS NAMED. The token
+// is minted in buildStartFrame at DISPATCH time with the TTL that was live then
+// (mintJWT sets exp = mint + ttl — jwt.go); session_boot_ts is stamped later, on
+// the SSE first-connect edge (anchorSessionBoot). So:
+//
+//   - session_boot_ts >= mint, therefore this estimate is an UPPER BOUND on the
+//     real expiry, too late by however long the boot took. The trigger built on
+//     it therefore fires slightly LATE — with a little under the full lead left
+//     — never early. That direction is the safe one: the window shrinks, it does
+//     not open before the token exists.
+//   - it reads the CURRENT agent_token_ttl, not the one the token was minted
+//     with. An owner who changes that setting mid-session moves this estimate
+//     for sessions whose tokens did not move. Raising the TTL therefore defers
+//     the wind-down past the real expiry (the session dies with no close-out —
+//     the pre-existing behaviour, not a new harm); lowering it winds sessions
+//     down early (a wasted, but safe, handover). Recording the real exp would
+//     need a durable per-session column, which this ticket deliberately did not
+//     add.
+//
+// ⚠️ EXACTLY ONE KIND IS EXEMPT, and the reason is a property of its credential,
+// not of what it is: a WARDEN's token is minted by mintWardenToken →
+// mintJWTWithoutExpiry, with NO exp claim at all, so it never expires and asking
+// this question about one would invent a deadline that does not exist.
+//
+// 🔴 This gate used to read `Kind != KindStaff`, which swept OUTSOURCE in
+// with warden while the comment explained only the warden half — the classic
+// shape of an exemption that is wider than its own justification. An outsource
+// worker's session token is minted by mintAgentToken with s.agentTokenTTLValue()
+// (worker_spawn.go), i.e. the SAME mint and the SAME TTL a staff member's boot
+// token gets, so it expires in exactly the same way; and every step of the
+// close-out — report_stopping, the lesson write, report_stopped — is an MCP call
+// carrying that token. Naming the one exempt kind, rather than allow-listing the
+// one included kind, is what keeps the next kind from inheriting an exemption
+// nobody decided to give it.
+func tokenExpiryOf(m Member, agentTokenTTL int64) float64 {
+	if m.Kind == KindWarden || agentTokenTTL <= 0 || m.SessionBootTS <= 0 {
+		return 0
+	}
+	return m.SessionBootTS + float64(agentTokenTTL)
+}
+
+// stampTokenExpiryWinddown opens a plain 停止 on any live staff session whose
+// agent token is inside its last tokenExpiryLeadSecs — the same shape
+// stampContextHighRecycle uses for the context thresholds, and deliberately so:
+// what ends a session is one funnel, and a second one with its own guards would
+// be a second chance to get the guards wrong.
+//
+// The guards are COPIED from stampContextHighRecycle rather than re-derived,
+// cell for cell, because each of them is there for a reason that holds here
+// identically:
+//
+//   - refocus_since > 0 → skip. The marker IS the cooldown; without it this loop
+//     re-stamps every 30 s for the whole final hour, and each re-stamp would
+//     destroy the close-out already in progress. There is deliberately NO
+//     promotion arm (the context pair's one exception): token expiry never
+//     escalates into a different kind, so there is nothing to promote to.
+//   - stopped_since >= the gauge's boot_ts → skip. An agent that has already
+//     said 「我收完了」 is not asked again, and armRefocusEpoch would zero the
+//     anchors and destroy that report. The boot_ts test is what tells THIS
+//     session's report apart from a predecessor's latch (下線 → 活化 leaves one).
+//   - online-only, and only while the server still WANTS it online
+//     (aRefocusStampWouldReachTheAgent). A stamp that does not reach the agent
+//     is not a weaker signal, it is no signal — and it strands a marker that
+//     activate does not clear.
+//
+// The boot-storm guard is NOT copied, and that is not an oversight: it exists to
+// stop a fresh session being recycled off a gauge reading that is over the line
+// the instant it boots. A token that is within an hour of expiry on a session
+// that just booted is not a mis-reading — it is a session that genuinely has
+// less than an hour, and suppressing it would leave exactly the case this
+// trigger is for.
+func (s *apiServer) stampTokenExpiryWinddown(members []Member, now float64) {
+	ttl := s.agentTokenTTLValue()
+	for i := range members {
+		m := &members[i]
+		expiry := tokenExpiryOf(*m, ttl)
+		if expiry <= 0 {
+			continue // not derivable (no session anchor, or not a staff session)
+		}
+		if now < expiry-tokenExpiryLeadSecs {
+			continue // still outside the lead
+		}
+		if now >= expiry {
+			// Past the derived expiry the token is certainly dead (the estimate
+			// is an upper bound — see tokenExpiryOf), so the sequence this stamp
+			// asks for could not be filed: every step of it is an MCP call on
+			// that token. Opening a wind-down here would print instructions to a
+			// session that can only answer 401.
+			continue
+		}
+		if m.RefocusSince > 0.0 {
+			continue // already winding down — the marker IS the cooldown
+		}
+		record := s.gauge.Get(m.ID)
+		if bootTS, ok := gaugeBootTS(record); ok && m.StoppedSince >= bootTS {
+			continue // this session has already reported it is finished
+		}
+		if !s.hub.IsOnline(m.ID) {
+			continue
+		}
+		if !aRefocusStampWouldReachTheAgent(*m) {
+			continue
+		}
+		if !armRefocusEpoch(m, refocusOpTokenExpiry, now) {
+			// Same shape as the auto-stamp above: the `refocus_since > 0`
+			// continue earlier in this loop already covers it, and this arm
+			// exists so that a future edit loosening that check surfaces as a
+			// log line instead of a write that quietly stores nothing.
+			reconcileLog("recycle: token-expiry stamp for %s refused — would move "+
+				"the wind-down ladder backwards from %s", m.ID, m.RefocusOp)
+			continue
+		}
+		if err := s.persistMemberWindDownAnchors(*m); err != nil {
+			reconcileLog("recycle: token-expiry ANCHOR write failed for %s: %v", m.ID, err)
+			continue
+		}
+		if err := s.putMember(*m, triggerServer); err != nil {
+			reconcileLog("recycle: token-expiry stamp persist failed for %s: %v", m.ID, err)
+			continue
+		}
+		reconcileLog("recycle: token-expiry 停止 for %s (token estimated to expire at %.0f, "+
+			"lead %.0fs)", m.ID, expiry, tokenExpiryLeadSecs)
 	}
 }
 
@@ -1129,13 +2552,44 @@ func bootStormTripped(secsSinceBoot *float64, minBootSecs float64) bool {
 // (§4.5): clear the recycle markers the moment the respawn-pending state is
 // observed (desired online ∧ ¬online ∧ refocus_since>0 — the kill landed), so
 // a slow/never-waking respawn can never be re-killed off a stale marker.
+//
+// 🔴 It also clears a wind-down latch left behind with NO epoch at all. An agent
+// can report_stopping / report_stopped on its own, without anybody stamping
+// refocus_since — a spontaneous close-out, or one whose epoch was already
+// cleared — and the arm below used to skip those rows on `refocus_since <= 0`,
+// so stopped_since sat on a desired-online member forever. That latch is not
+// inert: it is exactly what armRefocusEpoch documents, and it is read by the
+// recycle arm of decideUp (which robust-stops on stopped_since > 0 the instant
+// ANY epoch is stamped). Clearing it here is why the stamp sites can be trusted
+// to open a clean epoch even against a row that has been sitting in the DB for
+// days.
+//
+// 🔴 The SSE stop gate is NOT a second reader in this scope, and this comment
+// used to name it as one. api_infra.go's gate only fires on
+// `desired_state == offline`, and the first gate below `continue`s on anything
+// that is not desired online — so within this function's range the gate is
+// unreachable by construction. Citing a protection that cannot apply here made
+// the case for clearing the latch look stronger than it is; the decideUp reader
+// alone is the real reason, and it is sufficient.
+//
+// WHY THE `IsOnline` GATE IS SUFFICIENT here, and no close-out is cut short by
+// this: the arm only fires on desired online ∧ NOT online. A member with a live
+// session is never touched, so an agent working its sequence (report_stopping
+// sent, report_stopped not yet) keeps its anchors for as long as it is
+// connected. If its socket really is gone while desired_state is still online,
+// reconcile's decideUp is already going to START a replacement session on this
+// same tick — with or without the latch, nothing is waiting for that close-out
+// to finish. What the latch WOULD do in that state is arm the two destructive
+// readers above against the next epoch. Clearing loses nothing that is still
+// being used and removes a trap; keeping it protects a close-out that no code
+// path is still honouring.
 func (s *apiServer) clearRecycleMarkersOnRespawn(members []Member) {
 	for i := range members {
 		m := &members[i]
 		if m.DesiredState != DesiredStateOnline {
 			continue
 		}
-		if m.RefocusSince <= 0.0 {
+		if m.RefocusSince <= 0.0 && m.StoppedSince <= 0.0 && m.StoppingSince <= 0.0 {
 			continue // plain respawn — nothing to clear
 		}
 		if s.hub.IsOnline(m.ID) {
@@ -1145,6 +2599,10 @@ func (s *apiServer) clearRecycleMarkersOnRespawn(members []Member) {
 		m.RefocusOp = ""
 		m.StoppedSince = 0.0
 		m.StoppingSince = 0.0
+		if err := s.persistMemberWindDownAnchors(*m); err != nil {
+			reconcileLog("recycle: loop-break ANCHOR write failed for %s: %v", m.ID, err)
+			continue
+		}
 		if err := s.putMember(*m, triggerServer); err != nil {
 			reconcileLog("recycle: loop-break persist failed for %s: %v", m.ID, err)
 			continue
@@ -1304,6 +2762,10 @@ func (s *apiServer) clearStaleStoppingOnOnline(members []Member, now float64) {
 			continue
 		}
 		m.StoppingSince = 0.0
+		if err := s.persistMemberWindDownAnchors(*m); err != nil {
+			reconcileLog("revive: stale-stopping ANCHOR write failed for %s: %v", m.ID, err)
+			continue
+		}
 		if err := s.putMember(*m, triggerServer); err != nil {
 			reconcileLog("revive: stale-stopping clear persist failed for %s: %v", m.ID, err)
 			continue
@@ -1315,10 +2777,12 @@ func (s *apiServer) clearStaleStoppingOnOnline(members []Member, now float64) {
 
 // ── the cadence tick + the event-driven seams ─────────────────────────────────
 
-// runReconcileTick runs ONE producer tick over the roster snapshot: the three
-// pre-decide passes, then decide→dispatch per candidate. Candidates (§4.1):
-// every ACTIVE non-warden member, plus any ACTIVE warden whose desired_state
-// is uninstall. Serialized with the event-driven ticks via reconcileMu;
+// runReconcileTick runs ONE producer tick over the roster snapshot: THE entry
+// filter, THE shared pre-decide formalities (lifecycle_roster.go — the same
+// list the outsource producer runs), the receipt sweep, then decide→dispatch
+// per candidate. Candidates (§4.1): every ACTIVE non-warden member, plus any
+// ACTIVE warden whose desired_state is uninstall — which is what
+// lifecyclePolicyFor's staff arm says. Serialized with the event-driven ticks via reconcileMu;
 // best-effort — a fault is logged, never raised into the cadence loop.
 func (s *apiServer) runReconcileTick(now float64) {
 	defer func() {
@@ -1335,18 +2799,31 @@ func (s *apiServer) runReconcileTick(now float64) {
 	}
 	var members []Member
 	for _, m := range all {
-		if m.RosterStatus != RosterStatusActive {
+		// WHICH HALF drives this row (lifecycle_roster.go), asked BEFORE the
+		// entry filter — "is this mine to decide" comes before "should it
+		// exist". 🔴 NOT a no-op any more: ListMembers' `WHERE kind !=
+		// 'outsource'` is GONE (T-14 項目 6), so `all` genuinely contains
+		// contractor rows and THIS LINE is the only thing keeping them out of the
+		// member FSM. Deleting it re-creates the measured double-drive recorded
+		// on lifecycleTickDriverFor: one row taking a `start` from both halves in
+		// the same tick.
+		if lifecycleTickDriverFor(m) != driverReconcile {
 			continue
 		}
-		if m.Kind == KindWarden && parseDesired(m.DesiredState) != DesiredStateUninstall {
-			continue // no warden reconciles another warden's spawn/stop
+		// THE entry filter (lifecycle_roster.go). It used to be written out here
+		// by hand, and again in reconcileMemberNow, and a third time — in its
+		// outsource dialect — in runOutsourceTick. One question, one answer.
+		if !lifecyclePolicyFor(m).ShouldExist() {
+			continue
 		}
 		members = append(members, m)
 	}
-	s.stampContextHighRecycle(members, now)
-	s.clearRecycleMarkersOnRespawn(members)
-	s.clearStaleStoppingOnOnline(members, now)
-	s.consumeUninstallIntentOnOffline(members)
+	// THE pre-decide formalities, in THE order, from THE list
+	// (lifecycle_roster.go lifecycleRosterPasses). There is no second list: the
+	// outsource producer runs this same one through runWorkerLifecyclePasses, so
+	// a formality added here reaches a worker by construction and one that must
+	// not has to say so as its own AppliesTo.
+	s.runLifecycleRosterPasses(members, now)
 	// The receipt deadline (receipt_watch.go) — swept BEFORE the decide pass so
 	// a start/stop armed by THIS tick always gets a full window, never a same-
 	// tick sweep. Covers workers too: their start/stop rides the member verbs
@@ -1358,19 +2835,11 @@ func (s *apiServer) runReconcileTick(now float64) {
 	}
 }
 
-// startReconcileCadence mounts the always-on 30s producer loop (§4.1) — the
-// Python mount_reconcile_producer twin. The first tick fires one full period
-// after start (sleep-then-tick, matching the asyncio cadence). Never called
-// when --no-reconcile is set.
-func (s *apiServer) startReconcileCadence(period time.Duration) {
-	go func() {
-		for {
-			time.Sleep(period)
-			s.runReconcileTick(nowSecs())
-		}
-	}()
-	reconcileLog("cadence started (period=%gs)", period.Seconds())
-}
+// The 30s cadence that used to mount runReconcileTick on its own goroutine
+// (startReconcileCadence) is gone: T-14 item 5 merged it with the outsource
+// producer's identical loop into the single startLifecycleCadence
+// (lifecycle_tick.go), which runs this half first and the outsource half
+// after, each under its own lock and never both at once.
 
 // reconcileMemberNow is the EVENT-DRIVEN immediate reconcile for ONE member —
 // the activate/deactivate/uninstall click seam (producer.py
@@ -1394,11 +2863,33 @@ func (s *apiServer) reconcileMemberNow(memberID string) reconcileDecision {
 	s.reconcileMu.Lock()
 	defer s.reconcileMu.Unlock()
 	m, err := s.dal.GetMember(memberID)
-	if err != nil || m == nil || m.RosterStatus != RosterStatusActive {
+	if err != nil || m == nil {
 		return reconcileDecision{}
 	}
-	if m.Kind == KindWarden && parseDesired(m.DesiredState) != DesiredStateUninstall {
-		return reconcileDecision{} // a warden is never an agent-lifecycle spawn/stop candidate
+	// WHICH HALF drives this row — the SAME question runReconcileTick asks at
+	// the head of its candidate loop, asked here too so that the answer is a
+	// property of THIS FUNCTION rather than a coincidence in its callers.
+	//
+	// This door reads GetMember, not ListMembers, so T-14 項目 6 did not widen
+	// it — but it never narrowed it either: every one of the seven non-test
+	// callers happens to hand it a staff row (api_members ×5 via
+	// resolveMember(…, staffOnly), api_machines via resolveMachine which demands
+	// kind==warden, onboarding with the seed assistant's own id), so the guard
+	// that keeps a contractor out of the member FSM on the EVENT-DRIVEN path
+	// lived in seven argument lists across two other files. That is not a
+	// no-op that can be deleted: it is a no-op that can be UNDONE by a future
+	// caller passing anyMember — and api_members.go:790 / api_machines.go:1280
+	// already do exactly that elsewhere, so the precedent for widening exists.
+	// With the clause gone, a contractor reaching here would take a `start`
+	// from the member FSM while the outsource half takes its own — the measured
+	// double-drive recorded on lifecycleTickDriverFor (lifecycle_roster.go).
+	if lifecycleTickDriverFor(*m) != driverReconcile {
+		return reconcileDecision{}
+	}
+	// THE entry filter, the same one the cadence asks (lifecycle_roster.go).
+	// This used to be a hand-copy of the cadence's two conditions.
+	if !lifecyclePolicyFor(*m).ShouldExist() {
+		return reconcileDecision{}
 	}
 	reconcileLog("instant tick: member %s", memberID)
 	return s.reconcileTickMemberLocked(*m, nowSecs())
@@ -1413,9 +2904,15 @@ func (s *apiServer) reconcileMemberNow(memberID string) reconcileDecision {
 // What it skips differs by caller, and only one of them has a clock to skip:
 //   - recycle kill: skips the remaining recycleGraceFor window, and the cadence
 //     STOP arm is still the idempotent backstop if this frame is lost.
-//   - force-stop / offboard: there is NO clock here and NO backstop — decideDown
-//     returns decisionNone for the whole soft window, so a lost frame leaves the
-//     member online until the owner presses the button again.
+//   - force-stop / offboard: there is NO clock here to skip — decideDown returns
+//     decisionNone for the whole soft window.
+//
+// 🔴 "Best-effort" no longer means "one shot" (T-ed79). Every dispatch from here
+// arms RobustStopPendingAt, so a frame the fail-closed enqueue gate drops on an
+// unreachable warden is re-sent by the cadence once the member is still online
+// past stop_retry. Before that, the report_stopped collect in particular had no
+// backstop at ALL: no arm of the decider re-derives it, so a single lost frame
+// parked the member online forever on a session it had already closed out.
 func (s *apiServer) dispatchRobustStopNow(memberID string) {
 	if s.noReconcile {
 		return
@@ -1431,10 +2928,31 @@ func (s *apiServer) dispatchRobustStopNow(memberID string) {
 	// while the session being collected still runs on the origin — addressing the
 	// destination there would leave the old session alive forever.
 	s.enqueueToWarden(memberID, s.memberKillTargetWarden(memberID), frame)
+	// Record the dispatch so the cadence can re-send it if it never lands
+	// (T-ed79). Armed UNCONDITIONALLY — including on the fail-closed refusal
+	// above, which is the case that needs it most: an unreachable warden is
+	// exactly how a collect goes missing. See reconcileState.RobustStopPendingAt
+	// and the arm at the top of reconcileDecide.
+	s.noteRobustStopDispatched(memberID, nowSecs())
 	// The robust kill (force-stop, report_stopped recycle, relocate) ends the
 	// current session: drop its boot_ts so the respawn's first connect re-stamps
 	// a fresh anchor (T-8fb2 boot_ts fix).
 	s.clearSessionBootTS(memberID)
+}
+
+// noteRobustStopDispatched arms the at-least-once retry for one out-of-band
+// robust STOP. Takes reconcileMu itself: every caller is an HTTP handler that
+// holds no reconcile lock. A member with no store entry yet gets a fresh state
+// — the marker is the only thing the entry needs to carry.
+func (s *apiServer) noteRobustStopDispatched(memberID string, now float64) {
+	s.reconcileMu.Lock()
+	defer s.reconcileMu.Unlock()
+	st, ok := s.reconcileStates[memberID]
+	if !ok {
+		st = newReconcileState()
+	}
+	st.RobustStopPendingAt = now
+	s.reconcileStates[memberID] = st
 }
 
 // identitySweepDedupeSecs is the window a member's cross-machine identity sweep
@@ -1501,7 +3019,7 @@ func (s *apiServer) dispatchIdentitySweepNow(memberID, keepWarden string, now fl
 // the real 正身's sweep from the correct machine (§1 wanderer case).
 //
 // The expected machine per kind:
-//   - staff (kind=assistant): the owner-pinned desired_machine_id;
+//   - staff (kind=staff): the owner-pinned desired_machine_id;
 //   - outsource (A案 P6 — the former KindOutsource exclusion is REMOVED now the
 //     P5b naming convergence lets a member-verb stop target member-<ow-id>):
 //     the owner pin when concrete, else the machine the server ACTUALLY
@@ -1513,8 +3031,76 @@ func (s *apiServer) dispatchIdentitySweepNow(memberID, keepWarden string, now fl
 //     machine is reaped the moment the 正身 connects on the dispatched machine.
 //
 // Best-effort; a read fault or a warden sub is a clean no-op. Gated OFF by
-// --no-reconcile. Lock order: outsourceMu (worker target read) strictly BEFORE
-// reconcileMu — the one place both are held; nothing takes them reversed.
+// --no-reconcile.
+//
+// 🔴 CORRECTION (T-170e stage 3 — this comment used to say something false).
+// It read:
+//
+//	"Lock order: outsourceMu (worker target read) strictly BEFORE reconcileMu
+//	 — the one place both are held; nothing takes them reversed."
+//
+// The last clause was true; the middle one was not, and it is the half that
+// got quoted. THIS FUNCTION NEVER HOLDS BOTH LOCKS. The worker target read
+// goes through workerSpawnObs (worker_spawn.go), which takes s.outsourceMu and
+// releases it with `defer` inside its OWN body — so by the time control
+// returns here and s.reconcileMu.Lock() below runs, outsourceMu is already
+// gone. The neighbouring comments said so all along and contradicted this one:
+// workerSpawnObs's own doc ("…the identity-sweep 正身 check, which never hold
+// s.outsourceMu") and connectionIsTheGenuineArticle's ("Both callers reach
+// this WITHOUT holding s.outsourceMu").
+//
+// Re-measured over every non-test .go in the package (over-approximate call
+// graph: any identifier matching a declared name counts as an edge, so method
+// values passed without parens — `Run: s.stampContextHighRecycle` — count):
+// ZERO paths in either direction acquire one of {reconcileMu, outsourceMu}
+// while the other is held. There is therefore no ordering edge between them at
+// all, in either direction — not an order to obey, and not a deadlock to fear.
+//
+// The record is kept rather than the sentence silently swapped because the
+// false version was cited as a hard technical obstacle ("merging the two ticks
+// would invert a documented lock order") in T-170e stage 3's first write-up.
+// It was not one.
+//
+// ✅ THE TICKS HAVE SINCE BEEN MERGED (T-14 item 5, lifecycle_tick.go), and
+// this paragraph's forecast held. The constraint that actually bit was the one
+// named here — SELF-deadlock, not inversion — and the merge avoided it by not
+// creating the situation at all: runLifecycleTick holds NEITHER mutex, and each
+// half takes its own inside its own body and has dropped it before the next
+// line runs. So there is still no goroutine in this package holding both, and
+// the "ZERO paths in either direction" measurement above still describes the
+// code as it stands. A future merged region that held outsourceMu across a
+// helper which takes it again would still self-deadlock; that is why the halves
+// are sequenced rather than wrapped.
+//
+// 🔴 SECOND CORRECTION (same stage, next pass — the paragraph you are reading
+// shipped its OWN false sentence in the round that wrote the correction
+// above). It used to end with a five-name hazard list:
+//
+//	"— workerSpawnObs, workerReportStopping, dismissOutsourceWorkersForTask,
+//	 dismissOutsourceWorkerByID, noteWorkerStopNoSuchSession."
+//
+// That was not the hazard set. It omitted workerReportStopped,
+// workerReportWaking and workerRestartSelf — the three siblings sitting beside
+// workerReportStopping in the same file, called from the same handlers, taking
+// the same lock — and foldWorkerCommandResult, stampReportedLaunchFacts and
+// relocateWorkerByID besides. For a "do not call these" list, omission is the
+// dangerous direction, and this one drifted inside a single stage with nothing
+// able to report it.
+//
+// So it is not re-typed, and no successor list is offered. THE HAZARD SET IS
+// WHAT THIS GREP RETURNS, minus runOutsourceTick itself (the tick that would
+// be the one holding the lock):
+//
+//	grep -rn 'outsourceMu\.Lock()' --include='*.go' . | grep -v _test.go
+//
+// outsourceMu is a plain sync.Mutex (api_stub.go), so Lock is the only acquire
+// form and that grep cannot miss one. Run it before you merge; do not trust a
+// count written here — at the time of writing it was 18 sites in 18 distinct
+// functions, one of which is runOutsourceTick.
+//
+// The safety claim is unchanged and never rested on the list: runReconcileTick's
+// call tree reaches NONE of those acquirers today — all of them, not merely the
+// five that happened to be named.
 func (s *apiServer) identitySweepOnConnect(memberID, machineClaim string) {
 	if s.noReconcile || memberID == "" || machineClaim == "" {
 		return
@@ -1538,7 +3124,7 @@ func (s *apiServer) identitySweepOnConnect(memberID, machineClaim string) {
 // authority? machineClaim is server-minted and unforgeable, so the whole test is
 // whether it equals the machine the server EXPECTED this member on:
 //
-//   - staff (kind=assistant): the owner-pinned desired_machine_id;
+//   - staff (kind=staff): the owner-pinned desired_machine_id;
 //   - outsource: the owner pin when concrete, else the machine the server
 //     ACTUALLY dispatched the last start to (workerSpawnTarget — a task-level or
 //     manual placement leaves no durable pin on the worker row).

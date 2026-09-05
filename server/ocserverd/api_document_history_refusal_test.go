@@ -101,20 +101,20 @@ func TestRestoreDocumentHistoryRefusesToReviveAnOverCapRevision(t *testing.T) {
 		{
 			name: "lessons",
 			seed: func(t *testing.T, api *apiServer) (string, string) {
-				if err := api.dal.PutLessons(Lessons{RoleKey: role, TaskType: taskType, Text: oversized}); err != nil {
+				if err := api.dal.PutLessons(Lessons{RoleKey: role, Text: oversized}); err != nil {
 					t.Fatal(err)
 				}
 				rec := httptest.NewRecorder()
-				api.HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(rec, taskReq(t, http.MethodPost,
-					"/api/lessons/"+role+"/"+taskType, map[string]any{"text": "short again"}, "owner", "owner"),
-					role, taskType)
+				api.HandleReplaceLessonsApiLessonsRoleKeyPost(rec, taskReq(t, http.MethodPost,
+					"/api/lessons/"+role, map[string]any{"text": "short again"}, "owner", "owner"),
+					role)
 				if rec.Code != http.StatusOK {
 					t.Fatalf("shrinking write: %d %s", rec.Code, rec.Body.String())
 				}
-				return "lessons", role + "::" + taskType
+				return "lessons", role
 			},
 			live: func(t *testing.T, api *apiServer) string {
-				current, err := api.foldLessonsDTO(role, taskType)
+				current, err := api.foldLessonsDTO(role)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -247,9 +247,12 @@ func TestDocumentHistoryRoutesRefuseUnknownKindsAndBlankKeys(t *testing.T) {
 	for _, addr := range []struct{ kind, key string }{
 		{"member_avatar", "m-1"}, // a real document, but not one this feature versions
 		{"global_context", ""},
-		{"lessons", seedRoleAssistant},        // no task type — addresses nothing
-		{"lessons", "::" + seedRoleAssistant}, // blank role half
-		{"lessons", seedRoleAssistant + "::"}, // blank task-type half
+		// T-2: a lessons key is the bare role_key, so the three composite
+		// shapes that used to be refused HERE are no longer malformed — they
+		// are just keys naming no document (covered by
+		// TestDocumentHistoryRoundTripsLessonsUnderItsRoleKey). What remains
+		// malformed is what is malformed for every kind: a blank key.
+		{"lessons", ""},
 	} {
 		rec := httptest.NewRecorder()
 		api.HandleListDocumentHistoryApiDocumentHistoryKindKeyGet(rec, taskReq(t, http.MethodGet,

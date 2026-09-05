@@ -28,10 +28,10 @@
 #   ⑤ a step goes pending → in_progress → done. `pending → done` is not a legal
 #     agent transition (domain.go agentStepTransitions) and answers 409, so the
 #     old one-shot "report done" moved nothing.
-#   ⑥ a card opened by the executor of an ACTIVE task auto-binds to that task's
-#     CURRENT step (api_replycards.go) — and there must BE one: with no step
-#     in_progress the create is refused 409. So ⑥ comes while a step is running,
-#     and the owner side answers it (run.sh) to release the waiting_owner hold.
+#   ⑥ a card NAMES the step it is about (linked_task, T-18: create_reply_card
+#     no longer infers a binding and omitting the field is a 400) — and that step
+#     must be live, so ⑥ comes while a step is running, and the owner side
+#     answers it (run.sh) to release the waiting_owner hold.
 #   ⑦ closeout is TERMINAL-tasks-only (api_tasks.go). A task is terminal when
 #     its steps derive it there — so the last step must actually reach done
 #     first, and the handoff declaration rides THAT call, not the closeout.
@@ -117,15 +117,25 @@ if [[ -n "$TASK" ]] && ! skipped step_done; then
   fi
 fi
 
-# ⑥ 開一張等我回覆卡 — the card auto-binds to the step that is in_progress, so
-# the second step is started FIRST. That is not a trick to satisfy the server:
-# it is what "我做到這裡，需要你裁示" actually is. The step parks in
-# waiting_owner until run.sh's owner side answers, which is why ⑦ waits below.
+# ⑥ 開一張等我回覆卡 — the card NAMES the step it is about (linked_task, T-18:
+# create_reply_card no longer infers a binding, and omitting the field is a
+# 400). The second step is still started FIRST, and that is not a trick to
+# satisfy the server: it is what "我做到這裡，需要你裁示" actually is. The step
+# parks in waiting_owner until run.sh's owner side answers, which is why ⑦
+# waits below — so the binding has to be REAL, not incidental.
 if [[ -n "$TASK" ]] && ! skipped reply_card; then
   SID2="$(step_id_at 1)"
-  [[ -n "$SID2" ]] && sg_step reply_card_start POST "/api/tasks/$TASK/steps/$SID2/status" '{"status":"in_progress"}' >/dev/null
-  sg_step reply_card POST /api/reply-cards \
-    '{"kind":"decision","summary":"七步關卡:要不要繼續收尾?","body":"這是載體用的請示卡。","options":["繼續收尾","先停在這裡"]}' >/dev/null
+  # ⑥ needs a REAL second step: linked_task names it, and without one the card
+  # would send "step_id":"" and collect the required-field 400 instead of the
+  # honest refusal — which reads in the log like a broken card call rather than
+  # "there was no step to bind". A nested if rather than another `&&` line: as
+  # the last statement of this block a failed `&&` sets the block's status, and
+  # this file is one `set -e` away from that aborting the run.
+  if [[ -n "$SID2" ]]; then
+    sg_step reply_card_start POST "/api/tasks/$TASK/steps/$SID2/status" '{"status":"in_progress"}' >/dev/null
+    sg_step reply_card POST /api/reply-cards \
+      "{\"kind\":\"decision\",\"summary\":\"七步關卡:要不要繼續收尾?\",\"body\":\"這是載體用的請示卡。\",\"options\":[{\"text\":\"先停在這裡\",\"ai_pick\":false},{\"text\":\"繼續收尾\",\"ai_pick\":true}],\"linked_task\":{\"task_id\":\"$TASK\",\"step_id\":\"$SID2\"}}" >/dev/null
+  fi
 fi
 
 # ⑦ 回覆另一個 agent — the colleague spoke first (run.sh 3b) and is waiting. The
@@ -139,7 +149,7 @@ if ! skipped peer_message; then
   if [[ -z "$PEER" || -z "$PEER_NONCE" ]]; then
     say "🔴 ⑦ cannot run: run.sh seated no peer (OC_SG_PEER/OC_SG_PEER_NONCE empty)."
   else
-    INBOX="$(sg_http GET "/api/chat?with=$AGENT&peek=true&limit=200")"
+    INBOX="$(sg_http GET "/api/chat?with=$AGENT&limit=200")"
     if ! printf '%s' "$INBOX" | grep -qF "$PEER_NONCE"; then
       say "WARNING: the peer's message is NOT in the agent's chat. The plant and"
       say "the read have drifted apart — ⑦ would go red for a harness reason."
@@ -196,7 +206,7 @@ if ! skipped image_answer; then
   if [[ -z "$ANS" ]]; then
     say "🔴 ⑨ cannot run: run.sh planted no image (OC_SG_IMAGE_ANSWER empty)."
   else
-    ATT="$(sg_http GET "/api/chat?with=$AGENT&peek=true&limit=200" | python3 -c '
+    ATT="$(sg_http GET "/api/chat?with=$AGENT&limit=200" | python3 -c '
 import sys, json
 d = json.load(sys.stdin)
 rows = d if isinstance(d, list) else d.get("messages", d.get("chat", []))

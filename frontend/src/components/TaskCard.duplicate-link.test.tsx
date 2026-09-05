@@ -5,7 +5,12 @@
 // The ticket named two fallback branches (the dep rows). Review found this one
 // carrying the identical `?? rawId` shape ~60 lines below them: when the
 // ORIGINAL task a duplicate points at is not in the loaded population, the row
-// printed `t-1d8292a2f8db` where every other surface says `T-1d82`.
+// printed the raw id where every other surface printed the short number.
+//
+// 🔴 T-5291 (owner 2026-08-25) ENDED that mismatch by moving the other way:
+// the number IS the id now, so this row and every other surface print the same
+// string. What this file still holds is that the row NAMES the original at all
+// — the `??` fallback must not print an empty cell.
 //
 // It is fixed here rather than deferred because "the ticket only named two"
 // is a reason about the ticket, not about what owner sees. A surface read with
@@ -90,7 +95,7 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("T-c21e S1 重複原票列的編號", () => {
-  it("原票不在母體時,顯示派生的短編號而非原始長 id", () => {
+  it("原票不在母體時,仍叫得出原票的識別值", () => {
     const dupe = mkTask({
       title: "重複票",
       status: "duplicated",
@@ -99,13 +104,15 @@ describe("T-c21e S1 重複原票列的編號", () => {
     const { container } = renderCard(dupe, [dupe]);
 
     const text = container.textContent ?? "";
-    expect(text).toContain("T-1d82");
-    expect(text).not.toContain(LONG_ID);
+    // Was `toContain("T-1d82")` + `not.toContain(LONG_ID)`. The second half is
+    // deleted rather than relaxed: with the number equal to the id it directly
+    // contradicts the first half and could only pass on an empty row.
+    expect(text).toContain(LONG_ID);
   });
 
   it("原票在母體時,仍以 server 的 task_no 為準", () => {
     // taskNo and id are deliberately INCONSISTENT so the two sources are
-    // distinguishable: derivation would say T-9999, the server says T-abcd.
+    // distinguishable: derivation would say t-9999ffffffff, server says T-abcd.
     const original = mkTask({
       id: "t-9999ffffffff",
       taskNo: "T-abcd",
@@ -120,6 +127,6 @@ describe("T-c21e S1 重複原票列的編號", () => {
 
     const text = container.textContent ?? "";
     expect(text).toContain("T-abcd");
-    expect(text).not.toContain("T-9999");
+    expect(text).not.toContain("t-9999ffffffff");
   });
 });

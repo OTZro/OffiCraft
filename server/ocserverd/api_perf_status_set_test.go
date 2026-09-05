@@ -6,7 +6,7 @@ package main
 //     狀態 dropdown ticked, instead of shipping every live task and letting the
 //     browser hide most of them.
 //   * TaskListItemDTO.dep_tasks — resolve each dep to the facts the
-//     「等 T-xxxx <標題>」 row prints, so naming an already-CLOSED blocker no
+//     「等 <task id> <標題>」 row prints, so naming an already-CLOSED blocker no
 //     longer requires the client to download the closed population.
 //
 // Measured baseline this replaces (origin/main e7120c5, the live workshop DB):
@@ -333,7 +333,7 @@ func TestTaskListNamesADepTheFilterExcluded(t *testing.T) {
 		t.Fatalf("dep_tasks order/ids drifted: %+v", deps)
 	}
 	// MUTANT: pass nil for byID in the handler (or drop the join) and the title
-	// and status below go empty — the 「等 T-xxxx」 row degrades to a bare number,
+	// and status below go empty — the 「等 <task id>」 row degrades to a bare number,
 	// which is the owner-reported bug T-1d82 was opened for.
 	if deps[0].Title != "先把 SSE 重連補起來" {
 		t.Fatalf("closed dep must be NAMED: %+v", deps[0])

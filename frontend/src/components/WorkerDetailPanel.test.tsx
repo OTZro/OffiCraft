@@ -14,7 +14,7 @@
 // the picker's dark theme) is NOT asserted here — jsdom does not compute it.
 
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
-import { render, fireEvent, waitFor } from "@testing-library/react";
+import { render, fireEvent, waitFor, configure } from "@testing-library/react";
 import { I18nProvider } from "../i18n";
 import { api } from "../api";
 import { zh } from "../i18n/locales/zh";
@@ -30,7 +30,6 @@ import {
   __setMockMemberOnline,
 } from "../api/mock";
 import type { TaskView, OutsourceWorkerView } from "../api/adapter";
-import type { WireMonSession } from "../api/wire";
 
 let seq = 0;
 
@@ -93,6 +92,15 @@ function mkWorker(over: Partial<OutsourceWorkerView>): OutsourceWorkerView {
   };
 }
 
+// The 更改 dialog's mount has been measured at ~1060ms here, 60ms past
+// dom-testing-library's 1000ms asyncUtilTimeout default. Nothing about the
+// panel is slow on purpose; the default is simply too tight for this subtree.
+// Kept UNDER vitest's own 5000ms testTimeout on purpose: at 5000 the two race
+// and vitest wins, so the timeout below reports "Test timed out" and the
+// diagnostic in openSettingsDialog never gets to say what it saw (measured).
+const SETTINGS_DIALOG_TIMEOUT_MS = 3000;
+configure({ asyncUtilTimeout: SETTINGS_DIALOG_TIMEOUT_MS });
+
 /** Absence probe. `findByTestId` can only prove presence; a "the cell is gone"
  * assertion needs a query that RESOLVES TO NULL instead of throwing, or the
  * test cannot tell "not rendered" from "rendered but unmatched". */
@@ -100,29 +108,51 @@ function queryTestId(root: ParentNode, testId: string): HTMLElement | null {
   return root.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
 }
 
-/** Land a telemetry row for `id` reporting `model` (+ optional effort).
+/** Click 更改 and wait for the settings dialog to actually mount.
  *
- * T-e12c: the 模型/投入度 cells read the SELF-REPORTED pair, so a fixture that
- * only configures a worker leaves those cells at the honest dash. Tests whose
- * subject is something else (the runtime cells, the absence of an in-place
- * editor, the dialog lifecycle) say "and it is running <model>" with this,
- * rather than reaching back to the configured value the cells no longer show. */
-function reportsModel(id: string, model: string, effort = "high") {
-  __injectMockMonitoringSession({
-    id,
-    name: id,
-    role: "",
-    runtime: "claude",
-    model,
-    effort,
-    machine: "",
-    account: "",
-    presence: "online",
-    context_pct: null,
-    cost: null,
-    banked_cost: null,
-    tokens: null,
-  });
+ * Every test below pokes at controls INSIDE that dialog, so this is the front
+ * guard they lacked: on a red the message says whether the dialog node is in
+ * the DOM, which tells "the wait was too short" apart from "it never
+ * rendered" — the two need opposite fixes. */
+async function openSettingsDialog(
+  findByTestId: (testId: string) => Promise<HTMLElement>,
+): Promise<HTMLElement> {
+  fireEvent.click(await findByTestId("worker-detail-change"));
+  try {
+    return await findByTestId("worker-detail-settings-dialog");
+  } catch (err) {
+    const inDom = queryTestId(document.body, "worker-detail-settings-dialog");
+    throw new Error(
+      `worker-detail-settings-dialog did not appear within ` +
+        `${SETTINGS_DIALOG_TIMEOUT_MS}ms of clicking 更改. At timeout it was ` +
+        (inDom
+          ? "PRESENT in the DOM — it rendered LATE, so the wait is what is too short."
+          : "ABSENT from the DOM — it never rendered, so this is not a timing problem.") +
+        ` Underlying: ${(err as Error).message}`,
+    );
+  }
+}
+
+/** Make `over` a worker that is AWAKE and self-reporting `model` (+ effort).
+ *
+ * The 模型/思考強度 cells read the SELF-REPORTED pair off the worker's own
+ * durable columns, and only while it is awake (owner ruling `rc-8a129bc3a188`,
+ * option [1] — the member panel's rule, adopted here). A fixture that merely
+ * CONFIGURES a worker leaves both cells at the honest dash, and so does a
+ * reported value on a worker that is not up. Tests whose subject is something
+ * else (the runtime cells, the absence of an in-place editor, the dialog
+ * lifecycle) say "and it is running <model>" with this.
+ *
+ * 🔴 It deliberately does NOT land a monitoring session: a live session is no
+ * longer a source for these two cells. It used to be the FIRST source, ahead of
+ * the durable columns and with no awake gate.
+ */
+function reporting(
+  over: Partial<OutsourceWorkerView>,
+  model: string,
+  effort = "high",
+): Partial<OutsourceWorkerView> {
+  return { presence: "online", actualModel: model, actualEffort: effort, ...over };
 }
 
 function renderOfficeAt(hash: string) {
@@ -151,19 +181,23 @@ describe("WorkerDetailPanel — aligned real info (T-f190 item 1)", () => {
   it("shows the worker's REAL machine / account / context% / est.$ when reported", async () => {
     __injectMockTask(mkTask({ id: "t-1", taskNo: "T-9c21", title: "查帳單" }));
     __injectMockOutsourceWorker(
-      mkWorker({
-        id: "ow-1",
-        codename: "O-7",
-        taskId: "t-1",
-        taskTitle: "查帳單",
-        presence: "online",
-        machine: "Warden · mbp5",
-        account: "team-a@corp",
-        contextPct: 42,
-        cost: 3.5,
-      }),
+      mkWorker(
+        reporting(
+          {
+            id: "ow-1",
+            codename: "O-7",
+            taskId: "t-1",
+            taskTitle: "查帳單",
+            presence: "online",
+            machine: "Warden · mbp5",
+            account: "team-a@corp",
+            contextPct: 42,
+            cost: 3.5,
+          },
+          "Opus 4.6",
+        ),
+      ),
     );
-    reportsModel("ow-1", "Opus 4.6");
 
     const { findByTestId, container } = renderOfficeAt("#office/worker/ow-1");
     await findByTestId("worker-detail-task");
@@ -306,7 +340,19 @@ describe("WorkerDetailPanel — honest presence states (A案 P6 member vocabular
     // released worker, so any of them would be a dead affordance.
     expect(queryTestId(document.body, "worker-detail-change")).toBeNull();
     expect(queryTestId(document.body, "worker-detail-wake")).toBeNull();
-    expect(queryTestId(document.body, "worker-detail-stop")).toBeNull();
+    // T-ed79: the stop rung is a MemberActionButtons cell now, so the id that
+    // proves its absence changed with it. A stale `worker-detail-stop` here
+    // would be a vacuously-true assertion about an id nothing renders any more.
+    // A released worker is on no rung at all, so every id the one ladder cell
+    // can carry has to be absent — checking only 停止 would pass on a panel that
+    // rendered the kill button.
+    for (const id of [
+      "member-action-stop",
+      "member-action-accelerated-stop",
+      "member-action-force-stop",
+    ]) {
+      expect(queryTestId(document.body, id), id).toBeNull();
+    }
   });
 
   it("released vs merely OFFLINE are told apart, though both project the same grey dot", async () => {
@@ -394,9 +440,8 @@ describe("WorkerDetailPanel — 設定改走喚醒區 (T-7526 parity)", () => {
     __setMockMemberOnline("warden-mbp5", true);
     __injectMockTask(mkTask({ id: "t-1" }));
     __injectMockOutsourceWorker(
-      mkWorker({ id: "ow-1", taskId: "t-1", model: "Opus 4.6" }),
+      mkWorker(reporting({ id: "ow-1", taskId: "t-1", model: "Opus 4.6" }, "Opus 4.6")),
     );
-    reportsModel("ow-1", "Opus 4.6");
     const { findByTestId, queryByTestId } = renderOfficeAt("#office/worker/ow-1");
     // Positive control FIRST: both cells really are on screen holding real
     // values. Without it "no edit button" would also pass on a panel that
@@ -419,7 +464,7 @@ describe("WorkerDetailPanel — 設定改走喚醒區 (T-7526 parity)", () => {
     );
     const relocate = vi.spyOn(api, "relocateWorker");
     const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
-    fireEvent.click(await findByTestId("worker-detail-change"));
+    await openSettingsDialog(findByTestId);
     const select = (await findByTestId(
       "worker-detail-settings-machine",
     )) as HTMLSelectElement;
@@ -456,7 +501,7 @@ describe("WorkerDetailPanel — 設定改走喚醒區 (T-7526 parity)", () => {
       ),
     );
     const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
-    fireEvent.click(await findByTestId("worker-detail-change"));
+    await openSettingsDialog(findByTestId);
     const input = (await findByTestId("me-model-input")) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "claude-opus-4-8" } });
     fireEvent.click(await findByTestId("worker-detail-settings-confirm"));
@@ -487,7 +532,7 @@ describe("WorkerDetailPanel — 設定改走喚醒區 (T-7526 parity)", () => {
       return (await api.getOutsourceWorker(id)) as never;
     });
     const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
-    fireEvent.click(await findByTestId("worker-detail-change"));
+    await openSettingsDialog(findByTestId);
     const input = (await findByTestId("me-model-input")) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "claude-opus-4-8" } });
     const select = (await findByTestId(
@@ -508,17 +553,14 @@ describe("WorkerDetailPanel — 設定改走喚醒區 (T-7526 parity)", () => {
     __injectMockTask(mkTask({ id: "t-1" }));
     __injectMockTask(mkTask({ id: "t-2" }));
     __injectMockOutsourceWorker(
-      mkWorker({ id: "ow-1", taskId: "t-1", model: "Opus 4.6" }),
+      mkWorker(reporting({ id: "ow-1", taskId: "t-1", model: "Opus 4.6" }, "Opus 4.6")),
     );
     __injectMockOutsourceWorker(
-      mkWorker({ id: "ow-2", taskId: "t-2", model: "Sonnet 4.6" }),
+      mkWorker(reporting({ id: "ow-2", taskId: "t-2", model: "Sonnet 4.6" }, "Sonnet 4.6")),
     );
-    reportsModel("ow-1", "Opus 4.6");
-    reportsModel("ow-2", "Sonnet 4.6");
     const { findByTestId, queryByTestId, rerender } =
       renderOfficeAt("#office/worker/ow-1");
-    fireEvent.click(await findByTestId("worker-detail-change"));
-    await findByTestId("worker-detail-settings-dialog");
+    await openSettingsDialog(findByTestId);
 
     // Neither caller passes a `key`, so this is a PROP change, not a remount: a
     // surviving dialog would still hold ow-1's draft and one confirm would write
@@ -706,19 +748,36 @@ describe("WorkerDetailPanel — lifecycle ops (T-32e1/T-f190)", () => {
     await findByTestId("worker-detail-refocus-note");
   });
 
-  it("stop → the dot flips to 已停止 and the row swaps 更改／停止 for 喚醒", async () => {
+  // 🔴 REWRITTEN THREE TIMES FOR T-ed79. First for 「往正職靠：外包那顆改成優雅
+  // 停止，強制殺移到第三顆按鈕」 — 停止 asks the worker to work its 〈停止〉, so
+  // the worker stays alive in 停止中 and the row keeps offering what can still
+  // end the wait. Then for owner 2026-08-21 「不是一開始就顯示三個按鈕」「按了才
+  // 出現」: the escalations are REVEALED rather than greyed out, so this walks
+  // the ladder instead of reading it off a fixed row. Then for owner 2026-08-22
+  // 「同一個按鈕 升級的概念 不是不同按鈕」: what the walk finds at each step is
+  // no longer "one MORE rung beside the last" but the SAME cell carrying the
+  // next action — so the step that used to add 加速停止 to a row containing 停止
+  // now REPLACES 停止 with it, and this test asserts that replacement.
+  it("停止 → the worker goes 停止中 and the ladder cell UPGRADES to 加速停止, not to a second button", async () => {
     __injectMockTask(mkTask({ id: "t-1" }));
     __injectMockOutsourceWorker(
       mkWorker({ id: "ow-1", taskId: "t-1", presence: "online" }),
     );
     const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
-    // Live: 更改 ＋ 停止 side by side (owner 2026-07-31 「左右並排」).
+    // Live: 更改 ＋ the ONE ladder cell, side by side (owner 2026-07-31
+    // 「左右並排」), and the ladder is the SAME component the member panel
+    // renders, so the label and the upgrade order are 正職's by construction.
     const change = await findByTestId("worker-detail-change");
-    const stop = await findByTestId("worker-detail-stop");
-    expect(stop.textContent).toBe(zh.workerDetail.stop);
-    expect(change.parentElement).toBe(stop.parentElement);
-    expect(stop.parentElement?.className).toContain("mp-identity__buttons");
-    // 更改 is written FIRST so the row reads 更改 ＋ 停止, in that order.
+    const stop = await findByTestId("member-action-stop");
+    expect(stop.textContent).toBe(zh.lifecycle.action.stop);
+    // The rungs above are absent, not greyed out — and after 2026-08-22 there
+    // is nowhere for them to be: the cell IS 停止 at this stage.
+    expect(queryTestId(document.body, "member-action-accelerated-stop")).toBeNull();
+    expect(queryTestId(document.body, "member-action-force-stop")).toBeNull();
+    expect(stop.parentElement?.parentElement?.className).toContain(
+      "mp-identity__buttons",
+    );
+    // 更改 is written FIRST so the row reads 更改 ＋ the ladder cell.
     expect(
       change.compareDocumentPosition(stop) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
@@ -727,14 +786,73 @@ describe("WorkerDetailPanel — lifecycle ops (T-32e1/T-f190)", () => {
     await waitFor(async () =>
       expect(
         (await findByTestId("worker-detail-header-dot")).getAttribute("aria-label"),
+      ).toBe(zh.office.presence.stopping),
+    );
+    // The escalation now exists — it is the only thing that can end a wait with
+    // no deadline — and it exists IN THE SLOT 停止 occupied, which is the
+    // 2026-08-22 shape. 停止 is therefore gone rather than left beside it
+    // (spent): the old premise, that the pressed rung stays put and the new one
+    // takes a fresh slot, no longer holds. The rung ABOVE is still absent: a
+    // stop that has not been put on a clock is not a kill waiting to happen.
+    const upgraded = await findByTestId("member-action-accelerated-stop");
+    expect(upgraded.textContent).toBe(zh.lifecycle.action["accelerated-stop"]);
+    expect(queryTestId(document.body, "member-action-stop")).toBeNull();
+    expect(queryTestId(document.body, "member-action-force-stop")).toBeNull();
+    expect(queryTestId(document.body, "worker-detail-wake")).toBeNull();
+  });
+
+  // 強制停止 is the rung that still kills, and it is the only one behind a
+  // confirm — the click alone must reach no endpoint. Reaching it at all means
+  // walking the whole ladder, which is the point: 「強制停止應該是加速停止按下的
+  // 狀態才可以按」. Since 2026-08-22 the walk happens in ONE slot, so each step
+  // below also asserts that the rung below it is gone.
+  it("強制停止 is reached only by upgrading through 加速停止, ASKS FIRST, then kills and collapses the row to 喚醒", async () => {
+    __injectMockTask(mkTask({ id: "t-1" }));
+    __injectMockOutsourceWorker(
+      mkWorker({ id: "ow-1", taskId: "t-1", presence: "online" }),
+    );
+    const force = vi.spyOn(api, "forceStopWorker");
+    const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
+    // Rung 1 → rung 2. `waitFor` on the ENABLED state is not incidental: a cell
+    // that has just UPGRADED spends LADDER_ARM_MS inert so a repeat click on the
+    // rung below cannot escalate for the owner (MemberActionButtons) — and after
+    // 2026-08-22 that cooldown is the only thing that can, because the upgrade
+    // lands under the finger that pressed the previous rung.
+    fireEvent.click(await findByTestId("member-action-stop"));
+    await waitFor(async () =>
+      expect(
+        (await findByTestId("member-action-accelerated-stop")).hasAttribute("disabled"),
+      ).toBe(false),
+    );
+    // Still no kill button — the wind-down is open but not on a clock — and
+    // 停止 has been upgraded away rather than left beside it.
+    expect(queryTestId(document.body, "member-action-force-stop")).toBeNull();
+    expect(queryTestId(document.body, "member-action-stop")).toBeNull();
+
+    // Rung 2 → rung 3, in the same slot again.
+    fireEvent.click(await findByTestId("member-action-accelerated-stop"));
+    await waitFor(async () =>
+      expect(
+        (await findByTestId("member-action-force-stop")).hasAttribute("disabled"),
+      ).toBe(false),
+    );
+    expect(queryTestId(document.body, "member-action-accelerated-stop")).toBeNull();
+
+    fireEvent.click(await findByTestId("member-action-force-stop"));
+    await findByTestId("worker-detail-force-stop-confirm");
+    expect(force).not.toHaveBeenCalled();
+
+    fireEvent.click(await findByTestId("worker-detail-force-stop-confirm-btn"));
+    await waitFor(() => expect(force).toHaveBeenCalledWith("ow-1"));
+    await waitFor(async () =>
+      expect(
+        (await findByTestId("worker-detail-header-dot")).getAttribute("aria-label"),
       ).toBe(zh.office.presence.stopped),
     );
-    // …and the pair collapses to the ONE wake button.
     expect((await findByTestId("worker-detail-wake")).textContent).toBe(
       zh.lifecycle.action.spawn,
     );
-    expect(queryTestId(document.body, "worker-detail-change")).toBeNull();
-    expect(queryTestId(document.body, "worker-detail-stop")).toBeNull();
+    expect(queryTestId(document.body, "member-action-stop")).toBeNull();
   });
 
   it("喚醒 ASKS FIRST: it opens the settings dialog and reaches NO endpoint until confirmed", async () => {
@@ -923,6 +1041,18 @@ describe("WorkerDetailPanel — lifecycle ops (T-32e1/T-f190)", () => {
       ),
     );
     expect(select.value).toBe("m-asleep");
+    // …and it really is OFFERED, labelled 離線 and disabled. Asserting the
+    // selected value alone is not enough: a list that dropped the pin, or kept
+    // it selectable, both leave `select.value` reading "m-asleep" while the
+    // owner is one click from winding the worker onto a machine with no warden.
+    // (The rule is the SHARED `machineOptions`; the member panel's twin
+    // assertion is in MemberDetailPanel.relocate.test.tsx.)
+    const asleep = Array.from(select.options).find(
+      (o) => o.value === "m-asleep",
+    )!;
+    expect(asleep).toBeTruthy();
+    expect(asleep.textContent).toBe("m-asleep（離線）");
+    expect(asleep.disabled).toBe(true);
     // Edit ONLY the model, then confirm.
     fireEvent.change((await findByTestId("me-model-input")) as HTMLInputElement, {
       target: { value: "claude-opus-4-8" },
@@ -942,7 +1072,7 @@ describe("WorkerDetailPanel — lifecycle ops (T-32e1/T-f190)", () => {
     const setModel = vi.spyOn(api, "setWorkerModel");
     const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
     // The ONE settings entry (T-7526) — the model cell itself is read-only.
-    fireEvent.click(await findByTestId("worker-detail-change"));
+    await openSettingsDialog(findByTestId);
     // The shared ModelEffortEditor's free custom-model input (data-testid pinned).
     const input = (await findByTestId("me-model-input")) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "claude-opus-4-8" } });
@@ -960,7 +1090,7 @@ describe("WorkerDetailPanel — lifecycle ops (T-32e1/T-f190)", () => {
     // intent was stored (the running session is still on the old one until it
     // respawns). The dialog is where the configured value lives, so that is
     // where "the save landed and the UI adopted it" is honestly observable.
-    fireEvent.click(await findByTestId("worker-detail-change"));
+    await openSettingsDialog(findByTestId);
     await waitFor(async () =>
       expect(
         ((await findByTestId("me-model-input")) as HTMLInputElement).value,
@@ -1077,7 +1207,11 @@ describe("WorkerDetailPanel — initial-prompt preview (T-ba6b)", () => {
     await waitFor(() =>
       expect(body.textContent ?? "").toContain("Global Context"),
     );
-    expect(body.textContent ?? "").toContain("啟動程序");
+    // seeds.ts 直接 import 真正的 seeds/boot_sequence.md（?raw），沒有第二份
+    // 拷貝可以走鐘，所以這一行釘的是那份 seed 的 H1 逐字位元組。
+    // rc-e12733548e4b 之後是新名（啟動程序 → 啟動步驟），與 seed 同一顆
+    // commit 換掉。
+    expect(body.textContent ?? "").toContain("啟動步驟");
     // T-4595: this used to assert the codename and the bound task title were in
     // the preview. Both are gone — a worker's boot context is the staff fold
     // minus the persona slot, with no identity block, no task and no manual —
@@ -1180,7 +1314,7 @@ describe("WorkerDetailPanel — initial-prompt preview (T-ba6b)", () => {
   });
 });
 
-// ── T-e12c: the 模型/投入度 cell states what is RUNNING; the 更改／喚醒 dialog
+// ── T-e12c: the 模型/思考強度 cell states what is RUNNING; the 更改／喚醒 dialog
 // owns the SETTING. Owner ruling 2026-07-31:「成員面板以及監控台，一定要顯示
 // 回報回來的狀態，不能顯示設定值」. The two halves are pinned together on
 // purpose — the readout must never fall back to the configured pair, and the
@@ -1188,7 +1322,15 @@ describe("WorkerDetailPanel — initial-prompt preview (T-ba6b)", () => {
 // blank. T-7526 moved the editor out of the cell and into the dialog; these
 // pin the RULE, so they follow it there rather than the markup it used to have.
 describe("WorkerDetailPanel — reported state vs configured launch intent (T-e12c)", () => {
-  function liveWorkerReporting(over: Partial<WireMonSession> = {}) {
+  /** A worker that is awake and reporting a pair DIFFERENT from its configured
+   * one — and, deliberately, a live monitoring session reporting a THIRD pair.
+   *
+   * 🔴 The session is there to be IGNORED. Until owner ruling
+   * `rc-8a129bc3a188` (option [1]) it was the first source these two cells
+   * read, ahead of the worker's own durable columns and with no awake gate. If
+   * a future change reinstates it the readout below flips to the session's
+   * values, and this fixture is what makes that a red rather than a shrug. */
+  function liveWorkerReporting(over: Partial<OutsourceWorkerView> = {}) {
     __injectMockTask(mkTask({ id: "t-1" }));
     __injectMockOutsourceWorker(
       mkWorker({
@@ -1197,6 +1339,9 @@ describe("WorkerDetailPanel — reported state vs configured launch intent (T-e1
         presence: "online",
         model: "Opus 4.6",
         effort: "high",
+        actualModel: "claude-sonnet-4.9",
+        actualEffort: "low",
+        ...over,
       }),
     );
     __injectMockMonitoringSession({
@@ -1204,8 +1349,8 @@ describe("WorkerDetailPanel — reported state vs configured launch intent (T-e1
       name: "O-1",
       role: "",
       runtime: "claude",
-      model: "claude-sonnet-4.9",
-      effort: "low",
+      model: "session-only-model",
+      effort: "max",
       machine: "",
       account: "",
       presence: "online",
@@ -1213,7 +1358,6 @@ describe("WorkerDetailPanel — reported state vs configured launch intent (T-e1
       cost: null,
       banked_cost: null,
       tokens: null,
-      ...over,
     });
   }
 
@@ -1221,16 +1365,27 @@ describe("WorkerDetailPanel — reported state vs configured launch intent (T-e1
     liveWorkerReporting();
 
     const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
-    expect((await findByTestId("worker-detail-model-value")).textContent).toBe(
-      "claude-sonnet-4.9",
-    );
+    const modelValue = (await findByTestId("worker-detail-model-value"))
+      .textContent;
+    expect(modelValue).toContain("claude-sonnet-4.9");
+    // 🔴 …and it says WHOSE value that is. The tag is what keeps the row from
+    // reading as the configured model the 更改 dialog edits, and this panel
+    // grew it on owner ruling `rc-b8d219446b13` (option [0], 「兩邊都有」) — it
+    // was the member panel's alone, with nothing anywhere pinning its absence
+    // here as either a decision or an oversight.
+    expect(modelValue).toContain(zh.mp.modelReportedTag);
     expect(
       (await findByTestId("worker-detail-effort-value")).textContent,
     ).toContain("low");
+    // …and NOT the live monitoring session's pair, which is a different one
+    // again and is no longer a source for either cell.
+    expect(
+      (await findByTestId("worker-detail-model-effort-cell")).textContent,
+    ).not.toContain("session-only-model");
 
     // The setting lives in the 更改 dialog and is seeded from the WORKER, not
     // from what the session happens to be running.
-    fireEvent.click(await findByTestId("worker-detail-change"));
+    await openSettingsDialog(findByTestId);
     expect(
       ((await findByTestId("me-model-input")) as HTMLInputElement).value,
     ).toBe("Opus 4.6");
@@ -1260,7 +1415,7 @@ describe("WorkerDetailPanel — reported state vs configured launch intent (T-e1
     );
     // …and the configured pair is intact, just not on the readout: the dialog
     // still opens on it. A blank must never reach the save body either.
-    fireEvent.click(await findByTestId("worker-detail-change"));
+    await openSettingsDialog(findByTestId);
     expect(
       ((await findByTestId("me-model-input")) as HTMLInputElement).value,
     ).toBe("Opus 4.6");
@@ -1269,12 +1424,44 @@ describe("WorkerDetailPanel — reported state vs configured launch intent (T-e1
     ).toBe("high");
   });
 
+  it("blanks the readout for a worker that is not awake, however much it once reported", async () => {
+    // The half of the rule this panel did not have (owner ruling
+    // `rc-8a129bc3a188`, option [1] — the member panel's gate, adopted here).
+    // Reported columns are DURABLE: they survive the session that wrote them,
+    // so without the gate a stopped worker keeps stating a model it is not
+    // running. The live session below makes the old shape's answer visible —
+    // it would have been read first, and no gate would have stopped it.
+    liveWorkerReporting({ presence: "stopped" });
+
+    const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
+    expect(
+      (await findByTestId("worker-detail-model-value")).textContent,
+    ).toBe("—");
+    expect(
+      (await findByTestId("worker-detail-effort-value")).textContent,
+    ).toBe("—");
+    // The dash is bare: a provenance tag beside nothing would claim a report
+    // the panel is not showing.
+    expect(
+      (await findByTestId("worker-detail-model-effort-cell")).textContent,
+    ).not.toContain(zh.mp.modelReportedTag);
+  });
+
+  it("keeps the readout on a worker that is only WAKING, which is awake too", async () => {
+    liveWorkerReporting({ presence: "waking" });
+
+    const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
+    expect(
+      (await findByTestId("worker-detail-model-value")).textContent,
+    ).toContain("claude-sonnet-4.9");
+  });
+
   it("writes nothing when the dialog is confirmed unchanged, so no telemetry value can reach the save", async () => {
     liveWorkerReporting();
     const setModel = vi.spyOn(api, "setWorkerModel");
 
     const { findByTestId } = renderOfficeAt("#office/worker/ow-1");
-    fireEvent.click(await findByTestId("worker-detail-change"));
+    await openSettingsDialog(findByTestId);
     // Seeded from the worker, so a no-edit confirm is a true no-op. Were the
     // dialog seeded from the REPORTED pair instead, launchChanged would be true
     // and this click would silently overwrite the owner's intent with telemetry.

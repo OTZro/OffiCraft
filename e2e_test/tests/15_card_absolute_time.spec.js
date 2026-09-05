@@ -22,10 +22,18 @@ const {
 // Open a reply card AS the agent token (same path as spec 13): the initiator is
 // the verified JWT sub; the server mints the id + createdTs + companion chat
 // message. POST /api/reply-cards is the reply-card creation endpoint.
+//
+// linked_task: null is DECLARED, not defaulted-into — see the twin comment in
+// spec 13. Required since T-18, and null is the honest answer here: this spec
+// opens no task and plans no step, and what it pins is how a card's timestamp
+// RENDERS (相對時間 vs 絕對時間), which no task binding touches.
+//
+// ⚠️ Spread FIRST so a caller can override it. A card opened ABOUT a task must
+// pass its own linked_task {task_id, step_id} rather than inherit this null.
 async function createReplyCardAs(request, agentToken, card) {
   const res = await request.post(`${BASE}/api/reply-cards`, {
     headers: authHeaders(agentToken),
-    data: card,
+    data: { linked_task: null, ...card },
   });
   expect(res.status(), 'creating a reply card must succeed').toBe(200);
   return res.json();
@@ -56,7 +64,13 @@ test.describe('C2 · reply cards stamp open time ABSOLUTE (formatAbsolute), not 
       kind: 'decision',
       summary,
       body: '報告已整理完畢,等你確認。',
-      options: ['寄出(AI 建議)', '先不要'],
+      // T-40 option shape: objects carrying their own ai_pick. The pick sits
+      // on the SECOND option on purpose — position carries no meaning, and a
+      // card that put it first would keep passing against the old convention.
+      options: [
+        { text: '先不要', ai_pick: false },
+        { text: '寄出', ai_pick: true },
+      ],
     });
     expect(card.status).toBe('waiting');
 

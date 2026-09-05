@@ -57,8 +57,8 @@ const RESUME: MemberResumeSummaryView = {
   chat: [],
   tasks: [
     {
-      id: "t-answered",
-      taskNo: "T-245",
+      id: "t-02455291a009",
+      taskNo: "t-02455291a009",
       title: "依 owner 回覆調整目前方案",
       typeKey: "tm-05f7c776d6ff",
       status: "in_progress",
@@ -71,6 +71,17 @@ const RESUME: MemberResumeSummaryView = {
       updatedTs: 1787200000,
       detailChars: 0,
       answeredCardSteps: RESUME_ANSWERED_CARD_STEPS,
+      // T-91 — the wake snapshot's handover hold and reverse dependency edge.
+      // This story is the ordinary ticket: no hold, nobody queued behind it.
+      // `blocking` MUST be present (not undefined): the card reads
+      // `rt.blocking.length` directly, so a fixture that omits it crashes the
+      // whole component and every assertion below turns into "testid not
+      // found" rather than a geometry failure. The wire path is safe because
+      // `toResumeTask` fills `?? []`; this literal bypasses that mapper.
+      lock: "",
+      reassignedFrom: "",
+      reassignedFromKind: "",
+      blocking: [],
     },
   ],
   overview: {

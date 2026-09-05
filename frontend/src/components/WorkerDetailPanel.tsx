@@ -10,28 +10,39 @@ import {
   slot,
 } from "./AgentDetailPanel";
 import { pendingChangeHint, reportedMachine } from "../lib/pendingChange";
+import { buildAgentDetailVm, machineOptions } from "../lib/agentDetailVm";
 import { ModelEffortEditor } from "./ModelEffortEditor";
 import { ChevronLeftIcon, ChevronRightIcon } from "./icons";
 import { AvatarEditor } from "./AvatarEditor";
 import { Avatar } from "./Avatar";
 import { ResumeSummaryCard } from "./ResumeSummaryCard";
 import { LifecycleDot, presenceVisual } from "./LifecycleDot";
+import { MemberActionButtons, stopLadderStageOf } from "./MemberActionButtons";
 import { ScheduledMessagesCard } from "./ScheduledMessagesCard";
 // 🔴 This panel renders its settings dialog with the .machine-picker* classes,
-// so it must import their stylesheet ITSELF (T-7526). Both panels used to
-// free-ride on WorkerDetailPanel → useRelocateMachine → MachinePicker →
-// machine-picker.css; when the worker panel stopped driving that hook, the
-// last production importer went with it and BOTH dialogs rendered unstyled.
-// Style ownership follows the class names, not a transitive accident.
+// so it must import their stylesheet ITSELF (T-7526). Both panels used to reach
+// that sheet only through a chain of OTHER modules' imports; one link in the
+// chain stopped being driven, the last production importer went with it, and
+// BOTH dialogs rendered unstyled. Those chain modules have since been deleted
+// outright, so this direct import is now the only thing keeping the dialog
+// styled — deleting it breaks the dialog immediately, and no type error or
+// jsdom test will say so. Style ownership follows the class names, not a
+// transitive accident; pinned by styleOwnership.test.ts.
 import "./machine-picker.css";
 import "./member-detail.css";
 
 interface WorkerDetailPanelProps {
   worker: OutsourceWorkerView;
   /** This worker's live telemetry row from `GET /api/monitoring` (workers ride
-   * the SAME `sessions` array as members, keyed by their `ow-` id). It — not
-   * the worker DTO — is the source for the 模型 / 投入度 STATE readout;
-   * `undefined` (nothing reported) renders the honest dash. */
+   * the SAME `sessions` array as members, keyed by their `ow-` id).
+   *
+   * 🔴 THE PANEL NO LONGER READS IT. It used to be the source for the 模型 /
+   * 思考強度 readout, ahead of the worker DTO's own durable reported columns and
+   * with no awake gate — which is how this panel could show a model for a
+   * worker that was not up. The owner picked the member panel's rule instead
+   * (`rc-8a129bc3a188`, option [1]): awake, then the reported column, else the
+   * dash. The prop stays on the interface because callers still pass it and
+   * removing it is a separate, wider change; nothing here consumes it. */
   session?: MonSessionView;
   onBack: () => void;
   /** Jump to the bound task (#tasks/<taskId>); only wired when the worker has a
@@ -45,8 +56,19 @@ interface WorkerDetailPanelProps {
   /** Refocus (換手 — T-32e1): kill+respawn the session onto the SAME task. The
    * worker twin of the member refocus. Undefined ⇒ the affordance is hidden. */
   onRefocus?: () => Promise<void>;
-  /** Stop (停止 — T-f190): kill + hold down (owner-explicit; no auto-revival). */
+  /** 成本歸零 (owner-only, irreversible). Absent ⇒ no button. */
+  onResetCost?: () => Promise<void>;
+  /** Stop (停止 — T-f190; a GRACEFUL close-out since T-ed79): hold the worker
+   * down and show it the 〈停止〉; the 收口 is its own report_stopped. The FIRST
+   * rung of 停止 → 加速停止 → 強制停止. */
   onStop?: () => Promise<void>;
+  /** 加速停止 (T-ed79) — the MIDDLE rung: put the wind-down that is already open
+   * on the server's clock and TELL the worker. Not a kill, so it needs no
+   * confirm. Undefined ⇒ the rung renders disabled (the honesty rule). */
+  onAcceleratedStop?: () => Promise<void>;
+  /** 強制停止 (T-ed79) — the THIRD rung: kill the session NOW, saying nothing.
+   * This panel gates it behind its own confirm. */
+  onForceStop?: () => Promise<void>;
   /** Wake (喚醒 — T-7526): clear the stop + re-dispatch. ⚠️ The WIRE is still
    * `POST /api/outsource-workers/{id}/restart` — a frozen contract (§13). Only
    * the owner-facing WORD changed (owner 2026-07-31 「應該要統一」: 重啟 retired,
@@ -71,12 +93,12 @@ interface WorkerDetailPanelProps {
 /**
  * The outsource-worker detail view. Since T-ba6b it renders through the SAME
  * AgentDetailPanel the member detail page uses (owner constitution:「外包只是
- * 一個系統會幫我產生跟刪除的正職員工」) — the shared cards (模型/投入度、機器/
+ * 一個系統會幫我產生跟刪除的正職員工」) — the shared cards (模型/思考強度、機器/
  * Claude Account、運行狀況、最近操作、終端、初始 PROMPT) read the ONE unified
  * view model, and the worker-specific bits (外包角色頭像身分 + 任務 chip、
  * 委託人、委託任務) plug in through the panel's slots. Since T-7526 the shared
  * cards are READ-ONLY here too (the member panel's shape since T-927a): 模型/
- * 投入度 and 機器 carry no in-place editor, and every edit goes through the ONE
+ * 思考強度 and 機器 carry no in-place editor, and every edit goes through the ONE
  * dialog the identity card's action row opens — 更改 while it is running, 喚醒
  * while it is not (owner 2026-07-31). Everything the
  * worker has not really reported renders an honest dash / 「尚未分配」 — never a
@@ -84,12 +106,14 @@ interface WorkerDetailPanelProps {
  */
 export function WorkerDetailPanel({
   worker,
-  session,
   onBack,
   onOpenTask,
   onRelocate,
   onRefocus,
+  onResetCost,
   onStop,
+  onAcceleratedStop,
+  onForceStop,
   onWake,
   onSetModel,
   onFetchBootContext,
@@ -109,11 +133,23 @@ export function WorkerDetailPanel({
   // server-side); "" ⇒ never dispatched ⇒ 「尚未分配」, never a fabricated
   // machine name.
   const online = worker.presence === "online";
+  // Awakened = the same two presences the member panel reads (owner presence
+  // contract T-2860). It gates the 模型 / 思考強度 readout in the SHARED vm
+  // assembly: a worker that is not up reports no model, so the cell reads the
+  // dash rather than a value left over from a session that has ended (owner
+  // ruling `rc-8a129bc3a188`, option [1]).
+  const awake = worker.presence === "online" || worker.presence === "waking";
   const offline = worker.presence === "offline";
-  // stopping/stopped are both the owner-explicit hold-down (desired offline) —
-  // the action row treats them as one 已停止 mode.
-  const stopped =
-    worker.presence === "stopped" || worker.presence === "stopping";
+  // 🔴 stopping and stopped are NO LONGER one mode (T-ed79). They were, while
+  // 停止 killed the session on the spot: `stopping` was a blink between the
+  // click and the kill landing, so folding it into 已停止 cost nothing. Now 停止
+  // is a close-out the worker WORKS, and `stopping` is the whole duration of it
+  // — the exact window in which the owner needs the two escalation rungs. Folding
+  // it into the 喚醒 arm would hide 加速停止 and 強制停止 for precisely as long as
+  // they are the only things that can end the wait, which is the staff-side
+  // defect T-2123 already had to fix once.
+  const stoppingNow = worker.presence === "stopping";
+  const stopped = worker.presence === "stopped";
   // 🔴 The action row keys off LIVENESS, not off who asked for it (T-7526). A worker
   // whose session died on its own reads `offline` — nobody pressed 停止, so the
   // old `stopped`-only test showed 停止 on a worker with nothing to stop, and the
@@ -121,6 +157,7 @@ export function WorkerDetailPanel({
   // states take the 喚醒 arm; the server's restart guard was widened the same
   // way (INTENT → LIVENESS), so the two sides now agree.
   const noLiveSession = stopped || offline;
+
   // 🔴 RELEASED is not a presence — it is the worker's own lifecycle end
   // (WorkerStatusReleased on the wire). It deliberately does NOT come from the
   // dot: `presence` is `undefined` for a released worker AND for one that was
@@ -133,7 +170,18 @@ export function WorkerDetailPanel({
   // worker that is not running, or change a running one. Same split as the
   // member panel's `online`, and it decides the dialog's title + confirm word
   // too, so the button can never promise something the click does not do.
-  const wakeMode = noLiveSession;
+  // 🔴 stoppingNow is deliberately on the WAKE side of this particular split,
+  // which is the opposite of where the button row puts it, and both are right
+  // because they answer different questions. The row asks "can the owner still
+  // escalate?" (yes — the session is alive and working its close-out); this
+  // asks "what does the ONE settings dialog DO when confirmed?", and for a
+  // worker the owner has already held down the answer is 喚醒: /restart is
+  // reachable there (its guard refuses only a worker that is BOTH not held down
+  // and online), so the confirm really does revive it. That is what makes the
+  // ladder's first rung — Spawn, which opens this same dialog — a genuine
+  // rescue rather than a button that opens a dialog promising 更改 and then
+  // changes nothing on a held-down worker.
+  const wakeMode = noLiveSession || stoppingNow;
   const machineText = worker.machine || t.workerDetail.notAssigned;
   // ── the four "changed, not applied yet" hints (T-7f28) ────────────────────
   // This panel had NONE of these — not even for 機器, which the member panel
@@ -212,6 +260,7 @@ export function WorkerDetailPanel({
   // member panel's shape. Only 停止 still acts on click.
   const [stopBusy, setStopBusy] = useState(false);
   const [stopError, setStopError] = useState(false);
+  const [forceStopConfirm, setForceStopConfirm] = useState(false);
   async function handleStop() {
     if (!onStop || stopBusy) return;
     setStopBusy(true);
@@ -224,9 +273,36 @@ export function WorkerDetailPanel({
       setStopBusy(false);
     }
   }
+  // The other two rungs share stopBusy/stopError: they are one escalation on one
+  // row, and a per-rung spinner would let two of them look live at once.
+  async function handleAcceleratedStop() {
+    if (!onAcceleratedStop || stopBusy) return;
+    setStopBusy(true);
+    setStopError(false);
+    try {
+      await onAcceleratedStop();
+    } catch {
+      setStopError(true);
+    } finally {
+      setStopBusy(false);
+    }
+  }
+  async function confirmForceStop() {
+    if (!onForceStop || stopBusy) return;
+    setStopBusy(true);
+    setStopError(false);
+    try {
+      await onForceStop();
+      setForceStopConfirm(false);
+    } catch {
+      setStopError(true);
+    } finally {
+      setStopBusy(false);
+    }
+  }
 
   // ── 設定區 (更改 / 喚醒 — 與正職同一套形狀, T-7526) ─────────────────────────
-  // ONE dialog holds 執行環境 + 模型 + 投入度 + 機器, opened from the identity
+  // ONE dialog holds 執行環境 + 模型 + 思考強度 + 機器, opened from the identity
   // action row by BOTH 更改 (live worker) and 喚醒 (no live session). The panel
   // itself is READ-ONLY: the cells state what is currently true, every edit goes
   // through here — the member panel's shape since T-927a, now the outsource
@@ -242,33 +318,14 @@ export function WorkerDetailPanel({
   // pin-only worker endpoint, i.e. a frozen-wire change (§13).
   const onlineMachines = machines.filter((m) => m.online);
   // The pinned machine stays in the list even when it is not online — labelled
-  // 離線 and disabled, MachinePicker's rule. Dropping it would silently move a
-  // worker the owner deliberately parked; leaving it selectable would wind the
-  // worker down onto a machine with no warden.
-  const pinnedOfflineMachine =
-    worker.desiredMachineId &&
-    !onlineMachines.some((m) => m.machineId === worker.desiredMachineId)
-      ? (machines.find((m) => m.machineId === worker.desiredMachineId) ?? {
-          machineId: worker.desiredMachineId,
-          displayName: worker.desiredMachineId,
-        })
-      : undefined;
-  const settingsMachineOptions = [
-    ...onlineMachines.map((m) => ({
-      machineId: m.machineId,
-      label: m.displayName,
-      offline: false,
-    })),
-    ...(pinnedOfflineMachine
-      ? [
-          {
-            machineId: pinnedOfflineMachine.machineId,
-            label: msg.machineOfflineOption(pinnedOfflineMachine.displayName),
-            offline: true,
-          },
-        ]
-      : []),
-  ];
+  // 離線 and disabled. That rule is now the SHARED one (lib/agentDetailVm), not
+  // a second copy of MemberDetailPanel's: the owner retired the "two copies as
+  // each other's audit" arrangement on `rc-fc9ab61ad057`.
+  const settingsMachineOptions = machineOptions(
+    machines,
+    worker.desiredMachineId ?? "",
+    msg.machineOfflineOption,
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsRuntime, setSettingsRuntime] = useState<"claude" | "codex">(
     worker.runtime || "claude",
@@ -311,7 +368,8 @@ export function WorkerDetailPanel({
     // sleeping laptop and save the settings for later". The pinned-but-offline
     // machine stays in `settingsMachineOptions`, labelled 離線 and disabled, so a
     // disabled <option> can still render as the current value without being
-    // selectable — MachinePicker's rule, and the reason this seed is safe.
+    // selectable — the same rule MemberDetailPanel follows, and the reason this
+    // seed is safe.
     setSettingsMachineId(
       worker.desiredMachineId || onlineMachines[0]?.machineId || "",
     );
@@ -376,13 +434,6 @@ export function WorkerDetailPanel({
       setSettingsBusy(false);
     }
   }
-
-  // 累計總花費 = 已 banked 的歷史成本 + 當前 live session 成本 (DTO 保證兩者
-  // 分開不重疊 — 與正職同一口徑，T-ba6b)。兩者皆 null ⇒ null ⇒ 誠實 dash。
-  const totalCost =
-    worker.cost == null && worker.bankedCost == null
-      ? null
-      : (worker.cost ?? 0) + (worker.bankedCost ?? 0);
 
   const taskStatusText = worker.taskStatus
     ? (t.tasks.status[worker.taskStatus] ?? worker.taskStatus)
@@ -473,34 +524,100 @@ export function WorkerDetailPanel({
                 {t.mp.change}
               </button>
             )}
-            {wakeMode
-              ? onWake && (
-                  <button
-                    type="button"
-                    className="btn btn--accent-ghost"
-                    data-testid="worker-detail-wake"
-                    onClick={openSettings}
-                  >
-                    {t.lifecycle.action.spawn}
-                  </button>
-                )
-              : onStop && (
-                  <button
-                    type="button"
-                    className="btn btn--danger-ghost"
-                    data-testid="worker-detail-stop"
-                    disabled={stopBusy}
-                    onClick={() => void handleStop()}
-                  >
-                    {stopBusy ? t.workerDetail.stopping : t.workerDetail.stop}
-                  </button>
-                )}
+            {!noLiveSession ? (
+              /* 🔴 THE SAME LADDER AS 正職, FROM THE SAME COMPONENT (T-ed79,
+                 owner 2026-08-21 「往正職靠」＋「停止 → 加速停止 → 強制停止」).
+                 It renders MemberActionButtons rather than three worker-shaped
+                 buttons of its own, so the labels, the ORDER, WHICH RUNGS EXIST
+                 YET and the danger styling are one implementation for both panels — the thing that used to drift
+                 was exactly this row. That also retires the panel-local 停止
+                 label (t.workerDetail.stop): one verb, one word, both panels. */
+              <MemberActionButtons
+                status={stoppingNow ? "stopping" : "online-awake"}
+                // 按了才出現 — the member panel's line, from the shared
+                // function: the worker DTO carries the same presence /
+                // desired_state / refocus_since / refocus_op, so 外包 climbs the
+                // ladder on exactly the same evidence 正職 does.
+                stage={stopLadderStageOf(worker)}
+                // Spawn is the wedge rescue MemberActionButtons already offers
+                // in `stopping`, and here it is real: wakeMode is true for a
+                // held-down worker, so this dialog's confirm reaches 喚醒.
+                onSpawn={stoppingNow && onWake ? openSettings : undefined}
+                onStop={onStop ? () => void handleStop() : undefined}
+                // No confirm on the middle rung, for the member panel's stated
+                // reason: 加速停止 gives the worker a deadline it is TOLD about
+                // and can still beat, so a second click costs nothing
+                // irreversible.
+                onAcceleratedStop={
+                  onAcceleratedStop
+                    ? () => void handleAcceleratedStop()
+                    : undefined
+                }
+                // The TOP rung keeps its confirm — it is the only irreversible
+                // one left on this row.
+                onForceStop={
+                  onForceStop ? () => setForceStopConfirm(true) : undefined
+                }
+                labels={
+                  stopBusy ? { stop: t.workerDetail.stopping } : undefined
+                }
+              />
+            ) : (
+              onWake && (
+                <button
+                  type="button"
+                  className="btn btn--accent-ghost"
+                  data-testid="worker-detail-wake"
+                  onClick={openSettings}
+                >
+                  {t.lifecycle.action.spawn}
+                </button>
+              )
+            )}
           </div>
           {stopError && (
             <div className="mp-field__hint mp-info2__error">
               {t.workerDetail.stopError}
             </div>
           )}
+        </div>
+      )}
+      {/* The TOP rung's confirm — the member panel's dialog, in the worker
+          panel's place. It is the ONE irreversible button on this row now that
+          停止 asks instead of kills, which is exactly why it kept its gate while
+          the other two did not. */}
+      {forceStopConfirm && (
+        <div
+          className="mp-confirm"
+          data-testid="worker-detail-force-stop-confirm"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="mp-confirm__box">
+            <div className="mp-confirm__title">{t.mp.forceStopConfirmTitle}</div>
+            <p className="mp-confirm__body">
+              {msg.memberForceStopConfirmBody(worker.codename)}
+            </p>
+            <div className="mp-confirm__actions">
+              <button
+                type="button"
+                className="btn btn--ghost"
+                onClick={() => setForceStopConfirm(false)}
+                disabled={stopBusy}
+              >
+                {t.common.cancel}
+              </button>
+              <button
+                type="button"
+                className="btn btn--danger-ghost"
+                data-testid="worker-detail-force-stop-confirm-btn"
+                onClick={() => void confirmForceStop()}
+                disabled={stopBusy}
+              >
+                {stopBusy ? t.mp.forceStopBusy : t.mp.forceStopConfirmAction}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -708,18 +825,21 @@ export function WorkerDetailPanel({
         extraExpandCards: slot(scheduleCard),
         afterPromptCards: slot(<ResumeSummaryCard agentId={worker.id} />),
       }}
-      vm={{
+      // The vm is BUILT by the shared assembly (lib/agentDetailVm), the SAME
+      // call the member panel makes — see the twin literal in
+      // MemberDetailPanel.tsx. What stays below is only what this side reads
+      // differently: its own domain object, its own 機器 fallback, its own i18n
+      // leaves.
+      vm={buildAgentDetailVm({
         testIdPrefix: "worker-detail",
         online,
-        runtime: worker.runtime || "claude",
+        awake,
+        runtime: worker.runtime,
         // STATE readout = what the worker's own telemetry reported; honest ""
         // when it reported nothing — never the configured value beside it.
-        // Model/effort prefer the live monitoring session and fall back to the
-        // DURABLE reported column, so they survive the session ending (T-7f28);
-        // runtime has no session source and reads the column directly.
-        reportedRuntime: worker.actualRuntime ?? "",
-        model: session?.model || (worker.actualModel ?? ""),
-        effort: session?.effort || (worker.actualEffort ?? ""),
+        actualRuntime: worker.actualRuntime,
+        actualModel: worker.actualModel,
+        actualEffort: worker.actualEffort,
         pending: {
           runtime: pendingRuntime,
           model: pendingModel,
@@ -734,28 +854,24 @@ export function WorkerDetailPanel({
         // alias/label or nulled it — the raw credential key NEVER reaches here);
         // "" ⇒ the shared panel's honest dash (T-ba6b).
         accountText: worker.account || "",
-        contextPct: worker.contextPct ?? null,
-        compactionCount: worker.compactionCount ?? null,
-        cost: totalCost,
-        onRefocus: onRefocus
-          ? async () => void (await onRefocus())
-          : undefined,
-        refocusSince: worker.refocusSince ?? null,
+        contextPct: worker.contextPct,
+        compactionCount: worker.compactionCount,
+        liveCost: worker.cost,
+        bankedCost: worker.bankedCost,
+        onRefocus,
+        onResetCost,
+        refocusSince: worker.refocusSince,
         refocusOp: worker.refocusOp,
         refocusDeadline: worker.refocusDeadline,
         refocusSubmittedNote: t.workerDetail.refocusSubmittedNote,
         refocusSinceLabel: msg.workerRefocusSince,
-        lastOp: worker.lastOp ?? "",
-        lastOpVerb:
-          worker.lastOp === "start" || worker.lastOp === "worker_start"
-            ? t.workerDetail.lastOpStart
-            : worker.lastOp === "stop" || worker.lastOp === "worker_stop"
-              ? t.workerDetail.lastOpStop
-              : (worker.lastOp ?? ""),
-        lastOpOk: worker.lastOpOk ?? null,
-        lastOpLog: worker.lastOpLog ?? "",
-        lastOpReason: worker.lastOpReason ?? "",
-        lastOpAt: worker.lastOpAt ?? null,
+        lastOp: worker.lastOp,
+        lastOpStartText: t.workerDetail.lastOpStart,
+        lastOpStopText: t.workerDetail.lastOpStop,
+        lastOpOk: worker.lastOpOk,
+        lastOpLog: worker.lastOpLog,
+        lastOpReason: worker.lastOpReason,
+        lastOpAt: worker.lastOpAt,
         tmuxSession: `member-${worker.id}`,
         terminalHint: t.workerDetail.terminalHint,
         // Initial-prompt PREVIEW (boot-context): re-fetched when the viewed
@@ -769,7 +885,7 @@ export function WorkerDetailPanel({
               note: t.workerDetail.initialPromptNote,
             }
           : undefined,
-      }}
+      })}
     />
   );
 }

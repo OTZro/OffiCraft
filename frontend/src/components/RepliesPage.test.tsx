@@ -2,9 +2,10 @@
 //   1. Empty 請示 list → the ✓ 目前沒有待處理的請示 state.
 //   2. Waiting cards render newest ask first (createdTs desc); the LONGEST-
 //      waiting one keeps the highlight, each card with initiator identity,
-//      已等你 {t}, and options[0] tagged AI 建議.
+//      已等你 {t}, and the ai_pick option tagged AI 建議 (position means nothing).
 //   3. Answering (option click OR typed reply) moves the card 請示 →
-//      近期已回覆; the final answer is tagged 你選的 (+ AI 建議 when it IS the
+//      近期已回覆; the final answer is tagged 你選的 (+ AI 建議 when a circled
+//      option IS the
 //      AI pick). No close/skip control exists anywhere.
 //   3b. 近期已回覆 is COLLAPSED by default — only the toggle row (title · N +
 //      hint) renders; clicking expands the answered cards, clicking again
@@ -59,7 +60,10 @@ function mkCard(over: Partial<ReplyCard>): ReplyCard {
     kind: "decision",
     summary: "要幫你寄出這封信嗎？",
     body: "",
-    options: ["寄出", "先不要"],
+    // ai_pick sits on the SECOND option ON PURPOSE: with it on the first,
+    // reading `idx === 0` instead of `opt.aiPick` passes every assertion below.
+    options: [{ text: "寄出", aiPick: false }, { text: "先不要", aiPick: true }],
+    selectMode: "single",
     status: "waiting",
     attachments: [],
     createdTs: Date.now() / 1000 - 25 * 60,
@@ -152,32 +156,43 @@ describe("RepliesPage", () => {
     expect(names).not.toContain("ow-rel");
   });
 
-  it("tags the FIRST quick-reply option as the AI pick", async () => {
+  it("tags the option that carries ai_pick and leaves every other chip untagged", async () => {
     __injectMockReplyCard(mkCard({}));
     const { findAllByTestId } = renderPage();
     const [card] = await findAllByTestId("waiting-card");
-    const options = card.querySelectorAll(".reply-option");
-    expect(options).toHaveLength(2);
-    expect(options[0].textContent).toContain("AI 建議");
-    expect(options[1].textContent).not.toContain("AI 建議");
+    // Each chip WHOLE: its 1/2 ordinal, its wording and exactly the tags it
+    // earned. mkCard marks the SECOND option ai_pick, so the tag rides that one
+    // and the first chip is bare — a reader that tagged by position fails
+    // here.
+    expect(
+      [...card.querySelectorAll(".reply-option")].map((e) => e.textContent),
+    ).toEqual(["1寄出", "2先不要AI 建議"]);
   });
 
-  it("answering via an option moves the card to 近期已回覆 tagged 你選的 + AI 建議", async () => {
+  // 🔴 Written from the OWNER's side of the screen: he taps ONE option and the
+  // ask is dealt with. Nothing here presses a send button, and nothing asserts
+  // that some submit function ran — an implementation-side assertion like that
+  // would stay green the day someone puts the two-step interaction back, which
+  // is exactly how the last round shipped a card the owner could not answer
+  // (「也沒人知道有這個改變，只以為是壞掉」).
+  it("one tap on an option answers a single-select card outright — no second click anywhere", async () => {
     __injectMockReplyCard(mkCard({}));
     const { findAllByTestId, findByTestId, queryAllByTestId } = renderPage();
     const [card] = await findAllByTestId("waiting-card");
 
-    fireEvent.click(card.querySelectorAll(".reply-option")[0]);
+    fireEvent.click(card.querySelectorAll(".reply-option")[1]);
 
     // The answered pane is collapsed by default — expand it to see the card.
+    // (Expanding a pane is not answering anything: the ONLY click aimed at the
+    // card itself was the one above.)
     fireEvent.click(await findByTestId("answered-toggle"));
     const answeredCard = await findByTestId("answered-card");
+    // The ask is GONE from 待回覆 and standing in 近期已回覆 — the owner's own
+    // test of "did my tap take?".
     await waitFor(() => expect(queryAllByTestId("waiting-card")).toHaveLength(0));
     const final = answeredCard.querySelector('[data-testid="final-answer"]');
-    expect(final?.textContent).toContain("寄出");
-    expect(final?.textContent).toContain("你選的");
-    // The pick IS options[0] → the AI 建議 tag rides alongside.
-    expect(final?.textContent).toContain("AI 建議");
+    // The circled option IS the ai_pick one → the AI 建議 tag rides alongside.
+    expect(final?.textContent).toBe("你選的AI 建議先不要");
   });
 
   // T-4166: a 409 on answer is TERMINAL for that card — its task closed
@@ -223,7 +238,7 @@ describe("RepliesPage", () => {
       mkCard({
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
       })
     );
     vi.spyOn(api, "reanswerReplyCard").mockRejectedValue(
@@ -271,10 +286,8 @@ describe("RepliesPage", () => {
     fireEvent.click(await findByTestId("answered-toggle"));
     const answeredCard = await findByTestId("answered-card");
     const final = answeredCard.querySelector('[data-testid="final-answer"]');
-    expect(final?.textContent).toContain("收件人是誰？");
-    expect(final?.textContent).toContain("你選的");
-    // A free-text answer is NOT the AI pick.
-    expect(final?.textContent).not.toContain("AI 建議");
+    // A free-text answer circles nothing, so it is not the AI pick either.
+    expect(final?.textContent).toBe("你選的收件人是誰？");
   });
 
   it("近期已處理 is collapsed by default; the title row toggles it open and shut", async () => {
@@ -282,7 +295,7 @@ describe("RepliesPage", () => {
       mkCard({
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
       })
     );
     const { findByTestId, queryAllByTestId } = renderPage();
@@ -310,7 +323,7 @@ describe("RepliesPage", () => {
         id: "rc-ans",
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
       })
     );
     const listSpy = vi.spyOn(api, "listReplyCards");
@@ -337,7 +350,7 @@ describe("RepliesPage", () => {
       mkCard({
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdx: 1, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
       })
     );
     const { findByTestId, getByText } = renderPage();
@@ -346,10 +359,15 @@ describe("RepliesPage", () => {
 
     fireEvent.click(getByText("查看當初選項"));
     const options = card.querySelectorAll(".reply-option");
-    expect(options).toHaveLength(2);
-    // Review mode: options render but are NOT pickable yet.
+    // Review mode: options render but are NOT pickable yet, and the standing
+    // answer (index 0) wears 目前 — every chip WHOLE so a 目前 that leaked onto
+    // the wrong chip, or a lost AI tag, is a failure here. The two tags sit on
+    // DIFFERENT chips, which is what makes a positional reader of either fail.
+    expect([...options].map((e) => e.textContent)).toEqual([
+      "1寄出目前",
+      "2先不要AI 建議",
+    ]);
     expect((options[0] as HTMLButtonElement).disabled).toBe(true);
-    expect(options[1].textContent).toContain("目前");
     // 重新決定 sits at the expansion's bottom.
     expect(getByText("重新決定")).toBeTruthy();
   });
@@ -359,7 +377,7 @@ describe("RepliesPage", () => {
       mkCard({
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [1], text: "", attachments: [] },
       })
     );
     const { findByTestId, getByText, getByPlaceholderText } = renderPage();
@@ -370,17 +388,17 @@ describe("RepliesPage", () => {
     fireEvent.click(getByText("重新決定"));
     // Edit mode: options pickable + the SAME typed composer appears.
     const options = card.querySelectorAll(".reply-option");
-    expect((options[1] as HTMLButtonElement).disabled).toBe(false);
+    expect((options[0] as HTMLButtonElement).disabled).toBe(false);
     expect(getByPlaceholderText("或直接打字改寫回覆…")).toBeTruthy();
 
-    fireEvent.click(options[1]);
+    // Single-select 重新決定 also lands on the click.
+    fireEvent.click(options[0]);
 
     await waitFor(async () => {
       card = await findByTestId("answered-card");
       const final = card.querySelector('[data-testid="final-answer"]');
-      expect(final?.textContent).toContain("先不要");
       // No longer the AI pick → the AI 建議 tag is gone; 你選的 stays.
-      expect(final?.textContent).not.toContain("AI 建議");
+      expect(final?.textContent).toBe("你選的寄出");
     });
   });
 
@@ -389,7 +407,7 @@ describe("RepliesPage", () => {
       mkCard({
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [1], text: "", attachments: [] },
       })
     );
     const { findByTestId, getByText, queryByPlaceholderText } = renderPage();
@@ -402,10 +420,15 @@ describe("RepliesPage", () => {
 
     expect(queryByPlaceholderText("或直接打字改寫回覆…")).toBeNull();
     const final = card.querySelector('[data-testid="final-answer"]');
-    expect(final?.textContent).toContain("寄出");
-    expect(final?.textContent).toContain("AI 建議");
+    expect(final?.textContent).toBe("你選的AI 建議先不要");
   });
 
+  // 跳到原訊息 NAVIGATES (owner 2026-08-29: 「1 跟 2 變回去原本那樣」). The
+  // control writes #office/chat/<id>/msg/<msgId> and ChatArea locates +
+  // highlights the ask (B3 聊天整合). The known cost the owner accepted with
+  // this: when the ask is not inside the loaded window ChatArea's DOM search
+  // misses and the room simply opens on the newest message, silently. That is
+  // the OLD behaviour coming back on purpose — do not "fix" it here.
   it("跳到原訊息 routes to the member's chat with the ask message id (B3 locate target)", async () => {
     __injectMockReplyCard(mkCard({}));
     const { findAllByTestId, getByText } = renderPage();
@@ -549,7 +572,7 @@ describe("RepliesPage", () => {
   // Same field, different path (a staff member's card binds to its own step),
   // so it gets its own assertion rather than riding on the contractor one.
   it("names the task a staff member's ask belongs to", async () => {
-    __injectMockMember({ id: "m-dev", name: "Kyle", kind: "assistant" });
+    __injectMockMember({ id: "m-dev", name: "Kyle", kind: "staff" });
     __injectMockReplyCard(
       mkCard({
         from: "m-dev",
@@ -573,7 +596,7 @@ describe("RepliesPage", () => {
     __injectMockReplyCard(
       mkCard({
         status: "answered",
-        answer: { optionIdx: 0, text: "好", attachments: [] },
+        answer: { optionIdxs: [0], text: "好", attachments: [] },
         answeredTs: Date.now() / 1000 - 60,
         task: { id: "t-5", typeKey: "review-pr", title: "改開機說明" },
       }),

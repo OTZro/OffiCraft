@@ -1,6 +1,13 @@
 interface IconProps {
   size?: number;
   className?: string;
+  /** Opt-in only. Icons in this app are NOT hidden from the accessibility tree
+   * by default — that is a pre-existing, app-wide question and this is not the
+   * place to answer it for everyone. The one caller that passes it (T-4e95's
+   * quote row) sits inside an element that already carries the whole meaning as
+   * an aria-label, so its glyph would land in the tree as an unnamed `img` node
+   * saying nothing. Every other icon keeps the behaviour it has today. */
+  "aria-hidden"?: boolean | "true";
 }
 
 const base = (size: number) => ({
@@ -81,6 +88,18 @@ export function ChevronDownIcon({ size = 16, className }: IconProps) {
   return (
     <svg {...base(size)} className={className}>
       <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
+
+/** T-48: the jump-to-latest arrow. A full arrow (shaft + head), not the bare
+ * chevron above — inside a 32px circle a lone chevron reads as "expand", which
+ * is what every other chevron in this cockpit means. */
+export function ArrowDownIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg {...base(size)} className={className}>
+      <path d="M12 5v14" />
+      <path d="m19 12-7 7-7-7" />
     </svg>
   );
 }
@@ -335,6 +354,23 @@ export function ExpandIcon({ size = 16, className }: IconProps) {
       <polyline points="10 20 4 20 4 14" />
       <line x1="20" y1="4" x2="13" y2="11" />
       <line x1="4" y1="20" x2="11" y2="13" />
+    </svg>
+  );
+}
+
+/** Reply arrow — the 「回覆這則」 entry on a chat row, and the marker on the
+ * quote line above a message that replies to another (T-4e95). A left-turning
+ * arrow rather than a speech bubble: the action is aiming at an EXISTING
+ * message, not starting a new one, and ChatBubbleIcon already means the latter. */
+export function ReplyIcon({
+  size = 16,
+  className,
+  "aria-hidden": ariaHidden,
+}: IconProps) {
+  return (
+    <svg {...base(size)} className={className} aria-hidden={ariaHidden}>
+      <polyline points="9 17 4 12 9 7" />
+      <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
     </svg>
   );
 }

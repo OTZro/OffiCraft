@@ -15,7 +15,7 @@
 //   line 1  代號 (O-7 式 — the worker's name; an outsource has no other)
 //   line 2  presence dot at the LINE START (like a 正職 member row — the SAME
 //           5-state LifecycleDot, not a private green dot), then the
-//           任務代號 (T-xxxx) chip — CLICKABLE, routes to #tasks/<taskId> —
+//           任務編號 chip — CLICKABLE, routes to #tasks/<taskId> —
 //           then 接到的 task type (外包沒有角色名 — the bound task's type IS
 //           its role line). The dot is PRESENCE, not "is this row alive": an
 //           assigned worker may not have started yet and must never look live
@@ -35,14 +35,14 @@ import { Avatar } from "./Avatar";
 import { CurrentTaskTitle } from "./CurrentTaskTitle";
 import { LifecycleDot, presenceVisual } from "./LifecycleDot";
 
-/** The worker's ONE-LINE task line — [T-xxxx chip → task type], optionally
+/** The worker's ONE-LINE task line — [task-id chip → task type], optionally
  * led by the presence dot. SHARED between the rail's outsource row (dot; owner
  * 2026-07-16: 點在行首, member-row parity) and the worker chat header's
  * subtitle (owner 2026-07-16: 兩邊顯示一樣的東西 — same chip + type, but NO
  * dot: outsource presence lives only in the rail; the header never grows a
  * second presence source). One component so the two renderings can't drift.
  *
- *   · The T-xxxx chip stays CLICKABLE → #tasks/<taskId> (owner 2026-07-14:
+ *   · The task-id chip stays CLICKABLE → #tasks/<taskId> (owner 2026-07-14:
  *     點 task id 連到該任務頁); stopPropagation so the jump never also
  *     fires the enclosing row/header click. Honest: rendered only when the
  *     bound task resolved (taskNo joined by useOutsourceWorkers).
@@ -129,7 +129,7 @@ export function OutsourcePanel({
   /** Open the worker's lean detail panel (avatar target, mirroring MemberCard:
    * the row body opens the chat, the avatar opens the detail). */
   onOpenDetail: (workerId: string) => void;
-  /** Jump to the bound task's card (#tasks/<taskId>) — the row's T-xxxx chip
+  /** Jump to the bound task's card (#tasks/<taskId>) — the row's task-id chip
    * (owner report 2026-07-14: 點 task id 連到該任務頁). */
   onOpenTask: (taskId: string) => void;
 }) {
@@ -206,7 +206,7 @@ export function OutsourcePanel({
                 </span>
                 {/* line 2 — ONE line (owner 2026-07-16, second ruling):
                  * the presence dot at the LINE START (member-row parity), then the
-                 * clickable T-xxxx chip, then 接到的 task type — the SHARED
+                 * clickable task-id chip, then 接到的 task type — the SHARED
                  * OutsourceTaskLine (the worker chat header renders the same
                  * line, minus the dot). */}
                 <OutsourceTaskLine

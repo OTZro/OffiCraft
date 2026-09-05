@@ -13,9 +13,13 @@ import (
 // happened to respawn it.
 //
 // ── the predicate's decision table (memberHasStateToFlush) ───────────────────
-// Copied from workerHasStateToFlush; the staff substitutions and the reason for
-// each are in the file comment of member_ownerop_winddown.go. Inputs, in the
-// order the function short-circuits them:
+// NOT copied from workerHasStateToFlush any more (T-170e stage 2 ①): the rows
+// the two predicates agree on are ONE expression,
+// hasUncollectedOnlineOwnerOpState, which both of them call. What is still
+// staff-only is the SHELL — the kind row and the desired-offline row below —
+// and the reason each shell guard exists (and must not be flattened into the
+// shared call) is in the file comment of member_ownerop_winddown.go. Inputs, in
+// the order the function short-circuits them:
 //
 //	kind  | desired | online | refocus | stopped | wind down? | pinned by
 //	------+---------+--------+---------+---------+------------+----------------
@@ -60,7 +64,7 @@ func TestMemberOwnerOp_ModelChangeWindsDownThenRespawns(t *testing.T) {
 		t.Fatalf("the new model must persist: %+v", got)
 	}
 	// (a) the agent was told — refocus_since>0 ∧ desired_state=online is the exact
-	// condition cli/ocagent's recycleHook prints the 下線程序 wake on.
+	// condition cli/ocagent's recycleHook prints the 〈停止〉 wake on.
 	if got.RefocusSince <= 0.0 {
 		t.Fatalf("a live 換模型 must open a wind-down (refocus epoch): %+v", got)
 	}
@@ -163,10 +167,18 @@ func TestMemberOwnerOp_OfflineTakesEffectImmediately(t *testing.T) {
 	}
 }
 
-// row 2 — an explicit 停止 dominates. desired_state=offline means the owner
-// already said stop; stamping a refocus epoch would park a marker the agent's
-// own gate (desired_state=online) will never read.
-func TestMemberOwnerOp_StoppedMemberIsNotRevived(t *testing.T) {
+// row 2 — an explicit 停止 dominates: stamping a refocus epoch would park a
+// marker the agent's own gate (desired_state=online) will never read.
+//
+// 🔴 NARROWED BY T-14 項目 7, and the old header did not notice. desired_state=
+// offline is no longer one state for this purpose: on a member that has been
+// ASKED to stop (stopping_since > 0 — what a real 停止 leaves behind, forever)
+// 換 model now queues 「起來」 and the member comes back up. This fixture is the
+// OTHER half — testAgent leaves stopping_since at 0, the shape of a new hire
+// before its first 活化 — so what stays pinned here is that editing such a
+// member's model must not boot it. The converged-stop half is pinned by
+// TestRelocateAndModelChangeAfterAStopBringTheMemberBackUp.
+func TestMemberOwnerOp_NeverActivatedNewHireIsNotRevived(t *testing.T) {
 	s := newReconcileTestServer(t)
 	putWarden(t, s, "mach-a")
 
@@ -195,6 +207,15 @@ func TestMemberOwnerOp_StoppedMemberIsNotRevived(t *testing.T) {
 	if got.DesiredState != DesiredStateOffline {
 		t.Fatalf("no owner verb may quietly overturn 停止: %q", got.DesiredState)
 	}
+	if got.RestartAfterStop {
+		t.Error("a member nobody has ever asked to stop was queued for a start — " +
+			"editing a new hire's model before its first 活化 must not boot it")
+	}
+	if got.StoppingSince != 0 {
+		t.Fatalf("fixture drifted: stopping_since=%v — this row is meant to be the "+
+			"never-活化'd half, and with an anchor it silently becomes a test of the "+
+			"queueing branch while keeping this name", got.StoppingSince)
+	}
 }
 
 // row 1 — a warden runs no ocagent, so a refocus epoch on one is a marker no
@@ -221,7 +242,8 @@ func TestMemberOwnerOp_WardenIsNeverWoundDown(t *testing.T) {
 // the kill+respawn went out carrying whatever the row held then, and the old
 // session merely has not been reaped. Opening a SECOND window here would
 // dispatch nothing while the in-flight respawn boots on the OLD value, and the
-// owner's change would reach no session at all. (The worker twin's round-1 HIGH.)
+// owner's change would reach no session at all. (The worker twin's 收口-window
+// HIGH.)
 func TestMemberOwnerOp_VerbAfterTheCollectIsNotSwallowed(t *testing.T) {
 	s := newReconcileTestServer(t)
 	putWarden(t, s, "mach-a")
@@ -255,7 +277,7 @@ func TestMemberOwnerOp_VerbAfterTheCollectIsNotSwallowed(t *testing.T) {
 // report_stopped too (deactivate → the agent says it finished), and nothing
 // clears it while the member sits offline. Read GLOBALLY it would claim "already
 // collected" for the rest of that member's life, so every later 換模型 / 改機器
-// would be shot on the spot with no warning — the worker twin's round-2 HIGH.
+// would be shot on the spot with no warning — the worker twin's STALE-LATCH HIGH.
 func TestMemberOwnerOp_OrdinaryStopRestartStillWindsDownLater(t *testing.T) {
 	s := newReconcileTestServer(t)
 	putWarden(t, s, "mach-a")
@@ -364,5 +386,91 @@ func TestMemberOwnerOp_SecondVerbDuringAnOpenWindowReStamps(t *testing.T) {
 	if f := drainFrames(t, s, "mach-b"); len(f) != 0 {
 		t.Fatalf("the destination warden must not be asked to kill a session it "+
 			"does not hold: %+v", f)
+	}
+}
+
+// row 7, the UNSET-runtime 誤擋. It is not a row in the table above because the
+// table's inputs are lifecycle state; this one is about the VALUE being saved.
+//
+// It is NOT older than the ticket that found it — an earlier draft of this
+// comment said it was. PutMember used to bind NormalizeRuntime(m.Runtime), so
+// the out-of-box assistant's column held a concrete "claude" and the raw
+// comparison never misfired. The commit before this one stopped normalizing on
+// the way in (so "nobody has picked yet" stays distinguishable from "the owner
+// picked claude"), which is what makes "" durable and this comparison wrong.
+// seedOutOfBox never writing a runtime is true, but it only covers the seed
+// literal, not what the write path stored — it does not carry the claim alone.
+//
+// An empty runtime is NOT a third value. NormalizeRuntime("") is claude, that
+// is what buildStartFrame stamps, and that is what the live session is running.
+// So an owner who opens 成員設定 on a never-dispatched seed assistant and saves
+// runtime="claude" has changed NOTHING the agent can observe — and must not be
+// charged a wind-down for it. Saving "codex" on the same row IS a change and
+// must still recycle, which is the second half here: without it, "never wind
+// down on runtime" would pass the first half.
+func TestMemberOwnerOp_SavingClaudeOnAnUnsetRuntimeNeverWindsDown(t *testing.T) {
+	s := newReconcileTestServer(t)
+	putWarden(t, s, "mach-a")
+
+	m := testAgent("m-unset-rt")
+	m.DesiredState = DesiredStateOnline
+	m.DesiredMachineID = "mach-a"
+	m.Runtime = "" // the out-of-box seed shape
+	putTestMember(t, s, m)
+	connectOnline(t, s, "mach-a")
+	connectOnlineMachine(t, s, "m-unset-rt", "mach-a")
+
+	// Precondition: this member really is live and flushable, so a wind-down
+	// COULD be opened here. Without this the assertion below passes for the
+	// wrong reason (nothing to flush) on any future refactor.
+	if got, _ := s.dal.GetMember("m-unset-rt"); got == nil || !s.memberHasStateToFlush(*got) {
+		t.Fatalf("precondition: the member must be wind-down-eligible; got %+v", got)
+	}
+
+	rec := httptest.NewRecorder()
+	s.HandleUpdateMemberApiMembersMemberIdPatch(rec,
+		taskReq(t, "PATCH", "/api/members/m-unset-rt",
+			map[string]any{"runtime": RuntimeClaude}, wireOwnerID, "owner"), "m-unset-rt")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update: %d %s", rec.Code, rec.Body.String())
+	}
+	got, _ := s.dal.GetMember("m-unset-rt")
+	if got == nil || got.Runtime != RuntimeClaude {
+		t.Fatalf("the stated intent must still persist ('' -> claude): %+v", got)
+	}
+	if got.RefocusSince != 0.0 {
+		t.Fatalf("saving claude onto an UNSET runtime opened a wind-down "+
+			"(refocus_since = %v). NormalizeRuntime(\"\") is already claude, so the "+
+			"session is running exactly what was just saved: the owner was charged "+
+			"a 收工／重新聚焦 for a no-op edit that could not happen before the "+
+			"roster started carrying unset runtimes.", got.RefocusSince)
+	}
+	if f := drainFrames(t, s, "mach-a"); len(f) != 0 {
+		t.Fatalf("a no-op runtime save must dispatch nothing: %+v", f)
+	}
+
+	// 誤放 half — the same unset row saved as CODEX is a real change and must
+	// still open the wind-down.
+	m2 := testAgent("m-unset-rt2")
+	m2.DesiredState = DesiredStateOnline
+	m2.DesiredMachineID = "mach-a"
+	m2.Runtime = ""
+	putTestMember(t, s, m2)
+	connectOnlineMachine(t, s, "m-unset-rt2", "mach-a")
+
+	rec = httptest.NewRecorder()
+	s.HandleUpdateMemberApiMembersMemberIdPatch(rec,
+		taskReq(t, "PATCH", "/api/members/m-unset-rt2",
+			map[string]any{"runtime": RuntimeCodex}, wireOwnerID, "owner"), "m-unset-rt2")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update: %d %s", rec.Code, rec.Body.String())
+	}
+	got2, _ := s.dal.GetMember("m-unset-rt2")
+	if got2 == nil || got2.Runtime != RuntimeCodex {
+		t.Fatalf("'' -> codex must persist: %+v", got2)
+	}
+	if got2.RefocusSince <= 0.0 {
+		t.Fatalf("'' -> codex IS a launch-intent change (the live session is on "+
+			"claude) and must open a wind-down: %+v", got2)
 	}
 }

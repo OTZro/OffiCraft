@@ -243,7 +243,7 @@ func refuseDeletesOn(t *testing.T, d *DAL, table string) {
 // OTHER half rigged to fail: whatever survives must be both rows or neither.
 func TestDeletingADocumentAndItsRetainedHistoryIsAllOrNothing(t *testing.T) {
 	const roleKey, typeKey = "r-doomed", "tm-doomed"
-	lessonsKey := roleKey + "::" + seedLessonsTaskType
+	lessonsKey := roleKey
 	for _, doc := range []struct {
 		name       string
 		table      string
@@ -272,12 +272,12 @@ func TestDeletingADocumentAndItsRetainedHistoryIsAllOrNothing(t *testing.T) {
 			name: "lessons", table: "lessons", kind: "lessons", key: lessonsKey,
 			seed: func(t *testing.T, d *DAL) {
 				retainOneVersion(t, d, "lessons", lessonsKey, func(ex sqlExecer) error {
-					return putLessonsOn(ex, Lessons{RoleKey: roleKey, TaskType: seedLessonsTaskType, Text: "live"})
+					return putLessonsOn(ex, Lessons{RoleKey: roleKey, Text: "live"})
 				})
 			},
 			remove: func(d *DAL) error { _, err := d.DeleteLessonsForRole(roleKey); return err },
 			documentIn: func(t *testing.T, d *DAL) bool {
-				l, err := d.GetLessons(roleKey, seedLessonsTaskType)
+				l, err := d.GetLessons(roleKey)
 				if err != nil {
 					t.Fatal(err)
 				}

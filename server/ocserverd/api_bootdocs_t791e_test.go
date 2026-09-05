@@ -105,9 +105,51 @@ func (f bootDocFixture) read(t *testing.T, path string) bootDocDTO {
 	return dto
 }
 
+// replace posts a write. `text` is the EDITABLE HALF and nothing else — that
+// is the whole wire now (T-3201), so the fixture has nothing left to compose.
+//
+// 🔴 IT USED TO PREPEND THE HEAD, and deleting that is the change worth
+// noticing. The write face demanded the head back verbatim, so a fixture that
+// did not copy it was refused; the head is now joined on by the SERVER and the
+// request has no field that could carry one. A helper here that still built a
+// whole document would be sending a shape no client can send.
 func (f bootDocFixture) replace(t *testing.T, path, token, text string) (int, string) {
 	t.Helper()
-	return f.do(t, http.MethodPost, path, token, map[string]any{"text": text})
+	return f.do(t, http.MethodPost, path, token, map[string]any{"body": text})
+}
+
+// underHead answers what the server STORES for a body written at path: the
+// shipped read-only head, the separator, then the body.
+//
+// A BLANK body is joined too, and that is not an oversight — it is the shape
+// the wipe gesture now produces. Emptying the editable half leaves the head
+// standing, because the head was never the caller's to erase; what judges the
+// gesture is the wipe guard, on the body, plus the owner's ruling not to close
+// its allow_shrink bypass.
+func (f bootDocFixture) underHead(t *testing.T, path, text string) string {
+	t.Helper()
+	head, ok := f.headOf(t, path)
+	if !ok {
+		return text
+	}
+	return head + text
+}
+
+// headOf answers the head-plus-separator of the document at path, or ok=false
+// when that document has no read-only head.
+func (f bootDocFixture) headOf(t *testing.T, path string) (string, bool) {
+	t.Helper()
+	for _, c := range bootDocCases() {
+		if c.path != path {
+			continue
+		}
+		head, _, split := DocSplitHeadBody(f.seed(t, c.seed))
+		if !split {
+			return "", false
+		}
+		return head + docBodySep, true
+	}
+	return "", false
 }
 
 // seed reads a shipped seed through the very embed the server folds against.
@@ -137,7 +179,7 @@ func bootDocCases() []bootDocCase {
 		{"system_interaction", "/api/system-interaction", systemInteractionSeedMD, docKindSystemInteraction, systemInteractionDocKey},
 		{"boot_sequence_claude", "/api/boot-sequence/claude", bootSequenceSeedClaude, docKindBootSequence, bootSequenceKeyClaude},
 		{"boot_sequence_codex", "/api/boot-sequence/codex", bootSequenceSeedCodex, docKindBootSequence, bootSequenceKeyCodex},
-		// 下線程序 (T-c9c0) joined the family later; it is listed LAST so the
+		// 〈停止〉 (T-c9c0) joined the family later; it is listed LAST so the
 		// index-addressed cases above keep pointing at the documents they name.
 		{"offboard", "/api/offboard", offboardSeedMD, docKindOffboard, offboardDocKey},
 	}
@@ -160,8 +202,11 @@ func TestBootDoc_ReplacedTextReadsBackByteIdentical(t *testing.T) {
 			}
 			// Multi-byte + trailing whitespace + an empty line: a comparison
 			// that only survives ASCII would prove much less.
-			want := "# " + c.name + " 被改過了\n\n這一行有中文與 emoji 🚀，還有尾端空白  \n\n\t制表符\n"
-			status, body := f.replace(t, c.path, f.owner, want)
+			edit := "# " + c.name + " 被改過了\n\n這一行有中文與 emoji 🚀，還有尾端空白  \n\n\t制表符\n"
+			// What is STORED is the read-only head plus the edit: the head is
+			// part of the document, and a write that dropped it is refused.
+			want := f.underHead(t, c.path, edit)
+			status, body := f.replace(t, c.path, f.owner, edit)
 			if status != http.StatusOK {
 				t.Fatalf("replace %s: %d %s", c.path, status, body)
 			}
@@ -196,13 +241,14 @@ func TestBootDoc_ResetRestoresTheEmbeddedSeedByteIdentical(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			seed := f.seed(t, c.seed)
 			const edit = "# 被改壞的版本\n\nthis is not the factory text\n"
-			if edit == seed {
+			stored := f.underHead(t, c.path, edit)
+			if stored == seed {
 				t.Fatal("fixture bug: the edit must DIFFER from the seed or the assertion below is vacuous")
 			}
 			if status, body := f.replace(t, c.path, f.owner, edit); status != http.StatusOK {
 				t.Fatalf("replace: %d %s", status, body)
 			}
-			if mid := f.read(t, c.path); mid.Text != edit || mid.IsDefault {
+			if mid := f.read(t, c.path); mid.Text != stored || mid.IsDefault {
 				t.Fatalf("precondition: the document should be the edit; got is_default=%v", mid.IsDefault)
 			}
 
@@ -272,8 +318,17 @@ func TestBootDoc_OverCapIsRefusedWithAllThreeNumbers(t *testing.T) {
 			// One rune over the cap, and LONGER than what is stored: the rule is
 			// "over the cap AND not shorter than what is there", so an over-cap
 			// write that is shorter is legal and would prove nothing here.
-			over := strings.Repeat("字", cap+1)
-			if utf8.RuneCountInString(over) < utf8.RuneCountInString(stored.Text) {
+			// The read-only head rides along on every non-blank write, so the
+			// probes are sized in the room LEFT for the editable half. Without
+			// this the "exactly at the cap" control below would be over it.
+			head, _ := f.headOf(t, c.path)
+			room := cap - utf8.RuneCountInString(head)
+			if room <= 0 {
+				t.Fatalf("the head alone (%d runes) fills the %d-rune cap",
+					utf8.RuneCountInString(head), cap)
+			}
+			over := strings.Repeat("字", room+1)
+			if utf8.RuneCountInString(head+over) < utf8.RuneCountInString(stored.Text) {
 				t.Fatalf("fixture bug: the probe (%d runes) must not be shorter than what is stored (%d)",
 					utf8.RuneCountInString(over), utf8.RuneCountInString(stored.Text))
 			}
@@ -286,7 +341,7 @@ func TestBootDoc_OverCapIsRefusedWithAllThreeNumbers(t *testing.T) {
 			// only way to learn any of them, and a refusal that names none is a
 			// dead end.
 			for _, want := range []string{
-				strconv.Itoa(utf8.RuneCountInString(over)),
+				strconv.Itoa(utf8.RuneCountInString(head + over)),
 				strconv.Itoa(cap),
 				strconv.Itoa(utf8.RuneCountInString(stored.Text)),
 			} {
@@ -300,9 +355,78 @@ func TestBootDoc_OverCapIsRefusedWithAllThreeNumbers(t *testing.T) {
 			}
 			// Positive control: exactly AT the cap is accepted, so the refusal
 			// above is the ceiling and not a route that refuses everything.
-			atCap := strings.Repeat("字", cap)
+			atCap := strings.Repeat("字", room)
 			if status, body := f.replace(t, c.path, f.owner, atCap); status != http.StatusOK {
 				t.Fatalf("a write exactly AT the cap must be accepted; got %d %s", status, body)
+			}
+		})
+	}
+}
+
+// ── #3b — emptying a document with content needs allow_shrink ────────────────
+
+// The wipe guard (WholeDocWipeBlocked) had NO test on any of its five write
+// seams: deleting the three lines in replaceBootDoc left the whole build green,
+// so a boot sequence could be erased to nothing by a well-formed {"body": ""}
+// and nothing would say so. An agent whose boot sequence is empty is an agent
+// with no instructions, and it fails silently — nothing that never boots is
+// around to report it.
+//
+// Asserted on BEHAVIOUR only (status + what the document reads back as), never
+// on the refusal wording.
+func TestBootDoc_WipingADocWithContentIsRefusedUnlessAllowShrink(t *testing.T) {
+	f := newBootDocFixture(t)
+	for _, c := range bootDocCases() {
+		t.Run(c.name, func(t *testing.T) {
+			stored := f.read(t, c.path)
+			if strings.TrimSpace(stored.Text) == "" {
+				t.Fatalf("precondition: %s reads blank, so there is nothing to wipe and every "+
+					"assertion below would be vacuous", c.name)
+			}
+			// Both shapes of "empty": the literal empty string, and a body that
+			// only LOOKS non-empty. The guard trims, so whitespace must be
+			// refused too — otherwise " " is a bypass anyone finds by accident.
+			for _, probe := range []struct{ name, text string }{
+				{"empty_string", ""},
+				{"whitespace_only", "   \n\t\n  "},
+			} {
+				t.Run(probe.name, func(t *testing.T) {
+					status, body := f.replace(t, c.path, f.owner, probe.text)
+					if status != http.StatusBadRequest {
+						t.Fatalf("wiping %s must be refused without allow_shrink; got %d %s",
+							c.name, status, body)
+					}
+					// Status alone would pass on a refusal that had already
+					// written. Read the document back.
+					after := f.read(t, c.path)
+					if after.Text != stored.Text || after.IsDefault != stored.IsDefault {
+						t.Fatalf("the refused wipe CHANGED the document: is_default %v→%v, %d→%d chars",
+							stored.IsDefault, after.IsDefault,
+							utf8.RuneCountInString(stored.Text), utf8.RuneCountInString(after.Text))
+					}
+				})
+			}
+			// The bypass really is a bypass: allow_shrink=true empties it. This
+			// is today's behaviour and is pinned so the guard above cannot be
+			// "fixed" into a wall with no way through.
+			status, body := f.do(t, http.MethodPost, c.path, f.owner,
+				map[string]any{"body": "", "allow_shrink": true})
+			if status != http.StatusOK {
+				t.Fatalf("allow_shrink=true must let the wipe through; got %d %s", status, body)
+			}
+			// 🔴 WHAT AN ALLOWED WIPE EMPTIES IS THE OWNER'S HALF (T-3201). It
+			// used to leave the document at zero characters; the read-only head
+			// was never his to erase, and the wire has no field that could ask
+			// for it, so what survives is head + separator with nothing under
+			// it. The way back to a whole document is still one reset away.
+			after := f.read(t, c.path)
+			if after.Body != "" || after.IsDefault {
+				t.Fatalf("after an allowed wipe the body should be empty and the document not-default; "+
+					"got is_default=%v, %d body chars", after.IsDefault, utf8.RuneCountInString(after.Body))
+			}
+			if after.ReadOnlyHead != stored.ReadOnlyHead {
+				t.Fatalf("the wipe took the read-only head with it:\n before=%q\n after =%q",
+					stored.ReadOnlyHead, after.ReadOnlyHead)
 			}
 		})
 	}
@@ -321,7 +445,7 @@ func TestBootDoc_PlainAgentIsRefusedEveryWriteButStillReads(t *testing.T) {
 				t.Fatalf("a plain agent must still READ this block; got %d %s", status, body)
 			}
 			for _, target := range []string{c.path, c.path + "/reset"} {
-				status, body := f.do(t, http.MethodPost, target, f.plain, map[string]any{"text": "sneaky"})
+				status, body := f.do(t, http.MethodPost, target, f.plain, map[string]any{"body": "sneaky"})
 				if status != http.StatusForbidden {
 					t.Fatalf("POST %s as a plain agent: want 403, got %d %s", target, status, body)
 				}
@@ -358,7 +482,7 @@ func TestBootDoc_EditingClaudeLeavesCodexAlone(t *testing.T) {
 	if status, body := f.replace(t, "/api/boot-sequence/claude", f.owner, edit); status != http.StatusOK {
 		t.Fatalf("replace claude: %d %s", status, body)
 	}
-	if got := f.read(t, "/api/boot-sequence/claude").Text; got != edit {
+	if got := f.read(t, "/api/boot-sequence/claude").Text; got != f.underHead(t, "/api/boot-sequence/claude", edit) {
 		t.Fatalf("claude did not take the edit: %q", got)
 	}
 	codex := f.read(t, "/api/boot-sequence/codex")
@@ -371,10 +495,10 @@ func TestBootDoc_EditingClaudeLeavesCodexAlone(t *testing.T) {
 	if status, body := f.replace(t, "/api/boot-sequence/codex", f.owner, codexEdit); status != http.StatusOK {
 		t.Fatalf("replace codex: %d %s", status, body)
 	}
-	if got := f.read(t, "/api/boot-sequence/claude").Text; got != edit {
+	if got := f.read(t, "/api/boot-sequence/claude").Text; got != f.underHead(t, "/api/boot-sequence/claude", edit) {
 		t.Fatalf("editing codex moved claude: %q", got)
 	}
-	if got := f.read(t, "/api/boot-sequence/codex").Text; got != codexEdit {
+	if got := f.read(t, "/api/boot-sequence/codex").Text; got != f.underHead(t, "/api/boot-sequence/codex", codexEdit) {
 		t.Fatalf("codex did not take its own edit: %q", got)
 	}
 	// A runtime with no boot sequence is a 404 that NAMES the two that exist —
@@ -403,7 +527,7 @@ func TestBootDoc_EditedBlocksReachTheAssembledBootContext(t *testing.T) {
 
 	// Baseline: the marks are NOT in the shipped seeds, so finding one later
 	// can only mean the edit was folded in.
-	base, err := api.buildBootContext("", &Member{ID: "m-x", Name: "X", RoleKey: seedRoleAssistant}, "")
+	base, err := api.buildBootContext("", &Member{ID: "m-x", Name: "X", RoleKey: seedRoleAssistant})
 	if err != nil || base == nil {
 		t.Fatalf("baseline boot context: %v", err)
 	}
@@ -420,11 +544,11 @@ func TestBootDoc_EditedBlocksReachTheAssembledBootContext(t *testing.T) {
 		}
 	}
 	write(docKindSystemInteraction, systemInteractionDocKey, "# 系統互動\n\n"+sysMark+"\n")
-	write(docKindBootSequence, bootSequenceKeyClaude, "# 啟動程序\n\n"+claudeMark+"\n")
-	write(docKindBootSequence, bootSequenceKeyCodex, "# 啟動程序\n\n"+codexMark+"\n")
+	write(docKindBootSequence, bootSequenceKeyClaude, "# 啟動步驟\n\n"+claudeMark+"\n")
+	write(docKindBootSequence, bootSequenceKeyCodex, "# 啟動步驟\n\n"+codexMark+"\n")
 
 	// (a) staff, claude runtime.
-	claudeBoot, err := api.buildBootContext("", &Member{ID: "m-c", Name: "C", RoleKey: seedRoleAssistant, Runtime: RuntimeClaude}, "")
+	claudeBoot, err := api.buildBootContext("", &Member{ID: "m-c", Name: "C", RoleKey: seedRoleAssistant, Runtime: RuntimeClaude})
 	if err != nil || claudeBoot == nil {
 		t.Fatalf("claude boot context: %v", err)
 	}
@@ -432,7 +556,7 @@ func TestBootDoc_EditedBlocksReachTheAssembledBootContext(t *testing.T) {
 		t.Fatal("the edited 系統互動 block never reached the assembled boot context")
 	}
 	if !strings.Contains(claudeBoot.Context, claudeMark) {
-		t.Fatal("the edited claude 啟動程序 never reached the assembled boot context")
+		t.Fatal("the edited claude 啟動步驟 never reached the assembled boot context")
 	}
 	if strings.Contains(claudeBoot.Context, codexMark) {
 		t.Fatal("a claude member was handed the CODEX boot sequence — that is the failure this ticket must not introduce")
@@ -440,12 +564,12 @@ func TestBootDoc_EditedBlocksReachTheAssembledBootContext(t *testing.T) {
 
 	// (b) staff, codex runtime — the opposite pairing, so a mapping that always
 	// answers "claude" cannot pass.
-	codexBoot, err := api.buildBootContext("", &Member{ID: "m-x2", Name: "X2", RoleKey: seedRoleAssistant, Runtime: RuntimeCodex}, "")
+	codexBoot, err := api.buildBootContext("", &Member{ID: "m-x2", Name: "X2", RoleKey: seedRoleAssistant, Runtime: RuntimeCodex})
 	if err != nil || codexBoot == nil {
 		t.Fatalf("codex boot context: %v", err)
 	}
 	if !strings.Contains(codexBoot.Context, codexMark) || strings.Contains(codexBoot.Context, claudeMark) {
-		t.Fatal("a codex member did not get the codex 啟動程序 (or got the claude one)")
+		t.Fatal("a codex member did not get the codex 啟動步驟 (or got the claude one)")
 	}
 
 	// (c) the OUTSOURCE fold reads the same two documents — staff and outsource
@@ -462,7 +586,7 @@ func TestBootDoc_EditedBlocksReachTheAssembledBootContext(t *testing.T) {
 		t.Fatalf("workerBootSequence: %v", err)
 	}
 	if !strings.Contains(tail, codexMark) || strings.Contains(tail, claudeMark) {
-		t.Fatal("a codex worker did not get the edited codex 啟動程序")
+		t.Fatal("a codex worker did not get the edited codex 啟動步驟")
 	}
 }
 
@@ -496,7 +620,7 @@ func TestBootDoc_UnchangedSaveRetainsNoVersion(t *testing.T) {
 			if len(after) != len(afterFirst)+1 {
 				t.Fatalf("a real edit must retain exactly one version: %d → %d", len(afterFirst), len(after))
 			}
-			if after[0].Content["text"] != first {
+			if after[0].Content["text"] != f.underHead(t, c.path, first) {
 				t.Fatalf("the retained version is not the text this write replaced: %q", after[0].Content["text"])
 			}
 		})
@@ -573,7 +697,7 @@ func TestBootDoc_RestoreIsAdminGatedAndPutsTheOldTextBack(t *testing.T) {
 		t.Fatal("no retained versions — the restore below would assert nothing")
 	}
 	target := versions[0]
-	if target.Content["text"] != v1 {
+	if target.Content["text"] != f.underHead(t, c.path, v1) {
 		t.Fatalf("the newest retained version should be v1, got %q", target.Content["text"])
 	}
 	path := "/api/document-history/" + c.kind + "/" + c.key + "/" + strconv.Itoa(int(target.Id)) + "/restore"
@@ -584,7 +708,7 @@ func TestBootDoc_RestoreIsAdminGatedAndPutsTheOldTextBack(t *testing.T) {
 	if status, body := f.do(t, http.MethodPost, path, f.owner, nil); status != http.StatusOK {
 		t.Fatalf("restore as owner: %d %s", status, body)
 	}
-	if got := f.read(t, c.path).Text; got != v1 {
+	if got := f.read(t, c.path).Text; got != f.underHead(t, c.path, v1) {
 		t.Fatalf("after the restore the document is %q, want v1 back", got)
 	}
 }

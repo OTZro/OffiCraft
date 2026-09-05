@@ -16,9 +16,13 @@ import {
 } from "./OnboardingBanner";
 
 const getServerSettings = vi.fn();
+const patchServerSettings = vi.fn();
 
 vi.mock("../api", () => ({
-  api: { getServerSettings: () => getServerSettings() },
+  api: {
+    getServerSettings: () => getServerSettings(),
+    patchServerSettings: (patch: unknown) => patchServerSettings(patch),
+  },
 }));
 
 function settingsWith(onboarding: unknown) {
@@ -37,6 +41,8 @@ describe("OnboardingBanner", () => {
   beforeEach(() => {
     sessionStorage.clear();
     getServerSettings.mockReset();
+    patchServerSettings.mockReset();
+    patchServerSettings.mockImplementation(async () => settingsWith(null));
   });
 
   it("shows the failed step and its REASON", async () => {
@@ -68,6 +74,111 @@ describe("OnboardingBanner", () => {
     // one banner. The phrase carries its neighbouring punctuation so the step
     // label cannot satisfy this assertion by itself.
     expect(banner.textContent).toContain("、喚醒助理。");
+  });
+
+  // T-0648: the banner was Chinese everywhere EXCEPT the one sentence that says
+  // what actually broke — that arrived as the server's English engineer-facing
+  // `reason`. The closed `code` vocabulary is what the cockpit translates (the
+  // same shape backupHealth already uses); the raw `reason` stays only as the
+  // fallback for a code this build does not know.
+  it("renders the localized sentence for a coded reason, not the server English", async () => {
+    getServerSettings.mockResolvedValue(
+      settingsWith({
+        state: "failed",
+        startedAt: 1,
+        finishedAt: 2,
+        steps: [
+          {
+            name: "install_warden",
+            ok: false,
+            code: "install_failed",
+            reason: "installing this machine's warden failed (exit 1)",
+            detail: "[ocwarden install] FATAL: launchctl kickstart failed",
+          },
+        ],
+      })
+    );
+    renderBanner();
+    const banner = await screen.findByTestId("onboarding-banner");
+    expect(banner.textContent).toContain("這台機器沒有安裝成功");
+    // The English engineer sentence must be GONE from the banner body — a
+    // translation that merely sits beside the original has not translated it.
+    expect(banner.textContent).not.toContain(
+      "installing this machine's warden failed"
+    );
+    // …and the engineer payload it carried (the exit code) must not have been
+    // literal-translated into the owner's sentence either.
+    expect(banner.textContent).not.toContain("exit 1");
+  });
+
+  it("falls back to the server reason for a code this build does not know", async () => {
+    getServerSettings.mockResolvedValue(
+      settingsWith({
+        state: "failed",
+        startedAt: 1,
+        finishedAt: 2,
+        steps: [
+          {
+            name: "install_warden",
+            ok: false,
+            code: "a_code_from_a_newer_server",
+            reason: "something this cockpit has no wording for",
+            detail: "",
+          },
+        ],
+      })
+    );
+    renderBanner();
+    const banner = await screen.findByTestId("onboarding-banner");
+    expect(banner.textContent).toContain(
+      "something this cockpit has no wording for"
+    );
+  });
+
+  // A code that collides with a name on Object.prototype must take the SAME
+  // fallback. Looked up unguarded, `reasons["toString"]` answers an inherited
+  // FUNCTION, `??` sees a non-nullish hit and keeps it, and React renders a
+  // function child as nothing — the banner would go blank exactly where it is
+  // supposed to say what broke.
+  //
+  // The two inherited names are NOT the same shape, and one case cannot stand
+  // for the other: `toString` is a data property holding a function, while
+  // `__proto__` is an ACCESSOR whose getter returns an OBJECT. A guard written
+  // as "reject functions" passes `__proto__` straight through to React, which
+  // throws on an object child. Both names ride in the same report so the guard
+  // has to answer for the whole chain, not for the function half of it.
+  it("falls back to the server reason for a code that names an Object.prototype member", async () => {
+    getServerSettings.mockResolvedValue(
+      settingsWith({
+        state: "failed",
+        startedAt: 1,
+        finishedAt: 2,
+        steps: [
+          {
+            name: "install_warden",
+            ok: false,
+            code: "toString",
+            reason: "a reason only the server knows how to word",
+            detail: "",
+          },
+          {
+            name: "wake_assistant",
+            ok: false,
+            code: "__proto__",
+            reason: "a second reason only the server knows how to word",
+            detail: "",
+          },
+        ],
+      })
+    );
+    renderBanner();
+    const banner = await screen.findByTestId("onboarding-banner");
+    expect(banner.textContent).toContain(
+      "a reason only the server knows how to word"
+    );
+    expect(banner.textContent).toContain(
+      "a second reason only the server knows how to word"
+    );
   });
 
   it("hides the raw tool log behind a toggle, then reveals it", async () => {
@@ -158,27 +269,57 @@ describe("OnboardingBanner", () => {
     expect(screen.queryByTestId("onboarding-banner")).toBeNull();
   });
 
-  it("stays dismissed for the session once dismissed", async () => {
-    getServerSettings.mockResolvedValue(
-      settingsWith({
-        state: "failed",
-        startedAt: 1,
-        finishedAt: 2,
-        steps: [{ name: "wake_assistant", ok: false, reason: "no warden yet", detail: "" }],
-      })
-    );
-    const first = renderBanner();
-    (await screen.findByTestId("onboarding-dismiss")).click();
-    await waitFor(() => expect(screen.queryByTestId("onboarding-banner")).toBeNull());
-    first.unmount();
+  // ── 🔴 T-0648: 「不再顯示」 IS PERMANENT, AND THE SERVER IS WHERE IT LIVES ────
+  //
+  // Owner ruling rc-45eb8652b17f (「永久關閉，不需另外開任務」), reported after
+  // hitting the old behaviour himself: 「為什麼我重新點進網址又出現了？」 The
+  // dismissal used to be a sessionStorage key, which is scoped to ONE TAB — a
+  // second tab, or the same URL opened again, brought the banner straight back.
+  // These three cases pin the whole contract: the press writes to the server,
+  // a session that remembers nothing locally still stays quiet, and a report
+  // row that carries no stamp at all still speaks.
+  const dismissibleReport = {
+    state: "failed",
+    startedAt: 1,
+    finishedAt: 2,
+    dismissedAt: 0,
+    steps: [{ name: "wake_assistant", ok: false, reason: "no warden yet", detail: "" }],
+  };
 
+  it("writes the dismissal to the SERVER when 「不再顯示」 is pressed", async () => {
+    getServerSettings.mockResolvedValue(settingsWith(dismissibleReport));
     renderBanner();
-    // ONE read for both mounts (T-8115): the banner's first read joins the
-    // shared /api/settings snapshot, so the remount is answered from it rather
-    // than re-downloading 639 kB. The subject here is the dismissal, and it
-    // holds with the report already in hand.
-    await waitFor(() => expect(getServerSettings).toHaveBeenCalledTimes(1));
+    (await screen.findByTestId("onboarding-dismiss")).click();
+    await waitFor(() =>
+      expect(patchServerSettings).toHaveBeenCalledWith({ onboardingDismissed: true })
+    );
+    await waitFor(() => expect(screen.queryByTestId("onboarding-banner")).toBeNull());
+  });
+
+  it("stays quiet in a brand-new frontend session that remembers nothing locally", async () => {
+    // A NEW session: no sessionStorage, no cached snapshot, nothing but what
+    // the server says. Under the old per-tab dismissal this rendered the banner
+    // all over again — the whole bug.
+    sessionStorage.clear();
+    getServerSettings.mockResolvedValue(
+      settingsWith({ ...dismissibleReport, dismissedAt: 1750000000 })
+    );
+    renderBanner();
+    await waitFor(() => expect(getServerSettings).toHaveBeenCalled());
     expect(screen.queryByTestId("onboarding-banner")).toBeNull();
+  });
+
+  it("still speaks for a report row that carries no dismissal stamp at all", async () => {
+    // There is no migration: every report written before T-0648 has no
+    // dismissed_at. Absent must read as "nobody dismissed this" — the other
+    // reading would swallow the warning on every pre-existing install.
+    const { dismissedAt: _omitted, ...legacyReport } = dismissibleReport;
+    getServerSettings.mockResolvedValue(settingsWith(legacyReport));
+    renderBanner();
+    const step = await screen.findByTestId("onboarding-step-wake_assistant");
+    expect(step.querySelector(".onboarding-banner__reason")?.textContent).toBe(
+      "no warden yet"
+    );
   });
 });
 

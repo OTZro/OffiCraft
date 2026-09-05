@@ -11,14 +11,23 @@ package main
 //
 // The second half of the owner's ask is 「有東西要存才等,沒有就立刻走」, so this
 // file also pins the FAST paths. Which cases are fast is a stated criterion, not
-// a guess — see workerHasStateToFlush / ownerOpRevivesStoppedWorker.
+// a guess — see workerHasStateToFlush / ownerOpDisplacesTheSession.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // THE DECISION TABLE (written because BOTH HIGH defects in this票 were mis-drawn
-// boundaries of the SAME predicate — round 2 missed a state, round 3 drew the
+// boundaries of the SAME predicate — the 收口-window finding missed a state, and
+// the STALE-LATCH finding, whose cause was the first one's own fix, drew the
 // range too wide). Anyone changing workerHasStateToFlush: find your change in
 // this table first. A cell you cannot state an expectation for is where the
 // third defect lives.
+//
+// 🔴 THE TWO FINDINGS ARE NAMED, NOT NUMBERED (T-170e stage 2 ①). They used to
+// be "round 2" and "round 3" here and "round-1" and "round-2" in the staff twin
+// (member_ownerop_winddown.go and its test) — one ordinal apart, for the same
+// two defects, and the repo's own history does not settle it: the commit that
+// added the epoch scoping calls the arm it repaired 「第一輪 HIGH」. An ordinal
+// only the review transcript knows is not something a comment can keep true, so
+// both files now name the finding by what it was.
 //
 // TWO UPSTREAM GATES run BEFORE the predicate is even consulted, and they
 // dominate it (respawnWorkerForOwnerOp):
@@ -26,10 +35,19 @@ package main
 //	G1  desired_state == offline   → held_down receipt, NOTHING starts. An owner
 //	                                 停止 outranks every other owner verb.
 //	                                 (TestOwnerOp_StoppedWorkerStillOnlyGetsAReceipt)
-//	G2  op == restart              → immediate. The session it displaces is under
-//	                                 a standing kill order, so a 預告 waits for an
-//	                                 answer that is never coming (deny-list, so a
-//	                                 NEW verb gets the wind-down by default).
+//	G2  op == restart              → immediate. 重啟 is not a wind-down CAUSE at
+//	                                 all — it is a kill+respawn: it does not ask
+//	                                 the current session to flush and hand over,
+//	                                 it DISPLACES it (respawnWorkerForOwnerOpNow
+//	                                 → respawnWorkerNow kills the session on the
+//	                                 resolved target BEFORE it re-dispatches), so
+//	                                 there is nothing to 預告 to. NOT because the
+//	                                 worker must already be stopped — its handler
+//	                                 has NO desired-offline gate and answers 200
+//	                                 on a live, mid-加速停止 worker
+//	                                 (ownerOpDisplacesTheSession, worker_spawn.go).
+//	                                 (deny-list, so a NEW verb gets the wind-down
+//	                                 by default.)
 //	                                 (TestOwnerOp_RestartNeverWindsDown)
 //
 // Then the predicate itself, over its four inputs. `active` is Status ==
@@ -166,6 +184,10 @@ func TestOwnerOp_RelocateWindsDownInsteadOfKilling(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("report_stopped: %d %s", rec.Code, rec.Body.String())
 	}
+	// T-72dd: the stopped-report LATCHES; the shared FSM does the collect on the
+	// next tick. The move itself is unchanged — respawnWorkerNow still starts on
+	// whatever machine the row is pinned to when the collect runs.
+	workerTickPass(t, api, workerID, nowSecs())
 	if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 1 {
 		t.Fatalf("the collect must kill the OLD session (1 stop), got %d frames", got)
 	}
@@ -179,10 +201,17 @@ func TestOwnerOp_RelocateWindsDownInsteadOfKilling(t *testing.T) {
 	}
 }
 
-// TestOwnerOp_WindDownEndsOnTheDeadlineToo: the wind-down must not be able to
-// hang forever on a worker that never answers. The grace deadline
-// (StoppingTimeoutSecs) is the ceiling, driven by the tick's in-flight arm.
-func TestOwnerOp_WindDownEndsOnTheDeadlineToo(t *testing.T) {
+// TestOwnerOp_WindDownRunsNoClock_AndEndsOnTheWorkersOwnReport: an owner verb
+// is a 停止 (T-ed79), so NOTHING collects it on a clock — not at
+// StoppingTimeoutSecs, not later. This test used to assert the opposite ("the
+// deadline is the ceiling"), which was true of the FALLTHROUGH that put every
+// unnamed cause on the clock, never of a ruling.
+//
+// The other half is here in the same test on purpose: "no clock" must not be
+// readable as "never ends". The 收口 is the worker's own stopped report (and,
+// on the arm this fixture cannot reach without tearing the socket down, its
+// session dying — the grace-offline branch of autoHandoverWorker).
+func TestOwnerOp_WindDownRunsNoClock_AndEndsOnTheWorkersOwnReport(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
 	workerID := newActiveOnlineWorker(t, api)
@@ -196,19 +225,32 @@ func TestOwnerOp_WindDownEndsOnTheDeadlineToo(t *testing.T) {
 	api.hub.DrainWardenCommands(ServerSelfHost)
 	w, _ := api.dal.GetOutsourceWorker(workerID)
 
-	// Just short of the deadline: still waiting, nothing dispatched.
-	api.outsourceMu.Lock()
-	api.autoHandoverWorker(*w, w.RefocusSince+StoppingTimeoutSecs-1)
-	api.outsourceMu.Unlock()
-	if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 0 {
-		t.Fatalf("inside the grace window nothing may be dispatched, got %d frames", got)
+	// The old ceiling, and far past it: the worker is still working its SOP and
+	// nothing may be dispatched at it.
+	for _, elapsed := range []float64{
+		StoppingTimeoutSecs - 1, StoppingTimeoutSecs + 1, 100 * StoppingTimeoutSecs,
+	} {
+		workerTickPass(t, api, w.ID, w.RefocusSince+elapsed)
+		if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 0 {
+			t.Fatalf("+%.0fs after 換 model: nothing may be dispatched (this op runs "+
+				"no clock), got %d frames", elapsed, got)
+		}
 	}
-	// Past it: collected regardless.
-	api.outsourceMu.Lock()
-	api.autoHandoverWorker(*w, w.RefocusSince+StoppingTimeoutSecs+1)
-	api.outsourceMu.Unlock()
+
+	// …and the worker's own report IS the 收口: stop + start, at once.
+	rec = httptest.NewRecorder()
+	api.HandleReportStoppedApiSelfStoppedPost(rec,
+		taskReq(t, "POST", "/api/self/stopped", nil, workerID, "agent"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("report_stopped: %d %s", rec.Code, rec.Body.String())
+	}
+	// T-72dd: the stopped-report LATCHES; the shared FSM does the collect on the
+	// next tick. The move itself is unchanged — respawnWorkerNow still starts on
+	// whatever machine the row is pinned to when the collect runs.
+	workerTickPass(t, api, workerID, nowSecs())
 	if got := len(api.hub.DrainWardenCommands(ServerSelfHost)); got != 2 {
-		t.Fatalf("the deadline must collect (stop+start), got %d frames", got)
+		t.Fatalf("the worker's own stopped report must collect it (stop+start), "+
+			"got %d frames", got)
 	}
 }
 
@@ -295,12 +337,24 @@ func TestOwnerOp_UnclaimedButOnlineStillWindsDown(t *testing.T) {
 	}
 }
 
-// TestOwnerOp_RestartNeverWindsDown: 重啟 acts on a worker the owner ALREADY
-// stopped — 停止 dispatched the kill, so the session it would displace is under
-// a standing kill order. Fanning an SOP 預告 at it and then waiting out the
-// deadline for an answer that is never coming is exactly the pointless wait the
-// rule exists to prevent. This is the ONE deny-listed verb; a new verb added
-// later gets the wind-down by default.
+// TestOwnerOp_RestartNeverWindsDown: 重啟 skips the wind-down because it is not a
+// wind-down CAUSE — it is a kill+respawn. It does not ask the current session to
+// flush and hand over; it DISPLACES it (respawnWorkerForOwnerOp →
+// respawnWorkerForOwnerOpNow → respawnWorkerNow kills the session on the resolved
+// target BEFORE it re-dispatches), so an SOP 預告 would be fanned at a session
+// that is going away regardless. 改機器 / 換 model are the opposite verb — "the
+// same session's work must survive this change" — which is what the 預告 + window
+// buys them. This is the ONE deny-listed verb; a new verb added later gets the
+// wind-down by default.
+//
+// 🔴 NOT because 重啟 can only arrive at a worker the owner has already stopped.
+// It can arrive at ANY live worker: its handler has exactly two preconditions —
+// the row exists and it is not released — and NO desired-offline gate, so pressed
+// on a worker with desired_state="online" that is mid-加速停止 it answers 200.
+// The fixture below presses 停止 first for a different reason: that is how it
+// manufactures the race where the session is dying but has NOT been reaped yet,
+// so a state-only criterion would still read it as online. The prior 停止 is the
+// test's setup, NOT the precondition the rule rests on.
 func TestOwnerOp_RestartNeverWindsDown(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
@@ -338,6 +392,15 @@ func TestOwnerOp_RestartNeverWindsDown(t *testing.T) {
 // TestOwnerOp_StoppedWorkerStillOnlyGetsAReceipt: the pre-existing
 // desired_state=offline branch point outranks everything, wind-down included —
 // an owner 停止 must never be overturned by another owner verb.
+//
+// 🔴 IT IS ALSO THE COMPENSATION SENTINEL for the one asymmetry between this
+// funnel's predicate and the staff twin's (T-170e stage 2 ①). memberHasStateToFlush
+// carries an explicit desired-online guard (aRefocusStampWouldReachTheAgent);
+// workerHasStateToFlush carries none, and what stands in for it is the gate this
+// test drives — respawnWorkerForOwnerOp returning held_down BEFORE the predicate
+// is consulted. The setup below is deliberately a worker that is desired-offline
+// AND STILL ONLINE, which is exactly the state the shared core answers YES for:
+// if the gate ever stops being first, this test is what says so.
 func TestOwnerOp_StoppedWorkerStillOnlyGetsAReceipt(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
@@ -348,6 +411,16 @@ func TestOwnerOp_StoppedWorkerStillOnlyGetsAReceipt(t *testing.T) {
 		t.Fatalf("hold down: %v", err)
 	}
 	api.hub.DrainWardenCommands(ServerSelfHost)
+
+	// The state that makes this a compensation test rather than an ordinary
+	// held-down test: the shared core says there IS something to flush, and the
+	// only thing stopping a wind-down is the caller's gate.
+	held, _ := api.dal.GetOutsourceWorker(workerID)
+	if !api.hub.IsOnline(workerID) ||
+		!hasUncollectedOnlineOwnerOpState(held.RefocusSince, held.StoppedSince, true) {
+		t.Fatalf("setup: the shared predicate must answer YES here, or the gate "+
+			"under test is not the thing doing the work: %+v", held)
+	}
 
 	rec := postWorker(t, api, workerID, "model",
 		map[string]any{"model": "claude-opus-4-8"},
@@ -367,7 +440,7 @@ func TestOwnerOp_StoppedWorkerStillOnlyGetsAReceipt(t *testing.T) {
 	}
 }
 
-// TestOwnerOp_VerbAfterTheCollectIsNotSwallowed (T-98f4 review round 2, HIGH):
+// TestOwnerOp_VerbAfterTheCollectIsNotSwallowed (T-98f4, the 收口-window HIGH):
 // the window between 「收口已latch」 and 「新 session 還沒連上」 must not eat an
 // owner verb.
 //
@@ -405,6 +478,10 @@ func TestOwnerOp_VerbAfterTheCollectIsNotSwallowed(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("report_stopped: %d %s", rec.Code, rec.Body.String())
 	}
+	// T-72dd: the stopped-report LATCHES; the shared FSM does the collect on the
+	// next tick. The move itself is unchanged — respawnWorkerNow still starts on
+	// whatever machine the row is pinned to when the collect runs.
+	workerTickPass(t, api, workerID, nowSecs())
 	if w, _ := api.dal.GetOutsourceWorker(workerID); w.StoppedSince <= 0 {
 		t.Fatal("fixture: the collect must have latched stopped_since")
 	}
@@ -441,8 +518,8 @@ func TestOwnerOp_VerbAfterTheCollectIsNotSwallowed(t *testing.T) {
 	}
 }
 
-// TestOwnerOp_OrdinaryStopRestartStillWindsDownLater (T-98f4 review round 3,
-// HIGH — the hole the round-2 fix opened): the 「已收攏」 fast path must be
+// TestOwnerOp_OrdinaryStopRestartStillWindsDownLater (T-98f4, the STALE-LATCH
+// HIGH — the hole the 收口-window fix opened): the 「已收攏」 fast path must be
 // EPOCH-SCOPED, not a global read of stopped_since.
 //
 // stopped_since is latched in TWO places, and only one of them is a handover:
@@ -457,34 +534,39 @@ func TestOwnerOp_VerbAfterTheCollectIsNotSwallowed(t *testing.T) {
 // / 換 model on that worker is shot on the spot — no 預告, no grace, whatever
 // the session had not written down is gone — and it repeats for the rest of the
 // worker's life. That is the exact failure rule 2 exists to abolish, re-entering
-// through a broader and far more ordinary door than the one round 2 closed.
+// through a broader and far more ordinary door than the one the 收口-window fix
+// closed.
 func TestOwnerOp_OrdinaryStopRestartStillWindsDownLater(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
 	workerID := newActiveOnlineWorker(t, api)
 
-	// An ORDINARY 停止 → the worker reports it finished → 重啟. No handover
-	// anywhere in here: refocus_since is never stamped.
-	postWorker(t, api, workerID, "stop", nil,
-		api.HandleStopOutsourceWorkerApiOutsourceWorkersIdStopPost)
+	// A stopped-report arriving OUTSIDE any handover: desired_state stays online
+	// and refocus_since was never stamped, so workerReportStopped falls through
+	// to the bare latch — stopped_since set, no kill, the session still alive.
+	// That is the stale latch this test is about.
+	//
+	// ⚠️ IT USED TO REACH THAT STATE VIA 停止 → report → 重啟, and T-ed79 parity
+	// #11 closed that route: the restart handler now clears the wind-down anchors
+	// it used to leave behind. The state itself is still perfectly reachable —
+	// this arm needs no owner verb at all — so the test keeps its subject and only
+	// changes how it gets there. (The rest of that route is covered by
+	// worker_restart_clears_markers_ted79_test.go.)
 	rec := httptest.NewRecorder()
 	api.HandleReportStoppedApiSelfStoppedPost(rec,
 		taskReq(t, "POST", "/api/self/stopped", nil, workerID, "agent"))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("report_stopped: %d %s", rec.Code, rec.Body.String())
 	}
+	// T-72dd: the stopped-report LATCHES; the shared FSM does the collect on the
+	// next tick. The move itself is unchanged — respawnWorkerNow still starts on
+	// whatever machine the row is pinned to when the collect runs.
+	workerTickPass(t, api, workerID, nowSecs())
+	api.hub.DrainWardenCommands(ServerSelfHost)
 	w, _ := api.dal.GetOutsourceWorker(workerID)
 	if w.RefocusSince != 0 || w.StoppedSince <= 0 {
 		t.Fatalf("fixture: this test needs a NON-handover latch "+
 			"(refocus=%v stopped=%v)", w.RefocusSince, w.StoppedSince)
-	}
-	if rec := postWorker(t, api, workerID, "restart", nil,
-		api.HandleRestartOutsourceWorkerApiOutsourceWorkersIdRestartPost); rec.Code != http.StatusOK {
-		t.Fatalf("restart: %d %s", rec.Code, rec.Body.String())
-	}
-	api.hub.DrainWardenCommands(ServerSelfHost)
-	if w, _ := api.dal.GetOutsourceWorker(workerID); w.StoppedSince <= 0 {
-		t.Fatal("fixture: the stale latch must survive the restart for this test to bite")
 	}
 	if !api.hub.IsOnline(workerID) {
 		t.Fatal("fixture: the worker must be online for the wind-down to be owed")
@@ -517,7 +599,7 @@ func TestOwnerOp_OrdinaryStopRestartStillWindsDownLater(t *testing.T) {
 // of the decision table: refocus > 0 ∧ stopped == 0 — a grace window that is
 // OPEN and not yet collected.
 //
-// It is the neighbour of the round-2 defect cell and the reason that fix had to
+// It is the neighbour of the 收口-window defect cell and the reason that fix had to
 // be an AND rather than "refocus > 0 ⇒ immediate": nothing has been dispatched
 // yet here, so re-stamping is harmless and the owner still gets his 收尾. What
 // makes it safe is that the new pin is persisted BEFORE the window is (re)opened,
@@ -572,6 +654,10 @@ func TestOwnerOp_SecondVerbDuringAnOpenWindowReStampsAndStillCollects(t *testing
 	if rec.Code != http.StatusOK {
 		t.Fatalf("report_stopped: %d %s", rec.Code, rec.Body.String())
 	}
+	// T-72dd: the stopped-report LATCHES; the shared FSM does the collect on the
+	// next tick. The move itself is unchanged — respawnWorkerNow still starts on
+	// whatever machine the row is pinned to when the collect runs.
+	workerTickPass(t, api, workerID, nowSecs())
 	if got := len(api.hub.DrainWardenCommands("m-elsewhere")); got != 0 {
 		t.Fatalf("the superseded destination must receive nothing, got %d frames", got)
 	}

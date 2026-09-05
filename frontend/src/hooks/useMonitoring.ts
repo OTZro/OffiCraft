@@ -104,7 +104,24 @@ export function useMonitoring(opts?: { enabled?: boolean; refreshSeconds?: numbe
     // SSE: refetch the telemetry on any monitoring-related topic.
     const unsubscribe = api.subscribeEvents((topic) => {
       if (topic.includes("monitor")) {
-        requestVersion.current += 1;
+        // T-10, same defect as useMachines: this used to lead with
+        // `requestVersion.current += 1`, cancelling every in-flight request
+        // while issuing none of its own, leaving only the trailing refresh up
+        // to `refreshSeconds` later to repair the view.
+        //
+        // It is the same MECHANISM, reached by a different trigger. Nothing
+        // here self-triggers the way POST /api/machines does (that publishes
+        // `member`, which this hook ignores). What it collides with instead is
+        // background telemetry: api_monitoring.go publishes `monitoring` on
+        // every agent signal, and MonitorPage's `renameAccount` reconciles by
+        // `patchAccount(...).then(() => refetch())`. A heartbeat landing while
+        // that refetch is in flight discards the renamed label and the panel
+        // keeps the OLD name for up to 5 seconds.
+        //
+        // Same reasoning, same fix: an event frame means a newer answer may
+        // exist, not that the in-flight one is wrong. Let it land; schedule the
+        // coalesced follow-up. Issue-order precedence between real requests is
+        // untouched — both request paths still take a version from this counter.
         trailing = true;
         schedule();
       }

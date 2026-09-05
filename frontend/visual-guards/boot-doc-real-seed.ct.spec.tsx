@@ -53,15 +53,38 @@
 //       375/390/1040 — the pre-T-c33e sectioned version of this guard measured
 //       the same +45 at the same width.
 import { test, expect } from "@playwright/experimental-ct-react";
-import { BootDocRealSeedStory } from "./stories/BootDocRealSeedStory";
+import {
+  BootDocRealSeedStory,
+  BootDocHeadSeedStory,
+} from "./stories/BootDocRealSeedStory";
 
+// 🔴 TWO SUBJECTS SINCE T-6f44, and the second is not padding. 系統互動 lost its
+// read-only head (it was a title line, promoted into the body), and it was the
+// only document this guard ever rendered — so the "read-only head" level of the
+// chain would have been dropped from the suite entirely, retiring a protection
+// because its fixture changed rather than because the risk did. 加速停止 still
+// carries a head, so it keeps that level measured.
+// ⚠️ THE STORY IS CHOSEN BY A LITERAL, NOT PASSED AS A COMPONENT. Playwright's
+// CT transform extracts mount() arguments STATICALLY; handing it `<Story />`
+// where Story is a parameter defeats that, and the fallback drags the whole
+// import graph through Babel — which then chokes on the `?raw` markdown the
+// story imports, with an error that points at this file and names the .md
+// (measured: "Unexpected token (1:0)" on seeds/system_interaction.md).
+function chainGuard(
+  label: string,
+  which: "system" | "head",
+  expectHead: boolean
+) {
 for (const width of [320, 375, 390, 1040]) {
-  test(`width ${width}: the real system_interaction seed lays out with no level of the chain panning`, async ({
+  test(`${label} @ width ${width}: no level of the chain pans`, async ({
     mount,
     page,
   }) => {
     await page.setViewportSize({ width, height: 1200 });
-    const cmp = await mount(<BootDocRealSeedStory />);
+    const cmp =
+      which === "head"
+        ? await mount(<BootDocHeadSeedStory />)
+        : await mount(<BootDocRealSeedStory />);
 
     // The page reads its document through the adapter, so the first paint is
     // empty. Wait on the rendered content itself rather than a timer — and
@@ -71,10 +94,13 @@ for (const width of [320, 375, 390, 1040]) {
     // document through the adapter, so the first paint is empty, and waiting on
     // the last thing in the document says the WHOLE of it arrived rather than a
     // prefix. A count alone cannot say that.
-    await expect(cmp.locator(".doc-md")).toContainText(
+    // ⚠️ `.doc-card__body > .doc-md`, not `.doc-md` — a boot-context document
+    // renders a SECOND one above the editor for its read-only head (T-3201).
+    // The head is measured too, one level down.
+    await expect(cmp.locator(".doc-card__body > .doc-md")).toContainText(
       await cmp.getByTestId("story-last-heading").innerText()
     );
-    const m = await page.evaluate(() => {
+    const m = await page.evaluate((expectHead: boolean) => {
       const over = (el: Element) => el.scrollWidth - el.clientWidth;
       const scrolls = (el: Element) => {
         const ox = getComputedStyle(el).overflowX;
@@ -87,7 +113,20 @@ for (const width of [320, 375, 390, 1040]) {
         // reported as a distinct, failing value rather than as an absence.
         named.push({ where, over: el ? over(el) : 9999 });
       };
-      push("rendered document", ".doc-md");
+      push("rendered document", ".doc-card__body > .doc-md");
+      // The read-only half is inside the same card and is markdown too, so it
+      // can pan the chain exactly as the body can (T-3201). It is a NAMED level
+      // rather than left to the subtree sweep: a level that disappears has to
+      // fail loudly, and the sweep reports absence as nothing at all.
+      //
+      // 🔴 WHETHER IT IS THERE AT ALL IS NOW PER-DOCUMENT (T-6f44). Four of the
+      // ten lost their head — it was a title line and moved into the body — so
+      // for those, "missing" is the correct state and the loud-failure sentinel
+      // would be reporting the truth as a defect. The caller says which it
+      // expects, and BOTH answers are asserted: a head that vanishes where one
+      // is expected still fails loudly, and a head that reappears where none
+      // should be fails too.
+      if (expectHead) push("read-only head", ".doc-card__readonly-head");
       push("doc card head", ".doc-card__head");
       push("doc card note", ".doc-card__note");
       push("doc card body", ".doc-card__body");
@@ -132,8 +171,9 @@ for (const width of [320, 375, 390, 1040]) {
           settings: widthOf(".settings"),
           main: widthOf(".app__main"),
         },
+        headPresent: !!document.querySelector(".doc-card__readonly-head"),
       };
-    });
+    }, expectHead);
 
     for (const { where, over } of m.named) {
       expect(
@@ -151,5 +191,18 @@ for (const width of [320, 375, 390, 1040]) {
         width + 1
       );
     }
+
+    // Both directions of the head's presence, so neither "it vanished" nor "it
+    // came back" can pass quietly.
+    expect(
+      m.headPresent,
+      expectHead
+        ? `${label} must render a read-only head — the document declares one, and a card that stopped printing it hides the half the owner may not edit`
+        : `${label} must NOT render a read-only head — this document has none since T-6f44, and an empty panel is a divider under a heading that is not there`
+    ).toBe(expectHead);
   });
 }
+}
+
+chainGuard("the real system_interaction seed", "system", false);
+chainGuard("the real accelerated_stop seed", "head", true);

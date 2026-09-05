@@ -93,7 +93,7 @@ func NewDALPools(w, r *sql.DB) *DAL {
 type Member struct {
 	ID          string
 	Name        string
-	Kind        string // closed set: "assistant" | "warden" | "outsource" (schema CHECK)
+	Kind        string // closed set: "staff" | "warden" | "outsource" (schema CHECK)
 	RoleKey     string
 	Runtime     string
 	Model       string
@@ -140,9 +140,12 @@ type Member struct {
 	StoppedSince  float64
 	RefocusSince  float64
 	// RefocusOp names the operation that opened the window RefocusSince stamps
-	// ("relocate" | "runtime/model" | "context_high" | "refocus" |
-	// "restart_self"), "" when none is in flight. Stamped and cleared in lockstep
-	// with RefocusSince — see refocusOp* in member_ownerop_winddown.go.
+	// ("relocate" | "runtime/model" | "context_notice" | "context_high" |
+	// "refocus" | "restart_self" | "token_expiry" | "accelerated_stop"), ""
+	// when none is in flight. Stamped and cleared in lockstep with RefocusSince.
+	// 🔴 This list is a COPY and nothing checks it: the closed set lives in
+	// refocusOp* (member_ownerop_winddown.go), which is where a new cause goes,
+	// and winddownKindFor is what decides what each one MEANS. Read those.
 	RefocusOp string
 	// ForcedStopAt is the durable record that a session was CUT OFF rather than
 	// collected (migrations/00057): unix seconds of the last force-stop, 0 when
@@ -153,14 +156,36 @@ type Member struct {
 	//
 	// 🔴 NOT cleared on the next boot, unlike every other lifecycle anchor: it
 	// describes the session BEFORE this one, and that is precisely who needs to
-	// read it. Written through SetMemberForcedStopAt and PutMember's upsert. The
-	// upsert carries it forward-only with max(): forcedEpochLive has three
+	// read it. Written through SetMemberForcedStopAt and through a whole-row
+	// write; BOTH go through mfForcedStopAt, which declares the column
+	// forward-only, so every writer lands it as max(): forcedEpochLive has three
 	// readers — notice suppression, the SSE stop gate, and deactivate — that use
 	// it to distinguish a deliberate cut-off from a session working its close-out.
 	// The targeted update is best-effort, so a failed update must not leave a
 	// force-stopped session looking like a close-out. max() also prevents a stale
 	// snapshot from erasing an existing record.
 	ForcedStopAt float64
+	// RestartAfterStop is the SECOND owner intent, split out of DesiredState
+	// (T-14 項目 7, migrations/00070). DesiredState answers 「下線用多強」; this
+	// answers 「下線之後要不要起來」, and the two are independent:
+	//
+	//	false  nothing is waiting to come back up.
+	//	true   the owner's last action was a 重啟 intent (重新聚焦 / 改機器 /
+	//	       換 model) landing on a member that is already on its way down.
+	//	       The stop in flight is honoured AS IS — a 強制停止 stays a
+	//	       強制停止 — and the member is started again once it has converged
+	//	       offline.
+	//
+	// LAST WRITER WINS, deliberately, and only for this field: every 下線 verb
+	// clears it, every 重啟 verb sets it. The wind-down LADDER above it stays a
+	// ratchet (winddownStageMayAdvanceTo) — the two rules are different because
+	// they answer different questions, which is exactly what one column could
+	// not express.
+	//
+	// Consumed by consumeRestartAfterStop at the converged-offline edge of the
+	// reconcile tick, and cleared in the same write that flips DesiredState back
+	// to online. Not on the wire.
+	RestartAfterStop bool
 	// HandoverNoticedTS is the durable twin of the in-memory handover-notice
 	// claim (T-6ebc, migrations/00058): the session anchor whose one-and-only
 	// advance notice has already been sent, 0 when none has. It holds the ANCHOR
@@ -176,14 +201,75 @@ type Member struct {
 	// deliberately does NOT carry it, so no whole-row snapshot can revive a
 	// claim that a session boundary just cleared. Not on the wire.
 	HandoverNoticedTS float64
-	BankedCost        float64
-	LastOp            string
-	LastOpOK          *bool // nil = no op reported yet (three-valued)
-	LastOpLog         string
-	LastOpReason      string // structured "<code>: <detail>" cause; "" = none reported
-	LastOpAt          float64
-	RosterStatus      string  // "active" | "removed" (dismiss is a SOFT delete)
-	LinkedTaskID      *string // task binding (migrations/00024); nil = unbound. Outsource members carry their bound task id here.
+	// AgentIatFloor is the per-member CREDENTIAL FLOOR (T-14 項目 4B,
+	// migrations/00063): the `iat` of the token that last reported waking for
+	// this member, 0 when none has. requireAuth refuses any agent-scope token
+	// whose iat is STRICTLY LESS THAN it — so the moment a new generation says
+	// it is up, every credential minted for an earlier one is dead.
+	//
+	// It holds the WAKING CALLER'S OWN iat rather than now() on purpose: with a
+	// strictly-less-than comparison that is what makes the session raising the
+	// floor immune to its own stamp, whatever the gap between mint and boot or
+	// the skew between the two clocks.
+	//
+	// 🔴 Warden rows carry it like any other row, and the READ side declines to
+	// consult it for them (authz.go agentIatFloorRefusal). A warden credential
+	// has no exp, so a floor above one could never expire out of the way.
+	//
+	// Written through SetMemberAgentIatFloor only; a whole-row write carries it
+	// on INSERT but never onto an EXISTING row (mfAgentIatFloor declares it
+	// insertOnly), so no whole-row snapshot taken before a wake can put an older
+	// floor back over a newer one. Not on the wire.
+	AgentIatFloor float64
+	// TokenKeyID is WHICH signing key (keyring.go) this station last VERIFIED a
+	// credential of this member's with, "" when it has never verified one.
+	//
+	// 🔴 IT IS THE STATION'S OWN OBSERVATION, NEVER A SELF-REPORT (T-80). The
+	// value is taken from verifyJWTAnyKey — the key that actually produced a
+	// matching HMAC — and there is no wire field, no claim and no heartbeat block
+	// a machine could use to say which key it holds. That is load-bearing rather
+	// than incidental: this column's ONLY purpose is to answer "is it safe to
+	// press remove on the outgoing key", and an answer a machine could assert
+	// would be an answer an out-of-date, wrong or hostile machine could assert.
+	//
+	// 🔴 BUT "CANNOT REPORT IT" IS THE LITERAL CLAIM, NOT THE WHOLE ONE, AND THE
+	// DIFFERENCE IS WHY THE OBSERVATION MOVED. A machine cannot choose the VALUE,
+	// but it can choose WHICH CREDENTIAL IT PRESENTS: /api/machines/renew-credential
+	// is zero-argument self-service, so a warden can mint a fresh credential and
+	// present it ONCE while continuing to run on the old one. Recorded at the auth
+	// gate that was enough to read as converged with nothing written to disk —
+	// which is the exact failure this ticket exists to abolish, rebuilt by the
+	// mechanism meant to abolish it. So the observation is taken at ONE place, in
+	// api_infra.go's SSE handler after hub.Connect: the credential the process is
+	// actually RUNNING ON, not one it merely showed us. The residual is honest and
+	// bounded — presenting a fresh credential on a stream you then keep open is
+	// running on it, and doing it repeatedly costs a whole connection each time.
+	//
+	// A credential that has not been presented on a stream since the last rotation
+	// therefore leaves a STALE value here, which is the honest reading: nothing has
+	// proved that machine moved.
+	//
+	// The JWT header is a constant and carries no kid, so credential verification
+	// is the one and only moment in the process where this fact exists at all.
+	//
+	// Written through SetMemberTokenKeyID only; a whole-row write carries it on
+	// INSERT but never onto an existing row (mfTokenKeyID declares it insertOnly),
+	// for memberFromWorker's reason — it rebuilds a Member from zero and would
+	// send "" on every PutOutsourceWorker. Only warden rows are ever stamped, but
+	// the column is on the member table like every other per-identity fact.
+	//
+	// ON the wire, but only as MachineDTO.token_key_id (GET /api/machines) — a
+	// key ID is outside-safe by construction (keyring.go: ids are random, never
+	// derived from key material).
+	TokenKeyID   string
+	BankedCost   float64
+	LastOp       string
+	LastOpOK     *bool // nil = no op reported yet (three-valued)
+	LastOpLog    string
+	LastOpReason string // structured "<code>: <detail>" cause; "" = none reported
+	LastOpAt     float64
+	RosterStatus string  // "active" | "removed" (dismiss is a SOFT delete)
+	LinkedTaskID *string // task binding (migrations/00024); nil = unbound. Outsource members carry their bound task id here.
 	// ── A案 P7d (migrations/00025 — the outsource_worker fold) ────────────────
 	// Codename is the outsource display codename (O-7 / S-12 / H-3), globally
 	// unique and never reused (partial UNIQUE index); "" (stored NULL) on every
@@ -214,7 +300,8 @@ const memberColumns = `id, name, kind, role_key, runtime, model, actual_model, e
 	waking_since, stopping_since, stopped_since, refocus_since, refocus_op, banked_cost,
 	last_op, last_op_ok, last_op_log, last_op_reason, last_op_at, roster_status,
 	linked_task_id, codename, created_ts, released_ts, activated_ts,
-	avatar_attachment_id, forced_stop_at, handover_noticed_ts`
+	avatar_attachment_id, forced_stop_at, handover_noticed_ts, agent_iat_floor,
+	restart_after_stop, token_key_id`
 
 func scanMember(row interface{ Scan(...any) error }) (Member, error) {
 	var m Member
@@ -228,7 +315,8 @@ func scanMember(row interface{ Scan(...any) error }) (Member, error) {
 		&m.BankedCost,
 		&m.LastOp, &lastOpOK, &m.LastOpLog, &m.LastOpReason, &m.LastOpAt, &m.RosterStatus,
 		&linkedTaskID, &codename, &m.CreatedTS, &m.ReleasedTS, &m.ActivatedTS,
-		&m.AvatarAttachmentID, &m.ForcedStopAt, &m.HandoverNoticedTS,
+		&m.AvatarAttachmentID, &m.ForcedStopAt, &m.HandoverNoticedTS, &m.AgentIatFloor,
+		&m.RestartAfterStop, &m.TokenKeyID,
 	)
 	if err != nil {
 		return Member{}, err
@@ -243,41 +331,47 @@ func scanMember(row interface{ Scan(...any) error }) (Member, error) {
 	return m, nil
 }
 
-// ListMembers returns the STAFF roster (ANY roster_status — soft-removed rows
-// included; callers filter, mirroring repository.list_members). kind='outsource'
-// rows are EXCLUDED by design (A案 P7d): the merged storage keeps outsource
-// members out of every member-surface fold (REST list, reconcile, boot-context
-// rosters, monitoring) so the wire behaviour matches the pre-merge two-table
-// world — the outsource projection reads them through ListOutsourceWorkers
-// (dal_tasks.go). Behavioural roster convergence is a later, owner-gated step.
-func (d *DAL) ListMembers() ([]Member, error) {
-	rows, err := d.rdb.Query(`SELECT ` + memberColumns +
-		` FROM member WHERE kind != 'outsource' ORDER BY name COLLATE NOCASE`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Member
-	for rows.Next() {
-		m, err := scanMember(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, m)
-	}
-	return out, rows.Err()
-}
-
-// ListMembersIncludingOutsource is only for the GET /api/members wire list.
-// Reconcile and every other member-surface fold must continue using
-// ListMembers, whose outsource exclusion keeps workers out of the member FSM.
+// ListMembers returns the WHOLE roster — every kind (staff, warden AND
+// kind='outsource'), at ANY roster_status (soft-removed rows included; callers
+// filter). One query, one member population.
 //
-// ⚠️ Being in THIS list does not mean the member API works on the row: the
-// twin of this decision is resolveMember (api_helpers.go), which still answers
-// 404 for every ow- id. "In the roster list" ≠ "a member verb resolves" — the
-// invariant lives in the interaction of these two functions and nowhere else,
-// so neither may be changed without reading the other.
-func (d *DAL) ListMembersIncludingOutsource() ([]Member, error) {
+// 🔴 IT USED TO CARRY `WHERE kind != 'outsource'`, AND THAT CLAUSE IS GONE
+// (T-14 項目 6). Two things follow, and the second is the one that bites:
+//
+//  1. There is no longer a second function. `ListMembersIncludingOutsource`
+//     existed solely because this one excluded contractors; with the clause
+//     lifted the two queries were literally the same SELECT, so the twin was
+//     deleted and its seven call sites now name this one. Nothing about those
+//     seven changed — they always saw outsource rows.
+//
+//  2. EVERY OTHER CALLER NOW SEES ROWS IT NEVER SAW BEFORE. If you are reading
+//     this because you are about to add a call site: this function does NOT
+//     hand you "the staff". Decide, at YOUR call site, whether a contractor
+//     row belongs in your fold, and if it does not, say so in code. A
+//     lifecycle fold asks `lifecycleTickDriverFor(m) != driverReconcile`
+//     (lifecycle_roster.go) — the named predicate that REPLACED this WHERE
+//     clause, so the split is falsifiable by a parity test instead of being a
+//     property of a SQL string in this file. A non-lifecycle fold that
+//     genuinely wants staff only writes the kind test it means, next to the
+//     reason it means it. And a fold that filters NOTHING is a decision too —
+//     make it on purpose.
+//
+//     🔴 THE AUDIT OF TODAY'S CALL SITES IS NOT IN THIS COMMENT. It is
+//     listMembersCallSiteLedger in roster_widening_ledger_t14i6_test.go: one
+//     row per call site, saying whether PR ② widened it and what that fold
+//     does with a contractor row. It lives there because an enumeration
+//     written HERE is one nothing can check —
+//     TestListMembersCallSitesAreEachOnTheRecord joins the ledger against an
+//     AST scan in BOTH directions, so a caller with no row fails by name and a
+//     row with no caller fails by name. This paragraph used to carry the list
+//     itself, and it had already gone stale: it named three sites and did not
+//     mention reconcile.go's dispatchIdentitySweepNow, which PR ② widened too.
+//     Add your row there; do not re-grow the list here.
+//
+// ⚠️ "In this list" still does NOT mean "a member verb resolves". resolveMember
+// (api_helpers.go) answers 404 for every ow- id under staffOnly scope, and that
+// is deliberate. The two halves are only consistent when read together.
+func (d *DAL) ListMembers() ([]Member, error) {
 	rows, err := d.rdb.Query(`SELECT ` + memberColumns +
 		` FROM member ORDER BY name COLLATE NOCASE`)
 	if err != nil {
@@ -308,90 +402,199 @@ func (d *DAL) GetMember(id string) (*Member, error) {
 	return &m, nil
 }
 
-// PutMember upserts a member row (the repository.put_member twin; the SSE
-// delta is the service layer's job). On conflict it deliberately leaves
-// avatar_attachment_id untouched: ReplaceMemberAvatar/DeleteMemberAvatar are
-// the only update seams for that independently-owned pointer. This prevents a
-// stale lifecycle/model snapshot from erasing a newer avatar and orphaning its
-// blob. The INSERT still accepts the field for migrations/tests/new rows.
-func (d *DAL) PutMember(m Member) error {
-	var lastOpOK any
-	if m.LastOpOK != nil {
-		lastOpOK = *m.LastOpOK
+// runtime is stored EXACTLY as given, including "" (T-b3d0). It used to be
+// normalized on the way in, which silently turned "no runtime chosen yet" into
+// a durable "claude" — the seed assistant was born a Claude member on a box
+// that may only have Codex. Every READER already calls NormalizeRuntime, so the
+// "" == claude reading is unchanged; what is preserved now is the DIFFERENCE
+// between "the owner picked claude" and "nobody has picked yet", which is what
+// resolveEmptyRuntimeForPlacement needs at placement time.
+//
+// (The paragraph that used to sit here explained why PutMember's conflict clause
+// left avatar_attachment_id alone. That clause is gone; the column is now
+// declared insertOnly, and its reason lives on mfAvatarAttachmentID in
+// dal_member_patch.go with the rest of the property table.)
+// ── account spend (T-53, owner ruling rc-5c5d7c7c6dcd) ───────────────────────
+//
+// The ACCOUNT's own accumulated spend, the number the cockpit's account card
+// shows since that ruling. It is deliberately NOT a fold over the actors on the
+// account: the owner asked for the account figure and the per-member figure to
+// be clearable independently, and a derived number cannot be cleared without
+// clearing what it derives from. See migration 00069 for why an accumulator
+// rather than a cleared watermark.
+
+// AddAccountSpend adds newly reported spend to one account's accumulator,
+// creating the row on first sight. Called from the telemetry ingest — the one
+// place new spend becomes visible — and from nowhere else.
+func (d *DAL) AddAccountSpend(account string, delta float64) error {
+	if account == "" || delta <= 0 {
+		return nil
 	}
-	var linkedTaskID any
-	if m.LinkedTaskID != nil {
-		linkedTaskID = *m.LinkedTaskID
-	}
-	// "" stores NULL so the partial UNIQUE codename index never trips on the
-	// many codename-less staff rows (NULLs are mutually distinct in SQLite).
-	var codename any
-	if m.Codename != "" {
-		codename = m.Codename
-	}
-	_, err := d.wdb.Exec(`
-		INSERT INTO member (`+memberColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (id) DO UPDATE SET
-			name = excluded.name, kind = excluded.kind,
-			role_key = excluded.role_key, runtime = excluded.runtime,
-			model = excluded.model, actual_model = excluded.actual_model,
-			actual_runtime = excluded.actual_runtime,
-			actual_effort = excluded.actual_effort,
-			effort = excluded.effort, desired_state = excluded.desired_state,
-			desired_machine_id = excluded.desired_machine_id,
-			last_machine_id = excluded.last_machine_id,
-			session_boot_ts = excluded.session_boot_ts,
-			waking_since = excluded.waking_since,
-			stopping_since = excluded.stopping_since,
-			stopped_since = excluded.stopped_since,
-			refocus_since = excluded.refocus_since,
-			refocus_op = excluded.refocus_op,
-			banked_cost = excluded.banked_cost,
-			last_op = excluded.last_op, last_op_ok = excluded.last_op_ok,
-			last_op_log = excluded.last_op_log,
-			last_op_reason = excluded.last_op_reason,
-			last_op_at = excluded.last_op_at,
-			roster_status = excluded.roster_status,
-			linked_task_id = excluded.linked_task_id,
-			codename = excluded.codename,
-			created_ts = excluded.created_ts,
-			released_ts = excluded.released_ts,
-			activated_ts = excluded.activated_ts,
-			-- forced_stop_at only ever moves FORWARD. A caller holding the
-			-- current row carries the stamp it just set and it lands here; a
-			-- STALE snapshot carries an older value (or 0) and max() keeps
-			-- what is already stored, so the record that a session was cut off
-			-- survives every other writer — the property the avatar pointer
-			-- and the session anchor each needed their own seam for.
-			forced_stop_at = max(forced_stop_at, excluded.forced_stop_at)
-			-- handover_noticed_ts is DELIBERATELY ABSENT from this SET list
-			-- (T-6ebc). It is session-scoped state cleared at a session
-			-- boundary, and the boundary runs next to HTTP faces that write
-			-- member rows from snapshots taken before it; carrying the column
-			-- here would let one of those revive a claim that was just cleared
-			-- — silencing a genuinely new session's one notice. The INSERT
-			-- carries it so a brand-new row starts at its zero value;
-			-- SetMemberHandoverNoticedTS is the only writer that moves it.
-			-- Guarded by TestHandoverNotice_ClaimSurvivesAWholeRowUpsert:
-			-- adding this column to the SET list turns that test red.`,
-		m.ID, m.Name, m.Kind, m.RoleKey, NormalizeRuntime(m.Runtime), m.Model, m.ActualModel, m.Effort,
-		m.ActualRuntime, m.ActualEffort,
-		m.DesiredState, m.DesiredMachineID, m.LastMachineID, m.SessionBootTS,
-		m.WakingSince, m.StoppingSince, m.StoppedSince, m.RefocusSince, m.RefocusOp,
-		m.BankedCost,
-		m.LastOp, lastOpOK, m.LastOpLog, m.LastOpReason, m.LastOpAt, m.RosterStatus,
-		linkedTaskID, codename, m.CreatedTS, m.ReleasedTS, m.ActivatedTS,
-		m.AvatarAttachmentID, m.ForcedStopAt, m.HandoverNoticedTS,
-	)
+	_, err := d.wdb.Exec(`INSERT INTO account_spend (account, accumulated)
+		VALUES (?, ?)
+		ON CONFLICT(account) DO UPDATE SET accumulated = accumulated + excluded.accumulated`,
+		account, delta)
 	return err
+}
+
+// ListAccountSpend reads every account's accumulator in one query — the read
+// side folds thousands of actors but only ever a handful of accounts, so the
+// monitoring handler takes the whole map rather than a query per account.
+func (d *DAL) ListAccountSpend() (map[string]float64, error) {
+	rows, err := d.rdb.Query(`SELECT account, accumulated FROM account_spend`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]float64{}
+	for rows.Next() {
+		var account string
+		var accumulated float64
+		if err := rows.Scan(&account, &accumulated); err != nil {
+			return nil, err
+		}
+		out[account] = accumulated
+	}
+	return out, rows.Err()
+}
+
+// ZeroAccountSpend sets one account's accumulator to 0 and answers with what it
+// held — the receipt, and the last moment that figure exists anywhere (no
+// per-charge ledger backs it). A row that does not exist answers 0: an account
+// nobody has reported under and an account already at zero are the same state,
+// and neither is an error.
+//
+// Read and write in ONE transaction so the figure reported as destroyed is
+// exactly the figure that was destroyed, rather than one a concurrent report
+// had already moved.
+func (d *DAL) ZeroAccountSpend(account string) (float64, error) {
+	var had float64
+	err := d.inTx(func(tx *sql.Tx) error {
+		switch err := tx.QueryRow(`SELECT accumulated FROM account_spend WHERE account = ?`,
+			account).Scan(&had); {
+		case err == sql.ErrNoRows:
+			had = 0
+			return nil
+		case err != nil:
+			return err
+		}
+		_, err := tx.Exec(`UPDATE account_spend SET accumulated = 0 WHERE account = ?`, account)
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	return had, nil
+}
+
+// PutMember writes one member row WHOLE — the shape 52 callers still use, kept
+// exactly as it behaved before T-63 and now expressed as a thin shell over
+// PatchMember.
+//
+// It is two statements in ONE transaction, and each answers a different half:
+//
+//   - INSERT … ON CONFLICT (id) DO NOTHING lands the whole row when there is no
+//     row yet. This is the ONLY half that carries the insert-only columns, so a
+//     member is born with the model, runtime, effort, machine and receipt it was
+//     created with, and nothing afterwards can put a stale copy of those back.
+//   - PatchMember(updatableMemberFields(...)) writes the rest onto a row that
+//     already exists — the columns a whole-row writer is allowed to carry. That
+//     set is not listed here: it is whatever is NOT flagged insertOnly in the
+//     property table, so a column joins or leaves it by editing its own line.
+//
+// The end state is identical to the single upsert this replaced, on both paths.
+// A brand-new row: the INSERT lands every column, then the patch rewrites the
+// updatable ones with the same values (forced_stop_at through max(v, v) = v).
+// An existing row: the INSERT does nothing, the patch writes exactly the columns
+// the old conflict clause wrote.
+//
+// It fans NO SSE delta — s.putMember is the service-layer door that pairs the
+// write with publishMemberPatch, and PutOutsourceWorker deliberately reaches
+// this one without a member delta at all.
+func (d *DAL) PutMember(m Member) error {
+	fields := memberWholeRow(m)
+	return d.inTx(func(tx *sql.Tx) error {
+		if err := insertMemberRowIfAbsent(tx, fields); err != nil {
+			return err
+		}
+		return patchMemberOn(tx, m.ID, updatableMemberFields(fields)...)
+	})
+}
+
+// AddMemberBankedCost adds delta to ONLY member.banked_cost (T-14 項目 6) — the
+// durable cumulative spend of a staff member OR an outsource worker, since P7d
+// made both a row of the same table (outsource_worker.banked_cost is this
+// column). A whole-row write carries the column on INSERT but never onto an
+// existing row (mfBankedCost declares it insertOnly), so no whole-row write can
+// move it. This function and ZeroMemberBankedCost (T-53, just below) are its
+// two writers, and they are two by design: one accumulates, one resets.
+//
+// ACCUMULATES IN SQL, not in Go, for the reason SetMemberAgentIatFloor uses
+// max() in SQL: a read-modify-write in Go loses to whichever caller writes
+// last, and here the loser is money the owner has already been shown. The
+// banking edges are exactly the ones that can overlap — an SSE last-disconnect
+// racing a kill funnel (respawnWorkerNow / stopWorkerNow) on the same actor —
+// so `banked_cost + ?` is what makes the fold loss-free rather than merely
+// exactly-once.
+//
+// It does NOT fan a member delta: the delta is the service layer's job, the
+// same split PutMember documents. bankLiveCost's member branch publishes one;
+// its worker branch deliberately does not (a worker's changes ride the
+// outsource_worker projection).
+//
+// A missing row is a clean no-op (0 rows affected, no error).
+func (d *DAL) AddMemberBankedCost(id string, delta float64) error {
+	_, err := d.wdb.Exec(
+		`UPDATE member SET banked_cost = banked_cost + ? WHERE id = ?`, delta, id)
+	return err
+}
+
+// ZeroMemberBankedCost sets ONE actor's member.banked_cost to 0 and answers with
+// what it held — the receipt, and the last moment that figure exists anywhere
+// (T-53, owner rulings rc-7dea0deefa63 / rc-1344cc76a24a: the reset is
+// deliberately irreversible and no per-charge ledger backs the column). It
+// serves a staff member and an outsource worker alike, because P7d made both a
+// row of this table — the same reason AddMemberBankedCost above is one writer
+// rather than two.
+//
+// 🔴 IT MUST BE A SINGLE-COLUMN WRITE, and that is not a style preference. The
+// obvious shape — read the row, set BankedCost to 0, hand the whole row to
+// PutMember — silently does NOTHING now: banked_cost is deliberately insert-only
+// (T-14 項目 6), so the durable half of the reset
+// would never land while the API still answered 200 with a receipt naming money
+// it had not destroyed. The live half would go, the column would not, and the
+// cockpit would grow the number back on its next read.
+//
+// Read and write in ONE transaction, like ZeroAccountSpend: the figure reported
+// as destroyed is then exactly the figure that was destroyed, not one a
+// concurrent banking edge had already moved. A missing row answers 0 — an actor
+// that never banked anything and one already at zero are the same state, and
+// neither is an error.
+func (d *DAL) ZeroMemberBankedCost(id string) (float64, error) {
+	var had float64
+	err := d.inTx(func(tx *sql.Tx) error {
+		switch err := tx.QueryRow(`SELECT banked_cost FROM member WHERE id = ?`, id).Scan(&had); {
+		case err == sql.ErrNoRows:
+			had = 0
+			return nil
+		case err != nil:
+			return err
+		}
+		_, err := tx.Exec(`UPDATE member SET banked_cost = 0 WHERE id = ?`, id)
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	return had, nil
 }
 
 // SetMemberHandoverNoticedTS writes ONLY member.handover_noticed_ts (T-6ebc):
 // the session anchor whose one advance handover notice has been sent, or 0 to
 // release the claim at a session boundary. It is the SOLE writer that moves the
-// column — PutMember's upsert carries it on INSERT but never in its DO UPDATE
-// SET, so no whole-row snapshot can revive a cleared claim.
+// column — a whole-row write carries it on INSERT but never onto an existing
+// row (mfHandoverNoticedTS declares it insertOnly), so no whole-row snapshot can
+// revive a cleared claim.
 //
 // Single-column for the same two reasons SetMemberSessionBootTS is: the column
 // is not on the wire, so a member delta on the connect edge would be pure
@@ -406,20 +609,32 @@ func (d *DAL) SetMemberHandoverNoticedTS(id string, ts float64) error {
 }
 
 // SetMemberForcedStopAt stamps the force-stop record on ONE column. It is the
-// BACKSTOP now, not the only writer: PutMember's upsert carries the column
-// under max(), so the value lands in the same write that publishes the member
-// — and a stale lifecycle snapshot still cannot erase it, because max() keeps
-// whatever is already stored.
+// BACKSTOP now, not the only writer: a whole-row write carries the column too,
+// so the value lands in the same write that publishes the member — and a stale
+// lifecycle snapshot still cannot erase it, because the column is forward-only.
 //
-// 🔴 Why the upsert had to carry it (independent review): the SSE stop gate now
-// READS this column to tell "cut off deliberately" from "working its close-out".
-// While this seam was the only writer, and its failure is deliberately
-// non-fatal, a failed UPDATE left the column at 0 — and a force-stopped member
-// then reconnected as if it were closing out, on an arm that runs no clock to
-// collect it. A safety verdict must not hang on a best-effort write.
+// 🔴 Why the whole-row door had to carry it (independent review): the SSE stop
+// gate now READS this column to tell "cut off deliberately" from "working its
+// close-out". While this seam was the only writer, and its failure is
+// deliberately non-fatal, a failed UPDATE left the column at 0 — and a
+// force-stopped member then reconnected as if it were closing out, on an arm
+// that runs no clock to collect it. A safety verdict must not hang on a
+// best-effort write.
+//
+// 🔑 It goes through PatchMember rather than writing its own SQL (T-63). It used
+// to be a plain `forced_stop_at = ?`, which could walk the stamp BACKWARDS while
+// the whole-row door could not — two paths saying different things about one
+// column. Naming the field here makes the column's own forwardOnly declaration
+// apply to this path as well, so there is nothing left to keep in sync.
+//
+// ⚠️ WHAT THIS SEAM GAVE UP: it can no longer CLEAR the column. Passing 0, or
+// any value below the stored one, is now a silent no-op. Nothing relies on that
+// today — the sole non-test caller stamps nowSecs(), and the column is
+// deliberately never cleared (it describes the session BEFORE this one) — but an
+// "undo the force-stop record" would need its own seam rather than this one, and
+// would not find out by being refused.
 func (d *DAL) SetMemberForcedStopAt(id string, ts float64) error {
-	_, err := d.wdb.Exec(`UPDATE member SET forced_stop_at = ? WHERE id = ?`, ts, id)
-	return err
+	return d.PatchMember(id, mfForcedStopAt(ts))
 }
 
 // SetMemberSessionBootTS writes ONLY member.session_boot_ts (T-4235). It is a
@@ -441,6 +656,160 @@ func (d *DAL) SetMemberForcedStopAt(id string, ts float64) error {
 // A missing row is a clean no-op (0 rows affected, no error).
 func (d *DAL) SetMemberSessionBootTS(id string, ts float64) error {
 	_, err := d.wdb.Exec(`UPDATE member SET session_boot_ts = ? WHERE id = ?`, ts, id)
+	return err
+}
+
+// SetMemberWakingSince writes ONLY member.waking_since (T-14) — the DURABLE
+// wake anchor PresenceState projects 「喚醒中」 from, for BOTH kinds.
+//
+// Targeted column UPDATE for the second of SetMemberSessionBootTS's two reasons
+// (NO WHOLE-ROW WRITE): the outsource caller (notifyWorkerSpawn) is mid-dispatch
+// and the placement-block stamps immediately after it re-read the row and write
+// it back whole, so a snapshot write here would be clobbered by them. Touching
+// exactly one column cannot be. The first reason does NOT apply — presence IS on
+// the wire, and the dispatch fans its own outsource_worker delta right after.
+//
+// A missing row is a clean no-op (0 rows affected, no error).
+func (d *DAL) SetMemberWakingSince(id string, ts float64) error {
+	_, err := d.wdb.Exec(`UPDATE member SET waking_since = ? WHERE id = ?`, ts, id)
+	return err
+}
+
+// SetMemberWindDownAnchors writes the four wind-down anchor columns and NOTHING
+// else (T-55) — stopping_since / stopped_since / refocus_since / refocus_op, the
+// rung of the 下線 → 加速 → 強制 ladder a member is standing on plus the 換手
+// epoch opened on it. It is the sole writer of all four; a whole-row write
+// carries them on INSERT and never onto an existing row (their constructors
+// declare them insertOnly).
+//
+// 🔑 IT DELIBERATELY DOES NOT ROUTE THROUGH PatchMember, and that is a decision
+// rather than an oversight (T-63). Converging a setter onto the patch door earns
+// something only when the setter RE-IMPLEMENTS a property already declared on
+// the column — SetMemberForcedStopAt and SetMemberAgentIatFloor each wrote their
+// own max() beside a forwardOnly declaration, which is one property with two
+// representations that drift apart without anything going red. These four
+// columns declare no such property: they are a plain assignment here and
+// insert-only there, and insert-only has no meaning for a caller that names the
+// column outright. So there is nothing here to keep in sync, and rewriting it
+// would be churn.
+//
+// 🔴 FOUR COLUMNS, ONE WRITER — the same shape as SetMemberOpReceipt and for the
+// same reason. armRefocusEpoch stamps all four at once, and the readers consume
+// them together: StopIntent is stopping_since > 0, the ladder gate weighs the
+// refocus epoch against both stop anchors, and the collect fires on
+// stopped_since while refocus_op still names which verb opened the window. Four
+// separate writers would manufacture, on every stamp, a moment in which the row
+// describes a rung nobody ever stood on.
+//
+// ⚠️ forced_stop_at is NOT here and must not join: it is the durable record that
+// a session was cut off, and a whole-row write is allowed to carry it precisely
+// because the column is declared forwardOnly, so every writer lands it as
+// max(). A setter that ASSIGNED it would hand every caller the ability to move
+// it backwards — which is exactly what SetMemberForcedStopAt used to do before
+// it was routed through that declaration.
+//
+// A missing row is a clean no-op (0 rows affected, no error).
+func (d *DAL) SetMemberWindDownAnchors(id string, stoppingSince, stoppedSince,
+	refocusSince float64, refocusOp string) error {
+	_, err := d.wdb.Exec(
+		`UPDATE member SET stopping_since = ?, stopped_since = ?,
+			refocus_since = ?, refocus_op = ? WHERE id = ?`,
+		stoppingSince, stoppedSince, refocusSince, refocusOp, id)
+	return err
+}
+
+// SetMemberDesiredMachineID writes ONLY member.desired_machine_id (T-55) — the
+// owner's placement pin, "" when the member waits for a placement. It is the
+// SOLE writer that moves the column; a whole-row write carries it on INSERT and
+// never onto an existing row (mfDesiredMachineID declares it insertOnly).
+//
+// The pin is written by three faces that do not share a lock — the member
+// relocate, the member activate, and the worker relocate — and each of them
+// reaches this row holding a snapshot read before the others landed. While the
+// column rode the whole-row SET list, an activate that happened to be in flight
+// put its own (older) pin back over a relocate that had just moved the member,
+// and the member then booted on the machine the owner had just moved it OFF.
+// Nothing goes red when that happens; the placement simply disagrees with what
+// the cockpit shows.
+//
+// A missing row is a clean no-op (0 rows affected, no error).
+func (d *DAL) SetMemberDesiredMachineID(id, machineID string) error {
+	_, err := d.wdb.Exec(
+		`UPDATE member SET desired_machine_id = ? WHERE id = ?`, machineID, id)
+	return err
+}
+
+// SetMemberModel / SetMemberRuntime / SetMemberEffort write ONLY their own
+// column (T-55) — the three LAUNCH INTENTS the owner edits in 成員設定 and in
+// the outsource worker's twin face. Each is the SOLE writer of its column;
+// a whole-row write carries all three on INSERT and none of them onto an
+// existing row (their constructors declare them insertOnly).
+//
+// They are three writers rather than one because the two editing faces write
+// them INDEPENDENTLY: every field arrives optional, and a save that carries
+// only `effort` must not restate the model the row already holds — restating it
+// is precisely how a stale snapshot lands. The faces also sit next to the
+// owner-op wind-down, which re-reads and re-writes the same row while the edit
+// is still being answered.
+//
+// A missing row is a clean no-op (0 rows affected, no error).
+func (d *DAL) SetMemberModel(id, model string) error {
+	_, err := d.wdb.Exec(`UPDATE member SET model = ? WHERE id = ?`, model, id)
+	return err
+}
+
+// SetMemberRuntime writes ONLY member.runtime — see SetMemberModel.
+//
+// ⚠️ It stores what it is given, WITHOUT NormalizeRuntime: "" is a durable
+// third state ("nobody has picked yet"), distinct from an owner who picked
+// claude, and resolveEmptyRuntimeForPlacement depends on telling them apart.
+// PutMember's INSERT binds the raw value for the same reason.
+func (d *DAL) SetMemberRuntime(id, runtime string) error {
+	_, err := d.wdb.Exec(`UPDATE member SET runtime = ? WHERE id = ?`, runtime, id)
+	return err
+}
+
+// SetMemberEffort writes ONLY member.effort — see SetMemberModel.
+func (d *DAL) SetMemberEffort(id, effort string) error {
+	_, err := d.wdb.Exec(`UPDATE member SET effort = ? WHERE id = ?`, effort, id)
+	return err
+}
+
+// SetMemberOpReceipt writes the five last_op* columns and NOTHING else (T-55) —
+// the OP RECEIPT the cockpit renders as the ✓/✗ block under a member or worker.
+// It is the sole writer of all five; a whole-row write carries them on INSERT
+// and none of them onto an existing row (their constructors declare them
+// insertOnly).
+//
+// 🔴 ONE WRITER FOR FIVE COLUMNS, not five writers — the opposite of the launch
+// intents next door, and for the opposite reason. receiptRendersAsFailure reads
+// last_op, last_op_at and last_op_ok TOGETHER to decide what the panel shows, so
+// any moment in which some of the five have landed and the rest have not is a
+// state the cockpit renders as a verdict nobody wrote. Five writers would
+// manufacture that moment on every stamp. The launch intents split because their
+// two editing faces genuinely write them independently; a receipt is always
+// written whole.
+//
+// 🔴 ok is *bool BECAUSE THE COLUMN IS THREE-VALUED — nil / true / false, with
+// nil meaning "nothing folded yet" and stored as SQL NULL (scanMember reads it
+// back through sql.NullBool). It is NOT a bool with nil folded onto false:
+// receiptRendersAsFailure treats nil and false alike for RENDERING, but three
+// clear paths (clearWorkerPlacementBlock and the two converged clears) write nil
+// back DELIBERATELY, and a bool signature would silently turn each of them into
+// a written `false` — a verdict, where they meant to withdraw one.
+//
+// A missing row is a clean no-op (0 rows affected, no error).
+func (d *DAL) SetMemberOpReceipt(id, op string, ok *bool, log, reason string, at float64) error {
+	// nil interface binds SQL NULL, exactly as PutMember's own bind does — the
+	// round trip that keeps the third state a third state.
+	var okVal any
+	if ok != nil {
+		okVal = *ok
+	}
+	_, err := d.wdb.Exec(
+		`UPDATE member SET last_op = ?, last_op_ok = ?, last_op_log = ?,
+			last_op_reason = ?, last_op_at = ? WHERE id = ?`,
+		op, okVal, log, reason, at, id)
 	return err
 }
 
@@ -537,6 +906,44 @@ func (d *DAL) ListChat() ([]ChatMessage, error) {
 	return out, rows.Err()
 }
 
+// chatListFilter is the set of participant-side narrowings every LISTING path
+// of GET /api/chat shares: `with` (either side of a message) and the T-48
+// one-sided `sender` / `recipient`. They AND; a blank field is no filter at all.
+//
+// It is ONE type rather than three parameters passed around because the listing
+// queries must narrow IDENTICALLY. A filter honoured by the newest page and
+// forgotten by the page after it does not fail — it hands the caller rows it
+// promised to withhold, one page in, and nothing says so.
+//
+// The `caller_only` boolean used to be a fourth field here (owner ruling
+// rc-09f6d801b2b8 removed it from the wire). `sender`/`recipient` naming the
+// caller's own id is the replacement, and it is strictly more expressive: the
+// flag matched EITHER side, so "only mine" could not say which.
+type chatListFilter struct {
+	participant string // ?with= — matches EITHER side
+	sender      string // ?sender= — one side only
+	recipient   string // ?recipient= — one side only
+}
+
+// appendSQL appends this filter's conjuncts to a WHERE clause that already ends
+// in a condition. `col` prefixes the column names: "" for the single-table
+// reads, "m." for the unread read, which joins chat_read and must say which
+// table it means.
+func (f chatListFilter) appendSQL(query *string, args *[]any, col string) {
+	if f.participant != "" {
+		*query += ` AND (` + col + `sender = ? OR ` + col + `recipient = ?)`
+		*args = append(*args, f.participant, f.participant)
+	}
+	if f.sender != "" {
+		*query += ` AND ` + col + `sender = ?`
+		*args = append(*args, f.sender)
+	}
+	if f.recipient != "" {
+		*query += ` AND ` + col + `recipient = ?`
+		*args = append(*args, f.recipient)
+	}
+}
+
 // ListChatBefore returns the most recent `limit` messages strictly OLDER than
 // the (beforeTS, beforeID) keyset cursor, optionally filtered to a
 // participant (sender OR recipient; "" = no filter), oldest→newest — the
@@ -546,10 +953,10 @@ func (d *DAL) ListChat() ([]ChatMessage, error) {
 // so a cursor stays valid forever. The LIMIT lives in SQL (never a full-table
 // pull). A NEGATIVE limit disables the cap; limit 0 reads nothing.
 func (d *DAL) ListChatBefore(participant string, beforeTS float64, beforeID string, limit int) ([]ChatMessage, error) {
-	return d.listChatBefore(participant, "", beforeTS, beforeID, limit)
+	return d.listChatBefore(chatListFilter{participant: participant}, beforeTS, beforeID, limit)
 }
 
-func (d *DAL) listChatBefore(participant, caller string, beforeTS float64, beforeID string, limit int) ([]ChatMessage, error) {
+func (d *DAL) listChatBefore(f chatListFilter, beforeTS float64, beforeID string, limit int) ([]ChatMessage, error) {
 	if limit == 0 {
 		return nil, nil
 	}
@@ -557,14 +964,7 @@ func (d *DAL) listChatBefore(participant, caller string, beforeTS float64, befor
 		SELECT id, sender, recipient, body, ts, meta FROM chat_message
 		WHERE (ts < ? OR (ts = ? AND id < ?))`
 	args := []any{beforeTS, beforeTS, beforeID}
-	if participant != "" {
-		query += ` AND (sender = ? OR recipient = ?)`
-		args = append(args, participant, participant)
-	}
-	if caller != "" {
-		query += ` AND (sender = ? OR recipient = ?)`
-		args = append(args, caller, caller)
-	}
+	f.appendSQL(&query, &args, "")
 	query += ` ORDER BY ts DESC, id DESC`
 	if limit > 0 {
 		query += ` LIMIT ?`
@@ -595,17 +995,272 @@ func (d *DAL) listChatBefore(participant, caller string, beforeTS float64, befor
 	return out, nil
 }
 
+// chatAnchor is one endpoint of a start_id/end_id window: the (ts, id) pair of
+// a real message, resolved before any row is read so an unknown id can be
+// refused by name rather than answered as an empty page. The pair — not the id
+// alone — is what the window is expressed in, because the stream's order is
+// (ts, id) and comparing on id alone would order nothing.
+type chatAnchor struct {
+	TS float64
+	ID string
+}
+
+// newerThan reports whether a comes strictly after b in the stream's total
+// (ts, id) order — the SAME comparison listChatBefore pages by, so "start is
+// past end" here means exactly what "older than the cursor" means there.
+func (a chatAnchor) newerThan(b chatAnchor) bool {
+	if a.TS != b.TS {
+		return a.TS > b.TS
+	}
+	return a.ID > b.ID
+}
+
+// listChatWindow answers the T-48 start_id/end_id window: the messages between
+// the two anchors INCLUSIVE, oldest→newest, capped at `limit`.
+//
+// Either anchor may be nil, and which one is nil decides which END the cap eats
+// from — that is the whole difference between the two parameters:
+//
+//   - start only  — the anchor and the limit-1 messages AFTER it. Ascending
+//     LIMIT: the far (newest) end is what gets cut.
+//   - end only    — the anchor and the limit-1 messages BEFORE it. Descending
+//     LIMIT then reversed: the far (oldest) end is what gets cut, which is the
+//     same walk listChatBefore does, only inclusive of the anchor.
+//   - both        — one bounded window, anchored at END: descending LIMIT then
+//     reversed, so an over-wide window keeps end_id and loses rows at the
+//     start_id (older) side. This is spec's own wording — "a window wider than
+//     200 rows is truncated from the `start_id` end" — and that sentence is the
+//     ONLY place the both-anchors case is specified. The `start_id` paragraph
+//     ("this message and the limit-1 that follow it") describes the start-only
+//     window and says nothing about this case; reading it as a rule for both
+//     was the mistake, and spec now carries a pointer saying so.
+//     🔑 Either truncation falsifies one anchor's INCLUSIVE label. Spec already
+//     chose which one; this code does not get to re-choose.
+//
+// A window with no anchor at all is not this function's business — the handler
+// only reaches here once at least one was sent, and the anchorless request is
+// the legacy path, which must not change.
+//
+// `limit` arrives already validated to 1..200 by the handler; this function
+// still guards limit <= 0 as "read nothing" so it cannot be turned into an
+// unbounded scan by a future caller that forgets.
+func (d *DAL) listChatWindow(f chatListFilter, start, end *chatAnchor, limit int) ([]ChatMessage, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	query := `
+		SELECT id, sender, recipient, body, ts, meta FROM chat_message
+		WHERE 1=1`
+	var args []any
+	if start != nil {
+		query += ` AND (ts > ? OR (ts = ? AND id >= ?))`
+		args = append(args, start.TS, start.TS, start.ID)
+	}
+	if end != nil {
+		query += ` AND (ts < ? OR (ts = ? AND id <= ?))`
+		args = append(args, end.TS, end.TS, end.ID)
+	}
+	f.appendSQL(&query, &args, "")
+	// end present ⇒ anchor there and walk backwards (descending LIMIT, then
+	// reversed) so truncation eats the start_id/older side, which is what spec
+	// specifies for the both-anchors case. start-only ⇒ walk forwards.
+	descending := end != nil
+	if descending {
+		query += ` ORDER BY ts DESC, id DESC LIMIT ?`
+	} else {
+		query += ` ORDER BY ts, id LIMIT ?`
+	}
+	args = append(args, limit)
+	rows, err := d.rdb.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var got []ChatMessage
+	for rows.Next() {
+		m, err := scanChat(rows)
+		if err != nil {
+			return nil, err
+		}
+		got = append(got, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if !descending {
+		return got, nil
+	}
+	out := make([]ChatMessage, len(got))
+	for i, m := range got {
+		out[len(got)-1-i] = m
+	}
+	return out, nil
+}
+
+// ListChatLatest returns the most recent `limit` messages, oldest→newest —
+// the CURSORLESS page GET /api/chat serves. `participant` narrows to a
+// conversation line (sender OR recipient); "" disables the filter. limit 0 reads
+// nothing, a NEGATIVE limit disables the cap.
+//
+// It replaces "ListChat() then filter and slice in Go": that pulled every row
+// of chat_message into memory to hand back at most 30 of them (68.115ms on a
+// measured 48,153-row table, against 0.697ms here). The result is IDENTICAL,
+// not merely equivalent — "the newest N of the stream's total (ts, id) order"
+// is the same set whether you take the last N ascending or the first N
+// descending-then-reverse, which is exactly what the two paths do.
+//
+// 🔴 DELIBERATELY NO SINGLE-COLUMN INDEX on (sender, recipient) or (ts):
+// measured on the same real table, adding one made the scrollback page
+// (listChatBefore) 23× SLOWER, and ANALYZE changed nothing. This scan is the
+// cheap side of that trade.
+//
+// ⚠️ T-48: a COMPOSITE index on (recipient, sender, ts) DOES now exist
+// (migration 00075) — do not read the paragraph above as "this table carries no
+// index". It is a different shape, added for a different query: it COVERS the
+// unread count (2.7× there) and leaves this path untouched, because the
+// scrollback query cannot use it at all and the planner keeps
+// idx_chat_message_ts. The two statements are about two different indexes; the
+// 23× result above still stands for the single-column one.
+// 🔑 The 00075 numbers are SYNTHETIC (owner ruled it in on that basis, knowingly
+// — rc-6b67aa1a331c). The 23× above is from a real-data copy. Do not quote them
+// as if they came from the same measurement.
+func (d *DAL) ListChatLatest(participant string, limit int) ([]ChatMessage, error) {
+	return d.listChatLatest(chatListFilter{participant: participant}, limit)
+}
+
+func (d *DAL) listChatLatest(f chatListFilter, limit int) ([]ChatMessage, error) {
+	if limit == 0 {
+		return nil, nil
+	}
+	query := `SELECT id, sender, recipient, body, ts, meta FROM chat_message WHERE 1=1`
+	var args []any
+	f.appendSQL(&query, &args, "")
+	if limit < 0 {
+		// Uncapped: no need for the DESC walk + reverse, ask for the order the
+		// caller wants directly.
+		rows, err := d.rdb.Query(query+` ORDER BY ts, id`, args...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var out []ChatMessage
+		for rows.Next() {
+			m, err := scanChat(rows)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, m)
+		}
+		return out, rows.Err()
+	}
+	rows, err := d.rdb.Query(query+` ORDER BY ts DESC, id DESC LIMIT ?`,
+		append(args, limit)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var newestFirst []ChatMessage
+	for rows.Next() {
+		m, err := scanChat(rows)
+		if err != nil {
+			return nil, err
+		}
+		newestFirst = append(newestFirst, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]ChatMessage, len(newestFirst))
+	for i, m := range newestFirst {
+		out[len(newestFirst)-1-i] = m
+	}
+	return out, nil
+}
+
+// listChatUnread answers `GET /api/chat?unread=true`: the messages `reader` has
+// not read yet, OLDEST FIRST, optionally continued from `after` (exclusive).
+//
+// 🔴 THE WATERMARK IS PER (reader, sender), AND THAT IS THE WHOLE POINT.
+// chat_read holds one row per (reader_id, peer_id) pair, so each message is
+// compared against ITS OWN sender's row — the LEFT JOIN is pinned on
+// `r.peer_id = m.sender` in the ON clause, exactly as UnreadCountsFor pins it.
+// Comparing every message against ONE watermark instead (the reader's newest
+// row, say, or a single scalar) is the mutant this shape exists to refuse: a
+// reader who is current with A and has never opened B would have B's whole
+// history judged against A's high-water mark and silently dropped. The failure
+// is a SHORT PAGE, which is indistinguishable from having nothing unread — no
+// error, no count, nothing to notice.
+//
+// 🔴 COALESCE(..., 0) IS THE MISSING-ROW DEFAULT, and it must stay on a LEFT
+// join: an INNER join would drop exactly the senders the reader has never
+// opened, which are the ones whose unread matters most.
+//
+// 🔴 YOUR OWN MESSAGES ARE NOT EXCLUDED HERE, AND THAT IS AN OWNER RULING, NOT
+// AN OVERSIGHT (rc-dccab860be32). This predicate used to carry `sender <> reader`.
+// The owner's objection was about WHERE the rule lives: this function answers one
+// mechanical question — is it newer than my watermark for whoever sent it — and
+// "I do not need to be shown my own note" is a decision about PRINTING, not about
+// reading. So a message you addressed to yourself comes back here as unread, and
+// the drain is what declines to print it (and files the receipt anyway, which is
+// the one place in T-48 where something is marked read without being shown; see
+// cli/ocagent's note).
+//
+// ⚠️ `recipient = ?` already keeps out everything you sent to SOMEBODY ELSE, so
+// the only messages this concerns are the ones you sent to yourself.
+//
+// 🔴 THIS FUNCTION WRITES NOTHING. Reading unread does not clear unread; that is
+// PutChatRead's job, reached only from POST /api/chat/mark-read.
+//
+// `limit` keeps GET /api/chat's legacy semantics rather than the window path's
+// 1..200 bound: 0 reads nothing and a NEGATIVE limit is uncapped. A blank reader
+// reads nothing — an unauthenticated caller has no watermarks, and answering
+// "every message addressed to nobody" would be a different question.
+func (d *DAL) listChatUnread(reader string, f chatListFilter, after *chatAnchor, limit int) ([]ChatMessage, error) {
+	if reader == "" || limit == 0 {
+		return nil, nil
+	}
+	query := `
+		SELECT m.id, m.sender, m.recipient, m.body, m.ts, m.meta FROM chat_message m
+		LEFT JOIN chat_read r ON r.reader_id = ? AND r.peer_id = m.sender
+		WHERE m.recipient = ? AND m.ts > COALESCE(r.last_read_ts, 0)`
+	args := []any{reader, reader}
+	if after != nil {
+		query += ` AND (m.ts > ? OR (m.ts = ? AND m.id > ?))`
+		args = append(args, after.TS, after.TS, after.ID)
+	}
+	f.appendSQL(&query, &args, "m.")
+	query += ` ORDER BY m.ts, m.id`
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := d.rdb.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ChatMessage
+	for rows.Next() {
+		m, err := scanChat(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
 // ListChatByIDs returns the messages carrying the given ids, oldest→newest in
 // the stream's total (ts, id) order — the by-id re-read behind
 // `get_chat?ids=` (T-a828). A blank id list reads nothing.
 //
-// 🔴 IT DOES NOT FILTER BY CALLER, AND THAT IS THE POINT. The handler has to
-// tell "no such message" (404) apart from "that conversation is not yours"
-// (403), and a query that filtered here would collapse both into an empty row
-// set — leaving the handler to guess, which is how a permission refusal ends up
-// worded as "not found" and a caller goes hunting for a message that is right
-// there. The participation check lives at the seam that knows who is asking
-// (chatMessagesTheCallerWasIn).
+// 🔴 IT DOES NOT FILTER BY CALLER. Since T-4e95 nothing above it does either:
+// the by-ids read reaches as far as the ordinary listing does, because the
+// listing filters on `with` — a PARTICIPANT — not on the caller, and two doors
+// onto the same rows must not disagree about who may open them. This function
+// was already caller-blind before that ruling (a query that filtered here would
+// have collapsed "no such message" and "not yours" into one empty row set,
+// leaving the handler to guess); it is now caller-blind all the way up.
 //
 // Ids are matched exactly and the result carries at most one row per id, so a
 // duplicated id cannot inflate the answer. Rows are returned for whichever ids
@@ -741,6 +1396,18 @@ var documentHistoryKeepByKind = map[string]int{
 	docKindSystemInteraction: 10,
 	docKindBootSequence:      10,
 	docKindOffboard:          10,
+	// ALL SIX event procedures (T-3201, widened T-6f44) are retyped from the same
+	// text box and churn the same way, so they get the same depth. Two of them
+	// used to be absent on the argument 「nothing can write them, so a depth for
+	// them would be a number about a list that is always empty」 — true while they
+	// were read-only, expired the moment decision 2 made them editable. Leaving
+	// them out would have given two of the ten a three-deep history nobody chose.
+	docKindAcceleratedStop:             10,
+	docKindTaskCloseout:                10,
+	docKindTaskReassignPredecessor:     10,
+	docKindTaskTakeoverWithPredecessor: 10,
+	docKindTaskTakeoverFresh:           10,
+	docKindTaskUnblocked:               10,
 }
 
 // documentHistoryKeepFor answers the depth for one kind: the table above, else
@@ -893,38 +1560,52 @@ func refIDsFromJSON(blob string, into map[string]bool) {
 // uploaded in chat can be PINNED onto a task card as a deliverable — so the
 // cascade re-checks every survivor before dropping a blob.
 //
-// This is the only GC path for the GENERAL attachment graph
-// (`DeleteTaskArtifact` deliberately leaves the blob alone). The T-c826 avatar
-// lifecycle has its own single-owner delete paths; HardDeleteMember reuses this
-// same survivor scan so corrupt/legacy cross-references still fail safe. As of
-// T-c826
-// the blob-referencing columns in the schema are exactly these five, and
-// `collectSurvivingBlobRefs` reads all five:
+// This is the widest GC path for the GENERAL attachment graph
+// (`DeleteTaskArtifact` leaves the LIVE artifact's blob alone, and collects the
+// blobs of its retained versions; `ReplaceTaskArtifact` collects the blob of a
+// version it trims off the end). The T-c826 avatar lifecycle has its own
+// single-owner delete paths; HardDeleteMember reuses this same survivor scan so
+// corrupt/legacy cross-references still fail safe. As of T-60 the
+// blob-referencing columns in the schema are exactly these six, and
+// `collectSurvivingBlobRefs` reads all six:
 //
 //	chat_message.meta $.attachments[].id
 //	reply_card.answer_attachments[].id
 //	reply_card.attachments[].id          (T-5e8a question side)
 //	task_artifact.attachment_id          (T-62a8 — file/image kinds; '' on link)
 //	member.avatar_attachment_id           (T-c826 — dedicated personal image)
+//	task_artifact_history.attachment_id   (T-60 — a REPLACED artifact version)
 //
-// ⚠️ Add another referencing column anywhere and it MUST be added here in the
-// same commit; a blob whose only referrer is unknown to this scan is deleted
+// ⚠️ ONE column holds blob ids and deliberately does NOT vote:
+// `chat_attachment_ref.attachment_id` (T-51, migration 00074). That table is a
+// DERIVED index over source #1 above — every row of it restates a
+// `chat_message.meta $.attachments[].id` that is already counted here — so
+// letting it vote would keep a blob alive on the strength of its own referrer
+// and re-open exactly the T-62a8 failure below.
+// `TestDeleteChatInvolvingIgnoresTheGalleryIndex` pins that it never votes.
+//
+// ⚠️ Add another NON-DERIVED referencing column anywhere and it MUST be added
+// here in the same commit; a blob whose only referrer is unknown to this scan is deleted
 // out from under that referrer with no error and no receipt. The failure mode
 // this closed was exactly that: a deliverable pinned on a task card went to a
 // dead link when the chat message it was uploaded in was removed — and a
-// terminal task's artifact set is frozen in both directions, so it could not
+// terminal task's artifact set is frozen in every direction, so it could not
 // be re-attached.
 //
 // ⚠️ Honest limit — this scan is NOT a general GC. It only ever considers the
 // blobs the just-deleted messages referenced (`candidates`); nothing re-visits
 // a blob later. So a blob spared here because a task_artifact held it becomes
-// permanently uncollectable if that artifact is subsequently un-pinned
-// (`DeleteTaskArtifact` leaves blobs alone by decree, and un-pinning is
+// permanently uncollectable if that LIVE artifact is subsequently un-pinned
+// (`DeleteTaskArtifact` leaves the live blob alone by decree, and un-pinning is
 // refused once the task is terminal, so the window is narrow). That is a
 // bounded disk leak accepted in exchange for not destroying a deliverable —
 // the two are not symmetric: the leak is recoverable by a future sweep, the
-// deletion is not recoverable at all. A real reachability sweep over the five
-// columns below is the proper fix and does not exist yet.
+// deletion is not recoverable at all. A real reachability sweep over the six
+// columns below is the proper fix and does not exist yet. T-60 deliberately did
+// NOT extend that leak to the versions a replace retires: those blobs are
+// collected at the moment they stop being nameable (a trim, or the un-pin that
+// deletes the whole series), which is the only moment anything still knows they
+// existed.
 //
 // Returns (deletedMessages, deletedAttachments).
 func (d *DAL) DeleteChatInvolving(memberID string) (int, int, error) {
@@ -952,39 +1633,53 @@ func (d *DAL) DeleteChatInvolving(memberID string) (int, int, error) {
 		return 0, 0, err
 	}
 
-	surviving := map[string]bool{}
-	if len(candidates) > 0 {
-		if err := collectSurvivingBlobRefs(tx, surviving); err != nil {
-			return 0, 0, err
-		}
+	deletedAtts, err := collectOrphanBlobs(tx, candidates)
+	if err != nil {
+		return 0, 0, err
 	}
+	if err := tx.Commit(); err != nil {
+		return 0, 0, err
+	}
+	return int(deletedMsgs), deletedAtts, nil
+}
 
-	var deletedAtts int64
+// collectOrphanBlobs deletes, from a set of candidate blob ids, exactly those
+// that no still-stored record references — the single decision point every
+// blob collection goes through, so "is this blob still someone's?" is answered
+// by collectSurvivingBlobRefs and nowhere else. Call it AFTER the rows that
+// referenced the candidates are gone, from inside that same transaction.
+// Returns how many blobs were actually deleted.
+func collectOrphanBlobs(tx *sql.Tx, candidates map[string]bool) (int, error) {
+	if len(candidates) == 0 {
+		return 0, nil
+	}
+	surviving := map[string]bool{}
+	if err := collectSurvivingBlobRefs(tx, surviving); err != nil {
+		return 0, err
+	}
+	var deleted int64
 	for id := range candidates {
 		if surviving[id] {
 			continue
 		}
 		res, err := tx.Exec(`DELETE FROM chat_attachment WHERE id = ?`, id)
 		if err != nil {
-			return 0, 0, err
+			return 0, err
 		}
 		n, err := res.RowsAffected()
 		if err != nil {
-			return 0, 0, err
+			return 0, err
 		}
-		deletedAtts += n
+		deleted += n
 	}
-	if err := tx.Commit(); err != nil {
-		return 0, 0, err
-	}
-	return int(deletedMsgs), int(deletedAtts), nil
+	return int(deleted), nil
 }
 
 // collectSurvivingBlobRefs folds every chat_attachment id that a STILL-STORED
 // record references into `into` — the complete liveness verdict for the blob
-// store (the five columns enumerated on DeleteChatInvolving). Called after the
-// chat_message rows are deleted inside the same tx, so "still stored" is read
-// against the post-delete state.
+// store (the six columns enumerated on DeleteChatInvolving). Called after the
+// rows that referenced the candidates are deleted inside the same tx, so "still
+// stored" is read against the post-delete state.
 //
 // Deliberately one function rather than three inline blocks: the bug this
 // closed (T-62a8) was a MISSING source, and a missing source is far easier to
@@ -1023,7 +1718,7 @@ func collectSurvivingBlobRefs(tx *sql.Tx, into map[string]bool) error {
 
 	// 4. task artifacts (T-62a8) — a deliverable pinned onto a task card.
 	//    task_artifact rows have no cascade of their own and a terminal
-	//    task's set is frozen in both directions, so this reference is the
+	//    task's set is frozen in every direction, so this reference is the
 	//    strongest one in the schema: dropping its blob is unrecoverable.
 	//    The filter keeps LINK artifacts (no blob, attachment_id '') from
 	//    voting for a nonexistent empty-id blob.
@@ -1063,15 +1758,44 @@ func collectSurvivingBlobRefs(tx *sql.Tx, into map[string]bool) error {
 	if err != nil {
 		return err
 	}
-	defer memberRows.Close()
 	for memberRows.Next() {
 		var id string
 		if err := memberRows.Scan(&id); err != nil {
+			memberRows.Close()
 			return err
 		}
 		into[id] = true
 	}
-	return memberRows.Err()
+	if err := memberRows.Err(); err != nil {
+		memberRows.Close()
+		return err
+	}
+	memberRows.Close()
+
+	// 6. RETAINED ARTIFACT VERSIONS (T-60) — a deliverable that was REPLACED
+	//    keeps its previous versions, and a retained version's blob is as real
+	//    a referrer as the live row's: replacing an artifact must not delete
+	//    the file the earlier version still points at, and neither must the
+	//    removal of an unrelated chat message.
+	//
+	//    COALESCE for the same reason source 4 spells out: the fail-safe
+	//    direction of this predicate is "vote", and a bare `<> ''` against a
+	//    NULL is NULL, which silently stops the row voting.
+	histRows, err := tx.Query(
+		`SELECT attachment_id FROM task_artifact_history
+		 WHERE COALESCE(attachment_id, '') <> ''`)
+	if err != nil {
+		return err
+	}
+	defer histRows.Close()
+	for histRows.Next() {
+		var id string
+		if err := histRows.Scan(&id); err != nil {
+			return err
+		}
+		into[id] = true
+	}
+	return histRows.Err()
 }
 
 // collectChatMetaRefs folds every attachment id referenced by the
@@ -1105,6 +1829,114 @@ func collectChatMetaRefs(tx *sql.Tx, query string, into map[string]bool, args ..
 }
 
 // ── chat attachments ─────────────────────────────────────────────────────────
+
+// ChatAttachmentRef mirrors one row of chat_attachment_ref — the gallery's
+// index over chat_message.meta.attachments (migration 00074). Sender,
+// Recipient and TS are a SNAPSHOT of the owning message, and Ord is the
+// attachment's position in that message's posted array.
+//
+// 🔴 THIS DAL NEVER WRITES THIS TABLE. Three triggers on chat_message do
+// (insert / update / delete), so the index stays true no matter which writer
+// stores the message and whether or not it opened a transaction. Do not add a
+// Go write path here: it would be correct only while every writer goes
+// through it, and the day one does not there is no signal.
+//
+// ⚠️ Ord is NOT dense: a ref filtered out for having no id leaves a hole, so
+// never assume 0,1,2,... without gaps.
+type ChatAttachmentRef struct {
+	MessageID    string
+	Ord          int
+	AttachmentID string
+	Sender       string
+	Recipient    string
+	TS           float64
+	Mime         string
+	Filename     string
+}
+
+const chatAttachmentRefColumns = `message_id, ord, attachment_id, sender, recipient, ts, mime, filename`
+
+// chatAttachmentRefBefore reports whether a sorts before b in the gallery's
+// order: newest first, then the message stream's own (ts, id) tie-break, then
+// the attachment's position inside its message.
+//
+// 🔴 The message tie-break is ASCENDING on purpose. The pre-index handler read
+// the whole table in (ts, id) ASC and re-sorted it with a STABLE sort on ts
+// DESC, so equal-ts messages kept ascending id order. Flipping it here would
+// change what the panel shows for messages posted in the same second — a
+// visible change nobody asked for.
+func chatAttachmentRefBefore(a, b ChatAttachmentRef) bool {
+	if a.TS != b.TS {
+		return a.TS > b.TS
+	}
+	if a.MessageID != b.MessageID {
+		return a.MessageID < b.MessageID
+	}
+	return a.Ord < b.Ord
+}
+
+// listChatAttachmentRefsOneSided reads the rows of ONE side of the
+// conversation, already in gallery order. `extra` is appended to the WHERE.
+func (d *DAL) listChatAttachmentRefsOneSided(column, peer, extra string) ([]ChatAttachmentRef, error) {
+	rows, err := d.rdb.Query(
+		`SELECT `+chatAttachmentRefColumns+` FROM chat_attachment_ref
+		 WHERE `+column+` = ?`+extra+`
+		 ORDER BY ts DESC, message_id ASC, ord ASC`, peer)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ChatAttachmentRef
+	for rows.Next() {
+		var r ChatAttachmentRef
+		if err := rows.Scan(&r.MessageID, &r.Ord, &r.AttachmentID,
+			&r.Sender, &r.Recipient, &r.TS, &r.Mime, &r.Filename); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// ListChatAttachmentRefsFor returns every attachment of the member's
+// conversations (sender OR recipient), newest→oldest, read from the index
+// instead of scanning chat_message.
+//
+// 🔴 TWO SINGLE-SIDED QUERIES MERGED IN GO, NOT `sender = ? OR recipient = ?`.
+// Measured: the OR form makes SQLite answer with MULTI-INDEX OR and then a
+// TEMP B-TREE over every matching row — it throws away the ordering the two
+// indexes already provide. Each single-sided query is fully satisfied by its
+// index (no "USE TEMP B-TREE FOR ORDER BY" in the plan), so both arrive sorted
+// and merging them is linear.
+//
+// 🔴 The recipient side excludes sender = recipient. A self-message matches
+// BOTH sides, so without this it comes back twice (verified by seeding one:
+// OR form = 1 row, two-query form = 2). There are none today and nothing
+// prevents one.
+func (d *DAL) ListChatAttachmentRefsFor(peer string) ([]ChatAttachmentRef, error) {
+	sent, err := d.listChatAttachmentRefsOneSided("sender", peer, "")
+	if err != nil {
+		return nil, err
+	}
+	received, err := d.listChatAttachmentRefsOneSided(
+		"recipient", peer, " AND sender <> recipient")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ChatAttachmentRef, 0, len(sent)+len(received))
+	i, j := 0, 0
+	for i < len(sent) && j < len(received) {
+		if chatAttachmentRefBefore(received[j], sent[i]) {
+			out = append(out, received[j])
+			j++
+			continue
+		}
+		out = append(out, sent[i])
+		i++
+	}
+	out = append(out, sent[i:]...)
+	return append(out, received[j:]...), nil
+}
 
 // ChatAttachment mirrors the chat_attachment table (blob apart from the
 // message; the message meta refs are the only linkage). Filename nil = pasted
@@ -1254,6 +2086,46 @@ func (d *DAL) ListChatReads(reader, peer string) ([]ChatRead, error) {
 			return nil, err
 		}
 		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// UnreadCountsFor is UnreadCounts (domain.go) computed BY THE DATABASE: for
+// `reader`, the number of messages addressed to them, per sender, that are
+// newer than that sender's read watermark. Senders with nothing unread are
+// absent from the map — same shape the Go fold produces.
+//
+// It exists because both call sites (unreadCountsForRequest and the
+// unread-count endpoint) used to read the WHOLE chat_message table and the
+// reader's whole chat_read set into Go just to fold them down to a handful of
+// integers: 69.098ms on the measured real table, against 22.303ms here.
+//
+// 🔴 The LEFT JOIN + COALESCE(..., 0) IS the Go zero-value default: "no receipt
+// ⇒ watermark 0 ⇒ every addressed message counts". An INNER JOIN would silently
+// drop exactly the peers a reader has never opened — the ones whose unread
+// matters most. The join is pinned to `reader` in the ON clause (not the WHERE)
+// so a missing receipt still yields the row.
+//
+// domain.UnreadCounts is NOT dead: it is the pure fold this must agree with,
+// and the equivalence test drives both over the same fixtures.
+func (d *DAL) UnreadCountsFor(reader string) (map[string]int, error) {
+	rows, err := d.rdb.Query(`
+		SELECT m.sender, COUNT(*) FROM chat_message m
+		LEFT JOIN chat_read r ON r.reader_id = ? AND r.peer_id = m.sender
+		WHERE m.recipient = ? AND m.ts > COALESCE(r.last_read_ts, 0)
+		GROUP BY m.sender`, reader, reader)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var sender string
+		var n int
+		if err := rows.Scan(&sender, &n); err != nil {
+			return nil, err
+		}
+		out[sender] = n
 	}
 	return out, rows.Err()
 }
@@ -1444,29 +2316,29 @@ func (d *DAL) DeleteRoleDef(roleKey string) (bool, error) {
 	return deleted, nil
 }
 
-// ── lessons (per-role; composite (role_key, task_type) key) ──────────────────
+// ── lessons (per-role; role_key is the WHOLE key) ────────────────────────────
 
 // Lessons mirrors the lessons table: the per-role learnings overlay (agents
-// sharing a role share one doc). TaskType is currently a single fixed key.
+// sharing a role share one doc). RoleKey is the entire identity of the
+// document — the (role_key, task_type) composite was dropped in T-2
+// (00062_drop_lessons_task_type.sql).
 type Lessons struct {
 	RoleKey    string
-	TaskType   string
 	Text       string
 	Tombstoned bool
 }
 
-// GetLessons returns the overlay for (roleKey, taskType), or nil if never
-// edited.
-func (d *DAL) GetLessons(roleKey, taskType string) (*Lessons, error) {
-	return getLessonsOn(d.rdb, roleKey, taskType)
+// GetLessons returns the overlay for roleKey, or nil if never edited.
+func (d *DAL) GetLessons(roleKey string) (*Lessons, error) {
+	return getLessonsOn(d.rdb, roleKey)
 }
 
-func getLessonsOn(q sqlQuerier, roleKey, taskType string) (*Lessons, error) {
+func getLessonsOn(q sqlQuerier, roleKey string) (*Lessons, error) {
 	var l Lessons
 	err := q.QueryRow(`
-		SELECT role_key, task_type, text, tombstoned FROM lessons
-		WHERE role_key = ? AND task_type = ?`, roleKey, taskType,
-	).Scan(&l.RoleKey, &l.TaskType, &l.Text, &l.Tombstoned)
+		SELECT role_key, text, tombstoned FROM lessons
+		WHERE role_key = ?`, roleKey,
+	).Scan(&l.RoleKey, &l.Text, &l.Tombstoned)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -1483,17 +2355,17 @@ func (d *DAL) PutLessons(l Lessons) error {
 
 func putLessonsOn(ex sqlExecer, l Lessons) error {
 	_, err := ex.Exec(`
-		INSERT INTO lessons (role_key, task_type, text, tombstoned)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT (role_key, task_type) DO UPDATE SET
+		INSERT INTO lessons (role_key, text, tombstoned)
+		VALUES (?, ?, ?)
+		ON CONFLICT (role_key) DO UPDATE SET
 			text = excluded.text, tombstoned = excluded.tombstoned`,
-		l.RoleKey, l.TaskType, l.Text, l.Tombstoned)
+		l.RoleKey, l.Text, l.Tombstoned)
 	return err
 }
 
-// DeleteLessonsForRole HARD-deletes every overlay for roleKey (all task
-// types) — the custom-role cascade: per-role lessons have no meaning without
-// the role. Returns the deleted count.
+// DeleteLessonsForRole HARD-deletes roleKey's overlay — the custom-role
+// cascade: per-role lessons have no meaning without the role. Returns the
+// deleted count.
 func (d *DAL) DeleteLessonsForRole(roleKey string) (int, error) {
 	var deleted int
 	err := d.inTx(func(tx *sql.Tx) error {
@@ -1506,13 +2378,14 @@ func (d *DAL) DeleteLessonsForRole(roleKey string) (int, error) {
 			return err
 		}
 		deleted = int(n)
-		// Every "<role>::<task_type>" history key of this role, in the same
-		// transaction. Matched by an explicit prefix length rather than LIKE so
-		// a role key can never be read as a wildcard pattern.
-		prefix := roleKey + "::"
+		// This role's lessons history, in the same transaction. The key is
+		// now the BARE role_key (T-2 dropped the "::<task_type>" half), so
+		// this is an exact equality rather than the prefix match it used to
+		// be — the same shape DeleteInsightForRole right below has always
+		// used. An equality cannot over-reach onto a neighbouring role whose
+		// key merely starts with this one.
 		_, err = tx.Exec(`DELETE FROM document_history
-			WHERE document_kind = 'lessons' AND substr(document_key, 1, length(?)) = ?`,
-			prefix, prefix)
+			WHERE document_kind = 'lessons' AND document_key = ?`, roleKey)
 		return err
 	})
 	if err != nil {
@@ -1529,7 +2402,7 @@ func (d *DAL) DeleteLessonsForRole(roleKey string) (int, error) {
 // happened and what to do next time, insight records how this role weighs a
 // call. The owner's whole reason for asking was that the two were mixed.
 //
-// No TaskType axis (unlike Lessons) — hence a single-column primary key, and
+// A single-column primary key, the same shape Lessons has carried since T-2 —
 // hence a BARE role_key as the document_history key.
 type Insight struct {
 	RoleKey    string
@@ -1575,14 +2448,14 @@ func putInsightOn(ex sqlExecer, i Insight) error {
 // DeleteInsightForRole HARD-deletes the insight doc for roleKey — the
 // custom-role cascade twin of DeleteLessonsForRole. Returns the deleted count.
 //
-// 🔴 EXACT EQUALITY on the history key, NOT the prefix match DeleteLessonsForRole
-// uses. That difference is not stylistic. A lessons history key is composite
-// ("<role>::<task_type>"), so its prefix carries a "::" terminator and
-// "r-abc::" provably cannot match "r-abcdef::general". An insight history key is
-// the BARE role_key — no terminator — so a prefix match would delete r-abcdef's
-// retained versions while deleting r-abc. Exact equality is the only safe shape
-// for a single-key document, which is why this mirrors DeleteRoleDef rather
-// than the lessons cascade sitting right above it.
+// 🔴 EXACT EQUALITY on the history key. An insight history key is the BARE
+// role_key — no terminator — so a prefix match would delete r-abcdef's retained
+// versions while deleting r-abc. Exact equality is the only safe shape for a
+// single-key document. Until T-2 the lessons cascade above was the one
+// exception (its key was composite, "<role>::<task_type>", so its prefix
+// carried a "::" terminator); the axis is gone and both cascades are now the
+// same equality, which is why this reads as the house shape rather than as a
+// contrast.
 func (d *DAL) DeleteInsightForRole(roleKey string) (int, error) {
 	var deleted int
 	err := d.inTx(func(tx *sql.Tx) error {
@@ -1611,7 +2484,7 @@ func (d *DAL) DeleteInsightForRole(roleKey string) (int, error) {
 
 // BootDocument mirrors the boot_document table: the owner's overlay over ONE
 // shipped boot-context block (T-791e) — the 系統互動 seed, or one runtime's
-// 啟動程序 seed. Same three-state shape as Insight: no row / tombstoned row =
+// 啟動步驟 seed. Same three-state shape as Insight: no row / tombstoned row =
 // "serve the embedded seed", a live row = "serve this instead".
 //
 // The seed itself is never written here, which is what makes the reset route
@@ -1739,23 +2612,46 @@ func (d *DAL) PutMachineAlias(a MachineAlias) error {
 
 // ── reply cards (等我回覆卡) ─────────────────────────────────────────────────
 
-// ReplyCard mirrors the reply_card table (migrations/00003): one ask the owner
-// must answer. Options is the frozen quick-reply wording ([0] = the AI pick);
-// AnswerAttachments are light refs into the shared chat_attachment store, the
-// same shape as chat meta["attachments"].
+// ReplyCardOption is one frozen quick-reply choice (migrations/00065). AIPick
+// — not the option's POSITION — is what marks the AI's own recommendation. The
+// old convention ("options[0] is the AI pick") lived in prose only: no code
+// ever read index 0 as special, so nothing enforced it and nothing broke when
+// it was ignored. This field is that fact made executable.
+type ReplyCardOption struct {
+	Text   string `json:"text"`
+	AIPick bool   `json:"ai_pick"`
+}
+
+// ReplyCard mirrors the reply_card table (migrations/00003, 00065): one ask the
+// owner must answer. Options is the frozen quick-reply wording, each choice
+// carrying its own AIPick flag; AnswerAttachments are light refs into the
+// shared chat_attachment store, the same shape as chat meta["attachments"].
 type ReplyCard struct {
-	ID                string
-	FromMember        string
-	Kind              string // closed set: "decision" | "action" (schema CHECK)
-	Summary           string
-	Body              string
-	Options           []string
-	Status            string // "waiting" | "answered" | "expired" (closed set in code; migrations/00013 dropped the CHECK)
-	CreatedTS         float64
-	AnsweredTS        float64 // 0.0 while waiting; latest answer time after
-	ExpiredTS         float64 // 0.0 unless expired; when the expire action ran
-	ChatMessageID     string
-	AnswerOptionIdx   *int // nil = free-text-only answer (or not answered yet)
+	ID         string
+	FromMember string
+	Kind       string // closed set: "decision" | "action" (schema CHECK)
+	Summary    string
+	Body       string
+	Options    []ReplyCardOption
+	// SelectMode is the closed set "single" | "multi" (closed in code, no
+	// schema CHECK — the 00013 posture). It is ORTHOGONAL to Kind: Kind says
+	// what the owner must DO, SelectMode says how many options the answer may
+	// carry.
+	SelectMode    string
+	Status        string // "waiting" | "answered" | "expired" (closed set in code; migrations/00013 dropped the CHECK)
+	CreatedTS     float64
+	AnsweredTS    float64 // 0.0 while waiting; latest answer time after
+	ExpiredTS     float64 // 0.0 unless expired; when the expire action ran
+	ChatMessageID string
+	// AnswerOptionIdxs are the circled options' indices, stored DEDUPED and
+	// ASCENDING so that two answers circling the same options are byte-equal
+	// whatever order the owner clicked them in. nil = the answer carried no
+	// option at all (free text / attachments only, or not answered yet).
+	//
+	// ⚠️ nil and an EMPTY non-nil slice are the same thing to every reader
+	// here, and a nil check does NOT catch the empty one — test emptiness with
+	// len(), never with == nil.
+	AnswerOptionIdxs  []int
 	AnswerText        string
 	AnswerAttachments []any // [{id, mime, filename}] refs (chat_attachment ids)
 	// Attachments are the QUESTION-side refs the initiator opened the card
@@ -1770,18 +2666,19 @@ type ReplyCard struct {
 }
 
 const replyCardColumns = `id, from_member, kind, summary, body, options,
-	status, created_ts, answered_ts, expired_ts, chat_message_id,
-	answer_option_idx, answer_text, answer_attachments, attachments,
+	select_mode, status, created_ts, answered_ts, expired_ts, chat_message_id,
+	answer_option_idxs, answer_text, answer_attachments, attachments,
 	task_id, task_step_id`
 
 func scanReplyCard(row interface{ Scan(...any) error }) (ReplyCard, error) {
 	var c ReplyCard
 	var options, answerAttachments, attachments string
-	var optionIdx sql.NullInt64
+	var optionIdxs sql.NullString
 	err := row.Scan(
 		&c.ID, &c.FromMember, &c.Kind, &c.Summary, &c.Body, &options,
-		&c.Status, &c.CreatedTS, &c.AnsweredTS, &c.ExpiredTS, &c.ChatMessageID,
-		&optionIdx, &c.AnswerText, &answerAttachments, &attachments,
+		&c.SelectMode, &c.Status, &c.CreatedTS, &c.AnsweredTS, &c.ExpiredTS,
+		&c.ChatMessageID,
+		&optionIdxs, &c.AnswerText, &answerAttachments, &attachments,
 		&c.TaskID, &c.TaskStepID,
 	)
 	if err != nil {
@@ -1796,9 +2693,10 @@ func scanReplyCard(row interface{ Scan(...any) error }) (ReplyCard, error) {
 	if err := json.Unmarshal([]byte(attachments), &c.Attachments); err != nil {
 		return ReplyCard{}, fmt.Errorf("reply_card %s: bad attachments JSON: %w", c.ID, err)
 	}
-	if optionIdx.Valid {
-		idx := int(optionIdx.Int64)
-		c.AnswerOptionIdx = &idx
+	if optionIdxs.Valid {
+		if err := json.Unmarshal([]byte(optionIdxs.String), &c.AnswerOptionIdxs); err != nil {
+			return ReplyCard{}, fmt.Errorf("reply_card %s: bad answer_option_idxs JSON: %w", c.ID, err)
+		}
 	}
 	return c, nil
 }
@@ -1934,7 +2832,7 @@ func (d *DAL) PutReplyCard(c ReplyCard) error { return putReplyCardOn(d.wdb, c) 
 func putReplyCardOn(ex sqlExecer, c ReplyCard) error {
 	options := c.Options
 	if options == nil {
-		options = []string{}
+		options = []ReplyCardOption{}
 	}
 	answerAttachments := c.AnswerAttachments
 	if answerAttachments == nil {
@@ -1956,28 +2854,40 @@ func putReplyCardOn(ex sqlExecer, c ReplyCard) error {
 	if err != nil {
 		return err
 	}
-	var optionIdx any
-	if c.AnswerOptionIdx != nil {
-		optionIdx = *c.AnswerOptionIdx
+	selectMode := c.SelectMode
+	if selectMode == "" {
+		selectMode = replyCardSelectModeSingle
+	}
+	// nil AND empty both store as SQL NULL: "no option was circled" has one
+	// representation on disk, so a round trip cannot turn [] into an answer.
+	var optionIdxs any
+	if len(c.AnswerOptionIdxs) > 0 {
+		blob, err := json.Marshal(c.AnswerOptionIdxs)
+		if err != nil {
+			return err
+		}
+		optionIdxs = string(blob)
 	}
 	_, err = ex.Exec(`
 		INSERT INTO reply_card (`+replyCardColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			from_member = excluded.from_member, kind = excluded.kind,
 			summary = excluded.summary, body = excluded.body,
-			options = excluded.options, status = excluded.status,
+			options = excluded.options, select_mode = excluded.select_mode,
+			status = excluded.status,
 			created_ts = excluded.created_ts, answered_ts = excluded.answered_ts,
 			expired_ts = excluded.expired_ts,
 			chat_message_id = excluded.chat_message_id,
-			answer_option_idx = excluded.answer_option_idx,
+			answer_option_idxs = excluded.answer_option_idxs,
 			answer_text = excluded.answer_text,
 			answer_attachments = excluded.answer_attachments,
 			attachments = excluded.attachments,
 			task_id = excluded.task_id, task_step_id = excluded.task_step_id`,
 		c.ID, c.FromMember, c.Kind, c.Summary, c.Body, string(optionsBlob),
-		c.Status, c.CreatedTS, c.AnsweredTS, c.ExpiredTS, c.ChatMessageID,
-		optionIdx, c.AnswerText, string(answerAttachmentsBlob),
+		selectMode, c.Status, c.CreatedTS, c.AnsweredTS, c.ExpiredTS,
+		c.ChatMessageID,
+		optionIdxs, c.AnswerText, string(answerAttachmentsBlob),
 		string(attachmentsBlob), c.TaskID, c.TaskStepID,
 	)
 	return err
@@ -2717,4 +3627,45 @@ func (d *DAL) displayNames(query string) (map[string]string, error) {
 		out[key] = name
 	}
 	return out, rows.Err()
+}
+
+// SetMemberAgentIatFloor raises this member's credential floor to ts (T-14 項目
+// 4B) — the `iat` of the token that just reported waking. It is the SOLE writer
+// that moves the column: a whole-row write carries it on INSERT but never onto
+// an existing row (mfAgentIatFloor declares it insertOnly).
+//
+// FORWARD-ONLY, in SQL rather than in Go. A read-modify-write in Go loses to
+// whichever caller writes last, and the loser here is a REVOCATION: two
+// generations that wake close together would leave the floor at the older one's
+// iat and hand the superseded session its credentials back. max() in the
+// statement means the floor can only ever rise, whoever wins the race.
+//
+// ⚠️ What it still cannot do is separate two wakes in the SAME second — `iat`
+// is whole seconds and the owner has ruled that out of scope for now
+// (2026-08-28: 「先不管搶同一秒的問題好了」). max() makes the write safe; it does not
+// make the resolution finer.
+//
+// A missing row is a clean no-op (0 rows affected, no error).
+// 🔑 It goes through PatchMember rather than writing its own max() (T-63). The
+// column's monotonicity is declared on mfAgentIatFloor, and while this seam kept
+// a max() of its own the same property had TWO representations: both correct
+// today, both self-consistent, and wrong only when read together — which nobody
+// does. Nothing would have gone red on the day they diverged.
+func (d *DAL) SetMemberAgentIatFloor(id string, ts float64) error {
+	return d.PatchMember(id, mfAgentIatFloor(ts))
+}
+
+// SetMemberTokenKeyID records WHICH signing key this station just verified a
+// credential of this member's with (T-80). It is the SOLE writer that moves the
+// column: a whole-row write carries it on INSERT but never onto an existing row
+// (mfTokenKeyID declares it insertOnly).
+//
+// NOT forward-only, and it must not become so. The value is an OBSERVATION and
+// it legitimately moves in both directions: a machine reinstalled with an older
+// credential goes backwards, and that is exactly the fact the owner needs to see
+// before pressing remove. There is no ordering on key ids to be monotone about.
+//
+// A missing row is a clean no-op (0 rows affected, no error).
+func (d *DAL) SetMemberTokenKeyID(id, keyID string) error {
+	return d.PatchMember(id, mfTokenKeyID(keyID))
 }

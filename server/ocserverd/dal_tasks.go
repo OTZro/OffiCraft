@@ -315,7 +315,45 @@ func (d *DAL) CountTasksDuplicatingOriginal(originalID string) (int, error) {
 // (T-e271 node 3 explicitly did not widen into it) — PutTaskStep carries the
 // same carve-out for its `note` column one table over (T-e271 node 6), and its
 // remaining columns are still shared-write for exactly this reason.
-func (d *DAL) PutTask(t Task) error {
+func (d *DAL) PutTask(t Task) error { return putTaskOn(d.wdb, t, taskWriteUpsert) }
+
+// taskWriteMode selects the ONE thing that differs between the two callers of
+// putTaskOn: whether the INSERT carries its ON CONFLICT clause.
+//
+// 🔴 IT IS A MODE ON ONE STATEMENT, NOT TWO STATEMENTS. The column list, the
+// placeholder row and the 33 arguments are written ONCE; the mode appends a
+// suffix. A second copy of any of those three is the exact disease this whole
+// change set is fighting — a task column added to one list and not the other is
+// silently dropped on one path and nobody finds out until the data is wrong.
+type taskWriteMode int
+
+const (
+	// taskWriteUpsert is PutTask's long-standing load-mutate-save behaviour:
+	// writing an id that already exists UPDATES it (minus the description/title
+	// carve-outs above).
+	taskWriteUpsert taskWriteMode = iota
+
+	// taskWriteInsertOnly is what CreateTaskMintingID uses. A create is minting a
+	// BRAND NEW id off task_id_seq, so an existing row under that id is not
+	// something to merge into — it is proof the counter handed out a number
+	// twice, and the only safe answer is to fail LOUDLY.
+	//
+	// 🔴 THIS IS THE FIX FOR "撞號 = 靜默覆蓋 + 回 200" (T-52917b review). With the
+	// conflict clause in place a repeated mint did not error: it OVERWROTE the
+	// earlier task and the API still answered 200, so the damage was an invisible
+	// MISSING ROW. Measured on the previous head: a mint pinned to a fixed number
+	// left `task rows after that mint = 2` where 3 rows had been created, and the
+	// row it ate was a post-migration T-<n>. Without the clause the second INSERT
+	// trips the TEXT PRIMARY KEY, the transaction rolls back, no row is lost and
+	// the caller gets a 500 instead of a lie.
+	taskWriteInsertOnly
+)
+
+// putTaskOn is PutTask's body against either pool handle or an open
+// transaction (the sqlExecer convention, dal.go) — CreateTaskMintingID needs
+// the very same statement to run INSIDE its transaction, and a second copy of a
+// 33-column upsert would drift.
+func putTaskOn(ex sqlExecer, t Task, mode taskWriteMode) error {
 	inputs := t.Inputs
 	if inputs == nil {
 		inputs = map[string]any{}
@@ -328,9 +366,39 @@ func (d *DAL) PutTask(t Task) error {
 	if t.OutsourceDispatched {
 		dispatched = 1
 	}
-	_, err = d.wdb.Exec(`
-		INSERT INTO task (`+taskColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	// ONE column list, ONE placeholder row, ONE argument list — see taskWriteMode.
+	// The mode only decides whether the conflict SUFFIX is appended.
+	stmt := `
+		INSERT INTO task (` + taskColumns + `)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	if mode == taskWriteUpsert {
+		stmt += taskUpsertConflictClause
+	}
+	_, err = ex.Exec(stmt,
+		t.ID, t.TypeKey, t.Title, t.DedupeKey, string(blob), t.Description,
+		t.Status, t.Lock, t.Priority, t.ExecutorKind, t.ExecutorID, t.CreatorID,
+		t.WaitingReason,
+		t.CreatedTS, t.UpdatedTS, t.ClosedTS, t.CloseoutTS, t.DuplicateOf,
+		t.ReassignedFrom, t.ReassignedFromKind,
+		t.HandoverNote, t.HandoverNoteTS, t.HandoverNoteBy,
+		NormalizeRuntime(t.OutsourceRuntime),
+		t.OutsourceModel, t.OutsourceEffort, t.OutsourceMachine,
+		dispatched,
+		t.Handoff, t.HandoffNote, t.HandoffTaskID, t.FrozenBy,
+		t.KickoffNotifiedTo,
+	)
+	return err
+}
+
+// taskUpsertConflictClause is the suffix taskWriteUpsert appends to putTaskOn's
+// INSERT. It is deliberately parked immediately below putTaskOn and INSIDE no
+// other function so the two source-reading race guards
+// (TestTaskDescriptionRaceGuardHasTeeth / TestTaskTitleRaceGuardHasTeeth) can
+// keep reading the real text that decides which columns are shared-write.
+//
+// 🔴 `description` and `title` are ABSENT ON PURPOSE — see the long carve-out
+// comment on PutTask above. Do not add them back.
+const taskUpsertConflictClause = `
 		ON CONFLICT (id) DO UPDATE SET
 			type_key = excluded.type_key,
 			dedupe_key = excluded.dedupe_key, inputs = excluded.inputs,
@@ -358,21 +426,7 @@ func (d *DAL) PutTask(t Task) error {
 			handoff_note = excluded.handoff_note,
 			handoff_task_id = excluded.handoff_task_id,
 			frozen_by = excluded.frozen_by,
-			kickoff_notified_to = excluded.kickoff_notified_to`,
-		t.ID, t.TypeKey, t.Title, t.DedupeKey, string(blob), t.Description,
-		t.Status, t.Lock, t.Priority, t.ExecutorKind, t.ExecutorID, t.CreatorID,
-		t.WaitingReason,
-		t.CreatedTS, t.UpdatedTS, t.ClosedTS, t.CloseoutTS, t.DuplicateOf,
-		t.ReassignedFrom, t.ReassignedFromKind,
-		t.HandoverNote, t.HandoverNoteTS, t.HandoverNoteBy,
-		NormalizeRuntime(t.OutsourceRuntime),
-		t.OutsourceModel, t.OutsourceEffort, t.OutsourceMachine,
-		dispatched,
-		t.Handoff, t.HandoffNote, t.HandoffTaskID, t.FrozenBy,
-		t.KickoffNotifiedTo,
-	)
-	return err
-}
+			kickoff_notified_to = excluded.kickoff_notified_to`
 
 // ── task_dep ─────────────────────────────────────────────────────────────────
 
@@ -592,6 +646,52 @@ func (d *DAL) AllTaskStepProgress() (map[string]TaskStepProgress, error) {
 	return out, rows.Err()
 }
 
+// TaskCurrentStep is the (id, name) of a task's CURRENT step — the light task
+// list's pointer at the working node. Deliberately just the two display fields:
+// the list projection must never load the steps' fat dod text (that is what
+// get_task is for), so this carries no more of the row than the card prints.
+type TaskCurrentStep struct {
+	ID   string
+	Name string
+}
+
+// AllTaskCurrentStep returns every task's CURRENT step in ONE grouped query —
+// the light-list twin of domain.CurrentStep (keep them agreeing), and the same
+// shape as AllTaskStepProgress: one statement for the whole population, so a
+// list request stays a CONSTANT number of queries no matter how many tasks come
+// back. A per-task ListTaskSteps here would be an N+1 on an UNCAPPED endpoint.
+//
+// "Current" = the first non-TERMINAL step in timeline order (order_idx, id);
+// the `status != done AND status != superseded` filter is StepIsTerminal in
+// SQL. Tasks whose plan is empty — or whose steps have all reached a terminal
+// state — are simply ABSENT from the map, which the caller reads as the zero
+// value ("", ""), matching domain.CurrentStep on []. Only id and name are
+// selected: the dod text never enters the light list.
+func (d *DAL) AllTaskCurrentStep() (map[string]TaskCurrentStep, error) {
+	rows, err := d.rdb.Query(`
+		SELECT task_id, id, name FROM (
+		  SELECT task_id, id, name,
+		         ROW_NUMBER() OVER (
+		           PARTITION BY task_id ORDER BY order_idx, id) AS rn
+		    FROM task_step
+		   WHERE status != ? AND status != ?
+		) WHERE rn = 1`, StepStatusDone, StepStatusSuperseded)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]TaskCurrentStep{}
+	for rows.Next() {
+		var taskID string
+		var cur TaskCurrentStep
+		if err := rows.Scan(&taskID, &cur.ID, &cur.Name); err != nil {
+			return nil, err
+		}
+		out[taskID] = cur
+	}
+	return out, rows.Err()
+}
+
 // GetTaskStep returns one step by id, or nil if absent.
 func (d *DAL) GetTaskStep(id string) (*TaskStep, error) {
 	row := d.rdb.QueryRow(
@@ -757,7 +857,7 @@ func (d *DAL) TouchTaskUpdatedTS(id string, ts float64) error {
 // The hazard is structural, not exotic: this is a whole-row upsert with no
 // optimistic lock, and every OTHER step writer is a load-mutate-save
 // (dal.GetTaskStep → mutate one field → dal.PutTaskStep) — update_step_status,
-// armStepWithCard (open_gate / create_reply_card auto-bind), the reply-card
+// armStepWithCard (create_reply_card with an explicit linked_task), the reply-card
 // release path, and the reassign step reset. Nothing links those reads to those
 // writes, so the upsert asserts EVERY column as that handler read them. With
 // the note in the conflict list, an agent reporting a step's status replays the
@@ -1017,6 +1117,22 @@ type OutsourceWorker struct {
 	// mid-handover anchor.
 	StoppingSince float64
 	StoppedSince  float64
+	// WakingSince is the DURABLE wake anchor, a DIRECT mirror of
+	// member.waking_since (T-14): the timestamp of the last LANDED start
+	// dispatch, 0 when no wake is on record. Carried through workerFromMember /
+	// memberFromWorker for the same reason StoppingSince/StoppedSince are — the
+	// projection rebuilds a Member from scratch, so a column it forgets is
+	// ZEROED by the next outsource write, and zeroing this one drops a live
+	// worker out of 「喚醒中」 mid-wake.
+	//
+	// It replaces the in-memory workerSpawnAt anchor the presence projection
+	// used to read: that map is reborn empty by every re-exec, so a worker
+	// dispatched before a restart fell straight to 「離線」 while its wake was
+	// still in flight. The staff side already stamps at dispatch
+	// (stampWakeObservability, "a LANDED START stamps waking_since") — this is
+	// that same rule, not a second one. workerSpawnAt survives, but only as the
+	// re-dispatch PACE.
+	WakingSince float64
 	// DesiredState is the run-intent, a DIRECT mirror of member.DesiredState
 	// (T-f190, migrations/00020): "online" (system wants it running — the default),
 	// "offline" (owner-explicit STOP — held down, every auto-revival path skips it).
@@ -1024,6 +1140,27 @@ type OutsourceWorker struct {
 	// offline projects spawn_state "stopped". Replaces the earlier bespoke
 	// stopped_since marker with the member value domain (owner: 外包＝系統代管的正職員工).
 	DesiredState string
+	// RestartAfterStop is the SECOND owner intent (T-14 項目 7, migrations/00070),
+	// a DIRECT mirror of member.restart_after_stop: 「這一輪下線收口之後，把它帶
+	// 起來」. The 下線 verbs clear it, the 重啟 verbs (重新聚焦 / 改機器 / 換 model
+	// on a stopped worker) set it, and consumeWorkerRestartAfterStop spends it at
+	// the converged-offline edge of the outsource tick.
+	//
+	// 🔴 IT HAS TO BE CARRIED HERE, and this is the field that made T-65 包② a
+	// two-commit change rather than a one-commit one. restart_after_stop is one of
+	// the FEW owner-intent columns that is deliberately NOT insertOnly
+	// (mfRestartAfterStop, dal_member_patch.go), so memberWholeRow carries it into
+	// PutMember's SET list — which means every PutOutsourceWorker is a write of
+	// this column. While the projection did not carry it, memberFromWorker rebuilt
+	// the Member with the zero value and EVERY non-test PutOutsourceWorker call
+	// site wrote restart_after_stop=0 over whatever was there. (Do not trust a
+	// count in a comment — this sentence said "13" and was wrong in both
+	// directions: 12 before this package, 14 after. Count them.) A handler
+	// stamping the intent would have had it erased by the very next worker write,
+	// with NOTHING going red: the owner presses 重新聚焦 on a stopped worker, gets
+	// a 200, and the worker never comes up.
+	// Pinned by TestOutsourceProjectionCarriesRestartAfterStop.
+	RestartAfterStop bool
 	// BankedCost is the persistent historical cumulative cost (T-ba6b,
 	// migrations/00021), the worker twin of member.BankedCost: the live
 	// telemetry cost folds in here (bankLiveCost — the SAME helper the member
@@ -1084,8 +1221,10 @@ func workerFromMember(m Member) OutsourceWorker {
 		RefocusOp:          m.RefocusOp,
 		StoppingSince:      m.StoppingSince,
 		StoppedSince:       m.StoppedSince,
+		WakingSince:        m.WakingSince,
 		ForcedStopAt:       m.ForcedStopAt,
 		DesiredState:       m.DesiredState,
+		RestartAfterStop:   m.RestartAfterStop,
 		BankedCost:         m.BankedCost,
 		AvatarAttachmentID: m.AvatarAttachmentID,
 	}
@@ -1114,25 +1253,47 @@ func memberFromWorker(w OutsourceWorker) Member {
 	}
 	taskID := w.TaskID
 	return Member{
-		ID:                 w.ID,
-		Name:               w.Codename,
-		Kind:               KindOutsource,
-		RoleKey:            "",
-		Runtime:            NormalizeRuntime(w.Runtime),
-		Model:              w.Model,
-		ActualModel:        w.ActualModel,
-		ActualRuntime:      w.ActualRuntime,
-		ActualEffort:       w.ActualEffort,
-		Effort:             w.Effort,
-		DesiredState:       w.DesiredState,
-		DesiredMachineID:   w.DesiredMachineID,
-		LastMachineID:      w.LastMachineID,
-		SessionBootTS:      w.SessionBootTS,
-		RefocusSince:       w.RefocusSince,
-		RefocusOp:          w.RefocusOp,
-		StoppingSince:      w.StoppingSince,
-		StoppedSince:       w.StoppedSince,
-		ForcedStopAt:       w.ForcedStopAt,
+		ID:               w.ID,
+		Name:             w.Codename,
+		Kind:             KindOutsource,
+		RoleKey:          "",
+		Runtime:          NormalizeRuntime(w.Runtime),
+		Model:            w.Model,
+		ActualModel:      w.ActualModel,
+		ActualRuntime:    w.ActualRuntime,
+		ActualEffort:     w.ActualEffort,
+		Effort:           w.Effort,
+		DesiredState:     w.DesiredState,
+		DesiredMachineID: w.DesiredMachineID,
+		LastMachineID:    w.LastMachineID,
+		SessionBootTS:    w.SessionBootTS,
+		RefocusSince:     w.RefocusSince,
+		RefocusOp:        w.RefocusOp,
+		StoppingSince:    w.StoppingSince,
+		StoppedSince:     w.StoppedSince,
+		ForcedStopAt:     w.ForcedStopAt,
+		// 🔴 CARRIED, NOT ZEROED (T-14). This used to be a hardcoded 0 with a
+		// long note explaining that the worker vocabulary had no `waking` concept
+		// and that the DTO face anchored waking on the spawn dispatch instead. That
+		// second anchor WAS the divergence: it lived in memory, so a re-exec forgot
+		// it, and the two kinds answered 「喚醒中」 with two different rules. The
+		// worker vocabulary now carries the concept (OutsourceWorker.WakingSince),
+		// the spawn dispatch stamps it exactly where the staff arm does
+		// (stampWakeObservability), and PresenceState is the ONE reader for both.
+		//
+		// waking_since is NOT insertOnly, so a whole-row write does land it on an
+		// existing row — which makes this line what decides whether a mid-wake
+		// anchor survives the next worker write. Dropping it back to a constant
+		// re-opens the exact bug.
+		WakingSince: w.WakingSince,
+		// 🔴 CARRIED, NOT ZEROED (T-65 包②) — and unlike WakingSince above, this one
+		// is load-bearing on a column the whole-row upsert ACTIVELY WRITES rather
+		// than merely fails to refresh. mfRestartAfterStop is not insertOnly, so
+		// dropping this line back to the zero value does not leave the stored intent
+		// alone: it CLEARS it, on every single worker write. That is a silent
+		// erasure — no error, no red test that does not look for it specifically —
+		// so it has its own mutant in the T-65 包② DoD.
+		RestartAfterStop:   w.RestartAfterStop,
 		BankedCost:         w.BankedCost,
 		LastOp:             w.LastOp,
 		LastOpOK:           w.LastOpOK,

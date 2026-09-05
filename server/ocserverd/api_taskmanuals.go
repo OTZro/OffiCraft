@@ -62,21 +62,6 @@ func (s *apiServer) resolveTaskManual(typeKey string) (*TaskManual, error) {
 	return m, nil
 }
 
-// manualDisplayLabel renders a manual/type reference for human- and
-// agent-facing PROSE (boot context, nudges): the display name with the
-// ADDRESSING type_key kept in parentheses — agents still call
-// get_task_manual / write_task_learnings / create_task by key, so the key
-// must never vanish from the text. Falls back to the bare key when no
-// distinct display name exists (legacy manuals where display == key, or
-// none at all).
-func manualDisplayLabel(displayName, typeKey string) string {
-	name := trimString(displayName)
-	if name == "" || name == typeKey {
-		return typeKey
-	}
-	return name + "（" + typeKey + "）"
-}
-
 // writeTaskManual is the common single-manual response tail.
 func (s *apiServer) writeTaskManual(w http.ResponseWriter, m TaskManual) {
 	dto, err := newTaskManualDTO(m, s.manualSopCap(), s.manualLearningsCap())
@@ -597,7 +582,7 @@ func (s *apiServer) HandlePatchTaskLearningsApiTaskManualsTypeKeyLearningsPatchP
 	// slots on a snapshot of text nobody replaced (and bumps updated_ts for a
 	// change that did not happen), silently shortening the owner's undo path.
 	// Full reasoning at the patch_lessons twin (api_roles.go,
-	// HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost). This is the same
+	// HandlePatchLessonsApiLessonsRoleKeyPatchPost). This is the same
 	// "did the field actually change" gate update_task_manual already applies
 	// above via taskManualHistoryStreams; the receipt below stays outside the
 	// gate and unchanged.

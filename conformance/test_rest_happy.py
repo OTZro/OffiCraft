@@ -1,4 +1,4 @@
-"""REST happy-path face — every served route, minimum-viable identity, spec shape.
+"""REST happy-path face — every manifest row, minimum-viable identity, spec shape.
 
 Second conformance batch. The auth matrix (test_auth_matrix.py) pins WHO may
 call each route; this file pins WHAT a permitted call returns: for every row of
@@ -17,8 +17,11 @@ Coverage has the same teeth as the matrix: ``test_happy_covers_manifest``
 fails the run when a manifest row is neither in ``HAPPY`` nor in the explicit
 ``SKIPPED_HAPPY`` table (reason required), and
 ``test_openapi_covers_manifest`` pins the manifest row set to the frozen
-``spec/openapi.json`` operations — a new server route reddens BOTH snapshots
-before it can ship untested.
+``spec/openapi.json`` operations. Both of those compare the manifest to another
+hand-written list; what carries them back to the server is the Go test
+``TestRouteTableCoversSpecSurface``, which pins that same frozen spec against
+the route table the mux is built from — so a served route the manifest never
+learned about reddens there.
 
 Rows that serve non-JSON bytes (binaries, install.sh, chat attachment blob) or
 a non-OpenAPI protocol (MCP JSON-RPC) carry ``nonjson`` with a reason: status
@@ -28,9 +31,14 @@ is still asserted and a semantic ``check`` replaces schema validation.
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
 import os
 import pathlib
+import struct
+import time
+import urllib.parse
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -58,6 +66,56 @@ _PNG_BYTES = base64.b64decode(_PNG_B64)
 
 def _auth(token: str | None) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+# ── TOTP, computed here from the RFC rather than from the server's code ───────
+# 🔴 THIS IS THE INTEROP PROOF, and it is why it is hand-rolled from stdlib
+# instead of imported: this suite is a language-agnostic BLACK BOX (the run
+# script greps for server imports and fails if it finds any). A code computed
+# independently from RFC 6238 — HMAC-SHA1, 6 digits, 30s step, the triple every
+# authenticator app implements — verifying against this server is the only
+# evidence in the tree that a real phone will work. Reusing the server's own
+# helper would prove the server agrees with itself.
+_TOTP_STEP = 30
+_TOTP_DIGITS = 6
+
+
+def _totp_key(secret: str) -> bytes:
+    """Decode a base32 TOTP secret the way an authenticator does (unpadded,
+    case-insensitive). Raises on anything an app could not consume."""
+    cleaned = secret.strip().replace(" ", "").replace("-", "").upper()
+    pad = "=" * (-len(cleaned) % 8)
+    key = base64.b32decode(cleaned + pad)
+    assert key, f"empty TOTP key from {secret!r}"
+    return key
+
+
+def _totp_align_to_step_start(min_headroom: float = 12.0) -> None:
+    """Wait out the tail of the current 30s step when little of it is left.
+
+    🔴 WHY THE CEREMONY NEEDS THIS. The server accepts a code from the current
+    step ±1 — exactly THREE steps at any instant — and it SPENDS each step it
+    accepts (single-use codes). A ceremony with three code-consuming operations
+    (activate, login, disable) therefore needs all three slots, and they only
+    stay valid if the window does not slide mid-test. Starting 2s before a step
+    boundary would move the window under us and invalidate the earliest slot.
+    Waiting a few seconds is far cheaper (and far less flaky) than sleeping a
+    whole step between operations.
+    """
+    remaining = _TOTP_STEP - (time.time() % _TOTP_STEP)
+    if remaining < min_headroom:
+        time.sleep(remaining + 0.5)
+
+
+def _totp_code(secret: str, at: float | None = None, step_offset: int = 0) -> str:
+    """RFC 6238 code. ``step_offset`` shifts by whole 30s steps — needed because
+    the server SPENDS each step it accepts (replay defence), so the code that
+    armed the factor cannot also open a session."""
+    counter = int((at if at is not None else time.time()) // _TOTP_STEP) + step_offset
+    digest = hmac.new(_totp_key(secret), struct.pack(">Q", counter), hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    truncated = struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
+    return str(truncated % (10 ** _TOTP_DIGITS)).zfill(_TOTP_DIGITS)
 
 
 @dataclass
@@ -143,6 +201,33 @@ class Happy:
     check: CheckFn | None = None
 
 
+def _check_cost_reset_receipt(_ctx: HCtx, r: httpx.Response) -> None:
+    """A fresh member has never reported telemetry and has banked nothing, so
+    the receipt honestly says NOTHING WAS DESTROYED — both halves null rather
+    than 0. That distinction is the wire contract (null = there was nothing to
+    clear; 0 would read as "zero was cleared"), and it is what lets the cockpit
+    fall back to the existing "both null -> dash" rule after a reset instead of
+    rendering $0."""
+    data = r.json()
+    assert data["member_id"], data
+    assert data["cleared_cost"] is None, data
+    assert data["cleared_banked_cost"] is None, data
+
+
+def _check_account_cost_reset_receipt(_ctx: HCtx, r: httpx.Response) -> None:
+    """Nobody has ever reported under a scratch account tag, so the receipt
+    honestly says NOTHING WAS DESTROYED — null rather than 0. Two contracts ride
+    on that: null means "there was nothing to clear" while 0 would read as "zero
+    was cleared" (the same null semantics as CostResetDTO), and an unknown tag is
+    a SUCCESS rather than a 404, because an account is a free telemetry string
+    with no roster row — "no such account" and "that account has nothing to
+    clear" are the same state. Without the second, the owner's second press —
+    the likely one, having just cleared it — would look like an error."""
+    data = r.json()
+    assert data["account"], data
+    assert data.get("cleared_cost") is None, data
+
+
 def _check_version(_ctx: HCtx, r: httpx.Response) -> None:
     data = r.json()
     assert data["version"] and data["catalog_hash"], data
@@ -151,6 +236,124 @@ def _check_version(_ctx: HCtx, r: httpx.Response) -> None:
 def _check_login(_ctx: HCtx, r: httpx.Response) -> None:
     data = r.json()
     assert data["token"] and data["token_type"] == "bearer", data
+
+
+def _check_signing_keys(_ctx: HCtx, r: httpx.Response) -> None:
+    """The ring as the outside may see it: ids, creation times, exactly one
+    signer — and NOTHING that could be key material.
+
+    The leak check is deliberately structural rather than a list of field names
+    to forbid: it walks every key object and asserts its key set is exactly the
+    three documented fields, so a future field carrying a fingerprint, a hash
+    prefix or the key itself reddens here without anyone having predicted its
+    name. (Why it matters: on an install predating the ring the signing key IS
+    SHA-256 over the owner password, so publishing any digest of it is an
+    offline dictionary attack on that password.)"""
+    data = r.json()
+    keys = data["keys"]
+    assert keys, data
+    assert sum(1 for k in keys if k["is_signing"]) == 1, data
+    for k in keys:
+        assert set(k) == {"key_id", "created_ts", "is_signing"}, k
+        assert isinstance(k["key_id"], str) and k["key_id"], k
+        assert isinstance(k["created_ts"], (int, float)), k
+
+
+def _check_signing_key_rotated(ctx: HCtx, r: httpx.Response) -> None:
+    """A rotation puts a BRAND-NEW key in charge: after the call the ring holds
+    at least two keys and the one signing is the newest by ``created_ts``.
+
+    ⚠️ What this row does NOT prove is that the rotation dropped nothing — that
+    needs a reading taken BEFORE the call, which a response-only check cannot
+    take. It is pinned where a before/after IS available:
+    TestT62_RotationTakesEffectWithoutRestart and
+    TestT62_RetiredKeyVerifiesButNeverSigns
+    (server/ocserverd/keyring_rotation_t62_test.go), which mint a token under the
+    outgoing key and require it to keep passing the live gate afterwards. Saying
+    so here rather than writing a check that cannot see it: a subset assertion
+    against a ring re-read after the fact would pass no matter what the route
+    did."""
+    _check_signing_keys(ctx, r)
+    keys = r.json()["keys"]
+    assert len(keys) >= 2, keys
+    signing = [k for k in keys if k["is_signing"]][0]
+    assert signing["created_ts"] == max(k["created_ts"] for k in keys), keys
+    assert signing["created_ts"] > 0, signing
+
+
+def _happy_signing_key_remove_path(ctx: HCtx) -> str:
+    """Aim the removal at a key that signed NOTHING anyone is holding.
+
+    Rotate twice: the key created by the first rotation signs only between the
+    two calls, and this harness mints no credential in that window. Removing THAT
+    key is the route's full semantics with none of the poisoning — removing the
+    ORIGINAL key would revoke the very token this request authenticates with,
+    and every row after it.
+
+    If the ring cannot produce such a key the row fails rather than silently
+    aiming somewhere harmless: a removal probe that never removes anything is
+    the failure mode this file exists to prevent."""
+    hdr = _auth(ctx.owner_token)
+    before = {
+        k["key_id"]
+        for k in ctx.client.get("/api/auth/signing-keys", headers=hdr).json()["keys"]
+    }
+    ctx.client.post("/api/auth/signing-keys/rotate", headers=hdr)
+    mid = [
+        k
+        for k in ctx.client.get("/api/auth/signing-keys", headers=hdr).json()["keys"]
+        if k["key_id"] not in before
+    ]
+    assert len(mid) == 1, mid
+    ctx.client.post("/api/auth/signing-keys/rotate", headers=hdr)
+    return f"/api/auth/signing-keys/{mid[0]['key_id']}/remove"
+
+
+def _check_signing_key_removed(ctx: HCtx, r: httpx.Response) -> None:
+    """The removed key is gone from the ring the call answers with, and the ring
+    still has a signer (a removal that left the server unable to mint would be a
+    far worse outcome than a refused one)."""
+    _check_signing_keys(ctx, r)
+    removed = r.request.url.path.split("/")[-2]
+    assert removed not in {k["key_id"] for k in r.json()["keys"]}, (removed, r.json())
+
+
+def _happy_mfa_enroll_path(ctx: HCtx) -> str:
+    """Seed the ship-dark flag so enrol answers 200 rather than 403. Inert:
+    offering the factor arms nothing, so no later login fixture needs a code."""
+    ctx.client.post(
+        "/api/auth/mfa/offer",
+        json={"offered": True},
+        headers=_auth(ctx.owner_token),
+    )
+    return "/api/auth/mfa/enroll"
+
+
+def _check_mfa_state(_ctx: HCtx, r: httpx.Response) -> None:
+    data = r.json()
+    assert isinstance(data["offered"], bool), data
+    assert isinstance(data["enrolled"], bool), data
+    # A secret is disclosed exactly once, by enrol — never by the state read.
+    assert data["secret"] is None and data["otpauth_uri"] is None, data
+
+
+def _check_mfa_offer(_ctx: HCtx, r: httpx.Response) -> None:
+    data = r.json()
+    assert data["offered"] is True, data
+    assert data["enrolled"] is False, "offering the feature must not arm anything"
+
+
+def _check_mfa_enroll(_ctx: HCtx, r: httpx.Response) -> None:
+    data = r.json()
+    # enroll hands back a usable secret AND must NOT claim the factor is armed:
+    # a UI that trusted `enrolled` here would tell the owner they are protected
+    # while the next login still takes the password alone.
+    assert data["enrolled"] is False, data
+    assert data["secret"], data
+    assert data["otpauth_uri"].startswith("otpauth://totp/"), data
+    # The secret must be decodable base32 — an authenticator cannot use anything
+    # else, and a malformed one fails only later, on the phone.
+    _totp_key(data["secret"])
 
 
 def _check_install_sh(_ctx: HCtx, r: httpx.Response) -> None:
@@ -247,6 +450,54 @@ def _check_share_link_shape(ctx: HCtx, r: httpx.Response) -> None:
     assert sig and "&" not in sig, f"malformed sig segment: {url}"
 
 
+def _diff_pair_path(ctx: HCtx) -> str:
+    att_id, _payload = ctx.attachment()
+    return "/api/diff?" + urllib.parse.urlencode({"before": att_id, "after": att_id})
+
+
+def _check_diff_pair(ctx: HCtx, r: httpx.Response) -> None:
+    att_id, _payload = ctx.attachment()
+    d = r.json()
+    for name in ("before", "after"):
+        side = d[name]
+        assert side["address"] == att_id, side
+        assert side["gone"] is False, side
+        # The side carries the RESOLVED content and the stored mime — not a
+        # second address the reader would have to fetch. (The fixture is a PNG,
+        # so `text` is those bytes as a string; what is pinned here is that the
+        # field is present and the mime came along, not the bytes.)
+        assert isinstance(side["text"], str) and side["text"], side
+        assert side["mime"] == "image/png", side
+
+
+def _check_diff_share_link(ctx: HCtx, r: httpx.Response) -> None:
+    """The minted link is SERVER-RELATIVE, carries the same four parameters, and
+    reads the pair with NO credential at all — the whole point of the external
+    flavour."""
+    att_id, _payload = ctx.attachment()
+    url = r.json()["url"]
+    assert url.startswith("/diff?"), url
+    query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+    assert query["before"] == [att_id] and query["after"] == [att_id], query
+    assert query.get("sig") and query["sig"][0], f"no signature on the external link: {url}"
+
+    signed = "/api/diff?" + urllib.parse.urlparse(url).query
+    anon = ctx.client.get(signed)
+    assert anon.status_code == 200, f"credential-less read failed: {anon.status_code} {anon.text}"
+    assert anon.json()["before"]["address"] == att_id, anon.text
+
+    # Replacing the last base64url character has to CHANGE it: when the
+    # signature already ends in "X" the "tampered" url is the original, the
+    # server answers 200 and a healthy build fails the assertion below about
+    # once in every 64 runs. The Go twin (api_diff_test.go) handles the same
+    # collision; this copy did not.
+    sig = query["sig"][0]
+    tampered_sig = sig[:-1] + ("Y" if sig.endswith("X") else "X")
+    tampered = signed.replace("sig=" + sig, "sig=" + tampered_sig)
+    bad = ctx.client.get(tampered)
+    assert bad.status_code == 401, f"a tampered sig must be 401: {bad.status_code} {bad.text}"
+
+
 def _seeded_chat_path(template: str) -> Callable[[HCtx], str]:
     def build(ctx: HCtx) -> str:
         ctx.attachment()  # ensure at least one message/attachment exists
@@ -257,6 +508,27 @@ def _seeded_chat_path(template: str) -> Callable[[HCtx], str]:
 
 def _nonempty_list(_ctx: HCtx, r: httpx.Response) -> None:
     assert isinstance(r.json(), list) and r.json(), "expected a non-empty list"
+
+
+def chat_messages(r: httpx.Response) -> list:
+    """The rows out of a ``GET /api/chat`` response.
+
+    That route answers an OBJECT since T-48 — ``{messages, next_cursor}`` — on
+    EVERY parameter combination, because a bare array had nowhere to say
+    "there is more in this direction". Reading the body through here rather
+    than indexing it directly means the envelope is re-asserted by every chat
+    test in the suite, and a regression to the bare array fails all of them
+    with one sentence instead of an IndexError.
+    """
+    body = r.json()
+    assert isinstance(body, dict), f"GET /api/chat must answer an object: {r.text}"
+    msgs = body.get("messages")
+    assert isinstance(msgs, list), f"the envelope must carry `messages`: {r.text}"
+    return msgs
+
+
+def _nonempty_chat_page(_ctx: HCtx, r: httpx.Response) -> None:
+    assert chat_messages(r), "expected a non-empty chat page"
 
 
 def test_list_answers_carry_sizes_but_never_the_documents(client, owner_token):
@@ -418,7 +690,7 @@ def _happy_card(ctx: HCtx) -> str:
     r = ctx.client.post(
         "/api/reply-cards",
         json={"kind": "decision", "summary": "conf happy card",
-              "options": ["AI pick", "other"]},
+              "options": [{"text": "AI pick"}, {"text": "other"}], "linked_task": None},
         headers=_auth(ctx.agent.token),
     )
     assert r.status_code == 200, f"happy card failed: {r.status_code} {r.text}"
@@ -429,7 +701,7 @@ def _happy_answered_card(ctx: HCtx) -> str:
     card_id = _happy_card(ctx)
     r = ctx.client.post(
         f"/api/reply-cards/{card_id}/answer",
-        json={"option_idx": 0},
+        json={"option_idxs": [0]},
         headers=_auth(ctx.owner_token),
     )
     assert r.status_code == 200, f"happy answer failed: {r.status_code} {r.text}"
@@ -472,29 +744,43 @@ def _happy_task(ctx: HCtx) -> str:
     return r.json()["task"]["id"]
 
 
-def _happy_task_step(ctx: HCtx, gate: bool = False) -> tuple[str, str]:
-    """A fresh task with one planned step; (task_id, step_id). Task status is
-    DERIVED from the steps now (T-9ca5). For the gate case the step is reported
-    in_progress (a gate arms only on an in_progress task); the step-status case
-    leaves the step pending for its own pending→in_progress report."""
+def _happy_task_step(ctx: HCtx) -> tuple[str, str]:
+    """A fresh task with one planned PENDING step; (task_id, step_id).
+
+    Task status is DERIVED from the steps (T-9ca5). The `gate=True` variant
+    retired with the open_gate route (T-18): its only caller was that route's
+    happy row, and a card is now opened through POST /api/reply-cards with an
+    explicit linked_task, which has its own row and builds its own fixture."""
     h = _auth(ctx.agent.token)
     task_id = _happy_task(ctx)
     r = ctx.client.post(
         f"/api/tasks/{task_id}/plan",
         json={"steps": [{"name": "conf happy step", "dod": "asserted",
-                         "is_gate": gate}]},
+                         "is_gate": False}]},
         headers=h,
     )
     assert r.status_code == 200, f"happy plan failed: {r.status_code} {r.text}"
     # submit_plan answers with a bounded receipt (T-a98d); read the rows back.
     step_id = ctx.client.get(f"/api/tasks/{task_id}", headers=h).json()["steps"][0]["id"]
-    if gate:
-        r = ctx.client.post(
-            f"/api/tasks/{task_id}/steps/{step_id}/status",
-            json={"status": "in_progress"}, headers=h,
-        )
-        assert r.status_code == 200, f"happy step start failed: {r.status_code} {r.text}"
     return task_id, step_id
+
+
+_HAPPY_STEP_NOTE = "conf happy single-step note — 做到哪、下一步接什麼"
+
+
+def _happy_step_with_note(ctx: HCtx) -> str:
+    """A fresh task+step whose note has been WRITTEN through the real write
+    face, so the single-step read has something non-empty to prove it serves
+    (T-66). Reading back a blank note would pass against a handler that never
+    looked at the column."""
+    task_id, step_id = _happy_task_step(ctx)
+    r = ctx.client.post(
+        f"/api/tasks/{task_id}/steps/{step_id}/note",
+        json={"note": _HAPPY_STEP_NOTE},
+        headers=_auth(ctx.agent.token),
+    )
+    assert r.status_code == 200, f"happy note seed failed: {r.status_code} {r.text}"
+    return f"/api/tasks/{task_id}/steps/{step_id}"
 
 
 def _happy_closed_task(ctx: HCtx) -> str:
@@ -541,6 +827,105 @@ def _happy_reassigning_task(ctx: HCtx) -> str:
     assert r.status_code == 200, f"happy reassign failed: {r.status_code} {r.text}"
     assert r.json()["lock"] == "reassigning", r.text
     return task_id
+
+
+# The artifact id the replace row was aimed at, stashed by its path builder so
+# the row's check can assert the write ANSWERED with the same id — a replace
+# that minted a new one would otherwise pass on shape alone.
+_REPLACE_TARGET: dict[str, str] = {}
+
+
+def _happy_replaceable_artifact(ctx: HCtx) -> tuple[str, str]:
+    """A fresh task with one link artifact pinned; (task_id, artifact_id) — the
+    replace target."""
+    task_id, artifact_id = _happy_task_artifact(ctx)
+    _REPLACE_TARGET["id"] = artifact_id
+    return task_id, artifact_id
+
+
+def _happy_replaced_artifact(ctx: HCtx) -> tuple[str, str]:
+    """The same, already replaced once — so its version list has exactly one
+    retained entry to list."""
+    task_id, artifact_id = _happy_task_artifact(ctx)
+    r = ctx.client.post(
+        f"/api/tasks/{task_id}/artifact/{artifact_id}/replace",
+        json={"url": "https://example.com/pr/2"},
+        headers=_auth(ctx.agent.token),
+    )
+    assert r.status_code == 200, f"happy replace failed: {r.status_code} {r.text}"
+    return task_id, artifact_id
+
+
+# The blob the FILE version row was replaced away from, stashed by its path
+# builder so the row's check can assert the version's url addresses THAT blob.
+_REPLACED_FILE: dict[str, str] = {}
+
+
+def _happy_replaced_file_artifact(ctx: HCtx) -> tuple[str, str]:
+    """A FILE deliverable, already replaced once — the shape the version list
+    actually holds (agent-written reports and logs), and the one whose wire the
+    row's own `url` column cannot serve: it is empty for file/image, so a version
+    projection that copied it left every retained report unreachable.
+
+    Uploaded as `application/octet-stream` under a .md name because that is what
+    the agent upload path produces for a report."""
+    blobs = []
+    for n in (1, 2):
+        r = ctx.client.post(
+            "/api/chat",
+            json={
+                "to": ctx.agent.member_id,
+                "body": f"conf artifact report {n}",
+                "attachments": [
+                    {
+                        "data_b64": base64.b64encode(
+                            f"# conf report {n}\n".encode()
+                        ).decode(),
+                        "filename": "report.md",
+                        "mime": "application/octet-stream",
+                    }
+                ],
+            },
+            headers=_auth(ctx.owner_token),
+        )
+        assert r.status_code == 200, f"happy report seed failed: {r.text}"
+        blobs.append(r.json()["attachments"][0]["id"])
+
+    task_id = _happy_task(ctx)
+    r = ctx.client.post(
+        f"/api/tasks/{task_id}/artifact",
+        json={"kind": "file", "attachment_id": blobs[0]},
+        headers=_auth(ctx.agent.token),
+    )
+    assert r.status_code == 200, f"happy file artifact failed: {r.text}"
+    artifact_id = r.json()["artifact_id"]
+    r = ctx.client.post(
+        f"/api/tasks/{task_id}/artifact/{artifact_id}/replace",
+        json={"attachment_id": blobs[1]},
+        headers=_auth(ctx.agent.token),
+    )
+    assert r.status_code == 200, f"happy file replace failed: {r.text}"
+    _REPLACED_FILE["attachment_id"] = blobs[0]
+
+    # The link shape stays covered on the real wire even though the row now
+    # checks a file: a link version's url IS the row's own external url, which
+    # is the control that stops the blob rewrite from applying to every kind.
+    link_task, link_art = _happy_replaced_artifact(ctx)
+    r = ctx.client.get(
+        f"/api/tasks/{link_task}/artifact/{link_art}/history",
+        headers=_auth(ctx.agent.token),
+    )
+    assert r.status_code == 200, f"link history failed: {r.text}"
+    link_versions = r.json()
+    assert (
+        len(link_versions) == 1
+        and link_versions[0]["kind"] == "link"
+        and link_versions[0]["url"] == "https://example.com/pr/1"
+        and link_versions[0]["mime"] == ""
+        and link_versions[0]["is_image"] is False
+    ), f"a link version keeps its external url and describes no blob: {link_versions}"
+
+    return task_id, artifact_id
 
 
 def _happy_task_artifact(ctx: HCtx) -> tuple[str, str]:
@@ -745,17 +1130,113 @@ def _check_reset_insight(ctx: HCtx, r: httpx.Response) -> None:
 
 # ── the two editable boot-context blocks (T-791e) ────────────────────────────
 
-_BOOT_DOC_EDIT = "# conformance edit — 系統互動 / 啟動程序\n\nnot the factory text\n"
+_BOOT_DOC_EDIT = "# conformance edit — 系統互動 / 啟動步驟\n\nnot the factory text\n"
+
+# T-3201 — a boot document has TWO halves on the read face (``read_only_head``
+# and ``body``) and ONE on the write face (``body``). The marker that divides
+# them on disk used to be spelled out here, because the protocol was "send the
+# whole document back with its head verbatim" and a black-box client had to be
+# able to build one. It is gone from this suite along with that protocol: the
+# server hands over the half a write takes and joins the other one back on
+# itself, so a client that knows what a marker is knows something the wire no
+# longer asks it to know.
 
 
-def _boot_doc_written(ctx: HCtx, r: httpx.Response) -> None:
-    """The edit came back verbatim and the block stopped reading as default."""
-    d = r.json()
-    assert d["text"] == _BOOT_DOC_EDIT, d
-    assert d["is_default"] is False, d
-    assert d["size_chars"] == len(d["text"]), d
-    assert d["cap_chars"] >= d["size_chars"], d
-    assert d["has_seed"] is True, d
+# 🔴 WHICH DOCUMENTS CARRY A READ-ONLY HEAD IS READ FROM THE SHARED TABLE, NOT
+# ASSERTED AS A UNIVERSAL (T-6f44). Both checks below used to say
+# ``assert d["read_only_head"]`` — every boot document has a non-empty head —
+# and that was true right up until the owner ruled that four of them should not
+# have one. The rule was written down in FOUR places (the server's registry
+# mirror, the cockpit's, the seeds themselves, and here); three were updated and
+# this one, in Python, in a suite the person editing the seeds said out loud
+# they had not run, went red on documents that were entirely correct.
+#
+# bin/tests/fixtures/boot-doc-registry.tsv is the one copy the server's and the
+# cockpit's guards are already pinned to, so reading it here makes three sides
+# agree with ONE table instead of four sides agreeing with each other. Reading a
+# repo file is not a black-box violation — the iron rule is about importing
+# server IMPLEMENTATION modules, and this suite already reads spec/openapi.json
+# and spec/mcp-catalog.json the same way. The table is a spec, not an
+# implementation: it says which documents exist and what shape they ship in.
+_BOOT_DOC_TABLE_PATH = HERE.parent / "bin" / "tests" / "fixtures" / "boot-doc-registry.tsv"
+
+
+def _load_boot_doc_table() -> dict[tuple[str, str], bool]:
+    """address -> has_head. Missing, malformed or EMPTY is a hard failure at
+    import: a guard that goes green because it could not read its fixture is a
+    lie, and an empty table would go green by agreeing that nothing exists."""
+    out: dict[tuple[str, str], bool] = {}
+    text = _BOOT_DOC_TABLE_PATH.read_text(encoding="utf-8")
+    for i, line in enumerate(text.split("\n"), start=1):
+        if line.startswith("#") or line.strip() == "":
+            continue
+        cols = line.split("\t")
+        if len(cols) != 4:
+            raise AssertionError(
+                f"{_BOOT_DOC_TABLE_PATH}:{i}: want 4 tab-separated columns, got {len(cols)}"
+            )
+        if cols[0] == "kind":
+            continue  # the header row
+        if cols[3] not in ("true", "false"):
+            raise AssertionError(
+                f"{_BOOT_DOC_TABLE_PATH}:{i}: has_head is {cols[3]!r}, want true or false"
+            )
+        out[(cols[0], cols[1])] = cols[3] == "true"
+    if not out:
+        raise AssertionError(f"{_BOOT_DOC_TABLE_PATH} parsed to zero rows")
+    return out
+
+
+_BOOT_DOC_HAS_HEAD = _load_boot_doc_table()
+
+
+def _check_head(d: dict, kind: str, key: str) -> None:
+    """Both directions. A head that vanished is what happened this time; a head
+    that APPEARS on a document the table says has none is the same silent drift
+    seen from the other side — an agent starts reading a machine-written
+    sentence nobody decided to send it."""
+    addr = (kind, key)
+    assert addr in _BOOT_DOC_HAS_HEAD, (
+        f"{kind}/{key} is served but {_BOOT_DOC_TABLE_PATH} does not list it"
+    )
+    want = _BOOT_DOC_HAS_HEAD[addr]
+    got = bool(d["read_only_head"])
+    assert got == want, (
+        f"{kind}/{key}: the shared table says has_head={want}, this server serves "
+        f"read_only_head={d['read_only_head']!r}"
+    )
+    if want:
+        assert d["read_only_head"] in d["text"], d
+
+
+def _boot_doc_body(ctx: HCtx) -> dict:
+    """Body factory: the write face takes the editable half and nothing else."""
+    return {"body": _BOOT_DOC_EDIT}
+
+
+def _boot_doc_written(kind: str, key: str):
+    """The edit came back verbatim and the block stopped reading as default.
+
+    ``body`` is compared BYTE FOR BYTE against what was sent — that is the whole
+    contract now, and it is a stronger statement than the old one: what a client
+    sends is what a client reads back, with no half of the document it has to
+    carry along and no rule about carrying it correctly. ``text`` is the whole
+    stored document and is checked only for the properties the halves must have
+    inside it — including whether there is a head at all, which is now per
+    document and read from the shared table.
+    """
+
+    def check(_ctx: HCtx, r: httpx.Response) -> None:
+        d = r.json()
+        assert d["body"] == _BOOT_DOC_EDIT, d
+        assert d["text"].endswith(_BOOT_DOC_EDIT), d
+        _check_head(d, kind, key)
+        assert d["is_default"] is False, d
+        assert d["size_chars"] == len(d["text"]), d
+        assert d["cap_chars"] >= d["size_chars"], d
+        assert d["has_seed"] is True, d
+
+    return check
 
 
 def _boot_doc_reset(path: str):
@@ -786,6 +1267,12 @@ def _boot_doc_read(kind: str, key: str):
         d = r.json()
         assert d["kind"] == kind and d["key"] == key, d
         assert d["text"].strip(), "the block is empty — the shipped seed was not folded in"
+        # T-3201 — the read face names both halves, and the pair has to describe
+        # the document it came with: the half a write takes back is IN the
+        # stored text and ends it, and the half nobody may write is in it too.
+        # A client that gets this pair never has to know a marker exists.
+        assert d["body"] and d["text"].endswith(d["body"]), d
+        _check_head(d, kind, key)
         assert d["size_chars"] == len(d["text"]), d
         assert d["cap_chars"] >= d["size_chars"], d
         assert isinstance(d["is_default"], bool), d
@@ -804,6 +1291,31 @@ HAPPY: dict[str, Happy] = {
         identity="none",
         body=lambda _ctx: {"password": os.environ["OC_OWNER_PASSWORD"]},
         check=_check_login,
+    ),
+    # ── owner second factor (TOTP) ───────────────────────────────────────────
+    # enroll is a REAL happy face: it mints an INERT pending secret (nothing is
+    # armed until a code proves it), so it neither needs setup nor leaves the
+    # shared credential changed.
+    #
+    # activate / disable are NOT in this table — their positive faces would ARM
+    # a factor on the shared install, after which every later login fixture in
+    # the run would need a TOTP code. The full ceremony is exercised instead by
+    # test_mfa_full_ceremony below, which arms AND disarms inside one test so
+    # the install is left exactly as it was found.
+    "GET /api/auth/mfa": Happy(check=_check_mfa_state),
+    # Turning the flag ON is the precondition for the enrol row below, and is
+    # inert on its own — offering the factor arms nothing.
+    "POST /api/auth/mfa/offer": Happy(
+        body=lambda _ctx: {"offered": True}, check=_check_mfa_offer
+    ),
+    "GET /api/auth/signing-keys": Happy(check=_check_signing_keys),
+    "POST /api/auth/signing-keys/rotate": Happy(check=_check_signing_key_rotated),
+    "POST /api/auth/signing-keys/{key_id}/remove": Happy(
+        path=_happy_signing_key_remove_path,
+        check=_check_signing_key_removed,
+    ),
+    "POST /api/auth/mfa/enroll": Happy(
+        path=_happy_mfa_enroll_path, check=_check_mfa_enroll
     ),
     "GET /install.sh": Happy(
         identity="none",
@@ -938,6 +1450,14 @@ HAPPY: dict[str, Happy] = {
     ),
     "POST /api/members/{member_id}/force-stop": Happy(
         path=lambda ctx: f"/api/members/{ctx.fresh_member()}/force-stop",
+    ),
+    "POST /api/members/{member_id}/cost/reset": Happy(
+        path=lambda ctx: f"/api/members/{ctx.fresh_member()}/cost/reset",
+        check=_check_cost_reset_receipt,
+    ),
+    "POST /api/accounts/cost/reset": Happy(
+        body={"account": "conf-happy-untouched-account"},
+        check=_check_account_cost_reset_receipt,
     ),
     "DELETE /api/members/{member_id}": Happy(
         path=lambda ctx: f"/api/members/{ctx.fresh_member()}",
@@ -1080,7 +1600,7 @@ HAPPY: dict[str, Happy] = {
         ),
     ),
     "GET /api/chat": Happy(
-        path=_seeded_chat_path("/api/chat"), check=_nonempty_list
+        path=_seeded_chat_path("/api/chat"), check=_nonempty_chat_page
     ),
     "GET /api/chat/attachment/{attachment_id}": Happy(
         path=lambda ctx: f"/api/chat/attachment/{ctx.attachment()[0]}",
@@ -1093,6 +1613,11 @@ HAPPY: dict[str, Happy] = {
     ),
     "GET /api/chat/attachments": Happy(
         path=_seeded_chat_path("/api/chat/attachments"), check=_nonempty_list
+    ),
+    "GET /api/diff": Happy(path=_diff_pair_path, check=_check_diff_pair),
+    "GET /api/diff/share-link": Happy(
+        path=lambda ctx: _diff_pair_path(ctx).replace("/api/diff?", "/api/diff/share-link?", 1),
+        check=_check_diff_share_link,
     ),
     "POST /api/chat/attachments": Happy(
         identity="agent",
@@ -1111,7 +1636,7 @@ HAPPY: dict[str, Happy] = {
     "POST /api/reply-cards": Happy(
         identity="agent",
         body={"kind": "action", "summary": "conf happy open card",
-              "options": ["done, continue"]},
+              "options": [{"text": "done, continue"}], "linked_task": None},
         check=lambda _c, r: _expect(
             r,
             lambda d: d["status"] == "waiting"
@@ -1134,11 +1659,11 @@ HAPPY: dict[str, Happy] = {
     ),
     "POST /api/reply-cards/{card_id}/answer": Happy(
         path=lambda ctx: f"/api/reply-cards/{_happy_card(ctx)}/answer",
-        body={"option_idx": 0},
+        body={"option_idxs": [0]},
         check=lambda _c, r: _expect(
             r,
             lambda d: d["status"] == "answered"
-            and d["answer"]["option_idx"] == 0
+            and d["answer"]["option_idxs"] == [0]
             and d["answered_ts"],
         ),
     ),
@@ -1149,7 +1674,7 @@ HAPPY: dict[str, Happy] = {
             r,
             lambda d: d["status"] == "answered"
             and d["answer"]["text"] == "conf happy revised"
-            and d["answer"]["option_idx"] is None,
+            and d["answer"]["option_idxs"] is None,
         ),
     ),
     "POST /api/reply-cards/{card_id}/expire": Happy(
@@ -1302,7 +1827,7 @@ HAPPY: dict[str, Happy] = {
         check=lambda _c, r: _boot_doc_read("system_interaction", "global")(_c, r)
     ),
     "POST /api/system-interaction": Happy(
-        body={"text": _BOOT_DOC_EDIT}, check=_boot_doc_written
+        body=_boot_doc_body, check=_boot_doc_written("system_interaction", "global")
     ),
     "POST /api/system-interaction/reset": Happy(
         check=_boot_doc_reset("/api/system-interaction")
@@ -1313,21 +1838,44 @@ HAPPY: dict[str, Happy] = {
     ),
     "POST /api/boot-sequence/{runtime_key}": Happy(
         path="/api/boot-sequence/codex",
-        body={"text": _BOOT_DOC_EDIT},
-        check=_boot_doc_written,
+        body=_boot_doc_body,
+        check=_boot_doc_written("boot_sequence", "codex"),
     ),
     "POST /api/boot-sequence/{runtime_key}/reset": Happy(
         path="/api/boot-sequence/codex/reset",
         check=_boot_doc_reset("/api/boot-sequence/codex"),
     ),
-    # ── 下線程序, the fourth owner-editable global document (T-c9c0) ──────────
+    # ── 〈停止〉, the fourth owner-editable global document (T-c9c0) ──────────
     # A singleton keyed `global`, so it takes the system-interaction shape
     # rather than the boot-sequence one: no runtime on the path.
     "GET /api/offboard": Happy(
         check=lambda _c, r: _boot_doc_read("offboard", "global")(_c, r)
     ),
-    "POST /api/offboard": Happy(body={"text": _BOOT_DOC_EDIT}, check=_boot_doc_written),
+    "POST /api/offboard": Happy(
+        body=_boot_doc_body, check=_boot_doc_written("offboard", "global")
+    ),
     "POST /api/offboard/reset": Happy(check=_boot_doc_reset("/api/offboard")),
+    # ── the GENERIC face of all of the above, plus the six event procedures
+    # that never got named routes (T-3201) ───────────────────────────────────
+    # The write rows aim at accelerated_stop because it is the STOP-side document
+    # with a read-only head, so one row exercises both halves of the split.
+    # ⚠️ This used to say "because it is EDITABLE: two of the ten refuse every
+    # caller with 405" — since T-6f44's decision 2 NONE of the ten is read-only,
+    # so that reason no longer picks anything out. The 405 branch still exists in
+    # the server, it just has no shipped document behind it any more.
+    "GET /api/boot-docs/{kind}/{key}": Happy(
+        path="/api/boot-docs/task_closeout/global",
+        check=lambda _c, r: _boot_doc_read("task_closeout", "global")(_c, r),
+    ),
+    "POST /api/boot-docs/{kind}/{key}": Happy(
+        path="/api/boot-docs/accelerated_stop/global",
+        body=_boot_doc_body,
+        check=_boot_doc_written("accelerated_stop", "global"),
+    ),
+    "POST /api/boot-docs/{kind}/{key}/reset": Happy(
+        path="/api/boot-docs/accelerated_stop/global/reset",
+        check=_boot_doc_reset("/api/boot-docs/accelerated_stop/global"),
+    ),
     "GET /api/roles": Happy(check=_nonempty_list),
     "GET /api/doc-sizes": Happy(
         # Size-only overview: every capped document reports its own size and
@@ -1390,24 +1938,24 @@ HAPPY: dict[str, Happy] = {
     "DELETE /api/roles/{role}": Happy(
         path=lambda ctx: f"/api/roles/{ctx.fresh_role()}",
     ),
-    "GET /api/lessons/{role_key}/{task_type}": Happy(
-        path="/api/lessons/assistant/general",
+    "GET /api/lessons/{role_key}": Happy(
+        path="/api/lessons/assistant",
     ),
-    "POST /api/lessons/{role_key}/{task_type}": Happy(
-        path="/api/lessons/assistant/general",
+    "POST /api/lessons/{role_key}": Happy(
+        path="/api/lessons/assistant",
         body={"text": "conformance happy lessons doc"},
         check=lambda _c, r: _expect(
             r, lambda d: d["text"] == "conformance happy lessons doc"
         ),
     ),
-    "POST /api/lessons/{role_key}/{task_type}/patch": Happy(
+    "POST /api/lessons/{role_key}/patch": Happy(
         # Anchor-addressed patch (T-8327): an APPEND edit (empty old) always
         # lands regardless of the doc's current content; the receipt carries
         # size_chars/cap_chars/sha256 verification anchors instead of the full
         # text. T-3aeb renamed `size` -> `size_chars` (a size field must carry
         # its unit) and added the cap the write was judged against, so a caller
         # can compute its remaining budget without a second request.
-        path="/api/lessons/assistant/general/patch",
+        path="/api/lessons/assistant/patch",
         body={"edits": [{"old": "", "new": "conformance happy patch line"}]},
         check=lambda _c, r: _expect(
             r,
@@ -1420,9 +1968,8 @@ HAPPY: dict[str, Happy] = {
         ),
     ),
     # ── insight (T-3809) ─────────────────────────────────────────────────────
-    # The role journal's third block: the lessons trio with the task_type axis
-    # removed, so the key is the BARE role_key and the paths carry one segment
-    # rather than two.
+    # The role journal's third block. Its key is the BARE role_key — which
+    # since T-2 is also what the lessons trio above uses.
     "GET /api/insight/{role_key}": Happy(
         path="/api/insight/assistant",
         # ⚠️ This row deliberately does NOT assert the empty doc, and the reason
@@ -1527,7 +2074,10 @@ HAPPY: dict[str, Happy] = {
             lambda d: d["deduped"] is False
             and d["task"]["status"] == "not_started"
             and d["task"]["executor_id"] == ctx.agent.member_id
-            and d["task"]["task_no"].startswith("T-"),
+            # task_no IS the id (T-5291) — before that it was a separately
+            # derived display value (same wording as test_tasks.py; the old
+            # shape is deliberately not named there either).
+            and d["task"]["task_no"] == d["task"]["id"],
         ),
     ),
     "GET /api/tasks/count": Happy(
@@ -1684,7 +2234,7 @@ HAPPY: dict[str, Happy] = {
     ),
     "POST /api/tasks/{task_id}/steps/{step_id}/note": Happy(
         # T-cc3e. Written against a PENDING step on purpose: _happy_task_step
-        # leaves the step pending unless gate=True, and the note being writable
+        # always leaves the step pending, and the note being writable
         # with no status report first is the ticket's whole claim (waiting_reason
         # is the one bound to a status; this one is not). The check reads the
         # receipt's echoed note, so a handler that 200s without storing anything
@@ -1715,17 +2265,21 @@ HAPPY: dict[str, Happy] = {
             and d["note"] == "conf happy note patch",
         ),
     ),
-    "POST /api/tasks/{task_id}/steps/{step_id}/gate": Happy(
+    "GET /api/tasks/{task_id}/steps/{step_id}": Happy(
+        # T-66: the single-step read. The check is on the VALUE that came back,
+        # not on the shape: a note is written through the real write face first
+        # and this row asserts the same text comes out, plus the self-declared
+        # detail_level="full" that tells a caller this response is the whole
+        # step. A handler that answered the summary projection (no note) or
+        # forgot the marker cannot pass.
         identity="agent",
-        path=lambda ctx: "/api/tasks/{}/steps/{}/gate".format(
-            *_happy_task_step(ctx, gate=True)),
-        body={"kind": "decision", "summary": "conf happy gate",
-              "options": ["go", "hold"]},
+        path=_happy_step_with_note,
         check=lambda _c, r: _expect(
             r,
-            lambda d: d["status"] == "waiting"
-            and d["task"] is not None
-            and d["task"]["id"],
+            lambda d: d["detail_level"] == "full"
+            and d["note"] == _HAPPY_STEP_NOTE
+            and d["note_size_chars"] == len(_HAPPY_STEP_NOTE)
+            and d["note_cap_chars"] > 0,
         ),
     ),
     "POST /api/tasks/{task_id}/deps": Happy(
@@ -1771,6 +2325,69 @@ HAPPY: dict[str, Happy] = {
         path=lambda ctx: "/api/tasks/{}/artifact/{}".format(
             *_happy_task_artifact(ctx)),
         check=lambda _c, r: _expect(r, lambda d: d["artifact_count"] == 0),
+    ),
+    "GET /api/tasks/{task_id}/artifacts": Happy(
+        # T-66: the full-artifact read. The check is on the VALUES that came
+        # back, not on the shape — the artifact is pinned through the real write
+        # face first and this row asserts the same url/label/kind come out,
+        # plus the self-declared artifacts_detail_level="full" that tells a
+        # caller this response is the whole row. A handler that answered the
+        # id+label INDEX the task view carries (no url, no kind) cannot pass,
+        # and neither can one that forgot the marker.
+        identity="agent",
+        path=lambda ctx: "/api/tasks/{}/artifacts".format(
+            *_happy_task_artifact(ctx)),
+        check=lambda _c, r: _expect(
+            r,
+            lambda d: d["artifacts_detail_level"] == "full"
+            and len(d["artifacts"]) == 1
+            and d["artifacts"][0]["kind"] == "link"
+            and d["artifacts"][0]["url"] == "https://example.com/pr/1"
+            and d["artifacts"][0]["label"] == "conf PR"
+            and d["artifacts"][0]["created_ts"] > 0,
+        ),
+    ),
+    "POST /api/tasks/{task_id}/artifact/{artifact_id}/replace": Happy(
+        # T-60: the executing agent swaps a pinned deliverable's content while
+        # its id stays put. The check reads the id back out of the receipt and
+        # compares it with the one the fixture pinned — a replace that minted a
+        # new artifact (remove+add under another name) would pass a status check
+        # and fail here, which is the whole reason the verb exists.
+        identity="agent",
+        path=lambda ctx: "/api/tasks/{}/artifact/{}/replace".format(
+            *_happy_replaceable_artifact(ctx)),
+        body={"url": "https://example.com/pr/2", "label": "conf PR v2"},
+        check=lambda _c, r: _expect(
+            r,
+            lambda d: d["artifact_id"] == _REPLACE_TARGET["id"]
+            and d["artifact_count"] == 1
+            and d["version_count"] == 2,
+        ),
+    ),
+    "GET /api/tasks/{task_id}/artifact/{artifact_id}/history": Happy(
+        # T-60: the version list of an artifact that has just been replaced —
+        # exactly one retained version, carrying what the live row held before.
+        #
+        # The seed is a FILE deliverable on purpose. A link version's url is the
+        # row's own column and passes on a projection that copies the row; a
+        # file's is NOT — the column is empty for file/image, and the reachable
+        # address is the retained blob's serve path. Running this row against a
+        # link therefore proved nothing about the class this journal mostly
+        # holds, and every retained report read as gone on the real wire.
+        identity="agent",
+        path=lambda ctx: "/api/tasks/{}/artifact/{}/history".format(
+            *_happy_replaced_file_artifact(ctx)),
+        check=lambda _c, r: _expect(
+            r,
+            lambda d: len(d) == 1
+            and d[0]["kind"] == "file"
+            and d[0]["url"]
+            == f"/api/chat/attachment/{_REPLACED_FILE['attachment_id']}"
+            and d[0]["attachment_id"] == _REPLACED_FILE["attachment_id"]
+            and d[0]["mime"] == "application/octet-stream"
+            and d[0]["is_image"] is False
+            and d[0]["filename"] == "report.md",
+        ),
     ),
     # ── outsource panel (M3) ─────────────────────────────────────────────────
     "GET /api/outsource-workers": Happy(
@@ -1902,6 +2519,18 @@ SKIPPED_HAPPY: dict[str, str] = {
         "the auth matrix; the full change/revocation semantics in the server "
         "unit tests (api_settings_test.go)."
     ),
+    "POST /api/auth/mfa/activate": (
+        "the positive face ARMS the owner's second factor on the shared install, "
+        "after which every later login fixture in the run would need a TOTP code. "
+        "Exercised end-to-end by test_mfa_full_ceremony below, which arms and "
+        "then disarms inside one test so the install is left as found; the 409 "
+        "and 401 faces are pinned in the auth matrix."
+    ),
+    "POST /api/auth/mfa/disable": (
+        "the positive face needs an ARMED factor (see above) plus a live code. "
+        "Exercised by test_mfa_full_ceremony below; its nothing-armed 409 face is "
+        "pinned in the auth matrix."
+    ),
     "GET /api/events": (
         "SSE stream, not a JSON response — behaviour contract lives in "
         "spec/sse.md; the auth matrix probes its status face."
@@ -1994,12 +2623,41 @@ SKIPPED_HAPPY: dict[str, str] = {
         "kill+respawn in the server unit tests (worker_lifecycle_test.go, "
         "TestRefocusWorker_*)."
     ),
+    "POST /api/members/{member_id}/accelerated-stop": (
+        "T-ed79 owner 加速停止 (the middle rung): every face of it needs a member "
+        "with a LIVE SSE session AND an already-open wind-down — the endpoint 409s "
+        "without both, and this black-box suite can mint neither. The 409s "
+        "(no session / nothing winding down / a forced epoch), the re-stamped "
+        "anchor, the refocus_op=accelerated_stop write and the deadline the tick "
+        "then collects on are pinned in the server unit tests "
+        "(accelerated_stop_endpoint_ted79_test.go)."
+    ),
+    "POST /api/outsource-workers/{id}/accelerated-stop": (
+        "T-ed79 加速停止 for a worker: the same two prerequisites as the member "
+        "twin above (a live worker session and an open wind-down), and a worker row "
+        "is mintable only by the Phase 2 scheduler. The below-owner-403 / "
+        "owner-404 faces are pinned in the auth matrix; both arms (下線 and 換手), "
+        "the 409s and the collect on the deadline in the server unit tests "
+        "(worker_graceful_stop_ted79_test.go "
+        "TestWorkerStop_AcceleratedStopEscalatesTheStopEpochAndIsHonoured)."
+    ),
     "POST /api/outsource-workers/{id}/stop": (
-        "T-f190 owner 停止: the positive face needs a LIVE worker row (no black-box "
-        "mint path). The below-owner-403 / owner-404 faces are pinned in the auth "
-        "matrix; the desired_state=offline set + refocus clear + session kill + no-revive "
-        "in the server unit tests (worker_lifecycle_test.go, TestStopWorker_* / "
+        "T-f190 owner 停止, a GRACEFUL close-out since T-ed79: the positive face "
+        "needs a LIVE worker row (no black-box mint path). The below-owner-403 / "
+        "owner-404 faces are pinned in the auth matrix; the desired_state=offline "
+        "set + refocus clear + 〈停止〉 notice + NO kill + collection on the "
+        "worker's own report_stopped in the server unit tests "
+        "(worker_graceful_stop_ted79_test.go, TestWorkerStop_* / "
         "TestStoppedWorker_TickNeverRevives)."
+    ),
+    "POST /api/outsource-workers/{id}/force-stop": (
+        "T-ed79 owner 強制停止 (the third rung; the body /stop used to have): the "
+        "positive face needs a LIVE worker row (no black-box mint path). The "
+        "below-owner-403 / owner-404 faces are pinned in the auth matrix; the "
+        "forced anchors + immediate session kill + no-revive + the SILENCE of the "
+        "forced arm in the server unit tests (worker_lifecycle_test.go "
+        "TestForceStopWorker_KillsAndHoldsDown, "
+        "worker_forced_stop_parity_tc996_test.go)."
     ),
     "POST /api/outsource-workers/{id}/restart": (
         "T-f190 owner 重啟: the positive face needs a STOPPED worker row (no "
@@ -2012,8 +2670,9 @@ SKIPPED_HAPPY: dict[str, str] = {
     ),
     "POST /api/outsource-workers/{id}/model": (
         "T-f190 owner 換 model: the positive face needs a LIVE worker row (no "
-        "black-box mint path). The below-owner-403 / owner-404 faces are pinned in "
-        "the auth matrix; the model/effort persist + active-respawn / "
+        "black-box mint path). The all-identities-404 faces are pinned in "
+        "the auth matrix (T-ed79 dropped this row to the machine floor, so there "
+        "is no below-floor 403 face left); the model/effort persist + active-respawn / "
         "assigned-persist-only in the server unit tests (worker_lifecycle_test.go, "
         "TestSetWorkerModel_*)."
     ),
@@ -2344,6 +3003,197 @@ def test_share_sig_never_shadows_a_bad_bearer(hctx: HCtx) -> None:
     assert r.status_code == 401, f"bad ?token= + good sig must 401, got {r.status_code}"
 
 
+# ── owner second factor: the whole ceremony, over the real wire ──────────────
+
+
+def test_mfa_full_ceremony(hctx: HCtx) -> None:
+    """enroll → activate → login-with-code → replay refused → disable.
+
+    🔴 SELF-CLEANING BY CONSTRUCTION. This test ARMS the owner's second factor
+    on the shared install, so it MUST disarm it again — while it is armed, every
+    /api/login in the run needs a code. The disable is therefore not an
+    afterthought assertion but the thing that keeps the rest of the suite
+    honest, and the finally block guarantees it runs even when an assertion
+    above it fails. That is also why the positive activate/disable faces are not
+    ordinary HAPPY rows: a table row cannot guarantee its own cleanup.
+
+    The codes are computed independently from RFC 6238 (see _totp_code) — this
+    is the suite's proof that an ordinary authenticator app interoperates.
+
+    ⚠️ THE SHARED FAILURE BUDGET THIS DOCSTRING USED TO WARN ABOUT NO LONGER
+    EXISTS, and the warning is kept in negative form because it is exactly the
+    kind of thing someone re-derives from an old memory. There is no attempt
+    counter, no free allowance and no backoff any more (T-19 §0): the brake is a
+    concurrency cap plus, on the PUBLIC seams only, a fixed per-refusal wait. So
+    a refusal here no longer costs a later step anything, and the `finally`
+    disable can no longer throttle ITSELF into a 429 — which two earlier versions
+    of this test managed to do, leaving the factor ARMED and cascading into every
+    later login fixture in the run.
+
+    What a refusal DOES still cost is wall-clock, and only on the two public
+    seams: a failed /api/login here waits out the server's refusal floor before
+    answering. The mfa activate/disable refusals below are owner-gated and take
+    no floor at all, so they are as fast as they ever were.
+    """
+    owner = _auth(hctx.owner_token)
+    password = os.environ["OC_OWNER_PASSWORD"]
+
+    # 🔴 THE STEP BUDGET. Codes are single-use (the server advances a replay
+    # floor past every step it accepts) and only the current step ±1 is ever
+    # accepted — three slots, and this ceremony consumes exactly three:
+    #
+    #   activate → step-1     login → step+0     disable → step+1
+    #
+    # They MUST be strictly increasing (each must clear the floor the previous
+    # one left) and all three must stay inside the window, which is why the run
+    # aligns to a fresh step first. This is real product behaviour, not a test
+    # trick: an owner who logs in and immediately disables MFA must also wait
+    # for their authenticator to roll over to a code they have not spent.
+    _totp_align_to_step_start()
+
+    # The ship-dark flag gates SET-UP, and its default is OFF — an install that
+    # never opts in is untouched by this feature, so enrol would answer 403
+    # without this. Offering it arms nothing.
+    r = hctx.client.post("/api/auth/mfa/offer", json={"offered": True}, headers=owner)
+    assert r.status_code == 200, f"offer: {r.status_code} {r.text}"
+    assert r.json()["offered"] is True, r.json()
+    assert r.json()["enrolled"] is False, "offering the feature must not arm anything"
+
+    # ── enroll: an INERT pending secret ──────────────────────────────────────
+    r = hctx.client.post("/api/auth/mfa/enroll", headers=owner)
+    assert r.status_code == 200, f"{r.status_code} {r.text}"
+    enrolled = r.json()
+    secret = enrolled["secret"]
+    assert enrolled["enrolled"] is False, "enroll must not arm the factor"
+
+    # Nothing is armed yet, so the public probe must still say so and a
+    # password-only login must still work.
+    probe = hctx.client.get("/api/auth/status").json()
+    assert probe["mfa_required"] is False, probe
+    assert (
+        hctx.client.post("/api/login", json={"password": password}).status_code == 200
+    ), "a pending (unproven) secret must not gate login"
+
+    # 🔴 The owner token alone must NOT be able to arm a factor. A stolen token
+    # could otherwise enrol a secret the attacker controls and activate it,
+    # leaving the real owner locked out until someone runs `ocserverd
+    # mfa-disable` on the host — strictly worse than the pre-MFA baseline.
+    r = hctx.client.post(
+        "/api/auth/mfa/activate",
+        json={"password": "conf-definitely-wrong", "code": _totp_code(secret, step_offset=-1)},
+        headers=owner,
+    )
+    assert r.status_code == 401, f"activate with a wrong password: {r.status_code} {r.text}"
+    assert (
+        hctx.client.get("/api/auth/status").json()["mfa_required"] is False
+    ), "a factor was armed WITHOUT the password"
+
+    armed = False
+    try:
+        # ── activate: prove a code, arming the factor ────────────────────────
+        activation_code = _totp_code(secret, step_offset=-1)
+        r = hctx.client.post(
+            "/api/auth/mfa/activate",
+            json={"password": password, "code": activation_code},
+            headers=owner,
+        )
+        assert r.status_code == 200, f"activate: {r.status_code} {r.text}"
+        armed = True
+        assert r.json()["enrolled"] is True
+        # The ACTIVE secret must never be echoed back — otherwise a stolen owner
+        # token could read out the enrolment and clone the factor.
+        assert r.json()["secret"] is None, r.json()
+        assert r.json()["otpauth_uri"] is None, r.json()
+
+        # The public probe now tells the login wall to render a code field.
+        assert hctx.client.get("/api/auth/status").json()["mfa_required"] is True
+
+        # ── login now REQUIRES the code ─────────────────────────────────────
+        assert (
+            hctx.client.post("/api/login", json={"password": password}).status_code
+            == 401
+        ), "password alone must not log in while a factor is armed"
+
+        # The next slot up: activation SPENT step-1, so the code that armed the
+        # factor cannot also open a session.
+        login_code = _totp_code(secret, step_offset=0)
+        r = hctx.client.post(
+            "/api/login", json={"password": password, "code": login_code}
+        )
+        assert r.status_code == 200, f"two-factor login: {r.status_code} {r.text}"
+        assert r.json()["token"], r.json()
+
+        # ── the flag is a ROLLOUT switch, not a bypass ───────────────────────
+        # Withdraw the feature while the factor is ARMED. Login must still demand
+        # the code: if this ever stops holding, anyone holding a stolen owner
+        # token could simply turn the feature off and walk past the second factor
+        # that exists to stop exactly that.
+        r = hctx.client.post("/api/auth/mfa/offer", json={"offered": False}, headers=owner)
+        assert r.status_code == 200, f"withdraw: {r.status_code} {r.text}"
+        assert r.json()["enrolled"] is True, "withdrawing the feature disarmed the factor"
+        assert (
+            hctx.client.get("/api/auth/status").json()["mfa_required"] is True
+        ), "mfa_required went false while a factor is armed — the wall would hide the code field"
+        assert (
+            hctx.client.post("/api/login", json={"password": password}).status_code == 401
+        ), "password alone logged in while the feature was withdrawn — the flag is a bypass"
+        hctx.client.post("/api/auth/mfa/offer", json={"offered": True}, headers=owner)
+
+        # ── the replay guard: that same code must not work twice ─────────────
+        r = hctx.client.post(
+            "/api/login", json={"password": password, "code": login_code}
+        )
+        assert r.status_code == 401, (
+            f"a REPLAYED code logged in again ({r.status_code}) — the single-use "
+            "floor is not holding"
+        )
+
+        # A wrong password with a right code is refused the same way, and the
+        # refusal must not disclose WHICH half failed.
+        # A failed login does NOT spend the step (the password is checked first
+        # and short-circuits), so borrowing the disable slot here is safe.
+        wrong_pwd = hctx.client.post(
+            "/api/login",
+            json={
+                "password": "conf-definitely-wrong",
+                "code": _totp_code(secret, step_offset=1),
+            },
+        )
+        wrong_code = hctx.client.post(
+            "/api/login", json={"password": password, "code": "000000"}
+        )
+        assert wrong_pwd.status_code == wrong_code.status_code == 401
+        assert wrong_pwd.json() == wrong_code.json(), (
+            "the refusal distinguishes a wrong password from a wrong code, which "
+            f"confirms a correct password: {wrong_pwd.json()} vs {wrong_code.json()}"
+        )
+    finally:
+        if armed:
+            # Disarm with BOTH factors, using the LAST unspent slot in the
+            # window (+1). Still no retry loop: a loop over offsets outside the
+            # ±1 window can only fail, so it would burn the remaining window for
+            # nothing. (It used to be worse than pointless — each failure spent
+            # from a shared credential budget, which is how an earlier version of
+            # this test throttled ITSELF into a 429 instead of disarming. That
+            # budget is gone; the loop is still wrong.)
+            r = hctx.client.post(
+                "/api/auth/mfa/disable",
+                json={"password": password, "code": _totp_code(secret, step_offset=1)},
+                headers=owner,
+            )
+            assert r.status_code == 200, f"disable: {r.status_code} {r.text}"
+            assert r.json()["enrolled"] is False
+            # The install must be left EXACTLY as found, or every later login
+            # fixture in this run breaks.
+            assert hctx.client.get("/api/auth/status").json()["mfa_required"] is False
+            assert (
+                hctx.client.post(
+                    "/api/login", json={"password": password}
+                ).status_code
+                == 200
+            ), "password-only login must work again after the factor is removed"
+
+
 # ── coverage teeth ───────────────────────────────────────────────────────────
 
 
@@ -2628,6 +3478,148 @@ def test_upload_then_ref_post_roundtrip(hctx: HCtx) -> None:
     assert again.status_code == 200, again.text
 
 
+def test_chat_reply_to_is_the_servers_link_not_the_callers(hctx: HCtx) -> None:
+    """T-4e95 「回覆這則」 over the real wire.
+
+    The repo charter puts the BEHAVIOURAL close-out of a wire change here, and
+    this field has four claims worth closing out over HTTP rather than only in
+    Go: the link round-trips, a link OUT of this conversation is ACCEPTED and
+    brings its quote with it, an id naming nothing is refused, and a
+    caller-supplied ``meta.reply_to`` is discarded. The last is the one that
+    needs a real request the most — ``meta`` is copied through wholesale, so the
+    only thing standing between a caller and an unvalidated link is a deletion
+    the handler performs before it validates anything.
+
+    The second REVERSED on 2026-08-21 (owner ruling): this test asserted a 400
+    and an "another conversation" message until that date. The refusal is gone
+    because quoting a line out of two other people's thread in order to step in
+    and ask about it is the use case, and it was the one thing the refusal made
+    impossible.
+    """
+    quoted = hctx.client.post(
+        "/api/chat",
+        json={"to": hctx.agent.member_id, "body": "reply-to-target"},
+        headers=_auth(hctx.owner_token),
+    )
+    assert quoted.status_code == 200, quoted.text
+    quoted_id = quoted.json()["id"]
+    assert quoted.json()["reply_to"] == "", "a plain post carries no link"
+
+    # The commonest shape: answering what the other party sent you — a reply
+    # travelling the opposite way to the message it quotes.
+    reply = hctx.client.post(
+        "/api/chat",
+        json={"to": "owner", "body": "reply-to-answer", "reply_to": quoted_id},
+        headers=_auth(hctx.agent.token),
+    )
+    assert reply.status_code == 200, reply.text
+    assert reply.json()["reply_to"] == quoted_id
+
+    # Read it back off the wire — the POST response is built from the row the
+    # handler just made, so it would look right even if nothing were stored.
+    served = hctx.client.get(
+        f"/api/chat?ids={reply.json()['id']}", headers=_auth(hctx.agent.token)
+    )
+    assert served.status_code == 200, served.text
+    assert chat_messages(served)[0]["reply_to"] == quoted_id
+    # …and the QUOTE came with it, built by the server on this read. This is the
+    # half that makes the link usable: without it the browser would have to go
+    # and fetch what the id names, which is the design this replaced.
+    quote = chat_messages(served)[0].get("reply_to_chat")
+    assert quote is not None, f"every read must carry the quote: {served.text}"
+    assert quote["id"] == quoted_id
+    assert quote["from"] == "owner"
+    assert quote["to"] == hctx.agent.member_id
+    assert quote["content"] == "reply-to-target"
+
+    # A link OUT of this conversation, over the real wire: ACCEPTED, and the
+    # quoted text crosses the boundary with it. A THIRD party's line, so this is
+    # genuinely another conversation — owner↔agent in the other direction would
+    # be the SAME one and would prove nothing.
+    third = hctx.fresh_member()
+    elsewhere = hctx.client.post(
+        "/api/chat",
+        json={"to": third, "body": "another-thread"},
+        headers=_auth(hctx.owner_token),
+    )
+    assert elsewhere.status_code == 200, elsewhere.text
+    sideways = hctx.client.post(
+        "/api/chat",
+        json={
+            "to": "owner",
+            "body": "quoting sideways",
+            "reply_to": elsewhere.json()["id"],
+        },
+        headers=_auth(hctx.agent.token),
+    )
+    assert sideways.status_code == 200, sideways.text
+    assert sideways.json()["reply_to"] == elsewhere.json()["id"]
+    sideways_quote = sideways.json().get("reply_to_chat")
+    assert sideways_quote is not None, (
+        f"a cross-conversation reply must still carry its quote: {sideways.text}"
+    )
+    assert sideways_quote["content"] == "another-thread"
+    # THE ADDRESSEE IS THE QUOTED MESSAGE'S OWN. This reply travels agent→owner
+    # while the line it quotes travelled owner→third, so a projection that read
+    # the ENCLOSING message's recipient would answer "owner" — the one wrong
+    # answer that every same-conversation row above cannot tell apart.
+    assert sideways_quote["from"] == "owner"
+    assert sideways_quote["to"] == third, (
+        "the quote must name the ORIGINAL's addressee, not the recipient of "
+        f"the reply carrying it: {sideways.text}"
+    )
+    # Names are the OTHER half of the convention and are NOT resolved on this
+    # door — only the wake snapshot fills them.
+    assert sideways_quote.get("from_name", "") == ""
+    assert sideways_quote.get("to_name", "") == ""
+
+    # An id that names nothing is a 400 on the FIELD, not a 404 on the route.
+    orphan = hctx.client.post(
+        "/api/chat",
+        json={"to": "owner", "body": "orphan", "reply_to": "c-nosuchmessage"},
+        headers=_auth(hctx.agent.token),
+    )
+    assert orphan.status_code == 400, orphan.text
+    assert "c-nosuchmessage" in orphan.text
+
+    # A caller-supplied meta.reply_to is DISCARDED — while the rest of meta,
+    # which really is free-form passthrough, survives.
+    forged = hctx.client.post(
+        "/api/chat",
+        json={
+            "to": "owner",
+            "body": "forged-link",
+            "meta": {"reply_to": quoted_id, "keepme": "yes"},
+        },
+        headers=_auth(hctx.agent.token),
+    )
+    assert forged.status_code == 200, forged.text
+    assert forged.json()["reply_to"] == "", "a meta-supplied link must not stand"
+    assert forged.json()["meta"].get("keepme") == "yes"
+    assert forged.json().get("reply_to_chat") is None, (
+        "no link ⇒ no quote — a forged meta.reply_to must not conjure one either"
+    )
+
+    # A reply whose ORIGINAL CANNOT BE READ: the quote is absent, the link is
+    # not, and the message is served normally. Reached here the way a real
+    # station reaches it — the link was stamped by the server when the target
+    # existed, and the read happens against a target that no longer resolves.
+    # The POST door refuses an unknown id on purpose (asserted above), so this
+    # state cannot be created through it.
+    #
+    # What is checked over the wire here is the ORDINARY, ALWAYS-PRESENT half:
+    # a message that replies to nothing carries no quote key at all.
+    plain = hctx.client.get(
+        f"/api/chat?ids={quoted_id}", headers=_auth(hctx.agent.token)
+    )
+    assert plain.status_code == 200, plain.text
+    assert chat_messages(plain)[0]["reply_to"] == ""
+    assert chat_messages(plain)[0].get("reply_to_chat") is None, (
+        "a message that answers nothing must carry no quote: " + plain.text
+    )
+    assert "reply_to" not in forged.json()["meta"]
+
+
 def test_chat_recipient_validation_preserves_offline_mailbox(hctx: HCtx) -> None:
     """A valid member remains a durable mailbox while disconnected, but an
     invented recipient is rejected instead of becoming an orphaned chat row."""
@@ -2644,7 +3636,7 @@ def test_chat_recipient_validation_preserves_offline_mailbox(hctx: HCtx) -> None
         "/api/chat?with=owner&limit=-1", headers=_auth(hctx.agent.token)
     )
     assert mailbox.status_code == 200, mailbox.text
-    assert any(m["body"] == "offline-mailbox-probe" for m in mailbox.json())
+    assert any(m["body"] == "offline-mailbox-probe" for m in chat_messages(mailbox))
 
     rejected = hctx.client.post(
         "/api/chat",
@@ -2662,7 +3654,9 @@ def test_chat_recipient_validation_preserves_offline_mailbox(hctx: HCtx) -> None
         "/api/chat?with=m-conformance-typo&limit=-1", headers=_auth(hctx.owner_token)
     )
     assert missing_mailbox.status_code == 200, missing_mailbox.text
-    assert all(m["body"] != "must-not-land" for m in missing_mailbox.json())
+    assert all(
+        m["body"] != "must-not-land" for m in chat_messages(missing_mailbox)
+    )
 
 
 def test_upload_ref_rejections(hctx: HCtx) -> None:
@@ -2697,11 +3691,230 @@ def test_upload_ref_rejections(hctx: HCtx) -> None:
     assert r.status_code == 400 and "20 MB" in r.text, f"{r.status_code} {r.text}"
 
 
+def test_chat_answers_the_envelope_and_pages_by_opaque_cursor(hctx: HCtx) -> None:
+    """T-48: EVERY path of ``GET /api/chat`` answers ``{messages, next_cursor}``,
+    and ``next_cursor`` is the ONLY end-of-walk signal.
+
+    The bare array this replaced had nowhere to say "there is more in this
+    direction": a caller could only infer exhaustion from a short page, and a
+    page is short for reasons that have nothing to do with exhaustion. The three
+    paths that name their own set (``ids``, ``start_id``, ``end_id``) carry NO
+    cursor, because there is no defined direction to continue in.
+    """
+    peer = hctx.agent.member_id
+    sent = []
+    for i in range(4):
+        r = hctx.client.post(
+            "/api/chat",
+            json={"to": peer, "body": f"envelope seed {uuid.uuid4().hex[:6]} {i}"},
+            headers=_auth(hctx.owner_token),
+        )
+        assert r.status_code == 200, r.text
+        sent.append(r.json())
+
+    def page(params: dict) -> tuple[list, str]:
+        r = hctx.client.get("/api/chat", params=params, headers=_auth(hctx.owner_token))
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert isinstance(body, dict), f"must be an object, got {r.text[:200]}"
+        assert isinstance(body.get("messages"), list), r.text[:200]
+        return body["messages"], body.get("next_cursor", "")
+
+    # The three set-naming paths carry no cursor.
+    for params in (
+        {"ids": sent[0]["id"]},
+        {"start_id": sent[0]["id"], "limit": 2},
+        {"end_id": sent[-1]["id"], "limit": 2},
+    ):
+        msgs, cursor = page(params)
+        assert msgs, f"{params} returned nothing"
+        assert cursor == "", f"{params} must carry no next_cursor, got {cursor!r}"
+
+    # The newest page DOES, and walking it back reaches every seeded message
+    # exactly once. Not asserted as "the whole stream": this suite shares one
+    # server, so the only rows this test owns are the ones it posted.
+    msgs, cursor = page({"with": peer, "limit": 2})
+    assert cursor, "four messages exist behind a limit of 2 — expected a cursor"
+    seen = [m["id"] for m in msgs]
+    rounds = 0
+    while cursor:
+        rounds += 1
+        assert rounds < 200, "the cursor walk did not terminate"
+        prev = cursor
+        msgs, cursor = page({"with": peer, "limit": 2, "cursor": prev})
+        assert cursor != prev, f"next_cursor did not advance: {cursor!r}"
+        seen = [m["id"] for m in msgs] + seen
+    assert len(seen) == len(set(seen)), f"the walk re-served a message: {seen}"
+    for m in sent:
+        assert m["id"] in seen, f"the walk skipped {m['id']}"
+
+    # An opaque token is opaque: one this API never minted is a 422 that says so,
+    # rather than a 200 answering from some guessed position.
+    r = hctx.client.get(
+        "/api/chat", params={"with": peer, "cursor": "not-a-cursor"},
+        headers=_auth(hctx.owner_token),
+    )
+    assert r.status_code == 422, f"{r.status_code} {r.text}"
+    assert "next_cursor" in r.text, r.text
+
+
+def test_chat_unread_is_per_sender_and_marks_nothing_read(hctx: HCtx) -> None:
+    """T-48 ``?unread=true``: the caller's own unread, judged against the
+    watermark FOR EACH SENDER, oldest first, and still writing nothing.
+
+    🔴 The per-sender rule is the load-bearing half. Two senders write to the
+    agent; the agent marks ONE of them read up to its newest message. Everything
+    from the OTHER sender must survive — including messages OLDER than the
+    watermark that was just written — because that watermark belongs to a
+    different conversation. Folding the two into one number would drop them, and
+    would drop them silently: the answer is a shorter page, which is exactly what
+    an empty inbox looks like.
+    """
+    tag = uuid.uuid4().hex[:8]
+    reader, reader_tok = hctx.agent.member_id, hctx.agent.token
+    other = hctx.fresh_member()
+    other_tok = mint_member_token(hctx.client, hctx.owner_token, other)
+
+    def post(token: str, body: str) -> dict:
+        r = hctx.client.post(
+            "/api/chat", json={"to": reader, "body": body}, headers=_auth(token)
+        )
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    # Interleaved on purpose: `other`'s message is OLDER than the watermark the
+    # owner's line is about to get, so a single global watermark would hide it.
+    from_other = post(other_tok, f"unread-other-{tag}")
+    from_owner = post(hctx.owner_token, f"unread-owner-{tag}")
+    assert from_other["ts"] <= from_owner["ts"]
+
+    r = hctx.client.post(
+        "/api/chat/mark-read",
+        json={"peer": "owner", "last_read_ts": from_owner["ts"]},
+        headers=_auth(reader_tok),
+    )
+    assert r.status_code == 200, r.text
+
+    r = hctx.client.get(
+        "/api/chat", params={"unread": "true", "limit": -1}, headers=_auth(reader_tok)
+    )
+    assert r.status_code == 200, r.text
+    unread = {m["id"]: m for m in chat_messages(r)}
+    assert from_other["id"] in unread, (
+        "the OTHER sender has no watermark at all, so its message is unread even "
+        f"though it is older than the one just marked read: {sorted(unread)}"
+    )
+    assert from_owner["id"] not in unread, (
+        "the owner's line was marked read up to this message"
+    )
+    assert all(m["to"] == reader for m in unread.values()), (
+        "unread must only carry messages addressed to the caller"
+    )
+    assert all(m["from"] != reader for m in unread.values()), (
+        "your own messages are never your unread"
+    )
+    ts = [m["ts"] for m in unread.values()]
+    assert ts == sorted(ts), "unread is answered OLDEST FIRST"
+
+    # 🔴 READING IT CLEARS NOTHING. The full backlog is still there afterwards.
+    r2 = hctx.client.get(
+        "/api/chat", params={"unread": "true", "limit": -1}, headers=_auth(reader_tok)
+    )
+    assert r2.status_code == 200, r2.text
+    assert {m["id"] for m in chat_messages(r2)} == set(unread), (
+        "paging unread must not advance any watermark — the backlog is unchanged"
+    )
+
+    # `unread` names a set defined by watermarks; the stream-position cursors
+    # name a place in the whole stream. Both at once is a 422, not a guess.
+    for extra in ({"before_ts": 1, "before_id": "x"}, {"start_id": from_other["id"]}):
+        r = hctx.client.get(
+            "/api/chat", params={"unread": "true", **extra}, headers=_auth(reader_tok)
+        )
+        assert r.status_code == 422, f"{extra}: {r.status_code} {r.text}"
+
+
+def test_chat_refuses_a_query_parameter_it_does_not_declare(hctx: HCtx) -> None:
+    """T-48 (owner ruling, THIS ROUTE ONLY): an undeclared query parameter is a
+    400 that NAMES it, rather than being silently ignored.
+
+    ``caller_only`` is the case that made this worth having: it was removed in
+    the same change, and a caller still sending it would otherwise have received
+    a 200 carrying an UNNARROWED listing with nothing said. Now it is told.
+    """
+    for name, value in (("caller_only", "true"), ("peek", "true"), ("wiht", "owner")):
+        r = hctx.client.get(
+            "/api/chat",
+            params={"with": hctx.agent.member_id, name: value},
+            headers=_auth(hctx.owner_token),
+        )
+        assert r.status_code == 400, f"{name}: {r.status_code} {r.text}"
+        assert name in r.text, f"the refusal must name {name}: {r.text}"
+
+    # The scope of that rule is exactly one route: everything else still ignores
+    # what it does not know. Without this arm the test would pass just as well
+    # against a server that had grown the refusal everywhere.
+    r = hctx.client.get(
+        "/api/members", params={"wiht": "owner"}, headers=_auth(hctx.owner_token)
+    )
+    assert r.status_code == 200, (
+        f"only GET /api/chat refuses unknown parameters: {r.status_code} {r.text}"
+    )
+
+    # …and the `?token=` transport credential is not a typo: it is how a client
+    # that cannot set a header authenticates, and it must still be accepted here.
+    r = hctx.client.get(
+        "/api/chat",
+        params={"with": hctx.agent.member_id, "token": hctx.owner_token},
+    )
+    assert r.status_code == 200, f"?token= must be accepted: {r.status_code} {r.text}"
+
+
+def test_chat_sender_and_recipient_narrow_one_side_each(hctx: HCtx) -> None:
+    """T-48: ``sender``/``recipient`` filter ONE side each and AND together,
+    which pins one direction of one line — something ``with`` cannot express,
+    because it matches either side."""
+    tag = uuid.uuid4().hex[:8]
+    peer = hctx.agent.member_id
+    outbound = hctx.client.post(
+        "/api/chat", json={"to": peer, "body": f"one-sided-out-{tag}"},
+        headers=_auth(hctx.owner_token),
+    )
+    assert outbound.status_code == 200, outbound.text
+    inbound = hctx.client.post(
+        "/api/chat", json={"to": "owner", "body": f"one-sided-in-{tag}"},
+        headers=_auth(hctx.agent.token),
+    )
+    assert inbound.status_code == 200, inbound.text
+
+    r = hctx.client.get(
+        "/api/chat",
+        params={"sender": "owner", "recipient": peer, "limit": -1},
+        headers=_auth(hctx.owner_token),
+    )
+    assert r.status_code == 200, r.text
+    ids = {m["id"] for m in chat_messages(r)}
+    assert outbound.json()["id"] in ids
+    assert inbound.json()["id"] not in ids, (
+        "sender+recipient pins ONE direction; the reply travels the other way"
+    )
+    assert all(
+        m["from"] == "owner" and m["to"] == peer for m in chat_messages(r)
+    ), "every row must match both filters"
+
+
 def test_chat_scrollback_cursor_page_never_marks_read(hctx: HCtx) -> None:
     """T-bf82 scrollback: ``GET /api/chat?with=&before_ts=&before_id=`` serves
     the strictly-older history page (oldest→newest) and NEVER advances the
-    caller's read watermark; the cursorless list still auto-marks (unchanged);
-    a partial cursor is a 422."""
+    caller's read watermark; a partial cursor is a 422.
+
+    T-48 flipped the last clause of this pin. The cursorless list used to
+    auto-mark, and this test asserted it did. It does not any more, on ANY path:
+    owner ruled that reading a list must not be able to claim a conversation was
+    read (「get_chat 不應該可以標示已讀未讀，這應該要另一隻 API 明確表示有這個
+    意圖」), because a member that had only attached its listener — never woken,
+    never shown a line — grew a watermark for messages nobody had looked at.
+    Marking read is POST /api/chat/mark-read and nothing else."""
     peer = hctx.agent.member_id
     sent = []
     for i in range(3):
@@ -2741,7 +3954,7 @@ def test_chat_scrollback_cursor_page_never_marks_read(hctx: HCtx) -> None:
         headers=_auth(hctx.agent.token),
     )
     assert r.status_code == 200, r.text
-    page = r.json()
+    page = chat_messages(r)
     ids = [m["id"] for m in page]
     assert newest["id"] not in ids, "a history page must exclude the cursor row"
     assert ids[-2:] == [sent[0]["id"], sent[1]["id"]], (
@@ -2764,15 +3977,19 @@ def test_chat_scrollback_cursor_page_never_marks_read(hctx: HCtx) -> None:
         )
         assert r.status_code == 422, f"partial cursor: {r.status_code} {r.text}"
 
-    # The cursorless list is untouched: it still auto-marks to the newest ts.
+    # The cursorless list does not mark either (T-48). This is the arm that
+    # changed, so it is asserted against the watermark captured BEFORE any read
+    # in this test — "unchanged", not merely "below the newest ts", which would
+    # also pass if the write happened and landed low.
     r = hctx.client.get(
         "/api/chat",
         params={"with": "owner"},
         headers=_auth(hctx.agent.token),
     )
     assert r.status_code == 200, r.text
-    assert agent_watermark() >= newest["ts"], (
-        "the cursorless list must keep the auto read-receipt behavior"
+    assert agent_watermark() == marked_before, (
+        "a cursorless list must not advance the watermark either — marking a "
+        "conversation read is POST /api/chat/mark-read and nothing else"
     )
 
 
@@ -2792,9 +4009,16 @@ def test_happy_covers_manifest(routes_manifest: list[dict[str, str]]) -> None:
 
 
 def test_openapi_covers_manifest(routes_manifest: list[dict[str, str]]) -> None:
-    """The frozen spec/openapi.json and the served route table must describe
-    the SAME operation set — a route added to the server without a spec
-    freeze update (or vice versa) reddens the run here."""
+    """The frozen spec/openapi.json and routes_manifest.json must describe the
+    SAME operation set — a spec freeze update without a manifest update (or
+    vice versa) reddens the run here.
+
+    Both sides of THIS comparison are hand-written, so it cannot tell you the
+    server serves either set: two lists agreeing prove they were typed the same
+    day. The leg that reaches the server is TestRouteTableCoversSpecSurface
+    (server/ocserverd/server_test.go), which pins the same frozen spec against
+    the route table the mux is built from — chained with this test, the
+    manifest and the served routes are held equal."""
     manifest_ops = {f"{r['method']} {r['path']}" for r in routes_manifest}
     spec_ops = {
         f"{m.upper()} {p}"

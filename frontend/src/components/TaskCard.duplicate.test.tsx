@@ -1,6 +1,6 @@
 // TaskCard — the duplicated terminal status + 原票指向 (T-02c9). Locked:
 //   1. a duplicated task is terminal (sits in 已結束) and renders the 重複
-//      status badge + a 重複於 T-xxxx link that jumps to the original;
+//      status badge + a 重複於 <task id> link that jumps to the original;
 //   2. the ⋮ menu's 標記重複 opens a picker; confirming a chosen original marks
 //      the task duplicated through the seam — it then leaves the live list
 //      (whoever spots the duplicate closes it, no owner terminate needed).

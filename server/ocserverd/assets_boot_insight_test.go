@@ -80,7 +80,7 @@ func TestBootContextCarriesInsightBetweenRoleAndLessons(t *testing.T) {
 				t.Fatalf("fixture %q has no insight text — the assertions below would prove nothing", tc.key)
 			}
 
-			boot, err := s.buildBootContext(tc.key, nil, "general")
+			boot, err := s.buildBootContext(tc.key, nil)
 			if err != nil {
 				t.Fatalf("buildBootContext: %v", err)
 			}
@@ -101,7 +101,7 @@ func TestBootContextCarriesInsightBetweenRoleAndLessons(t *testing.T) {
 			// section that merely EXISTS somewhere cannot pass.
 			role := strings.Index(ctx, "# Role: ")
 			ins := strings.Index(ctx, title)
-			lessons := strings.Index(ctx, "# Lessons ("+tc.key+" / general)")
+			lessons := strings.Index(ctx, "# Lessons ("+tc.key+")")
 			if role < 0 || ins < 0 || lessons < 0 {
 				t.Fatalf("missing an anchor: role=%d insight=%d lessons=%d", role, ins, lessons)
 			}
@@ -129,7 +129,7 @@ func TestBootContextHasNoOrphanInsightHeaderForAnUnwrittenRole(t *testing.T) {
 		t.Fatalf("fixture is not the empty case: insight text = %q", insight.Text)
 	}
 
-	boot, err := s.buildBootContext(key, nil, "general")
+	boot, err := s.buildBootContext(key, nil)
 	if err != nil {
 		t.Fatalf("buildBootContext: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestBootContextHasNoOrphanInsightHeaderForAnUnwrittenRole(t *testing.T) {
 
 	// Positive control #2: the fold really assembled (otherwise "no # Insight"
 	// is satisfied by an empty string).
-	for _, want := range []string{"# Role: ", "# Lessons (" + key + " / general)"} {
+	for _, want := range []string{"# Role: ", "# Lessons (" + key + ")"} {
 		if !strings.Contains(ctx, want) {
 			t.Fatalf("boot context did not assemble: missing %q", want)
 		}

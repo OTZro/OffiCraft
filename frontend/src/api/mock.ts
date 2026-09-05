@@ -11,6 +11,10 @@ import type {
   VersionView,
   ReleaseCheckView,
   BackupHealthView,
+  SigningKeyView,
+  AuthStatusView,
+  MfaEnrollView,
+  MfaStateView,
   GlobalContextView,
   BootDocKind,
   BootDocView,
@@ -20,6 +24,7 @@ import type {
   DocumentHistoryView,
   DocumentRevisionView,
   DocumentSeedView,
+  DiffPairView,
   RoleSummaryView,
   RoleDefView,
   BootstrapView,
@@ -36,7 +41,9 @@ import type {
 import type {
   Api,
   ChatCursor,
+  ChatAnchor,
   ChatMessage,
+  ChatReplyQuote,
   ChatReadReceipt,
   ChatAttachmentInput,
   PushSubscriptionInput,
@@ -67,6 +74,8 @@ import type {
   OutsourceWorkerView,
   TaskTypeView,
   TaskCountView,
+  TaskStepDetailView,
+  TaskArtifactView,
   TaskManualSummaryView,
   TaskManualView,
   TaskManualPatch,
@@ -80,6 +89,10 @@ import type {
   ThemeListItem,
   ThemeWriteReceipt,
   ThemeDeleteResult,
+  SseConnectionState,
+  AccountCostResetReceipt,
+  CostResetReceipt,
+  TaskArtifactVersionView,
 } from "./adapter";
 import type {
   WireMember,
@@ -87,6 +100,7 @@ import type {
   WireMonSession,
   WireVersion,
   WireBackupHealth,
+  WireSigningKeys,
   WireGlobalContext,
   WireBootDoc,
   WireDocumentHistory,
@@ -99,6 +113,7 @@ import type {
   WireDeleteResult,
   WireUninstallResult,
   WireMachine,
+  WireServerSettings,
 } from "./wire";
 import {
   toMember,
@@ -106,6 +121,7 @@ import {
   toVersion,
   toReleaseCheck,
   toBackupHealth,
+  toSigningKeys,
   toGlobalContext,
   toBootDoc,
   toDocumentHistory,
@@ -126,14 +142,22 @@ import {
   DOC_CAP_CHARS_DEFAULTS,
   BOOT_DOC_CAP_CHARS_DEFAULTS,
   BOOT_DOC_HISTORY_KEPT,
+  TASK_EVENT_CAP_CHARS_DEFAULT,
   contentSizes,
   docCapBlocked,
+  wholeDocWipeBlocked,
 } from "./docCap";
+import { docJoinHeadBody, docSplitHeadBody } from "./docSplit";
 import {
   CHAT_BUDGET_CHARS_DEFAULT,
   CHAT_BUDGET_CHARS_MAX,
   CHAT_BUDGET_CHARS_MIN,
 } from "./chatBudget";
+import {
+  BACKUP_RETAIN_DEFAULT,
+  BACKUP_RETAIN_MAX,
+  BACKUP_RETAIN_MIN,
+} from "./backupRetain";
 import {
   MOCK_OWNER_ID,
   SEED_SYSTEM_INTERACTION_MD,
@@ -143,8 +167,34 @@ import {
   SEED_BOOT_SEQUENCE_MD,
   SEED_BOOT_SEQUENCE_CODEX_MD,
   SEED_OFFBOARD_MD,
+  SEED_ACCELERATED_STOP_MD,
+  SEED_TASK_CLOSEOUT_MD,
+  SEED_TASK_REASSIGN_PREDECESSOR_MD,
+  SEED_TASK_TAKEOVER_WITH_PREDECESSOR_MD,
+  SEED_TASK_TAKEOVER_FRESH_MD,
+  SEED_TASK_UNBLOCKED_MD,
 } from "./seeds";
 import { mockApiError } from "./errorCodes";
+import { formatDiffUrl, type DiffParams } from "../lib/diffLink";
+
+/** The offline cockpit's compare fixture — two texts that differ by one edited
+ * line and one added line, so both the line-level rows and the character-level
+ * tint have something real to draw. */
+const MOCK_DIFF_BEFORE = [
+  "# 專案說明",
+  "",
+  "第一段沒有改。",
+  "這一行的用字改過了。",
+  "最後一段沒有改。",
+].join("\n");
+const MOCK_DIFF_AFTER = [
+  "# 專案說明",
+  "",
+  "第一段沒有改。",
+  "這一行的措辭改過了。",
+  "新增的一行。",
+  "最後一段沒有改。",
+].join("\n");
 import {
   validateThemeBundle,
   isValidDisplayTheme,
@@ -197,7 +247,7 @@ const MOCK_WIRE_MEMBERS: WireMember[] = [
   {
     id: "mira",
     name: "Mira",
-    kind: "assistant", // mirror the real seed (dal/seed.py: Mira kind="assistant")
+    kind: "staff", // mirror the real seed (dbseed.go: Mira kind=KindStaff)
     role_key: "assistant",
     role_name: "",
     runtime: "claude",
@@ -254,6 +304,55 @@ const MOCK_WIRE_MEMBERS: WireMember[] = [
     desired_machine_id: "mbp5",
     machine: "", // OBSERVED position: offline → nothing observed → honest "—"
     presence: "offline",
+    refocus_since: 0,
+    last_op: "",
+    last_op_ok: null,
+    last_op_log: "",
+    last_op_reason: "",
+    last_op_at: 0,
+    forced_stop_at: 0,
+    roster_status: "active",
+    owner_id: "",
+    unread_count: 0,
+    schema_version: 2,
+  },
+  // A LIVE outsource worker, carried in the roster fixture because the roster
+  // ENDPOINT carries one: GET /api/members answers over the WHOLE member table,
+  // contractors included (the P7 convergence; since T-14 項目 6 that is the only
+  // roster query there is — `dal.ListMembers`, with no kind clause), so a
+  // cockpit that runs against a mock with no `ow-` row is running against a
+  // roster the server never serves.
+  //
+  // 🔴 WHAT ITS ABSENCE COST (T-26): the roster hands an `ow-` id to the
+  // held-id mirror, a chat delta naming that one id takes the per-item fast
+  // path, and GET /api/members/{ow-} answered 404 until 2026-08-28 — one
+  // guaranteed failed request plus a whole-roster refetch on every contractor
+  // chat line. The offline mock could not reproduce ANY of that, so the whole
+  // path was invisible to every frontend test. The item door is open now, and
+  // this row is what keeps a future re-narrowing from being silent here.
+  //
+  // The office roster, the task assignee picker and the reassign dialog all
+  // filter `kind === "staff"`, so this row changes no panel — it changes
+  // what the DATA looks like, which is the point.
+  {
+    id: "ow-7d8ad859dd9b",
+    name: "O-179", // a worker reads by its codename, never a personal name
+    kind: "outsource",
+    role_key: "", // contractors carry no role — their duty is the bound task
+    role_name: "",
+    runtime: "claude",
+    model: "claude-sonnet-4.5",
+    actual_model: "",
+    actual_runtime: "",
+    actual_effort: "",
+    actual_machine: "",
+    refocus_op: "",
+    refocus_deadline: 0,
+    effort: "medium",
+    desired_state: "online",
+    desired_machine_id: "warden-mbp5",
+    machine: "warden-mbp5",
+    presence: "online",
     refocus_since: 0,
     last_op: "",
     last_op_ok: null,
@@ -503,6 +602,72 @@ const BOOT_DOC_SEEDS: Record<string, string> = {
   "boot_sequence/codex": SEED_BOOT_SEQUENCE_CODEX_MD.trim(),
   // T-c9c0 — a singleton keyed "global", like system_interaction.
   "offboard/global": SEED_OFFBOARD_MD.trim(),
+  // T-3201 — the six lifecycle procedures, every one a singleton keyed
+  // "global". The ORDER of this map mirrors bootDocRegistry
+  // (server/ocserverd/api_bootdocs.go), which is the order these documents are
+  // declared and listed in everywhere else; a mock that invented an order of
+  // its own would make every ordered comparison against it meaningless.
+  // (It used to be described as "the order GET /api/boot-docs answers in" —
+  // that endpoint is gone; see __mockBootDocAddresses below.)
+  "accelerated_stop/global": SEED_ACCELERATED_STOP_MD.trim(),
+  "task_closeout/global": SEED_TASK_CLOSEOUT_MD.trim(),
+  "task_reassign_predecessor/global": SEED_TASK_REASSIGN_PREDECESSOR_MD.trim(),
+  "task_takeover_with_predecessor/global":
+    SEED_TASK_TAKEOVER_WITH_PREDECESSOR_MD.trim(),
+  "task_takeover_fresh/global": SEED_TASK_TAKEOVER_FRESH_MD.trim(),
+  "task_unblocked/global": SEED_TASK_UNBLOCKED_MD.trim(),
+};
+
+/** The documents the server SHOWS but refuses every write to.
+ *
+ * 🔴 EMPTY SINCE T-6f44, AND KEPT RATHER THAN DELETED. The owner ruled on
+ * 2026-08-24 that 〈新任務〉 and 〈擋著你手上任務的票解開了〉 — the two that used to
+ * be in here — become editable like the other eight. His earlier ruling
+ * (「以前 global context 是固定內容 我們也是會顯示 只是不給改」) was 照舊, a
+ * carry-over from when the boot context was fixed text, NOT a statement about
+ * these two documents' content; and 〈新任務〉 is one half of the same event as
+ * 〈任務轉派 · 給接手人〉, which he could always edit.
+ *
+ * The set stays because the 405 machinery it drives is still real and still
+ * reachable: a future document may ship read-only, and an empty set is how the
+ * mock says "none today" without the cockpit's refusal path becoming code that
+ * cannot be exercised at all. bootDocRegistry (server) is the truth source;
+ * this mirrors it so demo mode cannot validate a screen the real server
+ * refuses. */
+let BOOT_DOC_READ_ONLY: ReadonlySet<string> = new Set<string>();
+
+/** TEST-ONLY: make a document read-only for one test.
+ *
+ * 🔴 WHY THIS SEAM EXISTS. Since T-6f44 no SHIPPED document is read-only, so
+ * every assertion about how a read-only document renders — the body without an
+ * editor, the note, the absent version list — lost the only subject it could
+ * be written against. Deleting those assertions would have retired a live
+ * refusal path into code nothing exercises: the machinery is still reachable
+ * the day a document ships read-only again, and that is precisely the day
+ * nobody would notice it had rotted.
+ *
+ * Reset to empty by __resetMock, so a test that forgets to clean up cannot
+ * leak a read-only document into the next one. */
+export function __setBootDocReadOnly(keys: readonly string[]): void {
+  BOOT_DOC_READ_ONLY = new Set(keys);
+}
+
+/** The server's own name for a document, as its refusals spell it
+ * (bootDocRegistry's DocName). The listing carries it, so a caller reading a
+ * rejection and a caller reading the listing see the same words. */
+const BOOT_DOC_NAMES: Record<string, string> = {
+  "system_interaction/global": "system interaction block",
+  "boot_sequence/claude": "boot steps (claude)",
+  "boot_sequence/codex": "boot steps (codex)",
+  "offboard/global": "Stop document",
+  "accelerated_stop/global": "accelerated stop sequence",
+  "task_closeout/global": "task close-out procedure",
+  "task_reassign_predecessor/global":
+    "task reassignment document (to the predecessor)",
+  "task_takeover_with_predecessor/global":
+    "task reassignment document (to the successor)",
+  "task_takeover_fresh/global": "new task document",
+  "task_unblocked/global": "dependency-released notice",
 };
 const bootDocOverlays = new Map<string, string>();
 
@@ -525,17 +690,24 @@ function foldBootDoc(kind: BootDocKind, key: string): WireBootDoc {
   const seed = bootDocSeed(kind, key);
   if (seed === null) {
     throw mockApiError(
-      `http 404 for GET /api/${kind.replace(/_/g, "-")}/${key}`,
+      `http 404 for GET /api/boot-docs/${kind}/${key}`,
       404,
       `boot document '${kind}/${key}' does not exist`
     );
   }
   const overlay = bootDocOverlays.get(`${kind}/${key}`);
   const text = overlay ?? seed;
+  // The two halves the READ face names (T-3201). The mock splits because it is
+  // standing in for the server here; the cockpit never does — it is handed
+  // these. A stored text with no marker is all body, the same lenient reading
+  // the server's bootDocBodyOf takes.
+  const { head, body, split } = docSplitHeadBody(text);
   return {
     kind,
     key,
     text,
+    read_only_head: split ? head : "",
+    body: split ? body : text,
     owner_id: MOCK_OWNER_ID,
     schema_version: 3,
     size_chars: [...text].length,
@@ -543,18 +715,74 @@ function foldBootDoc(kind: BootDocKind, key: string): WireBootDoc {
     // read's `cap_chars` against `doc.cap_chars.<kind>`, so a mock pinned to
     // the default would keep answering 60000/15000 after the owner moved the
     // knob — and the page sizes its edits against exactly this number.
-    cap_chars: {
-      system_interaction: mockServerSettings.doc_cap_chars_system_interaction,
-      boot_sequence: mockServerSettings.doc_cap_chars_boot_sequence,
-      offboard: mockServerSettings.doc_cap_chars_offboard,
-    }[kind],
+    cap_chars: bootDocCap(kind),
     is_default: overlay === undefined,
-    // Every one of the three ships a seed, so the 還原出廠版 path is always
+    // Every one of the ten ships a seed, so the 還原出廠版 path is always
     // real here. The field is still reported rather than hardcoded true at the
     // call site: it is the flag the cockpit gates that affordance on, and a
     // block added later without a seed must be able to say so.
     has_seed: true,
+    read_only: BOOT_DOC_READ_ONLY.has(`${kind}/${key}`),
   };
+}
+
+/** Which cap judges this document — the LIVE setting where the server reads
+ * one, and `taskEventCapCharsDefault` for the four task events, which is a
+ * constant on the server too. 加速停止 shares 〈停止〉's setting, mirroring the
+ * registry row that calls `offboardCap()` for both. */
+function bootDocCap(kind: BootDocKind): number {
+  switch (kind) {
+    case "system_interaction":
+      return mockServerSettings.doc_cap_chars_system_interaction;
+    case "boot_sequence":
+      return mockServerSettings.doc_cap_chars_boot_sequence;
+    case "offboard":
+    case "accelerated_stop":
+      return mockServerSettings.doc_cap_chars_offboard;
+    case "task_closeout":
+    case "task_reassign_predecessor":
+    case "task_takeover_with_predecessor":
+    case "task_takeover_fresh":
+    case "task_unblocked":
+      return TASK_EVENT_CAP_CHARS_DEFAULT;
+  }
+}
+
+/** The 405 both write faces answer for a read-only document. `suffix` is the
+ * route tail so the thrown message names the call that was refused. */
+function refuseReadOnlyBootDoc(
+  kind: BootDocKind,
+  key: string,
+  suffix: string
+): void {
+  if (!BOOT_DOC_READ_ONLY.has(`${kind}/${key}`)) return;
+  throw mockApiError(
+    `http 405 for POST /api/boot-docs/${kind}/${key}${suffix}`,
+    405,
+    `the ${BOOT_DOC_NAMES[`${kind}/${key}`] ?? kind} is a read-only document — ` +
+      "it is shown so you can see what agents are told, but no caller may edit " +
+      "it and there is no version of it other than the shipped one; nothing was written"
+  );
+}
+
+/** The (kind, key) pairs this mock serves — parsed back out of BOOT_DOC_SEEDS
+ * rather than restated, so it cannot name a document it would then 404.
+ *
+ * 🔴 EXPORTED FOR ONE TEST, not for the cockpit (T-3201). `GET /api/boot-docs`
+ * is gone: which documents exist is the frozen spec's `BootDocKind` enum, and
+ * the cockpit's row table is indexed by it, so a missing row is a compile error
+ * rather than a listing to compare against. What still needs measuring is that
+ * this MOCK serves the same set — it stands in for the server in every other
+ * frontend test, and a document missing here makes those tests pass on a fleet
+ * that does not exist. api/mock.boot-doc-registry.test.ts is the only caller. */
+export function __mockBootDocAddresses(): { kind: BootDocKind; key: string }[] {
+  return Object.keys(BOOT_DOC_SEEDS).map((slot) => {
+    const cut = slot.lastIndexOf("/");
+    return {
+      kind: slot.slice(0, cut) as BootDocKind,
+      key: slot.slice(cut + 1),
+    };
+  });
 }
 const roleOverlays = new Map<string, WireRoleDef>();
 // Owner-created CUSTOM roles (M2-2): a wire doc per minted key (is_seed=false).
@@ -604,17 +832,15 @@ const CUSTOM_ROLE_TEMPLATE_MD = `# 角色定義
 （待填：這個角色的職責與工作方式——負責哪些事、怎麼做事、輸出長什麼樣、\
 與 owner 及其他成員怎麼協作、什麼事不歸你管。）
 `;
-// Lessons OVERLAY (owner overlay ⊕ seed), keyed by `${role_key}::${task_type}`. A
+// Lessons OVERLAY (owner overlay ⊕ seed), keyed by the BARE `role_key` (T-2
+// removed the `task_type` half of the old composite key). A
 // save stores the overlay so the folded read is now owner-edited
-// (is_default=false); absent → the folded read is the REAL seed. PER-ROLE doc
-// (per-role-learnings step1): agents sharing a role share the overlay.
+// (is_default=false); absent → the folded read is the REAL seed. PER-ROLE doc:
+// agents sharing a role share the overlay.
 const lessonsOverlays = new Map<string, WireLessons>();
-const lessonsKey = (roleKey: string, taskType: string) =>
-  `${roleKey}::${taskType}`;
 
-// Insight OVERLAY (T-3809), keyed by the BARE `role_key`. ⚠️ NOT the lessons
-// composite: insight has no task_type axis, so there is no "::" in this key and
-// nothing may derive one key format from the other. An absent entry folds
+// Insight OVERLAY (T-3809), keyed by the BARE `role_key` — the same shape
+// lessons uses since T-2. An absent entry folds
 // against INSIGHT_SEEDS below (T-e1e3).
 const insightOverlays = new Map<string, WireInsight>();
 
@@ -635,14 +861,25 @@ const INSIGHT_SEEDS: Record<string, string> = {
 // shows only the owner's own message. Fabricating an assistant reply here would
 // be as dishonest as a fake lastSeen for a never-online member.
 let chatLog: ChatMessage[] = [];
+// T-4e95: chat message ids used to be `mock-${Date.now()}` alone, and two posts
+// inside the same millisecond therefore got the SAME id — reproduced, not
+// theorised. That was survivable while nothing pointed AT a message; a reply
+// carries the quoted message's id and nothing else, so an ambiguous id makes
+// the quote resolve to whichever row happens to be first (and collides React's
+// keys besides). The real server mints `c-` + 12 random hex; this counter is the
+// mock's cheapest way to keep the same promise — one id, one message.
+//
+// Deliberately NOT reset by __resetMock: a counter that restarted could hand a
+// fresh message the id of one a test still holds a reference to, which is the
+// very ambiguity it exists to remove.
+let mockChatSeq = 0;
 
 // In-memory read receipts, keyed `{reader}::{peer}` → the monotonic last-read
-// watermark. Mirrors the BE chat_read table. In mock mode the OWNER reads its own
-// messages back and marks them read (via listChat / markChatRead), and — since the
-// mock never fabricates a member reply — a message the owner sends to a member is
-// marked read by that member ONLY if listChat(withId) is called as that member,
-// which the single-owner mock UI never does. So the mock's "read ✓" is honest: it
-// reflects only real recorded watermarks, never a fabricated peer read.
+// watermark. Mirrors the BE chat_read table. In mock mode the OWNER marks its own
+// messages read through markChatRead, and — since the mock never fabricates a
+// member reply — a message the owner sends to a member is never marked read by
+// that member at all. So the mock's "read ✓" is honest: it reflects only real
+// recorded watermarks, never a fabricated peer read.
 const chatReads = new Map<string, ChatReadReceipt>();
 
 // In-memory reply cards (等我回覆卡). HONEST HARD LINE (same as chatLog): the
@@ -659,7 +896,23 @@ let replyCards: ReplyCard[] = [];
 // §5.1) — the owner creates every type. Tests inject via __injectMockTask /
 // __injectMockOutsourceWorker / __injectMockTaskType to exercise the
 // list / filter / terminate / priority / message / manual seams.
-let tasks: TaskView[] = [];
+// 🔴 THE STORE HOLDS EACH ARTIFACT WHOLE, which is why the row type is not
+// plain `TaskView`. T-66 narrowed `TaskView.artifacts` to an id+label INDEX,
+// but an index is a READ SHAPE, not what a store keeps: the server's store
+// holds the full deliverable and its two reads project from it (`get_task` →
+// the index, `list_task_artifacts` → the full rows). A mock whose store held
+// only the index could not answer the second read at all — which is exactly
+// how it came to `return []` and tell a reader 「還沒有產物」 about a task whose
+// badge had just said N.
+export type MockTaskRow = Omit<TaskView, "artifacts"> & { artifacts?: TaskArtifactView[] };
+let tasks: MockTaskRow[] = [];
+
+// The retained PREVIOUS versions of a pinned deliverable (T-60), keyed by
+// artifact id — the mock's stand-in for `task_artifact_history`. Nothing in the
+// cockpit WRITES here (replace is the executing agent's MCP verb, not an owner
+// action), so the only producer is __injectMockArtifactVersions; un-pinning an
+// artifact drops its versions the way the server's transaction does.
+let artifactVersions = new Map<string, TaskArtifactVersionView[]>();
 let outsourceWorkers: OutsourceWorkerView[] = [];
 let taskManuals: TaskManualView[] = [];
 
@@ -741,11 +994,21 @@ function emitTopic(topic: string): void {
   for (const cb of [...topicSubscribers]) cb(topic);
 }
 
+/** The circled indices as the SERVER stores them: deduped + ascending, so
+ * `[2,0]` and `[0,2]` are the same stored answer. */
+function storedOptionIdxs(idxs: number[]): number[] {
+  return [...new Set(idxs)].sort((a, b) => a - b);
+}
+
 /** Answer-input validation shared by answer/re-answer — mirrors the server's
- * 400s: an empty answer (no option, no text, no attachments) and an
- * out-of-range option_idx are both rejected. */
+ * 400s: an empty answer (no option, no text, no attachments) is rejected, and
+ * an EMPTY `optionIdxs` list counts as empty rather than as an answer (the
+ * server's len() guard — a nil check would let `[]` through and close the card
+ * on nothing); an out-of-range index is rejected; and a `single` card given
+ * more than one index is rejected. */
 function validateReplyAnswer(card: ReplyCard, answer: ReplyCardAnswerInput) {
-  const hasOption = answer.optionIdx !== undefined && answer.optionIdx !== null;
+  const idxs = answer.optionIdxs ?? [];
+  const hasOption = idxs.length > 0;
   const hasText = (answer.text ?? "").trim().length > 0;
   const hasAtts = (answer.attachments ?? []).length > 0;
   if (!hasOption && !hasText && !hasAtts) {
@@ -755,15 +1018,21 @@ function validateReplyAnswer(card: ReplyCard, answer: ReplyCardAnswerInput) {
       "an answer needs an option, text, or attachments"
     );
   }
-  if (hasOption) {
-    const idx = answer.optionIdx as number;
+  for (const idx of idxs) {
     if (idx < 0 || idx >= card.options.length) {
       throw mockApiError(
         `http 400 for answer /api/reply-cards/${card.id}/answer`,
         400,
-        `option_idx ${idx} out of range`
+        `option_idxs out of range: ${idx}`
       );
     }
+  }
+  if (card.selectMode !== "multi" && storedOptionIdxs(idxs).length > 1) {
+    throw mockApiError(
+      `http 400 for answer /api/reply-cards/${card.id}/answer`,
+      400,
+      "this card takes at most one option"
+    );
   }
 }
 
@@ -789,8 +1058,9 @@ function toStoredReplyAnswer(
       };
     }
   );
+  const idxs = answer.optionIdxs ?? [];
   return {
-    optionIdx: answer.optionIdx ?? null,
+    optionIdxs: idxs.length > 0 ? storedOptionIdxs(idxs) : null,
     text: (answer.text ?? "").trim(),
     attachments,
   };
@@ -820,15 +1090,80 @@ function mockReplyCardStatusOf(
   return card ? card.status : null;
 }
 
+/** How much of a quoted message a quote line carries. A MIRROR of the server's
+ * `chatReplyQuoteMaxChars` (server/ocserverd/wire.go) — the mock has no server to
+ * ask, so the number has to be written twice.
+ *
+ * 🔴 TWO COPIES, ONE GUARD. Both sides used to assert 60 against their own
+ * hard-coded literal (Go: `wantQuoteRunes`; here: the 61-rune expectation in
+ * mock.reply-to.test.ts), so moving the server's constant and updating only the
+ * Go test left this side green and cutting at the old length — offline preview
+ * disagreeing with the live product, which is the one failure the mock exists to
+ * prevent. `mock.reply-to.test.ts` now READS wire.go and fails when the two
+ * numbers differ; it is the reason a comment is enough here. */
+const MOCK_REPLY_QUOTE_MAX_CHARS = 60;
+
+/** Read-time join mirroring the server's `reply_to_chat`: the message a reply
+ * quotes, snapshotted as the read happens.
+ *
+ * 🔴 UNCONDITIONAL, exactly like the server (T-4e95, owner ruling 2026-08-21).
+ * No "is it already in this window" check, no cache. null when the message
+ * replies to nothing AND null when it replies to something the log no longer
+ * carries — the caller tells the two apart by `replyTo`, which never
+ * disappears. Mock mode exists so an offline preview behaves like the real
+ * thing; a mock that only sometimes attached the quote would preview a bug the
+ * server does not have. */
+function mockReplyToChatOf(replyTo: string | null | undefined): ChatReplyQuote | null {
+  if (!replyTo) return null;
+  const quoted = chatLog.find((m) => m.id === replyTo);
+  if (!quoted) return null;
+  const oneLine = quoted.body.split(/\s+/).filter(Boolean).join(" ");
+  // Cut by CODE POINT, not by `.length`. The server counts runes, and
+  // String.prototype.length counts UTF-16 units — they agree on the CJK this
+  // studio is mostly written in and disagree on anything above the BMP (an
+  // emoji is two units and one rune), which is exactly the kind of quiet
+  // divergence a mock exists not to have.
+  const runes = [...oneLine];
+  return {
+    id: quoted.id,
+    from: quoted.from,
+    // "" like the server on every read that resolves no display names — which
+    // is every read the browser makes.
+    fromName: "",
+    // The QUOTED message's own recipient — the mock joins it off the same log
+    // row the server joins it off, so an offline preview draws the same
+    // 「寄件者 → 收件者」 a live one does, cross-conversation quotes included.
+    to: quoted.to,
+    toName: "",
+    content:
+      runes.length > MOCK_REPLY_QUOTE_MAX_CHARS
+        ? runes.slice(0, MOCK_REPLY_QUOTE_MAX_CHARS).join("") + "\u2026"
+        : oneLine,
+  };
+}
+
+/** One logged message as a READ serves it: a copy (so callers never mutate the
+ * log) carrying both read-time joins. Every mock chat read goes through this,
+ * for the same reason every server read goes through servedChatMessageDTO. */
+function mockServedChatMessage(m: ChatMessage): ChatMessage {
+  return {
+    ...m,
+    replyCardStatus: mockReplyCardStatusOf(m.replyCardId),
+    replyToChat: mockReplyToChatOf(m.replyTo),
+  };
+}
+
 /** Terminal task statuses (spec: 已完成/終止 為終態) — shared by the mock's
  * count / terminate / priority guards (mirrors the server's closed-set rule). */
 const TERMINAL_TASK_STATUSES = new Set(["done", "terminated", "duplicated"]);
 
-// The server's task_no projection of an id (domain.go TaskNo) — the mock needs
-// it for a dep whose task row is absent, exactly where the server derives it
-// rather than leaving the number blank (T-a3e4).
+// The server's task_no for an id (domain.go TaskNo) — the mock needs it for a
+// dep whose task row is absent, exactly where the server fills the number
+// rather than leaving it blank (T-a3e4). The number IS the id (T-5291), so
+// there is nothing to derive; the old `slice(2, 6)` here was a THIRD copy of a
+// projection that no longer exists.
 function deriveMockTaskNo(taskId: string): string {
-  return `T-${taskId.slice(2, 6)}`;
+  return taskId;
 }
 
 // withWorkerTaskJoin fills the bound-task fields the SERVER now folds into the
@@ -887,7 +1222,7 @@ function findTaskManual(typeKey: string): TaskManualView {
   return m;
 }
 
-function findTask(id: string): TaskView {
+function findTask(id: string): MockTaskRow {
   const t = tasks.find((x) => x.id === id);
   if (!t) {
     throw mockApiError(
@@ -1082,35 +1417,29 @@ function dropDocumentHistory(kind: DocumentKind, key: string): void {
   documentRows.delete(historySlot(kind, key));
 }
 
-/** Every "<role>::<task_type>" lessons document of one role. Matched by an
- * explicit PREFIX, exactly like DeleteLessonsOfRole: the key is compound, so
- * dropping only `<role>::general` would leave every other task type's history
- * readable after the role is gone. */
+/** The lessons document of one role. EXACT match on the bare role_key, mirroring
+ * DeleteLessonsForRole on the server: T-2 collapsed the compound
+ * "<role>::<task_type>" key to the role_key alone, and a prefix match on a key
+ * with no terminator would reach a neighbouring role whose key merely starts
+ * with this one. */
 function dropRoleLessonsHistory(roleKey: string): void {
-  const prefix = `${roleKey}::`;
+  const target = historySlot("lessons", roleKey);
   for (const slot of [...documentHistories.keys()]) {
-    if (slot.startsWith(historySlot("lessons", prefix))) {
+    if (slot === target) {
       documentHistories.delete(slot);
     }
   }
   for (const slot of [...documentRows]) {
-    if (slot.startsWith(historySlot("lessons", prefix))) documentRows.delete(slot);
+    if (slot === target) documentRows.delete(slot);
   }
-  for (const key of [...lessonsOverlays.keys()]) {
-    if (key.startsWith(prefix)) lessonsOverlays.delete(key);
-  }
+  lessonsOverlays.delete(roleKey);
 }
 
-/** The one insight document of one role (T-3809). 🔴 EXACT EQUALITY, not the
- * prefix match its lessons twin above uses — and the difference is load-bearing
- * in BOTH directions:
- *
- *   * the lessons key is compound, so it needs the prefix or sibling task types
- *     survive the role's deletion;
- *   * the insight key is the bare role_key with no "::" terminator, so copying
- *     that prefix match here would delete r-abcdef's retained versions while
- *     deleting r-abc. The server's cascade makes exactly this distinction
- *     (dal.go, DeleteInsightOfRole) and this mock has to agree with it.
+/** The one insight document of one role (T-3809). EXACT EQUALITY, the same
+ * shape its lessons twin above now uses: the key is the bare role_key with no
+ * "::" terminator, so a prefix match would delete r-abcdef's retained versions
+ * while deleting r-abc. (Until T-2 the lessons key was compound and DID need a
+ * prefix match; that is why the two used to differ.)
  *
  * 🔴 WHY THIS FUNCTION EXISTS AT ALL rather than a line added above: adding
  * "insight" to DocumentKind produces NO error anywhere in this file — the type
@@ -1234,7 +1563,19 @@ function snapshotDocument(
     // changes under a restore).
     case "system_interaction":
     case "boot_sequence":
-    case "offboard": {
+    case "offboard":
+    // T-3201: the six lifecycle documents are the SAME overlay shape. The two
+    // read-only ones never reach here in practice (nothing writes them, so no
+    // version is ever recorded), and they are listed rather than special-cased
+    // because this switch is total over DocumentKind and an arm that refuses
+    // them would be a second answer to "may this be edited" living where the
+    // wire's own `read_only` already answers.
+    case "accelerated_stop":
+    case "task_closeout":
+    case "task_reassign_predecessor":
+    case "task_takeover_with_predecessor":
+    case "task_takeover_fresh":
+    case "task_unblocked": {
       if (bootDocSeed(kind, key) === null) return null;
       const overlay = bootDocOverlays.get(`${kind}/${key}`);
       return {
@@ -1304,14 +1645,13 @@ function applyDocumentHistory(
       return;
     }
     case "lessons": {
-      const [roleKey, taskType] = key.split("::");
+      // The key IS the role_key since T-2 — nothing to split.
       if (tombstoned) {
         lessonsOverlays.delete(key);
       } else {
         lessonsOverlays.set(key, {
           ...docSizeFields(content.text ?? "", "learning"),
-          role_key: roleKey,
-          task_type: taskType,
+          role_key: key,
           text: content.text ?? "",
           owner_id: MOCK_OWNER_ID,
           schema_version: 2,
@@ -1417,6 +1757,31 @@ function mapWithExtras(w: WireMember): Member {
   return toMember(w);
 }
 
+/** 加速停止 stamps the SAME two-armed clock on a member and on an outsource
+ * worker, so the two mocks must not drift apart either — server-side both DTOs
+ * now read the ONE `winddownDeadlineOf` (T-14 item 3), and before that fix the
+ * worker mock's silence about `refocus_deadline` was accidentally right because
+ * the server also answered 0. It is this change that made it a divergence, on
+ * exactly the field the change is about, in the file a cockpit developer reads
+ * first — so the arithmetic lives in one place here rather than being spelled
+ * twice.
+ *
+ * `since === null` means "leave the existing stamp alone": the 下線 arm is
+ * anchored on the stop that is ALREADY open (`desired_state=offline`), so it
+ * only adds the ceiling. The 換手 arm opens the window here and stamps both.
+ * The grace mirrors the server's shipped default (StoppingTimeoutSecs), the
+ * same literal both arms used before this helper existed. */
+function acceleratedStopStamps(windingDownToOffline: boolean): {
+  since: number | null;
+  deadline: number;
+} {
+  const graceSecs = 120;
+  const now = Date.now() / 1000;
+  return windingDownToOffline
+    ? { since: null, deadline: now + graceSecs }
+    : { since: now, deadline: now + graceSecs };
+}
+
 function findWire(id: string): WireMember {
   const w = wireMembers.find((m) => m.id === id);
   if (!w) throw new Error(`mock: member not found: ${id}`);
@@ -1488,6 +1853,21 @@ function resumeDisplayNameOf(id: string): string {
 // server so the UI's error paths are exercisable offline.
 let mockPasswordSet = true;
 let mockPassword = "mock-password";
+// The mock's TOTP state, mirroring the server's three settings keys. It boots
+// with NO factor armed, which is what a fresh install looks like.
+//
+// The mock cannot compute real TOTP codes (no crypto here, and a test that had
+// to generate one would be testing HMAC, not the UI). It accepts one fixed
+// code instead — the same substitution the mock already makes for the claim
+// token. What the UI needs to be exercisable offline is the STATE MACHINE
+// (pending → armed → off) and the refusals, and those are faithful.
+// The ship-dark feature flag. Boots OFF, exactly like a real install that has
+// never opted in — so the mock cockpit shows what an untouched studio shows.
+let mockMfaOffered = false;
+let mockMfaActive = false;
+let mockMfaPending = false;
+const MOCK_TOTP_CODE = "123456";
+const MOCK_TOTP_SECRET = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
 const DEFAULT_MOCK_SETTINGS = {
   owner_token_ttl: 86400,
   agent_token_ttl: 604800,
@@ -1496,6 +1876,8 @@ const DEFAULT_MOCK_SETTINGS = {
   codex_compaction_threshold: 3,
   codex_notice_round: 2,
   monitoring_refresh_seconds: 5,
+  // 加速停止 grace — mirrors the server's shipped default (StoppingTimeoutSecs).
+  accelerated_grace_secs: 120,
   // M3 global outsource cap — mirrors the server's code-side default (3).
   outsource_max_parallel: 3,
   // T-ae38 document size caps — mirror the server's shipped defaults, which
@@ -1520,6 +1902,10 @@ const DEFAULT_MOCK_SETTINGS = {
   // caps above — a settings DTO missing a field the server always sends is a
   // mock the page can go green against while the real one breaks.
   chat_budget_chars: CHAT_BUDGET_CHARS_DEFAULT,
+  // T-8 backup retention N, served for the same reason as everything above: a
+  // settings DTO missing a field the server always sends is a mock the page can
+  // go green against while the real one breaks.
+  backup_retain: BACKUP_RETAIN_DEFAULT,
   // The two software-update toggles — both OFF out of the box, mirroring the
   // server (updates come from GitHub Releases; there is no updater server to
   // configure any more).
@@ -1539,6 +1925,12 @@ const DEFAULT_MOCK_SETTINGS = {
   // Layout width (T-756f) — OFF out of the box, mirroring the server (the
   // cockpit ships with the narrow centred column).
   display_wide: false,
+  // The first-run onboarding report (T-ba62). Null in the mock and staying
+  // that way: mock mode is a healthy studio, and a seeded FAILED report would
+  // hang the "your studio is broken" banner over every mock page. Declared
+  // rather than omitted so `onboarding_dismissed` below has something real to
+  // write to when a caller does seed one.
+  onboarding: null as WireServerSettings["onboarding"],
 };
 
 // ── Themes (T-83ef): their OWN store, keyed by id ────────────────────────────
@@ -2009,6 +2401,21 @@ let relocationPendingNext = false;
 // shape as relocationPendingNext, and equally sticky.
 let relocationDeferredNext = false;
 
+// The id shape is PRODUCTION'S, not a short stand-in: the server mints
+// "k-" + 16 hex (keyring.go newKeyID). A mock that models a narrower row than
+// the real one is a mock that hides layout defects from every guard mounted on
+// it — which is exactly what happened the first time this fixture was written
+// with "k-mock0". `created_ts: 0` is likewise the real convention, not a
+// placeholder: it is how an install that predates the ring reports a key whose
+// creation time was never recorded, so the card's "unknown" branch is exercised
+// by default.
+const MOCK_WIRE_SIGNING_KEYS: WireSigningKeys["keys"] = [
+  { key_id: "k-a1b2c3d4e5f60718", created_ts: 0, is_signing: true },
+];
+let mockSigningKeys: WireSigningKeys["keys"] = structuredClone(
+  MOCK_WIRE_SIGNING_KEYS,
+);
+
 export const mockApi: Api = {
   async listMembers(_opts?: { light?: boolean }): Promise<Member[]> {
     // Mirror the backend roster: dismissed (status="removed") rows are excluded.
@@ -2135,6 +2542,55 @@ export const mockApi: Api = {
     w.presence = "offline";
   },
 
+  async resetMemberCost(id: string): Promise<CostResetReceipt> {
+    // 成本歸零 (mirror handle_reset_cost): clear BOTH halves of the actor's spend
+    // and answer with what was destroyed. Cost lives on the monitoring session
+    // row here — MemberDTO carries none — which is also where the real backend's
+    // two halves surface, so the mutation lands where the cockpit reads it.
+    // An id with no session row clears nothing and honestly reports nulls.
+    const row = wireMonitoring.sessions.find((s) => s.id === id);
+    const clearedCost = row?.cost ?? null;
+    const clearedBankedCost = row?.banked_cost ?? null;
+    if (row) {
+      row.cost = null;
+      row.banked_cost = null;
+    }
+    // The figure is rendered from TWO stores here — the monitoring row and, for
+    // an outsource actor, its worker row — so clearing one and not the other
+    // leaves the panel showing the number the reset just destroyed (found by
+    // independent review, T-56). The real server has one figure per actor and
+    // fans a delta on both topics; the mock has to keep its two copies in step
+    // by hand or it stops being a rehearsal of that.
+    const worker = outsourceWorkers.find((w) => w.id === id);
+    if (worker) {
+      worker.cost = null;
+      worker.bankedCost = null;
+      emitTopic("outsource_worker");
+    }
+    // The production route fans a `monitoring` signal so the cockpit refetches.
+    // Without it here the mock reports success and nothing on screen moves.
+    emitTopic("monitoring");
+    return { memberId: id, clearedCost, clearedBankedCost };
+  },
+
+  async resetAccountCost(account: string): Promise<AccountCostResetReceipt> {
+    // 帳號歸零 (mirror handle_reset_account_cost): zero the ACCOUNT's own
+    // accumulated figure and touch NO member — the separation owner ruling
+    // rc-5c5d7c7c6dcd asked for. The account row is where the cockpit reads it,
+    // so the mutation lands there and the session rows are left alone.
+    // An account nobody reports under clears nothing and honestly answers null.
+    const row = wireMonitoring.accounts.find((a) => a.account === account);
+    const clearedCost = row?.cost ?? null;
+    if (row) {
+      row.cost = null;
+    }
+    // NO member or worker store is touched — that separation is the ruling this
+    // route exists for. Only the monitoring signal fans, the same one the
+    // production route publishes so the cockpit refetches the card.
+    emitTopic("monitoring");
+    return { account, clearedCost };
+  },
+
   async forceStopMember(id: string): Promise<void> {
     // Immediate kill escalation (mirror handle_force_stop_member): write
     // desired_state=offline and fall to offline. The mock has no live agent/warden to
@@ -2143,6 +2599,31 @@ export const mockApi: Api = {
     const w = findWire(id);
     w.desired_state = "offline";
     w.presence = "offline";
+  },
+
+  async acceleratedStopMember(id: string): Promise<void> {
+    // 加速停止 (mirror handle_accelerated_stop_member): the MIDDLE rung. It
+    // ESCALATES a wind-down that is already open — the mock reproduces the 409
+    // gate rather than the clock, because the gate is the part a cockpit can get
+    // wrong (offering the button where the server would refuse it) and the clock
+    // is server-side arithmetic the mock has no session to run.
+    const w = findWire(id);
+    // `stopping_since` is deliberately NOT on the wire, so the mock reads the
+    // projection the server derives from it — which is also the only thing the
+    // cockpit itself can see, and therefore the right basis for a mock whose job
+    // is to catch a cockpit offering a button the server would refuse.
+    const windingDown = w.presence === "stopping" || (w.refocus_since ?? 0) > 0;
+    if (!windingDown) {
+      throw mockApiError(
+        "http 409 for POST /api/members/{id}/accelerated-stop",
+        409,
+        "加速停止 escalates a wind-down that is already open — this member has not been asked to stop. Press 停止 (deactivate) or 重新聚焦 (refocus) first",
+      );
+    }
+    w.refocus_op = "accelerated_stop";
+    const stamps = acceleratedStopStamps(w.desired_state === "offline");
+    if (stamps.since !== null) w.refocus_since = stamps.since;
+    w.refocus_deadline = stamps.deadline;
   },
 
   async dismissMember(id: string): Promise<void> {
@@ -2481,8 +2962,8 @@ export const mockApi: Api = {
     // rows, most recently updated first), and an overview computed FROM those
     // two lists — never a separately-fabricated count, so it cannot drift from
     // what the lists actually carry (same honesty contract the real endpoint's
-    // shared assembly gives). READ-ONLY: unlike listChat, this never advances a
-    // read watermark.
+    // shared assembly gives). READ-ONLY: this never advances a read watermark —
+    // true of every read door here since T-48, listChat included.
     //
     // The T-1b09 studio-floor blocks (roster / machines) ARE mocked now, and
     // so are their roster_chars / machines_chars sizes — see below. They used
@@ -2515,14 +2996,32 @@ export const mockApi: Api = {
     // `toName` resolve through the roster; an id that resolves to nothing keeps
     // the HONEST "" (the panel then shows the id alone rather than a name it
     // invented).
-    const chat = chatWindow.map((m) => ({
-      ...m,
-      fromName: resumeDisplayNameOf(m.from),
-      toName: resumeDisplayNameOf(m.to),
-      tsDisplay: mockTsDisplay(m.ts),
-      bodyOmittedChars: m.bodyOmittedChars ?? 0,
-      card: m.card ?? null,
-    }));
+    //
+    // The QUOTE rides along too, and it is the ONE read that carries display
+    // names inside it. The server's snapshot path joins `reply_to_chat` through
+    // the same helper every other read uses but hands it the roster, so the wake
+    // payload's quote says 「名字 → 名字」 where a browser read says 「"" → ""」
+    // (api_chat.go resumeChatMessageDTO). The snapshot is ALSO the read that
+    // BILLS those characters against the chat budget, so a mock that dropped the
+    // quote here would preview a card cheaper and emptier than the real one.
+    const chat = chatWindow.map((m) => {
+      const quote = mockReplyToChatOf(m.replyTo);
+      return {
+        ...m,
+        fromName: resumeDisplayNameOf(m.from),
+        toName: resumeDisplayNameOf(m.to),
+        tsDisplay: mockTsDisplay(m.ts),
+        bodyOmittedChars: m.bodyOmittedChars ?? 0,
+        card: m.card ?? null,
+        replyToChat: quote
+          ? {
+              ...quote,
+              fromName: resumeDisplayNameOf(quote.from),
+              toName: resumeDisplayNameOf(quote.to),
+            }
+          : null,
+      };
+    });
 
     // EXECUTOR MATCH IS BY ID ALONE — no executorKind gate. That mirrors the
     // server exactly: `resumeTasksFor` → `ListOpenTasksByExecutor` filters on
@@ -2576,6 +3075,20 @@ export const mockApi: Api = {
           updatedTs: t.updatedTs,
           detailChars,
           answeredCardSteps,
+          // T-91 — the mock mirrors the server's own projection: the hold is
+          // copied off the task row, and `blocking` is the REVERSE dependency
+          // edge computed the same way the server computes it (every
+          // non-terminal task that names this one in its blockedBy).
+          lock: t.lock ?? "",
+          reassignedFrom: t.reassignedFrom ?? "",
+          reassignedFromKind: t.reassignedFromKind ?? "",
+          blocking: tasks
+            .filter(
+              (o) =>
+                !["completed", "terminated", "duplicated"].includes(o.status) &&
+                (o.deps ?? []).includes(t.id)
+            )
+            .map((o) => o.id),
         };
       });
 
@@ -2721,40 +3234,79 @@ export const mockApi: Api = {
     if (limit !== undefined && limit >= 0) {
       msgs = limit === 0 ? [] : msgs.slice(-limit);
     }
-    // AUTO READ-RECEIPT: listing a conversation IS reading it — advance the
-    // OWNER's watermark for this peer to the newest message ts (mirrors the BE
-    // handle_list_chat auto-mark; the mock caller is always the owner).
-    // A HISTORY PAGE (cursor present) NEVER advances the watermark (BE
-    // parity): reading old context is not reading the newest messages.
-    if (!before && msgs.length > 0) {
-      const newest = Math.max(...msgs.map((m) => m.ts));
-      markRead(MOCK_OWNER_ID, withId, newest);
-    }
-    // Read-time reply_card_status join (server parity) — a copy per message so
-    // callers never mutate the log.
-    return msgs.map((m) => ({
-      ...m,
-      replyCardStatus: mockReplyCardStatusOf(m.replyCardId),
-    }));
+    // NO READ RECEIPT (T-48, BE parity): listing a conversation is NOT reading
+    // it. GET /api/chat used to advance the owner's watermark on a cursorless
+    // list; the owner ruled that marking read must be an explicit intent, so
+    // the write moved out of this door entirely. The mock mirrors that — the
+    // only thing that marks anything read here is markChatRead().
+    // Read-time joins (server parity) — a copy per message so callers never
+    // mutate the log.
+    return msgs.map(mockServedChatMessage);
   },
 
-  async peekChat(withId: string, limit = 30): Promise<ChatMessage[]> {
-    // READ-ONLY twin of listChat: SAME filter/order/window, but NEVER advances
-    // the owner's read watermark (mirrors the BE ?peek=true — filter+cap by
-    // ?with= with no auto-mark). Used while the owner is not actually looking
-    // (backgrounded window) so the unread badge keeps counting. Default 30
-    // mirrors the http adapter (and the server default) so mock and http return
-    // the same window for a bare peekChat(withId).
-    let msgs = chatLog
+  async listChatWindow(
+    withId: string,
+    anchor: ChatAnchor,
+    limit: number,
+  ): Promise<ChatMessage[]> {
+    // Mock twin of the T-48 anchor window (`?start_id=` / `?end_id=`). Same
+    // total order the BE pages by, both ends INCLUSIVE, answered oldest→newest.
+    //
+    // THROWS on an id this conversation does not carry, matching the server's
+    // 404 — an unknown anchor must never look like "a real window that happens
+    // to be empty", which is the exact confusion the whole feature exists to
+    // remove.
+    const msgs = chatLog
       .filter((m) => m.from === withId || m.to === withId)
-      .sort((a, b) => a.ts - b.ts);
-    if (limit >= 0) {
-      msgs = limit === 0 ? [] : msgs.slice(-limit);
-    }
-    return msgs.map((m) => ({
-      ...m,
-      replyCardStatus: mockReplyCardStatusOf(m.replyCardId),
-    }));
+      .sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    const indexOf = (id: string) => {
+      const i = msgs.findIndex((m) => m.id === id);
+      // A REAL 404, not a bare Error (T-48): the cockpit now tells "no such
+      // message" apart from "the read failed" by the status, and a statusless
+      // throw here would make the offline cockpit say 「現在讀不到,可以再試」 about
+      // an id that genuinely does not exist.
+      if (i < 0)
+        throw mockApiError(
+          `http 404 for GET /api/chat?with=${withId}`,
+          404,
+          `no message carries id ${id}`,
+        );
+      return i;
+    };
+    let lo = 0;
+    let hi = msgs.length - 1;
+    if (anchor.startId !== undefined) lo = indexOf(anchor.startId);
+    if (anchor.endId !== undefined) hi = indexOf(anchor.endId);
+    if (lo > hi)
+      throw mockApiError(
+        `http 422 for GET /api/chat?with=${withId}`,
+        422,
+        "start_id is newer than end_id",
+      );
+    let window = msgs.slice(lo, hi + 1);
+    // Truncate at the START (older) end when both anchors are given — the
+    // window stays anchored on `end_id`. With only `start_id` the anchor is the
+    // OLD end, so the cap keeps the FIRST `limit`.
+    window =
+      anchor.endId !== undefined
+        ? window.slice(-limit)
+        : window.slice(0, limit);
+    return window.map(mockServedChatMessage);
+  },
+
+  async getChatMessage(id: string): Promise<ChatMessage> {
+    // Mock twin of GET /api/chat?ids=<id> — ONE named message in full, no
+    // read-watermark side effect. Caller-blind, exactly like the server: the
+    // by-ids door reaches as far as the ordinary listing does.
+    //
+    // THROWS on an unknown id, matching the server's all-or-nothing 404. That is
+    // not pedantry here: the quote row's whole design rests on a failure being
+    // said out loud instead of drawn as a plausible-looking blank, and a mock
+    // that resolved to `null` would let an offline session build a UI branch the
+    // real adapter can never reach.
+    const found = chatLog.find((m) => m.id === id);
+    if (!found) throw new Error(`no message carries id ${id}`);
+    return mockServedChatMessage(found);
   },
 
   async listChatAttachments(withId: string): Promise<GalleryAttachment[]> {
@@ -2762,8 +3314,9 @@ export const mockApi: Api = {
     // attachments of EVERY logged message the member participates in
     // (owner↔member both directions + inter-agent threads), newest→oldest,
     // each row carrying the sender id + the roster-resolved display name
-    // ("" for the owner — the UI renders its own 「我」 label). READ-ONLY:
-    // unlike listChat this never advances a read watermark. HONEST: derived
+    // ("" for the owner — the UI renders its own 「我」 label). READ-ONLY: this
+    // never advances a read watermark, as no read door here has since T-48.
+    // HONEST: derived
     // solely from real logged messages — never a fabricated entry.
     const involved = chatLog
       .filter((m) => m.from === withId || m.to === withId)
@@ -2794,6 +3347,7 @@ export const mockApi: Api = {
     to: string;
     body: string;
     attachments?: ChatAttachmentInput[];
+    replyTo?: string;
   }): Promise<ChatMessage> {
     // Record the owner's message into the in-memory log and echo it back. The
     // sender is MOCK_OWNER_ID ("owner") — matching the real backend, which
@@ -2818,8 +3372,17 @@ export const mockApi: Api = {
         isImage: mime.startsWith("image/"),
       };
     });
+    // The quote link (T-4e95). The mock enforces the SAME refusal the server
+    // does, and only that one: the target must EXIST. The same-conversation
+    // refusal that used to sit here went with the server's on 2026-08-21 —
+    // quoting a line out of another conversation is the use case now, and a
+    // mock that still refused it would make offline preview disagree with the
+    // real thing about the very behaviour this change exists to add.
+    if (msg.replyTo && !chatLog.some((m) => m.id === msg.replyTo)) {
+      throw new Error(`reply_to names no message (${msg.replyTo})`);
+    }
     const sent: ChatMessage = {
-      id: `mock-${stamp}`,
+      id: `mock-${stamp}-${++mockChatSeq}`,
       from: MOCK_OWNER_ID,
       to: msg.to,
       body: msg.body,
@@ -2829,9 +3392,14 @@ export const mockApi: Api = {
       // owner-posted message never carries one (mirrors the server).
       replyCardId: null,
       replyCardStatus: null,
+      replyTo: msg.replyTo ?? null,
     };
     chatLog.push(sent);
-    return sent;
+    // Echoed through the SAME read projection the listing uses, because the
+    // server echoes through servedChatMessageDTO: a reply's quote is on the POST
+    // response too, and a mock that left it off would have the thread flicker
+    // between "quoted" and "not quoted" offline and not online.
+    return mockServedChatMessage(sent);
   },
 
   async markChatRead(mark: {
@@ -3090,10 +3658,75 @@ export const mockApi: Api = {
         ...st,
         replyCardStatus: mockReplyCardStatusOf(st.replyCardId || null),
       })),
-      // Full task carries the resolved set; count kept == length (server parity).
-      artifacts: task.artifacts ?? [],
+      // Full task carries the artifact INDEX (T-66: id + label per deliverable);
+      // count kept == length (server parity). The full rows are listTaskArtifacts.
+      //
+      // 🔴 PROJECTED, not passed through. The store row holds each artifact
+      // whole, and a `TaskArtifactView` is structurally a `TaskArtifactRefView`
+      // too — so handing the stored row straight back type-checks and would
+      // quietly make mock mode the ONE place a task read carries url / mime /
+      // filename. The cockpit would then render from the task read here and
+      // 404 against a real server. The mapper is the guard, so the mock has to
+      // narrow exactly like it does.
+      artifacts: (task.artifacts ?? []).map((a) => ({ id: a.id, label: a.label })),
       artifactCount: (task.artifacts ?? []).length,
     };
+  },
+
+  async getTaskStep(taskId: string, stepId: string): Promise<TaskStepDetailView> {
+    // Mirrors GET /api/tasks/{task_id}/steps/{step_id} (T-66): ONE step, note
+    // text included, and NOTHING of the task.
+    //
+    // 🔴 A step that is not on the named task is a NOT-FOUND here too, not the
+    // other task's step. The server answers 404 for it, and a mock that happily
+    // resolved a step id against the whole store would let a cockpit bug that
+    // mixes task and step ids look correct in mock mode and 404 only in front
+    // of a real server.
+    //
+    // The mock task fixtures carry no step notes (they never have), so `note`
+    // is "" and `noteSizeChars` 0 — which is why no 備註 entry renders in mock
+    // mode. That is the honest projection of the fixtures, not a stub: a mock
+    // that invented note text would make the fetch-on-open path look exercised
+    // when the fixtures say there is nothing to open.
+    const task = findTask(taskId);
+    const step = task.steps.find((s) => s.id === stepId);
+    if (!step) {
+      throw mockApiError(
+        `http 404 for /api/tasks/${taskId}/steps/${stepId}`,
+        404,
+        `step '${stepId}' not found`
+      );
+    }
+    return {
+      ...structuredClone(step),
+      replyCardStatus: mockReplyCardStatusOf(step.replyCardId || null),
+      detailLevel: "full",
+      note: "",
+      noteSizeChars: 0,
+      noteCapChars: 4000,
+    };
+  },
+
+  async listTaskArtifacts(taskId: string): Promise<TaskArtifactView[]> {
+    // Mirrors GET /api/tasks/{task_id}/artifacts (T-66): the WHOLE ticket's
+    // deliverables, each in full, in one call.
+    //
+    // 🔴 THE ROWS COME OFF THE TASK, and a `[]` here would be a lie the reader
+    // can see. This used to `return []` under a comment claiming the mock
+    // fixtures never carry artifacts — false in this very file: `getTask`
+    // reads `task.artifacts`, `removeTaskArtifact` writes it, and
+    // `__injectMockTask` lands whole sets. The visible effect of the lie was
+    // the one thing TaskArtifactsPopover says it must never do: the badge
+    // saying 「產物 N」 over a panel saying 「還沒有產物」.
+    //
+    // Deliberately UNFILTERED and unpaged: the server's handler answers the
+    // whole ticket's set in one call, which is the shape the panel opens onto.
+    // Cloned so a caller mutating a row cannot reach into the store.
+    //
+    // `findTask` still runs, so an unknown task id is a not-found here exactly
+    // as it is against a real server — never a silent [].
+    const task = findTask(taskId);
+    return structuredClone(task.artifacts ?? []);
   },
 
   async getTaskCount(): Promise<TaskCountView> {
@@ -3107,10 +3740,16 @@ export const mockApi: Api = {
   },
 
   async terminateTask(id: string): Promise<TaskView> {
-    // Mirrors handle_terminate_task: the ONLY owner-side status change;
-    // non-terminal only (done/terminated → 409). Stamps closedTs and releases
-    // any bound outsource worker (the live list drops it — the card's 外包
-    // display honestly falls back to the bare label).
+    // Mirrors handle_terminate_task: the only status change that does not go
+    // through the task's own step reports; non-terminal only (done/terminated →
+    // 409). Stamps closedTs and releases any bound outsource worker (the live
+    // list drops it — the card's 外包 display honestly falls back to the bare
+    // label).
+    //
+    // ⚠️ NOT owner-only since T-b56e (owner 2026-08-20, card rc-b896e3f641e7):
+    // the task's own executor may terminate it too, unless that executor is an
+    // outsource worker. This mock has no caller identity, so it cannot model
+    // the gate — it answers as the cockpit's owner token always did.
     const t = findTask(id);
     if (TERMINAL_TASK_STATUSES.has(t.status)) {
       throw mockApiError(
@@ -3415,25 +4054,36 @@ export const mockApi: Api = {
     // predecessor notice fires for a member OR outsource predecessor (the
     // outsource one is now kept live), the successor notice for a member OR a
     // freshly-minted worker (whose boot context ALSO folds the same instruction).
-    const newExecutorLabel = newMember
-      ? newMember.name || newMember.id
-      : `外包 ${newWorker!.codename}`;
+    // 🔴 THE SUCCESSOR'S LABEL IS GONE (T-6f44). The predecessor notice no longer
+    // names who took the task, so there is nothing left to label — and that is
+    // what killed the fabricated 「外包（待排程指派）」 placeholder: an outsource
+    // successor is minted by the scheduler LATER, so at reassign time there was
+    // nobody to name and a hardcoded status string sat in a person's grammatical
+    // slot. Only the id survives, and only to address the message.
     const newExecutorId = newMember ? newMember.id : newWorker!.id;
     if (oldExecutor) {
       chatLog.push({
         id: `mock-reassign-old-${stamp}`,
         from: "system",
         to: oldExecutor,
+        // 🔴 T-6f44：逐字跟著 seeds/task_reassign_predecessor.md。owner 2026-08-24
+        // 拿掉了接手人的身分（「讓他自己去查」「不管是不是 outsource」），本體也
+        // 改成「先把交接寫到票上，對接是 nice-to-have」—— 因為外包接手人是排程器
+        // 之後才生的，那段對話可能永遠不會發生，唯一留得住的是寫在票上的字。
         body:
-          `[${t.taskNo}] 此任務已轉派給 ${newExecutorLabel}（id \`${newExecutorId}\`）。` +
-          `請停止推進，改為去跟他做交接：主動 post_chat 給他，回答他關於目前進度、在飛事項、要注意的坑的提問，` +
-          `直到他確認交接完成。交接完成後這張任務就不再是你的了。`,
+          `[${t.taskNo}] 此任務已轉派給新的接手人。` +
+          `請停止推進，先把交接資訊寫到這張任務上：目前進度、進行中的事項、有哪些雷要注意。` +
+          `**這一步不能省，它是接手人唯一保證讀得到的東西** —— 接手人可能還沒被建出來，也可能你已經下線了才輪到他。\n\n` +
+          `寫完就算交出去了。如果接手人剛好在線上來找你，就順便當面補齊；沒有的話不用等，也不用去找他。`,
         ts: stamp / 1000,
         attachments: [],
         replyCardId: null,
       });
     }
-    const note = input.note?.trim();
+    // `input.note` is deliberately NOT read here any more (T-6f44 / rc-0c36d8739b8f):
+    // the handover note lives on the TASK and rides its DTO; stapling a copy under
+    // the notice was the second one, and it was that copy which made these two
+    // documents unsplittable.
     if (oldExecutor) {
       const predecessorLabel =
         oldKind === "outsource"
@@ -3443,11 +4093,15 @@ export const mockApi: Api = {
         id: `mock-reassign-new-${stamp}`,
         from: "system",
         to: newExecutorId,
+        // 🔴 T-6f44：這段逐字跟著 seeds/task_takeover_with_predecessor.md 走。
+        // {title} 走了（票號已經指名那張票），前任的名字與 id 併成一個 slot，
+        // 而 {note} 早就不再附在通知裡（交接備註只留在任務上）。這裡是每個前端
+        // 測試看到的替身，它演的形狀跟出貨的不一樣，那些測試就是在一個不存在的
+        // 世界裡綠 —— 上一版正是這樣，舊句子在這裡活到了 T-6f44 的收官掃描。
         body:
-          `[${t.taskNo}] 你接手了任務「${t.title}」。你的前任是 ${predecessorLabel}（id \`${oldExecutor}\`）。` +
-          `請先跟他確認交接完成（直接 post_chat 給他，問清楚目前進度與在飛事項），` +
-          `確認後再由你自己呼叫 claim_task（認領）解除轉派鎖——只有你這個新負責人動得了；任務狀態一律照步驟推導，不必也不能自己報。` +
-          (note ? `\n\n交接備註：${note}` : ""),
+          `[${t.taskNo}] 你接手了這張任務，你的前任是 ${predecessorLabel}（${oldExecutor}）。` +
+          `請先跟他確認交接完成（直接 post_chat 給他，問清楚目前進度與進行中的事項），` +
+          `確認後再由你自己呼叫 claim_task（認領）解除轉派鎖——只有你這個新負責人動得了；任務狀態一律照步驟推導，不必也不能自己報。`,
         ts: stamp / 1000,
         attachments: [],
         replyCardId: null,
@@ -3457,10 +4111,10 @@ export const mockApi: Api = {
         id: `mock-reassign-new-${stamp}`,
         from: "system",
         to: newMember.id,
+        // Same ruling as its sibling above (T-6f44): no {title}, no {note}.
         body:
-          `[${t.taskNo}] 你接手了任務「${t.title}」。請先讀任務內容，` +
-          `準備好後由你自己呼叫 claim_task（認領）解除轉派鎖再開始執行；任務狀態一律照步驟推導，不必也不能自己報。` +
-          (note ? `\n\n交接備註：${note}` : ""),
+          `[${t.taskNo}] 你接手了這張任務。請先讀任務內容，` +
+          `準備好後由你自己呼叫 claim_task（認領）解除轉派鎖再開始執行；任務狀態一律照步驟推導，不必也不能自己報。`,
         ts: stamp / 1000,
         attachments: [],
         replyCardId: null,
@@ -3473,8 +4127,8 @@ export const mockApi: Api = {
 
   async removeTaskArtifact(taskId: string, artifactId: string): Promise<void> {
     // Mirrors handle_remove_task_artifact (T-3dc5): the owner/admin un-pin.
-    // Closed task → 409 (T-2654: the deliverable set is frozen in BOTH
-    // directions, so un-pin is refused exactly like add). Unknown artifact →
+    // Closed task → 409 (T-2654: the deliverable set is frozen in EVERY
+    // direction, so un-pin is refused exactly like add and replace). Unknown artifact →
     // 404, wrong-task ownership → 400. The blob is left intact (the mock has no
     // blob store to touch). The 409 must come BEFORE the artifact lookup, same
     // as the server — a mock that deletes where production refuses is worse
@@ -3498,7 +4152,38 @@ export const mockApi: Api = {
     }
     t.artifacts = arts.filter((a) => a.id !== artifactId);
     t.artifactCount = t.artifacts.length;
+    // Server parity (T-60): un-pinning deletes the artifact's retained versions
+    // in the SAME transaction. A mock that kept them would let a version list
+    // outlive the artifact it belongs to — a state production cannot reach.
+    artifactVersions.delete(artifactId);
     emitTopic("task");
+  },
+
+  async listTaskArtifactVersions(
+    taskId: string,
+    artifactId: string,
+  ): Promise<TaskArtifactVersionView[]> {
+    // Mirrors handle_list_task_artifact_history (T-60): the retained PREVIOUS
+    // versions, newest first. An artifact that has never been replaced answers
+    // [] (the honest "nothing has been replaced here"), never a 404. Read-only:
+    // there is no restore verb to pair with it.
+    //
+    // KNOWN DIVERGENCE from the server's guard ladder: the server answers
+    // unknown task 404 → unknown artifact 404 → artifact-on-a-different-task
+    // 400, while this mock only ever looks inside the named task's own
+    // artifacts, so a real artifact id belonging to ANOTHER task comes back 404
+    // here and 400 there. No mock artifact verb models that 400, so do not
+    // build a test of the 400 branch on this stub.
+    const t = findTask(taskId);
+    const art = (t.artifacts ?? []).find((a) => a.id === artifactId);
+    if (!art) {
+      throw mockApiError(
+        `http 404 for GET /api/tasks/${taskId}/artifact/${artifactId}/history`,
+        404,
+        `artifact '${artifactId}' not found`,
+      );
+    }
+    return structuredClone(artifactVersions.get(artifactId) ?? []);
   },
 
   async postTaskMessage(id: string, msg: TaskMessageInput): Promise<void> {
@@ -3598,9 +4283,17 @@ export const mockApi: Api = {
       w.machine = m ? m.name : machineId;
     }
     emitTopic("outsource_worker");
+    // Mock ↔ http parity (T-ed79 #5): a LIVE worker's move is deferred to its
+    // 收口, so the answer says "scheduled, not landed" AND says which of the two
+    // kinds of not-landed it is. A worker with no live session is dispatched now
+    // and carries neither flag.
+    const deferred = w.presence === "online";
     return {
       ...withWorkerTaskJoin(structuredClone(w)),
       unreadCount: unreadCountOf(w.id),
+      ...(deferred
+        ? { relocationPending: true, relocationDeferred: true }
+        : {}),
     };
   },
 
@@ -3637,9 +4330,11 @@ export const mockApi: Api = {
   },
 
   async stopWorker(id: string): Promise<OutsourceWorkerView> {
-    // 停止 (T-f190). Held down: set desired_state offline (member parity), clear any
-    // in-flight refocus, project presence "stopped". unknown/released → 404.
-    // Idempotent.
+    // 停止 (T-f190; a GRACEFUL close-out since T-ed79). Held down: desired_state
+    // offline (member parity) and the in-flight refocus cleared — but NO kill.
+    // The worker is shown its 〈停止〉 and keeps its session until it reports
+    // stopped, so a worker that was online projects "stopping" here, not
+    // "stopped". unknown/released → 404. Idempotent.
     const w = outsourceWorkers.find((x) => x.id === id);
     if (!w || w.status === "released") {
       throw mockApiError(
@@ -3649,6 +4344,72 @@ export const mockApi: Api = {
     }
     w.desiredState = "offline";
     w.refocusSince = null;
+    w.refocusOp = undefined;
+    w.presence = w.presence === "online" ? "stopping" : "stopped";
+    emitTopic("outsource_worker");
+    return {
+      ...withWorkerTaskJoin(structuredClone(w)),
+      unreadCount: unreadCountOf(w.id),
+    };
+  },
+
+  async acceleratedStopWorker(id: string): Promise<OutsourceWorkerView> {
+    // 加速停止 (T-ed79) — the MIDDLE rung. It escalates a wind-down that is
+    // ALREADY open, so its refusal is what makes it an escalation rather than a
+    // second stop button; the message names the rungs below it, mirroring the
+    // server's acceleratedStopWorkerNeedsAnOpenWindDownMsg.
+    const w = outsourceWorkers.find((x) => x.id === id);
+    if (!w || w.status === "released") {
+      throw mockApiError(
+        `http 404 for POST /api/outsource-workers/${id}/accelerated-stop`,
+        404, `outsource worker ${id} not found`
+      );
+    }
+    const windingDown =
+      (w.desiredState === "offline" && w.presence === "stopping") ||
+      (w.refocusSince ?? 0) > 0;
+    if (w.presence !== "online" && w.presence !== "stopping") {
+      throw mockApiError(
+        `http 409 for POST /api/outsource-workers/${id}/accelerated-stop`,
+        409, "加速停止 requires the worker to be online (no live session to accelerate)"
+      );
+    }
+    if (!windingDown) {
+      throw mockApiError(
+        `http 409 for POST /api/outsource-workers/${id}/accelerated-stop`,
+        409,
+        "加速停止 escalates a wind-down that is already open — this worker has not " +
+          "been asked to stop. Press 停止 or 重新聚焦 first"
+      );
+    }
+    w.refocusOp = "accelerated_stop";
+    // The SAME two arms as the member mock, through the same helper — the
+    // server's worker DTO reads the shared `winddownDeadlineOf` since T-14
+    // item 3, so a mock that stayed silent here would show the cockpit no
+    // countdown where the real wire now carries one.
+    const stamps = acceleratedStopStamps(w.desiredState === "offline");
+    if (stamps.since !== null) w.refocusSince = stamps.since;
+    w.refocusDeadline = stamps.deadline;
+    emitTopic("outsource_worker");
+    return {
+      ...withWorkerTaskJoin(structuredClone(w)),
+      unreadCount: unreadCountOf(w.id),
+    };
+  },
+
+  async forceStopWorker(id: string): Promise<OutsourceWorkerView> {
+    // 強制停止 (T-ed79) — the THIRD rung, and the body /stop used to have: the
+    // session is killed on the spot, so the worker lands in "stopped" directly.
+    const w = outsourceWorkers.find((x) => x.id === id);
+    if (!w || w.status === "released") {
+      throw mockApiError(
+        `http 404 for POST /api/outsource-workers/${id}/force-stop`,
+        404, `outsource worker ${id} not found`
+      );
+    }
+    w.desiredState = "offline";
+    w.refocusSince = null;
+    w.refocusOp = undefined;
     w.presence = "stopped";
     emitTopic("outsource_worker");
     return {
@@ -3669,19 +4430,28 @@ export const mockApi: Api = {
         404, `outsource worker ${id} not found`
       );
     }
-    // Mock ↔ http parity (T-7526): the guard asks whether the worker is ALIVE,
-    // not whether anyone pressed 停止. A worker whose session died on its own
-    // keeps desired_state=online and must still be revivable; a genuinely live
-    // one is still refused.
-    if (w.desiredState !== "offline" && w.presence === "online") {
-      throw mockApiError(
-        `http 409 for POST /api/outsource-workers/${id}/restart`,
-        409, "worker is still online — nothing to restart"
-      );
+    // Mock ↔ http parity (T-ed79 #10, owner 2026-08-21 「往正職靠：外包也不擋」):
+    // the over-spawn guard is GONE. A live worker is DISPLACED, not refused —
+    // the same shape 活化 has always had for a staff member — and the fact that
+    // the press found a live session is a receipt on the row instead of a 409.
+    if (w.presence === "online") {
+      w.lastOp = "start";
+      w.lastOpOk = false;
+      w.lastOpLog = "";
+      w.lastOpReason =
+        "session_alive: this worker was still running — 重啟 is replacing that " +
+        "session, not starting a first one. If it does not come back, its " +
+        "previous session was still holding the slot";
+      w.lastOpAt = Date.now() / 1000;
     }
     w.desiredState = "online";
     w.presence = "waking";
     emitTopic("outsource_worker");
+    // Mock ↔ http parity (T-ed79 #12): the mock always "dispatches", so it never
+    // reports activation_pending. The flag is deliberately NOT faked here — a
+    // mock that invents a pending state teaches the panel a story the server
+    // only tells in a condition this mock cannot reach (no kill target /
+    // unreachable warden).
     return {
       ...withWorkerTaskJoin(structuredClone(w)),
       unreadCount: unreadCountOf(w.id),
@@ -3739,15 +4509,21 @@ export const mockApi: Api = {
     // 404s are the contract that tells the panel the row is stale — but the
     // assembled text does not depend on either of them.
     const userText = foldGlobalContext().text;
-    const parts = [SEED_SYSTEM_INTERACTION_MD.trim()];
+    // FOLDED, like the staff preview and like the server (T-30e4). This path
+    // and getBootstrap were the SAME defect written twice — worth saying out
+    // loud, because fixing only the one the ticket named would have left an
+    // identical preview lying next door. Unlike the staff preview, the runtime
+    // here is real: a spawn names its worker, so buildWorkerBootContext really
+    // does branch, and so does this.
+    const parts = [foldBootDoc("system_interaction", "global").text.trim()];
     if (userText.trim()) {
       parts.push(`# 使用者自訂（Owner Additions）\n\n${userText.trim()}`);
     }
     parts.push(
-      (w.runtime === "codex"
-        ? SEED_BOOT_SEQUENCE_CODEX_MD
-        : SEED_BOOT_SEQUENCE_MD
-      ).trim(),
+      foldBootDoc(
+        "boot_sequence",
+        w.runtime === "codex" ? "codex" : "claude",
+      ).text.trim(),
     );
     return parts.join("\n\n") + "\n";
   },
@@ -4108,8 +4884,146 @@ export const mockApi: Api = {
     return toBackupHealth(wire);
   },
 
-  async getAuthStatus(): Promise<boolean> {
-    return mockPasswordSet;
+  async getSigningKeys(): Promise<SigningKeyView[]> {
+    return toSigningKeys({ keys: mockSigningKeys });
+  },
+
+  async rotateSigningKey(): Promise<SigningKeyView[]> {
+    // A real rotation: ADD a key, move the signing mark, drop nothing — so the
+    // mock cannot make the card look right while the server behaviour it
+    // stands in for would be wrong.
+    for (const k of mockSigningKeys) k.is_signing = false;
+    mockSigningKeys.push({
+      key_id: `k-${mockSigningKeys.length}${"0123456789abcdef".repeat(2).slice(0, 15)}`,
+      created_ts: Math.floor(Date.now() / 1000),
+      is_signing: true,
+    });
+    return toSigningKeys({ keys: mockSigningKeys });
+  },
+
+  async removeSigningKey(keyId: string): Promise<SigningKeyView[]> {
+    const target = mockSigningKeys.find((k) => k.key_id === keyId);
+    // 🔴 THE SAME ENVELOPE THE WIRE RETURNS, not a plain Error. A mock that
+    // throws bare prose makes `e.message` carry the reason, so a caller reading
+    // the wrong field looks correct in mock mode and shows `http 409 for POST …`
+    // against the real server. That is exactly what happened here, and
+    // frontend/.claude/rules/data-layer.md requires this envelope for the reason
+    // this comment exists.
+    if (!target) {
+      throw mockApiError(
+        `http 404 for POST /api/auth/signing-keys/${keyId}/remove`,
+        404,
+        `no signing key '${keyId}'`,
+      );
+    }
+    if (target.is_signing) {
+      throw mockApiError(
+        `http 409 for POST /api/auth/signing-keys/${keyId}/remove`,
+        409,
+        `key '${keyId}' is the one currently signing and cannot be removed — rotate first, then remove it`,
+      );
+    }
+    mockSigningKeys = mockSigningKeys.filter((k) => k.key_id !== keyId);
+    return toSigningKeys({ keys: mockSigningKeys });
+  },
+
+  async getAuthStatus(): Promise<AuthStatusView> {
+    return { passwordSet: mockPasswordSet, mfaRequired: mockMfaActive };
+  },
+
+  async getMfaState(): Promise<MfaStateView> {
+    return { offered: mockMfaOffered, enrolled: mockMfaActive };
+  },
+
+  async setMfaOffered(offered: boolean): Promise<MfaStateView> {
+    // A rollout switch: it never touches mockMfaActive, mirroring the server.
+    mockMfaOffered = offered;
+    return { offered: mockMfaOffered, enrolled: mockMfaActive };
+  },
+
+  async enrollMfa(): Promise<MfaEnrollView> {
+    // Same check order as the server: the feature gate first, then an active
+    // factor is a 409 before any secret is minted (rotation must disable first).
+    if (!mockMfaOffered) {
+      throw mockApiError(
+        "http 403 for POST /api/auth/mfa/enroll",
+        403,
+        "the second factor is not enabled on this server"
+      );
+    }
+    if (mockMfaActive) {
+      throw mockApiError(
+        "http 409 for POST /api/auth/mfa/enroll",
+        409,
+        "a second factor is already active; disable it first"
+      );
+    }
+    mockMfaPending = true;
+    return {
+      secret: MOCK_TOTP_SECRET,
+      otpauthUri: `otpauth://totp/OffiCraft:owner?secret=${MOCK_TOTP_SECRET}&issuer=OffiCraft&algorithm=SHA1&digits=6&period=30`,
+    };
+  },
+
+  async activateMfa(password: string, code: string): Promise<void> {
+    if (!mockMfaOffered) {
+      throw mockApiError(
+        "http 403 for POST /api/auth/mfa/activate",
+        403,
+        "the second factor is not enabled on this server"
+      );
+    }
+    if (mockMfaActive) {
+      throw mockApiError(
+        "http 409 for POST /api/auth/mfa/activate",
+        409,
+        "a second factor is already active"
+      );
+    }
+    if (!mockMfaPending) {
+      throw mockApiError(
+        "http 409 for POST /api/auth/mfa/activate",
+        409,
+        "no pending enrolment; call /api/auth/mfa/enroll first"
+      );
+    }
+    // BOTH factors, ONE indistinguishable refusal — the server's shape. The
+    // pending secret SURVIVES either way: a typo must not force a fresh QR scan.
+    if (
+      password !== mockPassword ||
+      code.replace(/[\s-]/g, "") !== MOCK_TOTP_CODE
+    ) {
+      throw mockApiError(
+        "http 401 for POST /api/auth/mfa/activate",
+        401,
+        "invalid password or code"
+      );
+    }
+    mockMfaPending = false;
+    mockMfaActive = true;
+  },
+
+  async disableMfa(password: string, code: string): Promise<void> {
+    if (!mockMfaActive) {
+      throw mockApiError(
+        "http 409 for POST /api/auth/mfa/disable",
+        409,
+        "no second factor is active"
+      );
+    }
+    // BOTH factors, ONE indistinguishable refusal — the server's shape.
+    if (
+      password !== mockPassword ||
+      code.replace(/[\s-]/g, "") !== MOCK_TOTP_CODE
+    ) {
+      throw mockApiError(
+        "http 401 for POST /api/auth/mfa/disable",
+        401,
+        "invalid password or code"
+      );
+    }
+    mockMfaActive = false;
+    mockMfaPending = false;
   },
 
   async setPassword(password: string, claimToken: string): Promise<void> {
@@ -4334,6 +5248,12 @@ export const mockApi: Api = {
         throw mockApiError("http 422 for PATCH /api/settings", 422, "codex_notice_round must be strictly below codex_compaction_threshold");
       }
     }
+    if (
+      patch.acceleratedGraceSecs !== undefined &&
+      (patch.acceleratedGraceSecs < 10 || patch.acceleratedGraceSecs > 3600)
+    ) {
+      throw mockApiError("http 422 for PATCH /api/settings", 422, "accelerated_grace_secs must be between 10 and 3600 seconds");
+    }
     if (patch.monitoringRefreshSeconds !== undefined && (patch.monitoringRefreshSeconds < 1 || patch.monitoringRefreshSeconds > 60)) {
       throw mockApiError("http 422 for PATCH /api/settings", 422, "monitoring_refresh_seconds must be between 1 and 60");
     }
@@ -4398,6 +5318,20 @@ export const mockApi: Api = {
           `${wire} must be between ${min} and 100000 characters — the floor is the shipped default, so the document cap can only be raised, never lowered`
         );
       }
+    }
+    // T-8: its own check. Its unit is FILES, not characters, and it is the only
+    // knob on this endpoint whose value causes DELETION — so it cannot sit in a
+    // table whose shared message talks about characters and floors.
+    if (
+      patch.backupRetain !== undefined &&
+      (patch.backupRetain < BACKUP_RETAIN_MIN ||
+        patch.backupRetain > BACKUP_RETAIN_MAX)
+    ) {
+      throw mockApiError(
+        "http 422 for PATCH /api/settings",
+        422,
+        `backup_retain must be between ${BACKUP_RETAIN_MIN} and ${BACKUP_RETAIN_MAX} backups per pool`
+      );
     }
     // T-c9b4: checked on its own, NOT as a row above — it has its own ceiling,
     // and the message above ("the floor is the shipped default … can only be
@@ -4479,6 +5413,9 @@ export const mockApi: Api = {
     if (patch.codexNoticeRound !== undefined) {
       mockServerSettings.codex_notice_round = patch.codexNoticeRound;
     }
+    if (patch.acceleratedGraceSecs !== undefined) {
+      mockServerSettings.accelerated_grace_secs = patch.acceleratedGraceSecs;
+    }
     if (patch.monitoringRefreshSeconds !== undefined) {
       mockServerSettings.monitoring_refresh_seconds = patch.monitoringRefreshSeconds;
     }
@@ -4514,6 +5451,9 @@ export const mockApi: Api = {
     }
     if (patch.chatBudgetChars !== undefined) {
       mockServerSettings.chat_budget_chars = patch.chatBudgetChars;
+    }
+    if (patch.backupRetain !== undefined) {
+      mockServerSettings.backup_retain = patch.backupRetain;
     }
     if (patch.updaterReceiveBeta !== undefined) {
       mockServerSettings.updater_receive_beta = patch.updaterReceiveBeta;
@@ -4560,6 +5500,46 @@ export const mockApi: Api = {
     // omitted field never changes it (PATCH semantics, server parity).
     if (patch.displayWide !== undefined) {
       mockServerSettings.display_wide = patch.displayWide;
+    }
+    // onboarding_dismissed (T-0648) — server parity: the stamp lives ON the
+    // report row, and only a `failed` report has a banner up to close. Every
+    // other state is refused with 409, exactly as setOnboardingDismissed does:
+    // no report at all (mock mode's standing state until a test seeds one via
+    // __injectMockOnboardingReport), or a run still `running`. What the
+    // `running` refusal buys server-side is not the stamp's visibility — a
+    // stamp there is wiped by whichever terminal path lands next — but the
+    // WRITE: the server's dismissal is an unlocked read-modify-write of the
+    // whole report row and the only writer that can run CONCURRENTLY with the
+    // run, so writing back a pre-verdict copy ERASES the failure and strands
+    // the report in `running`, where no banner draws and onboarding never
+    // re-runs. The mock has no concurrent writer to reproduce that, so it
+    // copies the REFUSAL, which is the part callers can observe. Like the
+    // server, this runs LAST — the settings fields above are already applied
+    // when the refusal is thrown.
+    if (patch.onboardingDismissed !== undefined) {
+      if (mockServerSettings.onboarding?.state !== "failed") {
+        // This sentence is a SECOND hand copy of errNoOnboardingBanner's, and
+        // it stays one: NOT ONE cross-language string contract in this repo
+        // reaches error-envelope text. Every `drift-*` gate in the Makefile
+        // regenerates from a source that carries something else — schema
+        // descriptions (spec/openapi.json), UI wording (locales/en.ts),
+        // --color-* names (styles/theme.css), --font-* names and safe-family
+        // stacks (themeFonts.source.json). Binding these two copies would mean
+        // inventing a generator for one string. Nothing depends on the wording
+        // either: the tests on both sides assert the STATUS (and the code
+        // derived from it), and the banner's only caller discards the rejection
+        // entirely — it puts itself back up rather than showing the server's
+        // sentence.
+        throw mockApiError(
+          "http 409 for PATCH /api/settings",
+          409,
+          "no onboarding banner is up to dismiss — the first-run report is absent or not in a failed state"
+        );
+      }
+      mockServerSettings.onboarding = {
+        ...mockServerSettings.onboarding,
+        dismissed_at: patch.onboardingDismissed ? Date.now() / 1000 : 0,
+      };
     }
     return toServerSettings(structuredClone(mockServerSettings));
   },
@@ -4636,19 +5616,41 @@ export const mockApi: Api = {
   async saveBootDoc(
     kind: BootDocKind,
     key: string,
-    text: string
+    body: string
   ): Promise<BootDocView> {
     // 404 BEFORE anything is written: foldBootDoc is the one place that knows
     // whether (kind, key) names a document, and a save that created a fourth
     // stream out of a typo'd runtime key would be the mock inventing a
     // document the server has no route for.
     const before = foldBootDoc(kind, key);
-    // The server's floor, mirrored: over cap AND not getting shorter is
-    // refused. The cockpit blocks first (it has the number on screen), so
-    // reaching this is either a stale page or a non-cockpit caller.
+    // 405, not 403: no principal may edit a read-only document, so pointing at
+    // authz would send an owner looking for a role to grant. The message is the
+    // server's own bootDocReadOnlyRefusal, shortened to the same claim.
+    refuseReadOnlyBootDoc(kind, key, "");
+    // 🔴 THE HEAD IS PUT BACK HERE, exactly as replaceBootDoc does it. The mock
+    // takes a BODY because the wire does; storing the body alone would make the
+    // demo mode the one place a headless document can still be created — the
+    // hazard the body-only wire exists to remove.
+    const text = before.read_only_head
+      ? docJoinHeadBody(before.read_only_head, body)
+      : body;
+    // The wipe guard the server has carried since T-2d99, on the unit the
+    // server judges it on: the BODY. The head survives every write, so a guard
+    // measured on the stored document would never see an emptying again.
+    if (wholeDocWipeBlocked(before.body, body)) {
+      throw mockApiError(
+        `http 400 for POST /api/boot-docs/${kind}/${key}`,
+        400,
+        "this would replace the existing document with an empty one"
+      );
+    }
+    // The server's floor, mirrored — and on the STORED document, which is what
+    // size_chars/cap_chars describe. The cockpit blocks first (it has the
+    // numbers on screen), so reaching this is a stale page or a non-cockpit
+    // caller.
     if (docCapBlocked(before.cap_chars, before.text, text)) {
       throw mockApiError(
-        `http 400 for POST /api/${kind.replace(/_/g, "-")}/${key}`,
+        `http 400 for POST /api/boot-docs/${kind}/${key}`,
         400,
         `document is ${[...text].length} characters, over the ${before.cap_chars} character limit`
       );
@@ -4672,6 +5674,7 @@ export const mockApi: Api = {
     // length would take away the recovery path exactly when the document is at
     // its worst.
     foldBootDoc(kind, key);
+    refuseReadOnlyBootDoc(kind, key, "/reset");
     recordDocumentHistory(kind, key);
     bootDocOverlays.delete(`${kind}/${key}`);
     emitTopic(BOOT_DOC_TOPIC);
@@ -4870,35 +5873,38 @@ export const mockApi: Api = {
   async getBootstrap(role: string): Promise<BootstrapView> {
     // Honest preview mirroring the backend buildBootContext slot order
     // (spec/lifecycle.md §2.2, as re-ordered by T-4595):
-    //   1. 系統互動 — the SEED text, FIRST. ⚠️ The real server folds the
-    //      owner's edit over it (T-791e, buildBootContext →
-    //      systemInteractionText); THIS PREVIEW DOES NOT — it reads the seed
-    //      straight, so an edited block shows as the factory text here. The
-    //      fold exists in this file (foldBootDoc) and getBootstrap simply does
-    //      not call it;
+    //   1. 系統互動 — FOLDED, FIRST (T-30e4). The owner's edit wins and the
+    //      seed is what an installation that never edited it folds to, exactly
+    //      as the server does it (T-791e, buildBootContext →
+    //      systemInteractionText → foldBootDocDTO). Until T-30e4 this slot read
+    //      the seed constant straight, so the one screen built to show what an
+    //      agent will read was the one place the owner's edit was invisible;
     //   2. 使用者自訂 — the owner's ADDITIVE block, SKIPPED entirely when empty;
-    //   3. `# Role:` + `# Insight (role)` + `# Lessons (role / task_type)` —
+    //   3. `# Role:` + `# Insight (role)` + `# Lessons (role)` —
     //      the persona (Duty → Insight → Learning, the order the three blocks
     //      are defined in), and the ONLY slot an outsource worker has nothing
     //      in (see getWorkerBootContext below). The Insight section is SKIPPED
     //      ENTIRELY when the folded text is blank, exactly like the owner block
     //      — the gate is the TEXT, never is_default/has_seed (those answer
     //      different questions and would emit an orphan header);
-    //   4. 啟動程序 — the Claude seed, LAST (recency-authoritative tail). Same
-    //      two gaps as slot 1: no fold, and no runtime either — getBootstrap
-    //      takes none, so it is always SEED_BOOT_SEQUENCE_MD. The worker path
-    //      (getWorkerBootContext) does branch on runtime.
+    //   4. 啟動步驟 — FOLDED, LAST (recency-authoritative tail), and always the
+    //      CLAUDE document. 🔴 The missing runtime parameter is DELIBERATE, not
+    //      the other half of the T-30e4 gap: the real request carries `{role}`
+    //      and no member_id ON PURPOSE (http.ts getBootstrap — a UI preview must
+    //      never be handed an agent JWT), so server-side `member == nil` →
+    //      memberRuntime "" → bootSequenceDocKey("") → the claude key. Teaching
+    //      this mock about runtime would make it disagree with the endpoint it
+    //      stands in for. The worker path (getWorkerBootContext) DOES branch on
+    //      runtime because a spawn really does name its worker.
     // The owner block moved from below the persona to above it so the two
     // assemblies line up: a
     // worker's boot context is this list minus slot 3, and with the owner block
     // wedged between the lessons and the boot sequence it could not be.
     // NO token (a UI preview mints none).
-    const taskType = "general"; // mirrors the server seed lessons task_type
     const roleDef = foldRole(role); // throws for an unknown role (≈ server 404)
-    const lessons =
-      lessonsOverlays.get(lessonsKey(role, taskType))?.text ?? SEED_LESSONS_MD;
+    const lessons = lessonsOverlays.get(role)?.text ?? SEED_LESSONS_MD;
     const userText = foldGlobalContext().text;
-    const parts = [SEED_SYSTEM_INTERACTION_MD.trim()];
+    const parts = [foldBootDoc("system_interaction", "global").text.trim()];
     if (userText.trim()) {
       parts.push(`# 使用者自訂（Owner Additions）\n\n${userText.trim()}`);
     }
@@ -4910,31 +5916,56 @@ export const mockApi: Api = {
     if (insightText.trim()) {
       parts.push(`# Insight (${role})\n\n${insightText.trim()}`);
     }
+    // The title is injected IDEMPOTENTLY, mirroring buildBootContext (T-8327):
+    // a generation that treats its boot segment as the document base and writes
+    // it back turns the title into document content, and a naive re-prepend
+    // would then stack one title per generation. Strip any leading copies of
+    // the EXACT title line first, so an already-poisoned document self-heals in
+    // the assembled preview instead of showing the drift the server does not.
+    // TWO titles are stripped, not one: a document poisoned BEFORE T-2 carries
+    // the old "# Lessons (role / general)" wording, and the server strips both
+    // (assets.go). Mirroring that here is what keeps this preview honest about
+    // what the agent will actually read.
+    const lessonsTitle = `# Lessons (${role})`;
+    const legacyLessonsTitle = `# Lessons (${role} / general)`;
+    let lessonsBody = lessons.trim();
+    for (;;) {
+      let stripped = false;
+      for (const title of [lessonsTitle, legacyLessonsTitle]) {
+        while (lessonsBody.startsWith(title)) {
+          const rest = lessonsBody.slice(title.length);
+          // A title that is merely the PREFIX of a longer line is not a
+          // duplicate title line — stop, or the next heading gets eaten.
+          if (rest !== "" && !rest.startsWith("\n")) break;
+          lessonsBody = rest.trim();
+          stripped = true;
+        }
+      }
+      if (!stripped) break;
+    }
     parts.push(
-      `# Lessons (${role} / ${taskType})\n\n${lessons.trim()}`,
-      SEED_BOOT_SEQUENCE_MD.trim(),
+      `${lessonsTitle}\n\n${lessonsBody}`,
+      foldBootDoc("boot_sequence", "claude").text.trim(),
     );
     const wire: WireBootstrap = {
       role,
       name: roleDef.name,
-      task_type: taskType,
       context: parts.join("\n\n") + "\n",
       token: null,
     };
     return toBootstrap(wire);
   },
 
-  async getLessons(roleKey: string, taskType: string): Promise<LessonsView> {
-    // The folded PER-ROLE lessons doc for `role_key` + `task_type`. When an
+  async getLessons(roleKey: string): Promise<LessonsView> {
+    // The folded PER-ROLE lessons doc for `role_key`. When an
     // overlay was saved (is_default=false) the folded read is that edit; otherwise
     // it IS the REAL seed (dal/seeds/lessons.md via SEED_LESSONS_MD) →
-    // is_default=true. Per-role-learnings step1: the seed is shared until a role
-    // diverges (each role_key gets its own overlay slot).
-    const overlay = lessonsOverlays.get(lessonsKey(roleKey, taskType));
+    // is_default=true. The seed is shared until a role diverges (each role_key
+    // gets its own overlay slot).
+    const overlay = lessonsOverlays.get(roleKey);
     const wire: WireLessons = overlay ?? {
       ...docSizeFields(SEED_LESSONS_MD, "learning"),
       role_key: roleKey,
-      task_type: taskType,
       text: SEED_LESSONS_MD,
       owner_id: MOCK_OWNER_ID,
       schema_version: 2,
@@ -4943,24 +5974,19 @@ export const mockApi: Api = {
     return toLessons(wire);
   },
 
-  async saveLessons(
-    roleKey: string,
-    taskType: string,
-    text: string
-  ): Promise<LessonsView> {
+  async saveLessons(roleKey: string, text: string): Promise<LessonsView> {
     // Whole-doc replace → store the per-role overlay; the folded read is now
     // owner-edited for THIS role_key only (a sibling role's doc is untouched).
-    recordDocumentHistory("lessons", lessonsKey(roleKey, taskType));
+    recordDocumentHistory("lessons", roleKey);
     const wire: WireLessons = {
       ...docSizeFields(text, "learning"),
       role_key: roleKey,
-      task_type: taskType,
       text,
       owner_id: MOCK_OWNER_ID,
       schema_version: 2,
       is_default: false,
     };
-    lessonsOverlays.set(lessonsKey(roleKey, taskType), wire);
+    lessonsOverlays.set(roleKey, wire);
     emitTopic("lessons");
     return toLessons(wire);
   },
@@ -5074,6 +6100,45 @@ export const mockApi: Api = {
     return { id: found.id, content: structuredClone(found.content) };
   },
 
+  async getDiff(params: DiffParams): Promise<DiffPairView> {
+    // A FIXTURE, and it says so: the mock cockpit has no blob store to read a
+    // side out of and no signature to check, so it answers a small, obviously
+    // synthetic pair rather than pretending to resolve an address. What it DOES
+    // reproduce faithfully is the shape the screen branches on — a heading per
+    // side, and the `missing` marker, which is the one state a fixture that
+    // always succeeds would leave permanently unreachable offline.
+    //
+    // The reserved address `att-000000000000` is how the offline cockpit
+    // reaches that state; every other address resolves.
+    //
+    // The labels are ECHOED, never invented: a side the url gave no heading
+    // comes back with none, exactly as the server answers it, so the reader's
+    // own 「目前存檔內容」/「初始版本」/「版本 #12」 path is reachable offline too.
+    const side = (address: string, label: string | undefined, text: string) =>
+      address === "att-000000000000"
+        ? { address, text: "", label, gone: true, goneReason: "mock: reserved gone address" }
+        : { address, text, label, gone: false };
+    return {
+      before: side(params.before, params.labelBefore, MOCK_DIFF_BEFORE),
+      after: side(params.after, params.labelAfter, MOCK_DIFF_AFTER),
+    };
+  },
+
+  async getDiffShareLink(params: DiffParams): Promise<string> {
+    // Mock face: the same URL SHAPE as the BE (the /diff page path + ?sig=)
+    // with a deterministic fake sig — never a verifiable credential (no secret
+    // in mock mode; the copy-link UI just needs a resolvable string). Any sig
+    // the caller happened to be holding is dropped, exactly as the real route
+    // drops it: the signature is what this call MINTS.
+    return formatDiffUrl({
+      before: params.before,
+      after: params.after,
+      labelBefore: params.labelBefore,
+      labelAfter: params.labelAfter,
+      sig: "mock-diff-share-sig",
+    });
+  },
+
   async getDocumentSeed(
     kind: DocumentKind,
     key: string
@@ -5155,15 +6220,33 @@ export const mockApi: Api = {
       topicSubscribers.delete(onTopic);
     };
   },
+
+  subscribeConnection(
+    onState: (state: SseConnectionState) => void
+  ): () => void {
+    // The mock has no transport, so it has no transport to lose: report "live"
+    // once and never call back. This is the honest answer, not a stub — there
+    // is nothing here that can go stale behind the owner's back, so the
+    // connection banner must stay off in mock mode. Anything else (starting at
+    // "connecting", say) would put a permanent "reconnecting" bar on a demo
+    // that is not reconnecting to anything.
+    onState("live");
+    return () => {};
+  },
 };
 
 // Reset hook for tests / hot-reload determinism (not used by the UI).
 export function __resetMock(): void {
+  // The ring is MUTATED by rotate/remove, so it belongs here: without this a
+  // test that rotates leaves a two-key ring for whatever runs next, and the
+  // failure lands on the innocent test.
+  mockSigningKeys = structuredClone(MOCK_WIRE_SIGNING_KEYS);
   wireMembers = structuredClone(MOCK_WIRE_MEMBERS);
   wireMonitoring = structuredClone(MOCK_WIRE_MONITORING);
   mockBinStatus.clear();
   mockBinStatus.set("warden-mbp5", "stale");
   globalContextOverlay = null;
+  BOOT_DOC_READ_ONLY = new Set<string>();
   bootDocOverlays.clear();
   roleOverlays.clear();
   customRoles.clear();
@@ -5176,10 +6259,14 @@ export function __resetMock(): void {
   chatReads.clear();
   replyCards = [];
   tasks = [];
+  artifactVersions = new Map();
   outsourceWorkers = [];
   taskManuals = [];
   mockPasswordSet = true;
   mockPassword = "mock-password";
+  mockMfaOffered = false;
+  mockMfaActive = false;
+  mockMfaPending = false;
   mockServerSettings = { ...DEFAULT_MOCK_SETTINGS };
   // T-83ef: themes are their own store now, so resetting settings no longer
   // clears them — the reset hook has to name the store explicitly or a theme
@@ -5203,7 +6290,7 @@ export function __setMockFirstRun(): string {
 // Test-only hook: land an INBOUND message (e.g. member → owner) in the mock log,
 // the way a real agent reply would arrive server-side. The mock UI itself never
 // fabricates one (see the chatLog note) — this exists so tests can exercise the
-// unread/read seam (unreadCountOf ↔ listChat auto-mark) against real log entries.
+// unread/read seam (unreadCountOf ↔ markChatRead) against real log entries.
 export function __injectMockChat(msg: ChatMessage): void {
   chatLog.push(msg);
 }
@@ -5221,8 +6308,25 @@ export function __injectMockReplyCard(card: ReplyCard): void {
 // create_task would arrive server-side. The mock UI itself never fabricates a
 // task (see the tasks note) — this exists so tests can exercise the tasks
 // page's list / filter / terminate / priority / message seams.
-export function __injectMockTask(task: TaskView): void {
-  tasks.push(task);
+export function __injectMockTask(task: TaskView | MockTaskRow): void {
+  // A plain `TaskView` is accepted because most callers only care about the
+  // list / filter / terminate seams and pass no artifacts at all. The cast is
+  // the one place the two artifact shapes meet: a caller that DOES pass rows is
+  // passing STORE rows (whole deliverables), which is what `listTaskArtifacts`
+  // hands back — pass index-only rows here and that read answers index-only
+  // rows, which is the honest consequence of what was put in.
+  tasks.push(task as MockTaskRow);
+  emitTopic("task");
+}
+
+// Test-only hook: land the retained PREVIOUS versions of one pinned deliverable
+// (T-60), newest first — what a sequence of `replace_task_artifact` calls would
+// have left behind. There is no cockpit write that can produce them.
+export function __injectMockArtifactVersions(
+  artifactId: string,
+  versions: TaskArtifactVersionView[],
+): void {
+  artifactVersions.set(artifactId, structuredClone(versions));
   emitTopic("task");
 }
 
@@ -5281,6 +6385,20 @@ export function __injectMockTaskType(t: TaskTypeView): void {
 export function __injectMockTaskManual(m: TaskManualView): void {
   taskManuals.push(structuredClone(m));
   emitTopic("task_manual");
+}
+
+// Test-only hook: seed the ONE first-run onboarding report, the way the server's
+// own kick / finish / recover would have left the row on disk. Mock mode ships
+// with no report at all (see the `onboarding: null` note on
+// DEFAULT_MOCK_SETTINGS) — this is the seeding caller that note is waiting for.
+// Without it the only reachable `onboarding_dismissed` branch is "no report",
+// so the half of the guard that REFUSES a stamp on a run still `running` — the
+// half the server comment calls the whole point — has nothing standing on it.
+// Cleared by __resetMock along with the rest of the settings blob.
+export function __injectMockOnboardingReport(
+  report: NonNullable<WireServerSettings["onboarding"]>
+): void {
+  mockServerSettings.onboarding = structuredClone(report);
 }
 
 // Test-only hook: flip a mock member's presence projection, the way the real

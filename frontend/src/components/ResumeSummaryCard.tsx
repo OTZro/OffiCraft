@@ -184,6 +184,22 @@ export function ChatRow({
 }) {
   const r = t.mp.resumeSummary;
   const card = m.card ?? null;
+  // T-9871 — the QUOTE this message replies to. The snapshot has always PAID
+  // for it: `resumeChatMessageChars` bills the quote's from_name + to_name +
+  // content against the same chat budget that decides how many messages fit, so
+  // the characters were already evicting other messages while this card drew
+  // none of them. Drawing them costs the budget nothing; NOT drawing them was
+  // the only state with a price and no goods.
+  //
+  // 🔴 TWO STATES, NO THIRD — the same rule the chat pane's row follows, and it
+  // holds here for the same reason: `reply_to_chat` is rebuilt by the server on
+  // THIS read, so there is nothing in flight and nothing to retry. `replyTo` is
+  // what says this message IS a reply (it never disappears); `replyToChat` is
+  // what says WHAT it replied to (null when the original is gone). An empty
+  // `content` is a legitimate quote of an attachment-only message and must NOT
+  // be folded into the gone sentence.
+  const quoted = m.replyToChat ?? null;
+  const isReply = (m.replyTo ?? "") !== "";
   return (
     <div className="mp-resume__chatrow" data-testid="mp-resume-chat-row">
       <div className="mp-resume__chatmeta">
@@ -221,6 +237,79 @@ export function ChatRow({
           )}
         </div>
       </div>
+      {/* 🔴 NOT A COPY OF THE CHAT PANE'S ROW — deliberately. That row carries a
+        * 「看原訊息」 control backed by ChatArea's `openQuotedMessage` →
+        * `api.getChatMessage` → full-view overlay, and this component is a pure
+        * renderer of one payload (its only read is the snapshot itself). Copying
+        * the control would drag that whole machine in here; copying its markup
+        * WITHOUT the machine would put a dead affordance on screen. The row is
+        * also styled for a chat bubble: a `border-bottom` separator (this card
+        * already HAS a frame, so that would be a second line inside one box) and
+        * a label that collapses under `@container chat-pane` — a container this
+        * card is not inside, so that rule can never fire here and the label
+        * would stay full width in the NARROWER surface. What is copied is the
+        * CONTENT and the two-state rule; the geometry is this card's own, and
+        * it is measured by visual-guards/resume-chat-quote.ct.spec.tsx at both
+        * ends of the width range because none of it is visible to jsdom.
+        *
+        * Names come from the payload, not from a roster lookup: the snapshot
+        * read is the one read that fills `from_name`/`to_name`, and `Party`
+        * applies rule 1 in the file header to them — "" renders as the id
+        * alone, never as an id dressed up as a name. */}
+      {isReply && (
+        <div
+          className="mp-resume__chatquote"
+          data-testid="mp-resume-chat-quote"
+          role="blockquote"
+          aria-label={
+            quoted
+              ? t.chat.replyQuoteRoleWho(
+                  `${quoted.fromName !== "" ? quoted.fromName : quoted.from} → ${
+                    quoted.toName !== "" ? quoted.toName : quoted.to
+                  }`,
+                )
+              : t.chat.replyQuoteRole
+          }
+        >
+          {quoted ? (
+            <>
+              <div className="mp-resume__chatquoteparties">
+                <Party
+                  name={quoted.fromName}
+                  id={quoted.from}
+                  testid="mp-resume-chat-quote-from"
+                />
+                <span className="mp-resume__arrow" aria-hidden="true">
+                  →
+                </span>
+                <Party
+                  name={quoted.toName}
+                  id={quoted.to}
+                  testid="mp-resume-chat-quote-to"
+                />
+              </div>
+              {/* PLAIN TEXT, and shortened by nobody here: the server cut it to
+                * its own rune cap before it went on the wire, and this line is
+                * the excerpt the agent read. Not `Markdown` — a 60-rune slice
+                * can end mid-construct, and half a fence rendered as markup
+                * would show the reader something the agent never saw. */}
+              <div
+                className="mp-resume__chatquotebody"
+                data-testid="mp-resume-chat-quote-body"
+              >
+                {quoted.content}
+              </div>
+            </>
+          ) : (
+            <div
+              className="mp-resume__chatquotegone"
+              data-testid="mp-resume-chat-quote-gone"
+            >
+              {t.chat.replyQuoteGone}
+            </div>
+          )}
+        </div>
+      )}
       <Markdown
         source={m.body}
         breaks
@@ -261,30 +350,40 @@ export function ChatRow({
               <span className="mp-resume__generatedlabel">
                 {r.cardOptionsLabel}
               </span>
-              {card.options.map((opt, i) => (
-                <span
-                  className="mp-resume__cardoption"
-                  key={`${i}-${opt}`}
-                  data-testid="mp-resume-card-option"
-                  data-picked={i === card.answerOptionIdx ? "true" : "false"}
-                >
-                  {opt}
-                  {/* options[0] is the AI pick — a property of how the card
-                    * was OFFERED, which is why it is tagged separately from
-                    * which option was actually chosen. */}
-                  {i === 0 && (
-                    <span className="mp-resume__cardtag">{r.cardAiPickTag}</span>
-                  )}
-                  {i === card.answerOptionIdx && (
-                    <span
-                      className="mp-resume__cardtag mp-resume__cardtag--picked"
-                      data-testid="mp-resume-card-picked"
-                    >
-                      {r.cardPickedTag}
-                    </span>
-                  )}
-                </span>
-              ))}
+              {card.options.map((opt, i) => {
+                // EVERY circled index is marked, not just the first: a
+                // multi-select answer that drew one 已選 (or none) would read
+                // as a decision the owner never made. `answerOptionIdxs` is
+                // null while unanswered / answered with free text only.
+                const picked = (card.answerOptionIdxs ?? []).includes(i);
+                return (
+                  <span
+                    className="mp-resume__cardoption"
+                    key={`${i}-${opt.text}`}
+                    data-testid="mp-resume-card-option"
+                    data-picked={picked ? "true" : "false"}
+                  >
+                    {opt.text}
+                    {/* The AI pick is a property of how the card was OFFERED,
+                      * which is why it is tagged separately from which options
+                      * were actually chosen — and it is read off THIS option's
+                      * own aiPick, never off its position. */}
+                    {opt.aiPick && (
+                      <span className="mp-resume__cardtag">
+                        {r.cardAiPickTag}
+                      </span>
+                    )}
+                    {picked && (
+                      <span
+                        className="mp-resume__cardtag mp-resume__cardtag--picked"
+                        data-testid="mp-resume-card-picked"
+                      >
+                        {r.cardPickedTag}
+                      </span>
+                    )}
+                  </span>
+                );
+              })}
             </div>
           )}
           {card.answerText !== "" && (
@@ -666,6 +765,40 @@ export function ResumeSummaryCard({ agentId }: { agentId: string }) {
                         <span className="mp-resume__tasktitle">{rt.title}</span>
                         <span className="mp-resume__taskstatus">{rt.status}</span>
                       </div>
+                      {/* T-91 — the handover hold and the reverse dependency
+                        * edge, drawn because the cockpit must show what the
+                        * agent is handed. Both render ONLY when they carry
+                        * something: an always-present empty row would say
+                        * "no handover" on every ordinary ticket, which is
+                        * noise the panel already refuses elsewhere. */}
+                      {rt.lock !== "" && (
+                        <div
+                          className="mp-resume__taskhold"
+                          data-testid="mp-resume-task-hold"
+                        >
+                          <span className="mp-resume__taskholdlabel">
+                            {t.tasks.lockReassigning}
+                          </span>
+                          <code className="mp-resume__taskholdfrom">
+                            {rt.reassignedFrom}
+                          </code>
+                        </div>
+                      )}
+                      {rt.blocking.length > 0 && (
+                        <div
+                          className="mp-resume__taskblocking"
+                          data-testid="mp-resume-task-blocking"
+                        >
+                          <span className="mp-resume__taskblockinglabel">
+                            {t.mp.resumeSummary.blockingLabel}
+                          </span>
+                          {rt.blocking.map((id) => (
+                            <code className="mp-resume__taskblockingid" key={id}>
+                              {id}
+                            </code>
+                          ))}
+                        </div>
+                      )}
                       {rt.answeredCardSteps.length > 0 && (
                         <div
                           className="mp-resume__answeredcard"

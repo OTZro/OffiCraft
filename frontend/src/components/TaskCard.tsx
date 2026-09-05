@@ -5,7 +5,7 @@
 // 2026-07-17, the chevron button is gone) expands the workflow timeline +
 // the embedded reply cards + the description. Top to bottom:
 //
-//   head      — row 1 is the fixed badge row (☑ #T-xxxx id badge · 優先權 chip
+//   head      — row 1 is the fixed badge row (☑ #<task id> badge · 優先權 chip
 //               (click → select-style dropdown, 高/中/低/凍結 incl. freeze) ·
 //               狀態 badge (click → owner-action dropdown, ALWAYS — 標記重複 /
 //               終止, greyed + unclickable once the task is closed, with the
@@ -26,7 +26,8 @@
 //               bar, and 已歷時 ticking from created_ts (closed tasks freeze
 //               at closed_ts — honest, the clock stops when the task does).
 //   waiting   — the one-line waiting_reason row while 等待外部.
-//   deps      — 被 T-xxxx 擋住 chips (task ids resolved to display task_no).
+//   deps      — 被 <task id> 擋住 chips (the chip prints the blocking task's
+//               id as-is — task_no IS the id since T-5291).
 //   message   — 傳訊息給 {executor}… box (POST /api/tasks/{id}/message;
 //               disabled while unassigned — the server would 409). Text
 //               and/or attachments: paste an image / pick files via the
@@ -43,7 +44,7 @@
 //               TaskReplyCard — the SHARED M2 ReplyCardBody interior, never a
 //               re-implementation; answered cards collapse to one line).
 //               Steps that EVER carried an approval (is_gate, or a bound
-//               reply card — auto-bound plain asks included) keep a permanent
+//               reply card — plain non-gate steps included) keep a permanent
 //               審批 marker after they finish (owner 2026-07-14: 持久標記).
 //               Transitional states when there are no steps yet: unassigned →
 //               等待指派; assigned-but-no-plan → 「等待 ○○ 建立 Steps」 (○○ = the
@@ -67,6 +68,7 @@ import type {
   TaskReassignInput,
   OutsourceWorkerView,
 } from "../api/adapter";
+import { api } from "../api";
 import { formatDuration } from "../lib/duration";
 import { copyText } from "../lib/clipboard";
 import { resolveStepBadge } from "../lib/stepBadge";
@@ -79,6 +81,7 @@ import { enterShouldSend } from "../lib/composerKeys";
 import {
   ATTACH_ACCEPT,
   useAttachmentStaging,
+  STAGING_TARGET_PER_MOUNT,
 } from "../hooks/useAttachmentStaging";
 import { ComposerAttachmentPreview } from "./ComposerAttachmentPreview";
 import { ConfirmModal } from "./ConfirmModal";
@@ -351,7 +354,9 @@ export function TaskCard({
   }, [located]);
 
   // 任務編號 chip 點擊複製(owner 2026-07-19 圈截圖):點 chip → 把顯示的任務
-  // 編號(task.taskNo，非內部 id)寫進剪貼簿,給一個短暫「已複製」回饋。chip 本身
+  // 編號(task.taskNo)寫進剪貼簿,給一個短暫「已複製」回饋。T-5291 之後那個編號
+  // 「就是」內部 id ——「非內部 id」這句原本寫在這裡,已是相反的事實,刪掉;複製
+  // 出去的字串等於 task id 這件事由 TaskCard.copy-taskno.test.tsx 釘住。chip 本身
   // 是個 <button>,所以 onCardToggleClick 的 closest("button,…") 濾網會自動放行
   // (點它不會展開卡片),Enter/Space 由 button 原生觸發、也不會冒泡去 toggle 卡。
   // 只有真的寫入成功才亮「已複製」—— copyText 失敗回 false,絕不假成功。
@@ -627,8 +632,18 @@ export function TaskCard({
   // 步驟備註 (T-e5b1 → T-6630 ④): the note is no longer disclosed INSIDE the
   // step. One step's note at a time is opened in the full-view overlay, so the
   // state is the note being read, not a per-step open/closed map.
+  // T-66 (owner rc-4c8065fb30a5:「座艙改成點開才抓」): the note TEXT is no longer
+  // on the task read, so opening the reader starts a fetch. The state therefore
+  // carries a PHASE as well as the text — a reader that showed an empty body
+  // while loading, or after a failure, would say "this step's note is empty",
+  // which is precisely what the entry control being there has already denied.
+  // stepId rides along so a late response for a note the reader has since
+  // closed (or replaced with another step's) is dropped instead of overwriting
+  // what is on screen.
   const [noteModal, setNoteModal] = useState<{
+    stepId: string;
     name: string;
+    phase: "loading" | "ready" | "failed";
     note: string;
   } | null>(null);
   // 🔴 NO SCROLL CORRECTION FOR THE NOTE, BY OWNER RULING (2026-08-15, T-6630
@@ -695,6 +710,32 @@ export function TaskCard({
     }
   }
 
+  // 步驟備註 (T-66) — 點開才抓. The card holds only `noteSizeChars`, so the text
+  // is fetched HERE, on the click, and the reader opens immediately in its
+  // loading phase rather than after the round trip: an entry that visibly does
+  // nothing for a moment is the thing this replaces.
+  //
+  // The stepId guard on both settles is not defensive noise. The reader is a
+  // single slot: open step A, close it, open step B, and A's response can still
+  // land — without the guard it would replace B's text with A's, under B's
+  // title, and nothing would look wrong.
+  async function openStepNote(step: TaskStepView) {
+    setNoteModal({ stepId: step.id, name: step.name, phase: "loading", note: "" });
+    try {
+      const detail = await api.getTaskStep(task.id, step.id);
+      setNoteModal((cur) =>
+        cur && cur.stepId === step.id
+          ? { ...cur, phase: "ready", note: detail.note }
+          : cur,
+      );
+    } catch (e) {
+      console.warn("TaskCard: step note fetch failed", e);
+      setNoteModal((cur) =>
+        cur && cur.stepId === step.id ? { ...cur, phase: "failed", note: "" } : cur,
+      );
+    }
+  }
+
   async function doTerminate() {
     setBusy(true);
     try {
@@ -750,7 +791,11 @@ export function TaskCard({
     onPickFile,
     removeAttachment,
     clearAttachments,
-  } = useAttachmentStaging();
+  } = useAttachmentStaging(
+    // Mounted under a key that changes with the card/task it belongs to, so a
+    // switch UNMOUNTS this surface and nothing can outlive it (T-48, R9-1).
+    STAGING_TARGET_PER_MOUNT,
+  );
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canSend =
     !sending &&
@@ -798,7 +843,7 @@ export function TaskCard({
 
   // ── embedded reply cards ────────────────────────────────────────────────────
   // Each step carrying a card (non-empty replyCardId — an armed gate OR an
-  // auto-bound plain ask) embeds one TaskReplyCard INSIDE its step row.
+  // ad-hoc ask bound to a plain step) embeds one TaskReplyCard INSIDE its step row.
 
   // ── header stamps ──────────────────────────────────────────────────────────
   // 已歷時 ticks from created_ts (含 等待指派/等待建立 Steps — spec §3.1); a CLOSED
@@ -927,7 +972,14 @@ export function TaskCard({
             description. Absent note ⇒ nothing rendered, no empty shell. Agent
             free text → <Markdown>, same treatment as the DoD and the waiting
             reason. */}
-        {step.note && (
+        {/* T-66: the ENTRY is drawn from the SIZE, not from the text — the
+            text is not on this payload any more. `> 0` means the server is
+            holding a note for this step; 0 means the step genuinely has none,
+            so nothing is drawn and there is still no empty shell. This is the
+            one signal that separates "nobody wrote anything" from "someone
+            wrote something you have not opened", exactly as it was when the
+            text rode along. */}
+        {(step.noteSizeChars ?? 0) > 0 && (
           <div className="task-step__note-actions">
             {/* 🔴 T-6630 ④ (owner 2026-08-16, second acceptance round):「我覺得
                 備註不是很常按,可以放在 step 的右下角,點開再跳出另一個 Modal 打
@@ -959,9 +1011,7 @@ export function TaskCard({
               data-testid="step-note-open"
               aria-label={t.tasks.stepNoteExpand}
               title={t.tasks.stepNoteExpand}
-              onClick={() =>
-                setNoteModal({ name: step.name, note: step.note ?? "" })
-              }
+              onClick={() => void openStepNote(step)}
             >
               <FileTextIcon size={15} />
               <span>{t.tasks.stepNoteLabel}</span>
@@ -1017,7 +1067,7 @@ export function TaskCard({
       onKeyDown={onCardToggleKeyDown}
     >
       {/* ── head (v4 layout — owner 2026-07-17「這兩排應該要對調」): the v2
-           order SWAPPED. Row 1 is the badge row (☑ #T-xxxx id badge · 優先權
+           order SWAPPED. Row 1 is the badge row (☑ #<task id> badge · 優先權
            chip (in-place editable) · 狀態 badge) and row 2 the title; the ▸/▾
            expand indicator holds the card's top-right corner, riding row 1
            alongside the badges — the corner is the anchor, not the title
@@ -1025,7 +1075,7 @@ export function TaskCard({
            deleted ⋮). No avatar; no chevron — the whole card toggles. ── */}
       <header className="task-card__head">
         <div className="task-card__head-top">
-          {/* Row 1 — the fixed badge row: #T-xxxx · 優先權 · 狀態 (v3 order —
+          {/* Row 1 — the fixed badge row: #<task id> · 優先權 · 狀態 (v3 order —
               the id leads). The priority chip edits in place (owner v2/v3):
               clicking it drops a vertical select-style menu (same visual
               vocabulary as the 狀態 dropdown popover); picking one calls
@@ -1307,9 +1357,11 @@ export function TaskCard({
                 directions (the server 409s un-pin exactly like add), so drop
                 the 移除 affordance instead of letting the click fail. Gating
                 here rather than at the call site covers every caller at once. */}
+            {/* T-66: no hydrate seam any more. The task read carries an
+                id+label INDEX of the artifacts (owner c-cd063427fb2f), so the
+                popover fetches the full rows itself when it opens. */}
             <TaskArtifactsBadge
               task={view}
-              onHydrate={onHydrate}
               onRemoveArtifact={
                 TERMINAL.has(view.status) ? undefined : onRemoveArtifact
               }
@@ -1517,7 +1569,7 @@ export function TaskCard({
         </div>
       </header>
 
-      {/* ── deps 「等 T-xxxx」 (被 T-xxxx 擋住) — v6 (owner 2026-07-17).
+      {/* ── deps 「等 <task id>」 (被 <task id> 擋住) — v6 (owner 2026-07-17).
            Was a bare .task-key--dep: a grey hairline box of mono text with no
            icon, wedged between the 建立者 row and the progress bar, reading as
            debug output rather than as "this task is waiting on something".
@@ -1546,7 +1598,7 @@ export function TaskCard({
              claim about THIS card. A dep badge there would read 「這張卡是
              等待中」, which is false for an in_progress-and-blocked card. That
              ban still holds — nothing below touches row 1.
-           · The new badge lives INSIDE the dep row, inboard of 「等 T-xxxx
+           · The new badge lives INSIDE the dep row, inboard of 「等 <task id>
              <標題>」. Its subject is unambiguous from position alone: it is
              the status OF THE DEP TASK named on the same line, exactly like
              the 編號 and 標題 beside it. It says nothing about this card.
@@ -1657,20 +1709,19 @@ export function TaskCard({
                       390px guard). Absence of a badge on a row that otherwise
                       always has one IS the signal. */}
                   <ClockIcon size={13} />
-                  {/* The NUMBER is derived, not the raw id (T-c21e, owner
-                      2026-07-20: 「那些 ID 應該要跟任務卡上面顯示的一樣,任務
-                      卡上的 ID 似乎沒這麼長」). Both of these branches used to
-                      print `depId` whole — `t-1d8292a2f8db` where every other
-                      surface says `T-1d82` — because with no `dep` in hand
-                      there was no server-supplied task_no to print. There
-                      never needed to be one: task_no is a pure projection of
-                      the id (deriveTaskNo mirrors the server's), so the short
-                      form is computable right here.
-                      Resolved rows below still print `dep.taskNo` — same
-                      value, but from the source. Deriving is the fallback,
-                      not the default: if the server ever changes the
-                      projection, the surface that matters most keeps agreeing
-                      with it for free. */}
+                  {/* Both branches print the dep's NUMBER, which since T-5291
+                      (owner 2026-08-25) simply IS its id — no shortening, no
+                      re-casing. The predecessor comment here claimed «every
+                      other surface says `T-1d82`» and that the short form was
+                      «computable right here»; both sentences died with the
+                      projection and are removed rather than left standing.
+                      Why deriveTaskNo is still called instead of printing
+                      `depId`: with no `dep` in hand there is no server-supplied
+                      task_no, and this keeps the one seam that states the rule.
+                      Resolved rows below still print `dep.taskNo` — the same
+                      value, but from the SOURCE, so if the number ever stops
+                      being the id the surface that matters most follows the
+                      server for free. */}
                   <span>
                     {unknown
                       ? msg.taskBlockedBy(deriveTaskNo(depId))
@@ -2027,7 +2078,13 @@ export function TaskCard({
       {noteModal && (
         <MarkdownPreviewOverlay
           title={`${t.tasks.stepNoteLabel} · ${noteModal.name}`}
-          source={noteModal.note}
+          source={
+            noteModal.phase === "ready"
+              ? noteModal.note
+              : noteModal.phase === "loading"
+                ? t.tasks.stepNoteLoading
+                : t.tasks.stepNoteFailed
+          }
           onClose={() => setNoteModal(null)}
         />
       )}

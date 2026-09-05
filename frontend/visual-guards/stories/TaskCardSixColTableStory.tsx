@@ -40,19 +40,24 @@ function TasksShell({ task }: { task: ReturnType<typeof mkTask> }) {
   );
 }
 
+// 🔴 A FROZEN SNAPSHOT of the doc's rows as they read in 2026-07, kept verbatim
+// because the 390/320px measurements below are a function of this exact text.
+// Do not reason from its content: the B2 row's 「待裁定：外包 DTO 無 `actual_model`」
+// is FALSE since T-7f28 added the column, and owner `rc-b8d219446b13` closed B2.
+// The live account is docs/design/worker-panel-parity.md; this is layout input.
 export const SIX_COL_TABLE_MD = [
   "## 六欄表格（取自 worker-panel-parity 設計表的欄位形狀）",
   "",
   "| # | 項目 | 正職有什麼 | 外包有什麼 | 差在哪 | 期望行為 |",
   "|---|------|-----------|-----------|--------|---------|",
   "| A1 | 返回鍵 | `mp__back`（共用面板畫） | 同 | 同 | 維持共用，不動 |",
-  "| A6 | 任務 chip（`T-xxxx`）+ 任務類型 | 無 | 有，可點 → `#tasks/<id>` | 外包獨有 | 保留。外包的「角色」就是它綁的任務類型，這是 rail 列形的同一條裁定 |",
+  "| A6 | 任務 chip（任務編號，T-5291 起即 task id 本身）+ 任務類型 | 無 | 有，可點 → `#tasks/<id>` | 外包獨有 | 保留。外包的「角色」就是它綁的任務類型，這是 rail 列形的同一條裁定 |",
   "| B2 | 模型值的語意 | REPORTED（agent 開機回報的實際值） | CONFIGURED（`worker.model`，owner 意圖值） | 差 | 待裁定：外包 DTO 無 `actual_model`，模型格無法像正職那樣標「最近一次開機回報」 |",
 ].join("\n");
 
 const SIX_COL_TASK = mkTask({
-  id: "t-e4ae-six-col",
-  taskNo: "T-e4ae",
+  id: "t-e4ae5291a002",
+  taskNo: "t-e4ae5291a002",
   title: "手機寬表格六欄 recon",
   status: "in_progress",
   description: SIX_COL_TABLE_MD,

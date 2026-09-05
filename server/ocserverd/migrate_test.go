@@ -144,7 +144,7 @@ func TestReplyCardExpiredMigrationRoundTrip(t *testing.T) {
 	} {
 		if _, err := db.Exec(`INSERT INTO reply_card
 			(id, kind, status, created_ts, answered_ts, expired_ts, options, summary)
-			VALUES (?, 'decision', ?, 1, ?, ?, '["A"]', 's')`,
+			VALUES (?, 'decision', ?, 1, ?, ?, '[{"text":"A","ai_pick":true}]', 's')`,
 			row.id, row.status, row.answered, row.expired); err != nil {
 			t.Fatalf("seed %s: %v", row.id, err)
 		}
@@ -992,7 +992,7 @@ func TestMemberAvatarMigrationRollback(t *testing.T) {
 	}
 	if _, err := db.Exec(`INSERT INTO member
 		(id, name, kind, avatar_attachment_id)
-		VALUES ('m-avatar-mig', 'Avatar', 'assistant', 'ava-owned')`); err != nil {
+		VALUES ('m-avatar-mig', 'Avatar', 'staff', 'ava-owned')`); err != nil {
 		t.Fatalf("seed member: %v", err)
 	}
 
@@ -1061,7 +1061,14 @@ func TestMigration00045DeletesOnlyTheRetiredTaskManualHistory(t *testing.T) {
 		}
 	}
 
-	if err := runMigrations(db); err != nil {
+	// 🔴 UP TO 00045 EXACTLY, not the whole chain. This test names ONE
+	// migration's blast radius, so it must run that migration and no later one:
+	// running everything meant its verdict silently included every subsequent
+	// DELETE, and 00061 (drop_non_general_lessons) is one — it legitimately
+	// removes the seeded lessons row 'r-assistant::review-pr', whose task_type
+	// is not 'general', which made this test report 00045 as taking a row it
+	// never touched. Scoping the run is what keeps the failure message true.
+	if err := goose.UpTo(db, "migrations", 45); err != nil {
 		t.Fatalf("delete up: %v", err)
 	}
 

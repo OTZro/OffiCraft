@@ -1,7 +1,12 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n";
-import { type OnboardingReportView } from "../api";
 import {
+  api,
+  type OnboardingReportView,
+  type OnboardingStepView,
+} from "../api";
+import {
+  adoptServerSettings,
   loadServerSettings,
   refreshServerSettings,
 } from "../hooks/sharedServerSettings";
@@ -22,11 +27,23 @@ import "./onboarding.css";
  * a problem, and a banner that appears and then disappears on its own trains
  * the owner to ignore it.
  *
- * Dismissal is per-session (sessionStorage): the underlying condition is
- * durable, so a permanent dismissal would hide a still-broken studio forever,
- * while re-nagging on every render would be noise.
+ * 🔴 DISMISSAL IS PERMANENT, AND IT IS THE SERVER'S (T-0648). 「不再顯示」 PATCHes
+ * `onboarding_dismissed`, which stamps `dismissed_at` on the ONE onboarding
+ * report row; this component then simply believes that field. It used to be a
+ * sessionStorage key — scoped to one TAB — so opening the same URL again
+ * brought the banner straight back. The owner hit that himself and ruled the
+ * dismissal permanent (rc-45eb8652b17f).
+ *
+ * ⚠️ WHAT HE KNOWINGLY BOUGHT, SAID PLAINLY: nothing in this build ever writes
+ * a SECOND onboarding report, so on a given install "permanent" today means
+ * this banner never speaks again once dismissed — even if the studio is still
+ * broken. That is his call, not an oversight, and the code is arranged so it
+ * costs nothing to undo: the stamp rides ON the report, the report row is
+ * rewritten WHOLESALE, so the day anything writes a fresh report (a re-detect,
+ * a re-run) the dismissal goes with the old blob and the banner speaks again
+ * with nobody having to remember to clear it. Moving the stamp to a row of its
+ * own would silently delete that property.
  */
-const DISMISS_KEY = "oc.onboarding.dismissed";
 
 /** Poll cadence + ceiling for the non-terminal states (see the effect below). */
 export const ONBOARDING_POLL_MS = 3000;
@@ -67,9 +84,10 @@ function isTerminal(report: OnboardingReportView | null): boolean {
 export function OnboardingBanner() {
   const { t } = useI18n();
   const [report, setReport] = useState<OnboardingReportView | null>(null);
-  const [dismissed, setDismissed] = useState(
-    () => sessionStorage.getItem(DISMISS_KEY) === "1"
-  );
+  // Optimistic only — the durable answer is report.dismissedAt, which the very
+  // next read carries. This state exists so the press feels instant and so the
+  // banner does not flash back while the PATCH is in the air.
+  const [justDismissed, setJustDismissed] = useState(false);
   const [showDetail, setShowDetail] = useState(false);
 
   // POLL until the report reaches a terminal state.
@@ -128,7 +146,10 @@ export function OnboardingBanner() {
     };
   }, []);
 
-  if (dismissed || !report || report.state !== "failed") return null;
+  if (justDismissed || !report || report.state !== "failed") return null;
+  // > 0, not truthiness of a flag: a report with no stamp — every row written
+  // before this field existed — reads 0 and still speaks.
+  if (report.dismissedAt > 0) return null;
   const failed = report.steps.filter((s) => !s.ok);
   if (failed.length === 0) return null;
 
@@ -139,6 +160,42 @@ export function OnboardingBanner() {
         ? t.onboarding.stepWakeAssistant
         : name;
 
+  // The sentence that says WHAT BROKE, in the reader's language (T-0648).
+  //
+  // The server's `reason` is English engineer-facing prose composed in
+  // onboarding.go, so it was the one thing on this otherwise-translated banner
+  // that could not be translated — and a server-side wording change should not
+  // be able to rewrite the UI either. So the cause travels as a CLOSED `code`
+  // and the wording lives here, the same split backupHealth.ts already uses.
+  //
+  // 🔴 THE FALLBACK IS LOAD-BEARING, in BOTH directions. An older server sends
+  // no code at all, and a newer one can send a code this build has never heard
+  // of; either way the server's own sentence is still the best thing we have,
+  // and rendering it verbatim is how this banner can never be made to go
+  // silent by a version skew. Deliberately NOT a generic "unknown error".
+  //
+  // Only a STRING counts as a hit. `reasons` is a plain object literal, so an
+  // unguarded index answers an INHERITED member for a code like `toString`,
+  // and `??` keeps it because it is not nullish — the one sentence this banner
+  // exists to show is then gone.
+  //
+  // 🔴 AND THE INHERITED MEMBERS ARE NOT ALL ONE SHAPE. All but one of
+  // Object.prototype's names are data properties holding FUNCTIONS, which React
+  // renders as nothing (blank banner); `__proto__` is the exception — an
+  // ACCESSOR whose getter returns an OBJECT, which React throws on ("Objects
+  // are not valid as a React child") — and this banner sits directly in App
+  // with no error boundary anywhere above it, so that throw unmounts the whole
+  // cockpit, not just the banner.
+  //
+  // A guard phrased as "reject functions" therefore closes only the first half.
+  // Requiring a string closes both at once, and needs no list of names: a real
+  // wording is always a string, so every miss falls through to the server's
+  // own sentence.
+  const reasonText = (step: OnboardingStepView) => {
+    const worded = (t.onboarding.reasons as Record<string, unknown>)[step.code];
+    return typeof worded === "string" ? worded : step.reason;
+  };
+
   return (
     <div className="onboarding-banner" role="status" data-testid="onboarding-banner">
       <div className="onboarding-banner__head">
@@ -148,8 +205,18 @@ export function OnboardingBanner() {
           className="onboarding-banner__dismiss"
           data-testid="onboarding-dismiss"
           onClick={() => {
-            sessionStorage.setItem(DISMISS_KEY, "1");
-            setDismissed(true);
+            setJustDismissed(true);
+            void api
+              .patchServerSettings({ onboardingDismissed: true })
+              // The echo IS the new truth for every other reader of the shared
+              // settings snapshot in this tab.
+              .then(adoptServerSettings)
+              .catch(() => {
+                // The write did not land, so the dismissal is not durable —
+                // put the banner back rather than let the owner believe he has
+                // silenced something the server never heard about.
+                setJustDismissed(false);
+              });
           }}
         >
           {t.onboarding.dismiss}
@@ -162,7 +229,7 @@ export function OnboardingBanner() {
             <span className="onboarding-banner__step">{stepLabel(s.name)}</span>
             {/* The REASON is the payload — a step name alone is the same
                 silence with a label on it. */}
-            <span className="onboarding-banner__reason">{s.reason}</span>
+            <span className="onboarding-banner__reason">{reasonText(s)}</span>
           </li>
         ))}
       </ul>

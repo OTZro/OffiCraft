@@ -183,7 +183,7 @@ func TestRenderPlist_EmptyNamespaceOmitsStamp(t *testing.T) {
 
 func TestLaunchctlReinstall_NamespacedLabel(t *testing.T) {
 	f := newFakeSys()
-	f.runFn = labelGoneRunFn
+	f.runFn = labelGoneRunFn()
 	p := fixedPaths()
 	p.namespace = "seth"
 	p.label = "com.officraft.ocwarden.seth"
@@ -196,6 +196,7 @@ func TestLaunchctlReinstall_NamespacedLabel(t *testing.T) {
 		"bootout gui/501/com.officraft.ocwarden.seth",
 		"print gui/501/com.officraft.ocwarden.seth",
 		"bootstrap gui/501 " + p.plistPath,
+		"print gui/501/com.officraft.ocwarden.seth",
 		"kickstart -k gui/501/com.officraft.ocwarden.seth",
 	}
 	if len(f.runs) != len(want) {
@@ -295,7 +296,7 @@ func TestRealMain_BareTeardownRefusesBeforeAnyHostOperation(t *testing.T) {
 	// the fake to have recorded it. Namespaced (not --canonical) on purpose:
 	// even if this ever escaped to the real sysOps, com.officraft.ocwarden.seamprobe
 	// and /h/.officraft-seamprobe exist on no host.
-	hostSeamSeed = func(fs *fakeSys) { fs.runFn = labelGoneRunFn }
+	hostSeamSeed = func(fs *fakeSys) { fs.runFn = labelGoneRunFn() }
 	defer func() { hostSeamSeed = nil }()
 	probe := envFn(map[string]string{"HOME": "/h", "OC_NAMESPACE": "seamprobe"})
 	var ns strings.Builder
@@ -329,7 +330,7 @@ func TestRealMain_BareTeardownRefusesBeforeAnyHostOperation(t *testing.T) {
 
 func TestDoTeardown_NamespacedActsOnOwnLabelOnly(t *testing.T) {
 	f := newFakeSys()
-	f.runFn = labelGoneRunFn
+	f.runFn = labelGoneRunFn()
 	p := teardownPaths{
 		tokfile:   "/h/.officraft-seth/warden/exec-warden.tok",
 		plistPath: "/h/Library/LaunchAgents/com.officraft.ocwarden.seth.plist",

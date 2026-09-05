@@ -383,7 +383,27 @@ resolve_runtime_stamps() {
     log "WARNING: no agent runtime resolved (neither claude nor codex) — wardens installed via the cockpit's bootstrap-here on THIS host will refuse every spawn (runtime_bin_unresolved)."
     log "WARNING: fix: install one, or export OC_CLAUDE_BIN=/absolute/path/to/claude or OC_CODEX_BIN=/absolute/path/to/codex and re-run 'ocserver install' (safe — idempotent)."
   elif [[ -z "$claude_bin" ]]; then
-    log "NOTE: claude not resolved here — codex members work, claude members on this host would hit claude_bin_unresolved (export OC_CLAUDE_BIN=/absolute/path/to/claude and re-run to fix)."
+    # "codex members work" used to be the whole sentence, and out of the box it
+    # was a comfort that did not apply: the one member a fresh install ships
+    # with had no runtime of its own and was read as a claude member, so on THIS
+    # host it was the member that could not start. A member with no runtime of
+    # its own is now resolved against what this host reports, at placement time
+    # (T-b3d0) — so state that, and confine the failure to the case that really
+    # is one: a member someone deliberately set to claude.
+    #
+    # AND SAY WHEN. Resolution reads the capability map the warden reports, and
+    # that map lives in the server's in-memory telemetry store (server.go:361,
+    # newMemStore) — it is NOT persisted, so every server start and every
+    # self-update re-exec empties it. Between a restart and the next heartbeat
+    # (30s cadence) the server has nothing to resolve against, leaves the
+    # runtime unset, and an unset runtime still normalises to claude on the
+    # wire: that member is dispatched as claude once and fails to spawn. It
+    # recovers by itself on the next tick after the heartbeat lands, so this is
+    # a window, not a defect — but an unqualified "starts on codex" promises
+    # something this NOTE cannot deliver at that moment, and the person reading
+    # it is standing at exactly the restart it applies to.
+    log "NOTE: claude not resolved here — this host runs codex. Once this host has reported its runtimes (first warden heartbeat after a server start, ~30s), a member with no runtime chosen for it is placed on what this host reports, so the out-of-box assistant starts on codex; only a member you deliberately set to claude cannot start here. Before that first heartbeat a not-yet-resolved member is still dispatched as claude and will fail one spawn, then recover."
+    log "NOTE: to run claude members on this host: install claude, or export OC_CLAUDE_BIN=/absolute/path/to/claude and re-run 'ocserver install' (safe — idempotent). Otherwise set that member's 執行環境 to codex."
   elif [[ -z "$codex_bin" ]]; then
     log "NOTE: codex not resolved here — claude members work, codex members on this host would hit runtime_bin_unresolved (export OC_CODEX_BIN=/absolute/path/to/codex and re-run to fix)."
   fi
@@ -396,6 +416,43 @@ resolve_runtime_stamps() {
   if [[ -n "$codex_bin" ]]; then
     CODEX_ENV_LINE="
         <key>OC_CODEX_BIN</key><string>$codex_bin</string>"
+  fi
+}
+
+# bootstrap_and_confirm GUI PLIST TARGET — bootstrap a rendered plist, CONFIRM
+# launchd actually registered the label, then kickstart it.
+#
+# WHY THE CONFIRM EXISTS (T-908d, same shape as cli/ocwarden/install.go's T-0648
+# guard): `launchctl bootstrap` can exit 0 and register NOTHING. When it does, the
+# first verb to notice is the NEXT one — kickstart — which fails with exit 113
+# "Could not find service … in domain". This function used to turn that into
+# "launchctl kickstart failed for …", which sends the operator to debug a step
+# that was never broken. So: ask launchd directly, in the gap between the two.
+#
+# HAND-COPIED, not shared, from install.sh's copy of the same loop — the two
+# installers are separate programs and neither may be broken by a change to the
+# other's bounds. It is the bootout poll above run in the OPPOSITE direction.
+#
+# BOUNDED AND NON-FATAL ON TIMEOUT (deliberate, ~5s = 25 x 0.2s): registration can
+# merely LAG a bootstrap that exited 0, and failing here on the lag alone would
+# turn machines that install fine today into machines that do not. A timeout only
+# WARNs; it becomes a diagnosis solely when kickstart ALSO fails, which is the
+# proof the label really is absent.
+#
+# TOP LEVEL for the same reason render_serve_plist is: the `bootstrap-and-confirm`
+# seam drives this exact function, so the blame decision is tested by running it.
+bootstrap_and_confirm() {
+  local gui="$1" dst="$2" target="$3"
+  launchctl bootstrap "$gui" "$dst" || fail "launchctl bootstrap failed for $dst"
+  local _reg=0 _i
+  for _i in $(seq 1 25); do
+    if launchctl print "$target" >/dev/null 2>&1; then _reg=1; break; fi
+    sleep 0.2
+  done
+  [[ "$_reg" == "1" ]] || log "WARN: launchd still does not know $target ~5s after bootstrap exited 0; kickstarting anyway"
+  if ! launchctl kickstart -k "$target"; then
+    [[ "$_reg" == "1" ]] || fail "launchctl bootstrap exited 0 but registered nothing — launchd does not know $target, so the job was never loaded; the plist to look at is $dst"
+    fail "launchctl kickstart failed for $target"
   fi
 }
 
@@ -723,7 +780,9 @@ PLIST
         fail "DRYRUN: $label rendered plist failed plutil -lint"
       fi
       echo "[ocserver] DRYRUN would: launchctl bootout $GUI/$label 2>/dev/null || true" >&2
-      echo "[ocserver] DRYRUN would: launchctl bootstrap $GUI $dst; kickstart -k $GUI/$label" >&2
+      echo "[ocserver] DRYRUN would: launchctl bootstrap $GUI $dst" >&2
+      echo "[ocserver] DRYRUN would: poll launchctl print $GUI/$label until registered (bootstrap can exit 0 and register nothing; bounded ~5s, non-fatal)" >&2
+      echo "[ocserver] DRYRUN would: launchctl kickstart -k $GUI/$label" >&2
       return 0
     fi
     mkdir -p "$LA_DIR"
@@ -741,8 +800,7 @@ PLIST
       sleep 0.2
     done
     [[ "$_gone" == "1" ]] || log "WARN: $label still registered ~5s after bootout; bootstrapping anyway"
-    launchctl bootstrap "$GUI" "$dst" || fail "launchctl bootstrap failed for $dst"
-    launchctl kickstart -k "$GUI/$label" || fail "launchctl kickstart failed for $GUI/$label"
+    bootstrap_and_confirm "$GUI" "$dst" "$GUI/$label"
     log "loaded $label"
   }
 
@@ -1050,6 +1108,15 @@ main() {
       REPO="/render-seam/repo"; OC_TOML="/render-seam/oc.toml"
       LOG_DIR="/render-seam/log"
       render_serve_plist
+      ;;
+    # bootstrap-and-confirm — HIDDEN test seam (not in usage): drive the REAL
+    # bootstrap→confirm→kickstart decision (`bootstrap_and_confirm`, the same
+    # function `install` step 6 hands every label to) against a shimmed launchctl,
+    # so a harness can assert WHICH STEP gets blamed without running the whole
+    # install. Args: GUI PLIST TARGET. Nothing else about the install is touched.
+    bootstrap-and-confirm)
+      [[ $# -eq 3 ]] || fail "bootstrap-and-confirm needs: GUI PLIST TARGET"
+      bootstrap_and_confirm "$1" "$2" "$3"
       ;;
     ""|-h|--help) usage; [[ "$sub" == "" ]] && exit 1 || exit 0 ;;
     *)            fail "unknown command: $sub (see: bin/ocserver --help)" ;;

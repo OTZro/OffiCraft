@@ -293,6 +293,33 @@
   font-weight: 700;
   color: var(--color-text-strong);
 }
+/* 成本歸零 (T-53). Same 28px pill as .mp-refocus — it sits in the sibling cell
+   head and the two must line up — but carried in --color-danger rather than the
+   accent, because pressing it destroys a figure nothing else in the system
+   holds. Disabled is the honest state when there is nothing measured to clear. */
+.mp-cost-reset {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--color-danger) 35%, transparent);
+  background: transparent;
+  color: var(--color-danger);
+  font-size: 12.5px;
+  font-weight: 500;
+  transition: background 0.15s, opacity 0.15s;
+}
+.mp-cost-reset:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+}
+.mp-cost-reset:disabled {
+  color: var(--color-text-muted);
+  border-color: color-mix(in srgb, var(--color-text-muted) 20%, transparent);
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .mp-refocus {
   display: inline-flex;
   align-items: center;
@@ -680,16 +707,27 @@
     flex-basis: 100%;
     align-items: stretch;
   }
-  /* The row spans the card and its members share the width evenly, so 更改 ＋
-   * 停止 stay side by side instead of crushing into the right edge. Direct
-   * children (the 更改 button and the .member-actions group) each take a share;
-   * the group's own buttons then fill that share. */
+  /* One BAND per direct child, each spanning the card. It arrived because owner
+   * 2026-08-21 turned the single 停止 into a three-rung row that could not share
+   * a phone-width line (the card's inner width at 375 is 289); owner 2026-08-22
+   * collapsed the ladder back to ONE upgrading button, so the cluster is at most
+   * 更改 ＋ 喚醒 ＋ that button and would now fit on one line at 375 too. The
+   * band shape is KEPT deliberately: a full-width tap target per action is the
+   * phone shape the owner asked for (不要在窄螢幕擠成一團), and nothing about the
+   * ruling asked for the narrow layout to change. So: band 1 = 更改, band 2 = the
+   * action group, its buttons sharing the full card width on ONE line.
+   *
+   * Before this, `flex: 1 1 0` split the card in half between 更改 and the
+   * WHOLE ladder group, which then stacked 3-deep inside its half while `align-
+   * items: center` floated it against the single 更改 button — a ragged
+   * three-line block, and the rung an owner reaches for first (停止) ended up
+   * ABOVE 更改 rather than beside it. */
   .mp-identity__buttons {
     align-self: stretch;
-    justify-content: stretch;
+    align-items: stretch;
   }
   .mp-identity__buttons > * {
-    flex: 1 1 0;
+    flex: 1 1 100%;
     min-width: 0;
   }
   .mp-identity__buttons .member-actions {
@@ -1794,6 +1832,50 @@
      shrink-wraps to its longest word and a short message would sit in a narrow
      box, which is the same "floating" look from a different cause. */
   align-self: stretch;
+  overflow-wrap: anywhere;
+}
+/* T-9871 引用列 — the message this one replies to. The snapshot already BILLS
+   the quote's names and excerpt against the chat budget, so these characters
+   were evicting other messages while nothing drew them.
+
+   WHAT KEEPS THIS INSIDE THE FRAME IS `overflow-wrap: anywhere` BELOW, not the
+   `align-self` here. The row is `flex-direction: column` with
+   `align-items: flex-start`, so this child would otherwise take fit-content
+   with min-content as its floor (T-4aa0) — but with the excerpt breakable that
+   floor is one character, so it cannot push the card out either way. Measured:
+   deleting `align-self: stretch` leaves resume-chat-quote.ct.spec.tsx GREEN at
+   both widths, deleting `overflow-wrap: anywhere` reddens it by 105px at 320px.
+   Stretch is here so the left rule spans the card rather than stopping at the
+   end of a short excerpt, and NOTHING GUARDS THAT — it is a look, not a rule.
+
+   🔴 A LEFT RULE, NOT A BOTTOM ONE. The chat pane separates its quote with
+   `border-bottom` because it sits inside a bubble with no frame of its own;
+   `.mp-resume__chatrow` is already a bordered card, so a bottom rule would draw
+   a second line inside one box. The left rule says "quoted" the way a
+   blockquote does and adds no horizontal line at all. */
+.mp-resume__chatquote {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 2px;
+  padding-left: 6px;
+  border-left: 2px solid color-mix(in srgb, var(--color-overlay) 16%, transparent);
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+/* Wraps rather than truncating: this card lives in a side panel that is
+   NARROWER than the chat pane, and the pane's own answer to a long parties line
+   (drop the jump label at `@container chat-pane`) cannot fire here — this card
+   is not inside that container. Wrapping needs no container to be right. */
+.mp-resume__chatquoteparties {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+}
+.mp-resume__chatquotebody,
+.mp-resume__chatquotegone {
   overflow-wrap: anywhere;
 }
 .mp-resume__taskrow {

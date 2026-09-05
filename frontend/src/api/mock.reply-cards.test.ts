@@ -20,7 +20,8 @@ function mkCard(over: Partial<ReplyCard>): ReplyCard {
     kind: "decision",
     summary: "要幫你寄出這封信嗎？",
     body: "",
-    options: ["寄出", "先不要", "改寄給別人"],
+    options: [{ text: "寄出", aiPick: true }, { text: "先不要", aiPick: false }, { text: "改寄給別人", aiPick: false }],
+    selectMode: "single",
     status: "waiting",
     attachments: [],
     createdTs: Date.now() / 1000 - 600,
@@ -55,7 +56,7 @@ describe("mock reply-card api", () => {
         id: "done",
         status: "answered",
         answeredTs: now - 30,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
       })
     );
 
@@ -66,7 +67,7 @@ describe("mock reply-card api", () => {
 
   it("windows the answered list to 24h, newest answer first", async () => {
     const now = Date.now() / 1000;
-    const ans = { optionIdx: null, text: "ok", attachments: [] };
+    const ans = { optionIdxs: null, text: "ok", attachments: [] };
     __injectMockReplyCard(
       mkCard({ id: "recent", status: "answered", answeredTs: now - 60, answer: ans })
     );
@@ -92,9 +93,9 @@ describe("mock reply-card api", () => {
   it("answering a waiting card closes it and decrements the count", async () => {
     __injectMockReplyCard(mkCard({ id: "rc-1" }));
 
-    const card = await mockApi.answerReplyCard("rc-1", { optionIdx: 1 });
+    const card = await mockApi.answerReplyCard("rc-1", { optionIdxs: [1] });
     expect(card.status).toBe("answered");
-    expect(card.answer?.optionIdx).toBe(1);
+    expect(card.answer?.optionIdxs).toEqual([1]);
     expect(card.answeredTs).not.toBeNull();
     expect((await mockApi.getReplyCardCount()).waiting).toBe(0);
     expect(await mockApi.listReplyCards("waiting")).toEqual([]);
@@ -109,37 +110,54 @@ describe("mock reply-card api", () => {
       text: "收件人是誰？",
     });
     expect(card.status).toBe("answered");
-    expect(card.answer?.optionIdx).toBeNull();
+    expect(card.answer?.optionIdxs).toBeNull();
     expect(card.answer?.text).toBe("收件人是誰？");
   });
 
-  it("rejects an empty answer and an out-of-range option with 400", async () => {
+  it("rejects an empty answer, an empty option list, an out-of-range option and a second option on a single card with 400", async () => {
     __injectMockReplyCard(mkCard({ id: "rc-1" }));
     expect(await statusOf(mockApi.answerReplyCard("rc-1", {}))).toBe(400);
+    // `[]` is EMPTY, not an answer: a nil-style check would let it through and
+    // close the card on a decision nobody made.
     expect(
-      await statusOf(mockApi.answerReplyCard("rc-1", { optionIdx: 9 }))
+      await statusOf(mockApi.answerReplyCard("rc-1", { optionIdxs: [] }))
     ).toBe(400);
-    // Both rejections left the card untouched.
+    expect(
+      await statusOf(mockApi.answerReplyCard("rc-1", { optionIdxs: [9] }))
+    ).toBe(400);
+    // mkCard is a SINGLE card, so two indices is a 400 the way the server's is.
+    expect(
+      await statusOf(mockApi.answerReplyCard("rc-1", { optionIdxs: [0, 1] }))
+    ).toBe(400);
+    // Every rejection left the card untouched.
     expect((await mockApi.getReplyCardCount()).waiting).toBe(1);
+  });
+
+  it("stores a multi card's indices deduped and ascending, whatever order they arrive in", async () => {
+    __injectMockReplyCard(mkCard({ id: "rc-1", selectMode: "multi" }));
+    const card = await mockApi.answerReplyCard("rc-1", {
+      optionIdxs: [2, 0, 2],
+    });
+    expect(card.answer?.optionIdxs).toEqual([0, 2]);
   });
 
   it("answering an already-answered card is a 409 (revise via reanswer)", async () => {
     __injectMockReplyCard(mkCard({ id: "rc-1" }));
-    await mockApi.answerReplyCard("rc-1", { optionIdx: 0 });
+    await mockApi.answerReplyCard("rc-1", { optionIdxs: [0] });
     expect(
-      await statusOf(mockApi.answerReplyCard("rc-1", { optionIdx: 1 }))
+      await statusOf(mockApi.answerReplyCard("rc-1", { optionIdxs: [1] }))
     ).toBe(409);
   });
 
   it("reanswer replaces the answer wholesale and stays answered", async () => {
     __injectMockReplyCard(mkCard({ id: "rc-1" }));
-    const first = await mockApi.answerReplyCard("rc-1", { optionIdx: 0 });
+    const first = await mockApi.answerReplyCard("rc-1", { optionIdxs: [0] });
 
     const revised = await mockApi.reanswerReplyCard("rc-1", {
       text: "改成手動寄",
     });
     expect(revised.status).toBe("answered");
-    expect(revised.answer?.optionIdx).toBeNull();
+    expect(revised.answer?.optionIdxs).toBeNull();
     expect(revised.answer?.text).toBe("改成手動寄");
     expect(revised.answeredTs).toBeGreaterThanOrEqual(first.answeredTs ?? 0);
     // A revision never re-counts the badge.
@@ -149,13 +167,13 @@ describe("mock reply-card api", () => {
   it("reanswering a still-waiting card is a 409", async () => {
     __injectMockReplyCard(mkCard({ id: "rc-1" }));
     expect(
-      await statusOf(mockApi.reanswerReplyCard("rc-1", { optionIdx: 0 }))
+      await statusOf(mockApi.reanswerReplyCard("rc-1", { optionIdxs: [0] }))
     ).toBe(409);
   });
 
   it("an unknown card id is a 404", async () => {
     expect(
-      await statusOf(mockApi.answerReplyCard("nope", { optionIdx: 0 }))
+      await statusOf(mockApi.answerReplyCard("nope", { optionIdxs: [0] }))
     ).toBe(404);
     expect(await statusOf(mockApi.getReplyCard("nope"))).toBe(404);
   });
@@ -179,17 +197,17 @@ describe("mock reply-card api", () => {
     // Terminal: expire again / answer / reanswer are all 409; unknown id 404.
     expect(await statusOf(mockApi.expireReplyCard("rc-1"))).toBe(409);
     expect(
-      await statusOf(mockApi.answerReplyCard("rc-1", { optionIdx: 0 }))
+      await statusOf(mockApi.answerReplyCard("rc-1", { optionIdxs: [0] }))
     ).toBe(409);
     expect(
-      await statusOf(mockApi.reanswerReplyCard("rc-1", { optionIdx: 0 }))
+      await statusOf(mockApi.reanswerReplyCard("rc-1", { optionIdxs: [0] }))
     ).toBe(409);
     expect(await statusOf(mockApi.expireReplyCard("nope"))).toBe(404);
   });
 
   it("expire refuses an answered card", async () => {
     __injectMockReplyCard(mkCard({ id: "rc-1" }));
-    await mockApi.answerReplyCard("rc-1", { optionIdx: 0 });
+    await mockApi.answerReplyCard("rc-1", { optionIdxs: [0] });
     expect(await statusOf(mockApi.expireReplyCard("rc-1"))).toBe(409);
     expect((await mockApi.getReplyCard("rc-1")).status).toBe("answered");
   });
@@ -198,12 +216,16 @@ describe("mock reply-card api", () => {
     __injectMockReplyCard(mkCard({ id: "rc-1" }));
     const card = await mockApi.getReplyCard("rc-1");
     expect(card.id).toBe("rc-1");
-    expect(card.options).toEqual(["寄出", "先不要", "改寄給別人"]);
+    expect(card.options).toEqual([
+      { text: "寄出", aiPick: true },
+      { text: "先不要", aiPick: false },
+      { text: "改寄給別人", aiPick: false },
+    ]);
     expect(card.status).toBe("waiting");
 
-    await mockApi.answerReplyCard("rc-1", { optionIdx: 1 });
+    await mockApi.answerReplyCard("rc-1", { optionIdxs: [1] });
     const answered = await mockApi.getReplyCard("rc-1");
     expect(answered.status).toBe("answered");
-    expect(answered.answer?.optionIdx).toBe(1);
+    expect(answered.answer?.optionIdxs).toEqual([1]);
   });
 });

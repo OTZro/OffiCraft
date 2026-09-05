@@ -93,7 +93,8 @@ function mkCard(over: Partial<ReplyCard>): ReplyCard {
     kind: "decision",
     summary: "要往哪個方向做？",
     body: "",
-    options: ["A", "B"],
+    options: [{ text: "A", aiPick: true }, { text: "B", aiPick: false }],
+    selectMode: "single",
     status: "waiting",
     attachments: [],
     createdTs: Date.now() / 1000 - 600,
@@ -139,22 +140,34 @@ describe("mock reassign — member target", () => {
     expect(after.reassignedFrom).toBe("someone-else");
     expect(after.reassignedFromKind).toBe("member");
 
-    // The NEW executor is told who its predecessor is, to confirm the handover
-    // WITH them, then flip the status back themselves — the note rides along. A
-    // system message, never an owner DM (T-ba04).
-    const inbox = await mockApi.peekChat("mira");
+    // The NEW executor is told who its predecessor is and to claim the task
+    // itself. A system message, never an owner DM (T-ba04).
+    const inbox = await mockApi.listChat("mira");
     expect(inbox.some((m) => m.from === "system")).toBe(true);
     const notice = inbox.map((m) => m.body).join("\n");
     expect(notice).toContain(task.taskNo);
     expect(notice).toContain("你的前任是");
     expect(notice).toContain("claim_task");
     expect(notice).not.toContain("update_task_status");
-    expect(notice).toContain("先看 PR #12");
+    // 🔴 THE NOTE NO LONGER RIDES ALONG (rc-0c36d8739b8f: 「拿掉 —— 交接備註只留
+    // 在任務上」). This used to assert the opposite; the assertion was inverted
+    // rather than deleted, because a stapled copy AFTER the instructions is what
+    // made this document unsplittable in the first place.
+    // ⚠️ Honest limit: this only pins that the NOTICE has no copy. The cockpit
+    // has no handoverNote field at all today, so there is nothing on this side
+    // to assert the note landed on the TASK — the server side owns that.
+    expect(notice).not.toContain("先看 PR #12");
 
-    // The OLD executor is told to go hand over to the successor (also system).
-    const old = await mockApi.peekChat("someone-else");
+    // The OLD executor is told to stop and write the handover ONTO THE TASK.
+    // 🔴 IT DOES NOT NAME THE SUCCESSOR (owner 2026-08-24: 「讓他自己去查」「不管
+    // 是不是 outsource」) — an outsource successor is minted later, so naming one
+    // forced a fabricated placeholder into a person's grammatical slot.
+    const old = await mockApi.listChat("someone-else");
     expect(old.some((m) => m.from === "system")).toBe(true);
-    expect(old.map((m) => m.body).join("\n")).toContain("已轉派給 Mira");
+    const oldNotice = old.map((m) => m.body).join("\n");
+    expect(oldNotice).toContain("此任務已轉派給新的接手人");
+    expect(oldNotice).toContain("先把交接資訊寫到這張任務上");
+    expect(oldNotice).not.toContain("Mira");
   });
 
   it("expires the task's waiting cards and rewinds non-terminal steps", async () => {
@@ -245,12 +258,12 @@ describe("mock reassign — outsource target", () => {
 
     // The OLD outsource worker (now kept live) is told to hand over — a system
     // message, not an owner DM.
-    const old = await mockApi.peekChat("ow-old");
+    const old = await mockApi.listChat("ow-old");
     expect(old.some((m) => m.from === "system")).toBe(true);
     expect(old.map((m) => m.body).join("\n")).toContain("此任務已轉派給");
     // The freshly-minted worker gets its OWN pairing message (it used to get
     // none) naming its predecessor + the self-flip protocol.
-    const mintedInbox = await mockApi.peekChat(minted.id);
+    const mintedInbox = await mockApi.listChat(minted.id);
     const mintedNotice = mintedInbox.map((m) => m.body).join("\n");
     expect(mintedInbox.some((m) => m.from === "system")).toBe(true);
     expect(mintedNotice).toContain("你的前任是");

@@ -59,6 +59,7 @@ function renderClaude() {
         docKey="claude"
         title={s.bootClaudeName}
         historyTitle={s.historyBootClaudeTitle}
+        confirmSaveBody={s.bootDocSaveConfirmBoot}
         crumbs={[{ label: s.title }]}
       />
     </I18nProvider>
@@ -73,6 +74,27 @@ function renderCodex() {
         docKey="codex"
         title={s.bootCodexName}
         historyTitle={s.historyBootCodexTitle}
+        confirmSaveBody={s.bootDocSaveConfirmBoot}
+        crumbs={[{ label: s.title }]}
+      />
+    </I18nProvider>
+  );
+}
+
+// 🔴 A DOCUMENT THAT STILL CARRIES A READ-ONLY HEAD. Since T-6f44 four of the
+// ten (系統互動, 啟動步驟 ×2, 停止) have NONE — their head was one title line,
+// which moved into the body — so assertions ABOUT the head can no longer be
+// written against them. 加速停止 keeps a head (its one deadline line) and is
+// the smallest document that does, which makes it the honest subject for them.
+function renderAcceleratedStop() {
+  return render(
+    <I18nProvider>
+      <BootDocPage
+        kind="accelerated_stop"
+        docKey="global"
+        title={s.acceleratedStopName}
+        historyTitle={s.historyAcceleratedStopTitle}
+        confirmSaveBody={s.bootDocSaveConfirmAcceleratedStop}
         crumbs={[{ label: s.title }]}
       />
     </I18nProvider>
@@ -87,6 +109,7 @@ function renderSystem() {
         docKey="global"
         title={s.systemName}
         historyTitle={s.historyBootSystemTitle}
+        confirmSaveBody={s.bootDocSaveConfirmSystem}
         crumbs={[{ label: s.title }]}
       />
     </I18nProvider>
@@ -124,7 +147,7 @@ describe("BootDocPage", () => {
     // Everything except the document's first line — the part a whole-document
     // save has to carry along with the new heading.
     const rest = before.text.split("\n").slice(1).join("\n");
-    await typeWholeDoc(utils, `# 全新的啟動程序標題\n\n${rest}`);
+    await typeWholeDoc(utils, `# 全新的啟動步驟標題\n\n${rest}`);
     fireEvent.click(utils.getByTestId("doc-card-save"));
     fireEvent.click(await utils.findByTestId("doc-card-save-confirm-btn"));
 
@@ -132,7 +155,7 @@ describe("BootDocPage", () => {
     const [kind, key, text] = save.mock.calls[0];
     expect(kind).toBe("boot_sequence");
     expect(key).toBe("claude");
-    expect(text.startsWith("# 全新的啟動程序標題")).toBe(true);
+    expect(text.startsWith("# 全新的啟動步驟標題")).toBe(true);
     // The write is a WHOLE-DOCUMENT replace and always was — what the editor
     // holds is what lands, so the rest of the document has to be in it.
     //
@@ -151,7 +174,7 @@ describe("BootDocPage", () => {
 
     // And the page now RENDERS the saved document: the heading came back from
     // the adapter's response, not from local state that was never confirmed.
-    await utils.findByText("全新的啟動程序標題");
+    await utils.findByText("全新的啟動步驟標題");
     // Back out of edit mode, so a second save cannot ride the first one's draft.
     await waitFor(() =>
       expect(utils.queryByTestId("doc-card-editor")).toBeNull()
@@ -178,14 +201,14 @@ describe("BootDocPage", () => {
     }
   });
 
-  it("edits the whole document in ONE box — no per-section surface survives", async () => {
+  it("edits the whole editable half in ONE box — no per-section surface survives", async () => {
     // 🔴 T-c33e's acceptance condition, asserted on the rendered page: these
     // three blocks have no editor implementation of their own. One textarea,
     // covering the whole document, reached the same way 角色定義 is — and none
     // of the per-section affordances (paste / apply / discard / preview /
     // pending badge) exist any more.
     const utils = renderSystem();
-    const stored = (await api.getBootDoc("system_interaction", "global")).text;
+    const doc = await api.getBootDoc("system_interaction", "global");
 
     // Nothing to edit per section, before or after the editor opens.
     expect(utils.queryAllByTestId(/^boot-doc-sec/)).toEqual([]);
@@ -194,12 +217,46 @@ describe("BootDocPage", () => {
 
     const boxes = utils.container.querySelectorAll("textarea");
     expect(boxes.length).toBe(1);
-    // …and that box was seeded with the WHOLE document, not a slice of it.
+    // …and that box was seeded with the WHOLE editable half, not a slice of it
+    // — and NOT with the read-only head, which is shown beside it and which the
+    // wire has no field for (T-3201).
     fireEvent.click(utils.getByText(s.cancel));
     fireEvent.click(utils.getByTestId("doc-card-edit"));
     expect((utils.getByTestId("doc-card-editor") as HTMLTextAreaElement).value).toBe(
-      stored
+      doc.body
     );
+    // 🔴 系統互動 HAS NO READ-ONLY HEAD ANY MORE (T-6f44): its head was its own
+    // title line, and that line moved into the body, so the whole document is
+    // the editable half. Asserted rather than skipped — this is the first
+    // document ever to ship without one, and the failure it replaces is silent
+    // (a head left declared with no marker in the seed makes every write 500).
+    expect(doc.readOnlyHead).toBe("");
+    // …and with no head there is no head panel either. A page that still
+    // printed an empty one would be showing the owner a divider under a
+    // heading that is no longer there.
+    expect(utils.queryByTestId("doc-card-readonly-head")).toBeNull();
+  });
+
+  // 🔴 THE PAIRED CONTROL for the assertion above, on a document that DOES
+  // still carry a head. Without it, a page that had stopped rendering the
+  // read-only half for EVERY document would pass — the owner's rule is that he
+  // sees the half he may not type into, and the four documents that lost their
+  // head must not take that rule down with them.
+  it("shows the read-only head beside the editor on a document that still has one", async () => {
+    const utils = renderAcceleratedStop();
+    const doc = await api.getBootDoc("accelerated_stop", "global");
+
+    expect(doc.readOnlyHead).not.toBe("");
+    fireEvent.click(await utils.findByTestId("doc-card-edit"));
+    // On screen…
+    expect(utils.getByTestId("doc-card-readonly-head").textContent).toContain(
+      doc.readOnlyHead.split("\n")[0].replace(/^#+ /, "")
+    );
+    // …and NOT in the box, because the wire has no field for it and typing
+    // into it would be typing into a value the server composes.
+    expect(
+      (utils.getByTestId("doc-card-editor") as HTMLTextAreaElement).value
+    ).not.toContain(doc.readOnlyHead);
   });
 
   it("holds no editor state of its own — the shell is the shared component", async () => {
@@ -252,12 +309,12 @@ describe("BootDocPage", () => {
   });
 
   it("the restore calls the RESTORE endpoint, not the replace one — and lives only in the history list", async () => {
-    await api.saveBootDoc("boot_sequence", "claude", "被改壞的啟動程序\n");
+    await api.saveBootDoc("boot_sequence", "claude", "被改壞的啟動步驟\n");
     const reset = vi.spyOn(api, "resetBootDoc");
     const save = vi.spyOn(api, "saveBootDoc");
 
     const utils = renderClaude();
-    await utils.findAllByText(/被改壞的啟動程序/);
+    await utils.findAllByText(/被改壞的啟動步驟/);
 
     // 還原出廠版 is NOT a control of its own on this page. It stood here as a
     // top-level button until the owner overrode that on 2026-08-14 (card
@@ -346,6 +403,24 @@ describe("BootDocPage", () => {
     const cap = BOOT_DOC_CAP_CHARS_DEFAULTS.boot_sequence;
     const utils = renderClaude();
 
+    const doc = await api.getBootDoc("boot_sequence", "claude");
+    // The server enforces the cap on the document it STORES, so the readout has
+    // to add back whatever the draft does not hold — the read-only head and its
+    // separator. A cockpit measuring the body alone would promise room that does
+    // not exist.
+    //
+    // 🔴 ON THIS DOCUMENT THE OVERHEAD IS NOW ZERO, and that is correct rather
+    // than a broken fixture: 啟動步驟 lost its read-only head in T-6f44, so the
+    // stored document IS the body. Asserted as an identity so a future head
+    // sneaking back in — which would silently shrink the room the owner is
+    // promised — fails here.
+    expect(doc.sizeChars).toBe(runeLength(doc.body));
+    // …and the addition itself is still exercised, on a document that DOES
+    // carry a head. Without this the readout could have stopped adding the
+    // overhead altogether and every remaining assertion would still pass.
+    const withHead = await api.getBootDoc("accelerated_stop", "global");
+    expect(withHead.sizeChars - runeLength(withHead.body)).toBeGreaterThan(0);
+
     await typeWholeDoc(utils, "超".repeat(cap + 50));
 
     const notice = await utils.findByTestId("doc-card-over-cap");
@@ -354,6 +429,7 @@ describe("BootDocPage", () => {
     // the agent would boot from a document the owner never wrote.
     expect(notice.textContent).toContain(String(cap));
     const shown = Number(/\d{4,}/.exec(notice.textContent ?? "")?.[0]);
+    // No head on this document, so what is stored is exactly what was typed.
     expect(shown).toBe(cap + 50);
     expect(shown).toBeGreaterThan(cap);
     expect(shown).toBeGreaterThan([...SEED_BOOT_SEQUENCE_MD.trim()].length);
@@ -406,7 +482,11 @@ describe("BootDocPage", () => {
     );
     // The DIRECTORY row is what the marking reads since T-1170 — the list
     // never sees this text, only how much of it there is.
-    expect(target.sizes.text).toBe(runeLength(overCap));
+    // The retained revision is the STORED document — the body that was written
+    // plus the read-only head the server joined on (T-3201).
+    const stored = await api.getBootDoc("system_interaction", "global");
+    const overhead = stored.sizeChars - runeLength(stored.body);
+    expect(target.sizes.text).toBe(runeLength(overCap) + overhead);
 
     const row = await utils.findByTestId(`doc-history-item-${target.id}`);
     expect(within(row).getByText(s.historyBlockedBadge)).toBeTruthy();
@@ -434,12 +514,18 @@ describe("BootDocPage", () => {
     const utils = renderSystem();
     await utils.findAllByText("這是 owner 現在的版本");
     expect(utils.container.textContent).toContain("只有 API 知道這一段。");
-    // The seed's own opening heading is nowhere on the page.
-    const seedHeading = SEED_SYSTEM_INTERACTION_MD.split("\n")[0].replace(
-      /^#+ /,
-      ""
+    // The seed's own BODY is nowhere on the page. ⚠️ Not its opening heading:
+    // that heading is the document's READ-ONLY HEAD, which the page now shows
+    // beside the editor and which is the same bytes whether the owner has
+    // edited the document or not (T-3201) — asserting on it would be asserting
+    // that the half nobody may change had changed.
+    const seedBody = SEED_SYSTEM_INTERACTION_MD.trim()
+      .split("\n")
+      .find((line) => line.trim().startsWith("## "));
+    expect(seedBody).toBeTruthy();
+    expect(utils.container.textContent).not.toContain(
+      String(seedBody).replace(/^#+ /, "")
     );
-    expect(utils.container.textContent).not.toContain(seedHeading);
     // …and it is not the default any more, which is the same claim said in the
     // cockpit's own vocabulary.
     expect(utils.queryByText(s.defaultBadge)).toBeNull();

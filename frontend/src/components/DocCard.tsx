@@ -16,7 +16,7 @@
 // under it. Today's callers:
 //   * 角色定義 / 使用者自訂 (SettingsPage) — the original two, unchanged apart
 //     from the over-cap fix below.
-//   * 系統互動 / 啟動程序 ×2 (BootDocPage) — which pass `confirmSave`,
+//   * 系統互動 / 啟動步驟 ×2 (BootDocPage) — which pass `confirmSave`,
 //     `replaceNote` and `requireDirty`, and hold no editor state of their own.
 // InsightCard / LessonsCard / the two task-manual documents are NOT migrated
 // here yet (a separate ticket); the shell is shaped so they can be, which is
@@ -45,14 +45,26 @@ import {
   type DocumentHistoryEntryProps,
 } from "./DocumentHistoryEntry";
 import { serverMessageOf } from "../api/errors";
-import { docCapBlocked, runeLength } from "../api/docCap";
+import { docCapBlockedBySize, runeLength } from "../api/docCap";
 import "./settings.css";
 
 /** The folded document this card renders. Structural on purpose: the role
  * definition, the global-context block and the two boot-context blocks are four
  * different view types that all carry these two fields. */
 export interface DocCardDoc {
+  /** The EDITABLE text: what the editor holds and what `onSave` is handed. */
   text: string;
+  /** A half of the document this card must SHOW and must never let anyone edit
+   * (T-3201 — the boot-context documents' read-only head). Absent for every
+   * other document, and absent means the card behaves exactly as it always did.
+   *
+   * 🔴 IT LIVES ON THE DOC, NOT IN A `renderBody` (deliberate). BootDocPage is
+   * forbidden to hold an editor of its own — it may not even mention
+   * `renderBody`, which its own test asserts — and rendering the half nobody
+   * may type into is the same shell concern as the usage readout or the cap
+   * refusal. Putting it here keeps the ONE card every editable document draws
+   * itself with, which is T-c33e's ruling. */
+  readOnlyHead?: string;
   isDefault: boolean;
 }
 
@@ -72,7 +84,7 @@ export interface DocCardProps {
    * pencil InlineEdit in the heading; commits ride the role PATCH choke. */
   onRenameTitle?: (name: string) => Promise<void> | void;
   doc: DocCardDoc | null;
-  /** The unified settings breadcrumb (T-8f6e) — 設定 › 角色誌 › <this doc>. */
+  /** The unified settings breadcrumb (T-8f6e) — 設定 › 全域情境 › <this doc>. */
   crumbs: Crumb[];
   /** Save/reset are omitted for read-only docs. */
   onSave?: (text: string) => Promise<void> | void;
@@ -110,6 +122,11 @@ export interface DocCardProps {
    * only the pages whose editor used to be per-section owe the sentence, and
    * adding it under a page that never offered anything else would be noise. */
   replaceNote?: string;
+  /** One line under the card head that is about THIS document rather than about
+   * saving — today, why a read-only document has no editor (T-3201). Separate
+   * from `replaceNote` because the two are never both true: a document nobody
+   * may write cannot be warned that saving replaces it. */
+  note?: ReactNode;
   /** Ask before saving. The body is the caller's, because the consequence is:
    * a mangled boot sequence means agents never come online and nobody is left
    * to fix it, and that sentence is FALSE of the system-interaction block. */
@@ -125,8 +142,8 @@ export interface DocCardProps {
   /** Put the whole card behind its own heading, CLOSED on mount (T-6278).
    *
    * 🔴 NO CALLER PASSES THIS TODAY (T-bac4). It was built for the page that
-   * stacked TWO full documents — 啟動程序, Claude then Codex — and that page is
-   * gone: 啟動程序 is now an index of two rows, one document per page, so
+   * stacked TWO full documents — 啟動步驟, Claude then Codex — and that page is
+   * gone: 啟動步驟 is now an index of two rows, one document per page, so
    * nothing has two cards to fold. This docstring used to describe that stacked
    * page in the present tense, which the independent review caught: a reader
    * would have believed the page still exists.
@@ -184,6 +201,7 @@ export function DocCard({
   isDefault: isDefaultOverride,
   usage,
   replaceNote,
+  note,
   confirmSave,
   requireDirty = false,
   renderBody,
@@ -201,6 +219,7 @@ export function DocCard({
   const [failed, setFailed] = useState<string | null>(null);
 
   const text = doc ? doc.text : "";
+  const readOnlyHead = doc?.readOnlyHead ?? "";
   // 🔴 A null doc means the body has NOT been read (loading, or the read
   // failed) — it does not mean the document is untouched. The old fallback
   // here was `true`, which turned "I do not know" into the positive claim 預設:
@@ -214,13 +233,36 @@ export function DocCard({
   // window where the doc read is pending or broken.
   const isDefault = isDefaultOverride ?? (doc ? doc.isDefault : false);
 
+  // 🔴 WHAT THE DRAFT DOES NOT COUNT. `usage.size` is the size of the STORED
+  // document, and for a document with a read-only head the editor holds only
+  // part of it — so the difference between the two is exactly the head (plus
+  // whatever separates the halves, which this card is not allowed to know).
+  // Deriving it instead of taking a prop keeps every existing caller at zero:
+  // where the editor holds the whole document, `usage.size` and the text agree
+  // and this is 0.
+  //
+  // It has to be added back, because the cap the server enforces is on the
+  // document it STORES. A readout measuring the body against a whole-document
+  // cap would tell the owner he has room he does not have, and the refusal he
+  // then collects would quote numbers his screen never showed him.
+  const storedOverhead = usage ? Math.max(0, usage.size - runeLength(text)) : 0;
   // While editing, both the readout and the refusal judge the DRAFT. Mirrors
   // the server's own rule (docCapBlocked): over the cap is refused unless the
   // document is getting shorter, so an already-over-cap document can still be
   // edited downward instead of being frozen.
-  const shownSize = usage ? (editing ? runeLength(draft) : usage.size) : 0;
+  const shownSize = usage
+    ? editing
+      ? runeLength(draft) + storedOverhead
+      : usage.size
+    : 0;
   const overCap =
-    usage !== undefined && editing && docCapBlocked(usage.cap, text, draft);
+    usage !== undefined &&
+    editing &&
+    docCapBlockedBySize(
+      usage.cap,
+      usage.size,
+      runeLength(draft) + storedOverhead
+    );
   const unchanged = requireDirty && draft === text;
 
   // ⚠️ NO SCROLL CORRECTION HERE, AND THE REASON IS THAT NONE IS POSSIBLE —
@@ -304,6 +346,17 @@ export function DocCard({
   // Removed with the top-level button rather than left dangling — a dead
   // private function reads like a path something still takes.
 
+  // The read-only half stands ABOVE the editor and stays there while editing —
+  // it is what the owner writes his half AGAINST, so hiding it the moment he
+  // starts typing takes away the thing he is answering. Markdown-rendered like
+  // the body's read view, because that is how an agent will read it.
+  const head = readOnlyHead ? (
+    <div className="doc-card__readonly-head" data-testid="doc-card-readonly-head">
+      <div className="doc-card__readonly-label">{t.settings.docReadOnlyHead}</div>
+      <Markdown source={readOnlyHead} className="doc-md" />
+    </div>
+  ) : null;
+
   const body = renderBody ? (
     renderBody({ editing: editing && !readOnly, text, draft, setDraft })
   ) : editing && !readOnly ? (
@@ -345,9 +398,9 @@ export function DocCard({
             /* 🔴 NO aria-label HERE. One stood here saying 展開這份文件 /
              * 收合這份文件, and the independent review measured what it cost:
              * BOTH buttons — and, through them, both <h1>s — reported the same
-             * accessible name, so a screen reader could not tell 啟動程序
+             * accessible name, so a screen reader could not tell 啟動步驟
              * (Claude Code) from (Codex CLI), and getByRole('button', {name:
-             * '啟動程序（Claude Code）'}) matched nothing. That is this
+             * '啟動步驟（Claude Code）'}) matched nothing. That is this
              * ticket's own defect (two documents you cannot tell apart) rebuilt
              * in the accessibility tree, plus WCAG 2.5.3 Label in Name.
              * The visible title IS the name; aria-expanded carries the state,
@@ -517,8 +570,16 @@ export function DocCard({
             {replaceNote}
           </div>
         )}
+        {note && (
+          <div className="doc-card__note" data-testid="doc-card-note">
+            {note}
+          </div>
+        )}
 
-        <div className="doc-card__body">{body}</div>
+        <div className="doc-card__body">
+          {head}
+          {body}
+        </div>
       </div>
         </>
       )}

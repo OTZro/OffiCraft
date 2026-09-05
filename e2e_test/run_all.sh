@@ -27,6 +27,25 @@
 # a change here is the `macos-e2e` job on the PR and its log.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# T-45/B: member e2e uses the Playwright path, not cmux browser discovery.  The
+# browser tool lives outside this repository, so this explicit selector is the
+# boundary we can enforce here: a caller that tries to route this harness
+# through cmux gets a named refusal instead of a misleading setup failure.
+case "${OC_E2E_BROWSER_BACKEND:-playwright}" in
+  playwright)
+    echo "[run_all] member e2e browser backend=Playwright (cmux browser is unsupported; use this harness)"
+    ;;
+  cmux)
+    echo "[run_all] FATAL: OffiCraft members do not use cmux browser for e2e; run 'bash e2e_test/run_all.sh' or setup.sh -> Playwright -> teardown.sh instead. NOT a server failure." >&2
+    exit 2
+    ;;
+  *)
+    echo "[run_all] FATAL: unsupported member e2e browser backend '${OC_E2E_BROWSER_BACKEND}' (supported: Playwright; cmux browser is not a member e2e path)." >&2
+    exit 2
+    ;;
+esac
+
 # `||` does NOT swallow common.sh's own hard guards: an `exit 2` inside a sourced
 # file exits this script with 2 regardless (verified) — this only catches the
 # file being missing/unreadable, which would otherwise surface as a confusing
@@ -73,10 +92,14 @@ echo "[run_all] === E2E (playwright) ==="
 # What it does when it runs: build BOTH cli binaries IN-TREE so the warden's spawn
 # shim can resolve ocagent. resolveOcAgentBin walks three parents up from the
 # ocwarden executable to find <repoRoot>/cli/ocagent/ocagent — the spec's default
-# ocwarden path (REPO_ROOT/../ocwarden) walks to /Users and symlinks a BROKEN
-# ocagent into the spawned agent's workdir (a deaf agent that only comes online if
-# claude self-rescues in time — the presence-timeout flake). In-tree builds restore
-# the dev layout the resolver is written for. Both artifacts are gitignored.
+# ocwarden path (REPO_ROOT/../ocwarden) walks to /Users, where nothing exists.
+# T-81 CHANGED WHAT HAPPENS NEXT, so do not go looking for the old symptom: the
+# spawn used to symlink that broken path into the agent's workdir and carry on,
+# producing a DEAF agent that only came online if claude self-rescued in time (the
+# presence-timeout flake). start() now REFUSES the spawn outright with
+# ocagent_not_found. Same prerequisite, but the failure is immediate and says what
+# is wrong instead of surfacing minutes later as a flaky timeout. In-tree builds
+# restore the dev layout the resolver is written for. Both artifacts are gitignored.
 #
 # Why it is conditional (T-c329): it was unconditional, which cost every caller
 # two builds for a class that, by default, does not run. It does NOT make the

@@ -34,7 +34,7 @@ func crossrefWorkerCtx(t *testing.T) string {
 func crossrefMemberCtx(t *testing.T) string {
 	t.Helper()
 	s := newWorkerTestServer(t)
-	bc, err := s.buildBootContext("", nil, "")
+	bc, err := s.buildBootContext("", nil)
 	if err != nil || bc == nil {
 		t.Fatalf("buildBootContext: %v", err)
 	}

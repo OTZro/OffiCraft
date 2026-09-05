@@ -18,7 +18,7 @@
 // read at exec time, never the argv (see buildLaunchCommand).
 //
 // DELIBERATELY NOT here (server owns these in v2, or later warden phases):
-//   - roster poll / placement / over-spawn guard / is_assistant_kind spawn
+//   - roster poll / placement / over-spawn guard / is_staff_kind spawn
 //     decision / reconcile loop / cross-tick state  → server (T2.1)
 //   - kill / force-kill                             → Phase 3
 //   - token minting (/api/bootstrap)                → server (A4: mint归server)
@@ -52,7 +52,7 @@ const (
 	// cold claude REPL can take several seconds to accept input (rendering the
 	// welcome screen, dismissing startup notices), so we retry the Enter until the
 	// context gauge confirms submission. ~30×1s ≈ 30s covers a slow cold start yet
-	// stays COMFORTABLY under the reconcile start_timeout (WAKING_TTL_SECS=90s) so a
+	// stays COMFORTABLY under the reconcile start_timeout (the configured waking TTL) so a
 	// slow-but-successful boot is never miscounted as a start-failure → circuit trip.
 	nudgeMaxAttempts = 30
 	nudgeSettle      = 1 * time.Second
@@ -67,18 +67,30 @@ const (
 // hands DOWN these parameters; the warden only executes them.
 // ---------------------------------------------------------------------------
 
-// StartParams is the server-downpushed start(...) payload. token/role/task_type/
-// model/session_name are server-owned decisions; the warden never mints a token
+// StartParams is the server-downpushed start(...) payload. token/role/model/
+// session_name are server-owned decisions; the warden never mints a token
 // nor picks a placement (A4/T2.1). PersonaContext is the pre-composed persona the
 // server hands in as plain text (the warden does NO server I/O to fetch it).
+//
+// task_type used to be on that server-owned list. T-2 removed the lessons
+// classification axis it was sourced from, and the server's start-frame builder
+// no longer carries the field at all — see the `rpc: start` args table in
+// spec/sse.md, which now states that removal in as many words.
 type StartParams struct {
 	MemberID       string
 	PersonaContext string
 	MemberToken    string
 	Role           string
-	TaskType       string // colours the boot prompt upstream; carried for parity
-	Runtime        string // claude (default) | codex
-	Model          string
+	// TaskType is INERT since T-2. It never coloured anything on this side —
+	// it was carried for parity with a server field that chose a lessons
+	// bucket — and the server stopped sending it when the axis was removed.
+	// The frame parse (startParamsFromArgs) still reads `task_type` when a
+	// frame carries one, and NOTHING in this binary reads the result. Left in
+	// place rather than deleted because removing it is a wire-surface change,
+	// not a comment fix.
+	TaskType string
+	Runtime  string // claude (default) | codex
+	Model    string
 	// Effort is the member's owner-set reasoning-effort launch intent
 	// (low/medium/high/max, from member.effort server-side). Empty ⇒ the historic
 	// "medium" default, keeping an old frame's launch line byte-identical.
@@ -216,8 +228,10 @@ func buildAppendSystemPrompt(agentID, role, personaFile string) string {
 // never online).
 //
 // The target is ocAgentBin when set (resolveOcAgentBin's answer: the ocwarden SIBLING
-// $HOME/.officraft/warden/ocagent once home-installed, guaranteed present by install's
-// download step), else it FALLS BACK to the repoRoot-relative <repoRoot>/cli/ocagent/ocagent
+// $HOME/.officraft/warden/ocagent once home-installed — install's download step puts it
+// there, but NOT before the warden starts, which is the T-81 window: for a while after a
+// fresh install the sibling is simply not there yet), else it FALLS BACK to the
+// repoRoot-relative <repoRoot>/cli/ocagent/ocagent
 // (dev / in-tree, no home install). The sibling path is LOAD-BEARING once the warden is
 // home-installed: the durable ocwarden runs from $HOME/.officraft/warden, so
 // resolveRepoRoot's os.Executable walk lands on $HOME (not the real checkout) and the
@@ -235,6 +249,18 @@ func ocAgentSymlinkTarget(repoRoot, ocAgentBin string) string {
 		return ocAgentBin
 	}
 	return filepath.Join(repoRoot, "cli", "ocagent", "ocagent")
+}
+
+// ocAgentTarget is the per-spawn resolution seam (T-81). It exists so start() can ask
+// the question at the moment it needs the answer instead of reading a value frozen at
+// warden boot. An unset seam is a CONSTRUCTION fault, not a dev mode: it means whoever
+// built these deps never decided where ocagent comes from, and guessing on their behalf
+// is how a machine ends up silently deaf. Refuse and say so.
+func (d SpawnDeps) ocAgentTarget() (string, bool) {
+	if d.ResolveOcAgentBin == nil {
+		return "", false
+	}
+	return d.ResolveOcAgentBin()
 }
 
 // buildLaunchCommand is the port of build_launch_command: the one shell line tmux
@@ -689,13 +715,30 @@ type SpawnDeps struct {
 	// base for the ocagent shim's exec target (<repoRoot>/cli/ocagent/ocagent);
 	// injected (not derived inside start) so tests pin a deterministic root.
 	RepoRoot string
-	// OcAgentBin is the RESOLVED ocagent binary path the workdir `ocagent` symlink
-	// points at (resolveOcAgentBin: the ocwarden sibling when home-installed, else the
-	// repoRoot-relative dev path). Injected pre-resolved so start needs no FS probe.
-	// "" ⇒ ocAgentSymlinkTarget falls back to <RepoRoot>/cli/ocagent/ocagent.
-	OcAgentBin string
-	WriteFile  func(path, content string, mode os.FileMode) error
-	MkdirAll   func(path string, perm os.FileMode) error
+	// ResolveOcAgentBin answers "where is ocagent, and is it actually there?" and is
+	// called ONCE PER SPAWN, not once per process (T-81). The pre-resolved string it
+	// replaced was computed while the warden was booting — and on a FRESH machine
+	// ocagent is downloaded AFTER that moment, so the warden recorded a path that did
+	// not exist yet and never looked again: every member spawned on that machine got a
+	// DANGLING workdir symlink, never ran `ocagent listen`, and never came online —
+	// with the tmux window open and nothing anywhere reporting an error. Resolving at
+	// the moment of use means the first spawn after the download simply finds it, with
+	// no warden restart and nobody having to intervene.
+	// The bool is the OTHER half: it says the chosen path EXISTS. start() refuses the
+	// spawn when it is false, which turns "silently deaf forever" into one visible
+	// failure the server records.
+	//
+	// 🔴 REQUIRED. An earlier draft let nil mean "fall back to the repoRoot-relative
+	// dev path, and assume it is there" — and an independent reviewer showed that was
+	// the whole bug wearing a different hat: setting this ONE field to nil in
+	// buildSpawnDeps restored the original defect exactly, and the entire package
+	// stayed green. A lenient nil is a hole with a test-shaped cover on it, because
+	// nothing guards the single line that wires production up. So nil now REFUSES the
+	// spawn (see ocAgentTarget), and buildSpawnDeps has a test of its own asserting
+	// this field is set.
+	ResolveOcAgentBin func() (string, bool)
+	WriteFile         func(path, content string, mode os.FileMode) error
+	MkdirAll          func(path string, perm os.FileMode) error
 	// Symlink / Remove publish the workdir `ocagent` as a SYMLINK to OcAgentBin (see
 	// ocAgentSymlinkTarget for why a symlink, not a wrapper/hardlink). Remove clears a
 	// stale link first so re-spawn into an existing workdir is idempotent (os.Symlink
@@ -721,6 +764,32 @@ type SpawnDeps struct {
 	// time.Sleep so a cold claude REPL gets real time to become input-ready.
 	Sleep func(time.Duration)
 }
+
+// claudeBinUnresolvedReason is the owner-facing refusal for "this member wants
+// Claude and this machine has none". It names all THREE exits; the cheapest —
+// changing the member's runtime, which installs nothing — is FIRST, because
+// position is what carries "cheapest" once the prose explaining it is gone.
+//
+// LENGTH IS A FEATURE HERE, NOT A COMPROMISE. This string is a last_op_reason,
+// whose declared contract (ocapi_gen.go MemberDTO.LastOpReason) is a
+// "structured one-line cause" — as distinct from the free-form last_op_log
+// dump. The cockpit renders it accordingly: .mp-lastop__reason
+// (frontend/components/member-detail.css) is word-break:break-word with no
+// truncation and no expander, in --color-danger. A prose paragraph there does
+// not become a paragraph; it becomes a wall of red the owner has to read past
+// to find the one sentence that matters. The first draft ran 431 display
+// columns — roughly six wrapped lines of it.
+//
+// So the remediation is compressed to labels, not explanations: each exit is
+// the shortest phrase that still lets an owner act on it. What was dropped is
+// only the reasoning behind exit 3 (that launchd's PATH is not the shell's) —
+// recoverable from the install docs, and irrelevant to the two exits an owner
+// on a codex-only box will actually take. What is NOT droppable, and stays
+// first, is the Codex exit: this refusal exists because owners were being sent
+// to install a runtime they had deliberately declined.
+const claudeBinUnresolvedReason = "claude_bin_unresolved: no Claude Code on this machine. " +
+	"Fix any one: set this member's 執行環境 to Codex; " +
+	"install Claude Code here; or re-install the warden with OC_CLAUDE_BIN=<path>."
 
 // start EXECUTES one server-downpushed spawn. It does NOT decide whether to spawn
 // (that is the server's placement call); it only refuses to CLOBBER a live local
@@ -762,7 +831,14 @@ func (d SpawnDeps) start(p StartParams) SpawnOutcome {
 	}
 	// The selected runtime must be resolvable. A machine may carry either or both.
 	if runtimeName == "claude" && d.ClaudeBin == "" {
-		return SpawnOutcome{OK: false, Reason: "claude_bin_unresolved: set OC_CLAUDE_BIN or put claude on the daemon PATH (~/.local/bin absent from launchd PATH)"}
+		// Written for the OWNER, who reads this on the member row's
+		// last_op_reason (T-b3d0). Every earlier wording offered only two
+		// exits and BOTH of them were "go get claude" — so an owner who had
+		// deliberately installed Codex alone (a supported configuration) was
+		// sent to install, log in to, and pay for a runtime they never
+		// intended to use. The runtime is a per-member setting, so the
+		// cheapest fix is usually neither of the other two; it is named first.
+		return SpawnOutcome{OK: false, Reason: claudeBinUnresolvedReason}
 	}
 	if runtimeName == "codex" {
 		if d.CodexBin == "" {
@@ -772,6 +848,14 @@ func (d SpawnDeps) start(p StartParams) SpawnOutcome {
 			return SpawnOutcome{OK: false, Reason: "warden_bin_unresolved: cannot launch codex-session sidecar"}
 		}
 		if _, err := d.Runner.Run(d.CodexBin, "login", "status"); err != nil {
+			// 2026-09-05 codex-probe incident: the Reason stays exactly as it was — it is rendered on the
+			// member row for the OWNER, and this err carries the subprocess's
+			// stderr, which is unvetted text we must not put on his screen.
+			// But it must not vanish either: the same call in runtimeprobe.go
+			// discarded its err for months and cost five members a night of
+			// being unstartable with nothing anywhere saying why. The log is
+			// the host-local channel that can hold it.
+			d.logf("codex gate: `%s login status` failed: %v", d.CodexBin, err)
 			return SpawnOutcome{OK: false, Reason: "codex_not_logged_in: `codex login status` failed on this host"}
 		}
 	}
@@ -782,13 +866,45 @@ func (d SpawnDeps) start(p StartParams) SpawnOutcome {
 	// carries the value-free SET/unset summary ONLY (see claudecreds.go).
 	if runtimeName == "claude" && d.ClaudeCreds != nil {
 		if st := d.ClaudeCreds(); !st.Present {
+			// SAME OWNER-FACING CONTRACT AS claudeBinUnresolvedReason, and it is
+			// this arm — not that one — that the heartbeat probe's "omit an
+			// unmeasured login rather than call it a no" trade-off actually
+			// lands on: a host with claude INSTALLED but signed out resolves
+			// ClaudeBin, so it can never reach the bin_unresolved arm. Every
+			// earlier wording here offered two exits and BOTH were "go get
+			// claude logged in" — the same disease this ticket exists to cure,
+			// re-created in a narrower cell. The Codex exit is named FIRST for
+			// the same reason it is there: the runtime is a per-member setting,
+			// so it is usually the cheapest fix.
+			//
+			// WIDTH, MEASURED WITH THE SUMMARY A REAL HOST PRODUCES — not the
+			// two-source one the test used to stub. probeClaudeCreds marks
+			// cred_file, keychain AND all four claudeCredEnvKeys, so a
+			// signed-out Mac renders six "=unset" pairs: 140 columns of the
+			// total on its own. This message went 516 -> 359 columns. The
+			// sibling constant runs 182 under a 220 guard because it
+			// interpolates nothing at all. So the gap between them is the
+			// SUMMARY, not the prose — and shrinking the summary is a separate
+			// change, because its value-free construction is a security
+			// contract (see claudecreds.go). Guard set at 380 here, above 359.
+			//
+			// The launchd clause stays, but NOT for the reason an earlier draft
+			// of this comment gave. That draft claimed this string is "the only
+			// place the trap is written down at all" — FALSE, and an
+			// independent reviewer caught it: claudecreds_test.go explains the
+			// same trap verbatim, and install.go carries the plist relay that
+			// makes the escape hatch real in the first place. What IS true, and
+			// is the actual reason to keep it: no USER-FACING doc says it —
+			// `grep -rn OC_CLAUDE_CRED_CHECK docs/ bin/ spec/` is empty, so an
+			// owner who reads this line and goes looking finds nothing.
+			// Writing it into docs/guide/troubleshooting.md is the real fix and
+			// is not this ticket's.
 			return SpawnOutcome{OK: false, Reason: fmt.Sprintf(
-				"claude_not_logged_in: no claude credential found on this host (%s) — "+
-					"run `claude` once as this user and complete login, then retry. "+
-					"To bypass this gate instead: re-run `ocwarden install` with "+
-					"OC_CLAUDE_CRED_CHECK=0 in its environment (the warden is a launchd "+
-					"job, so only the plist the installer stamps can change its env — "+
-					"exporting the variable in a shell has no effect on it)", st.Summary)}
+				"claude_not_logged_in: no claude credential here (%s). "+
+					"Fix any one: set this member's 執行環境 to Codex; "+
+					"run `claude` once as this user; or re-install the warden "+
+					"with OC_CLAUDE_CRED_CHECK=0 (shell exports do not reach it).",
+				st.Summary)}
 		}
 	}
 	// idempotent clobber-guard: REFUSE to stomp a live session. This is a LOCAL
@@ -859,7 +975,28 @@ func (d SpawnDeps) start(p StartParams) SpawnOutcome {
 		return SpawnOutcome{OK: false, Reason: fmt.Sprintf(
 			"symlink_failed: clearing stale ocagent link: %v", err)}
 	}
-	if err := d.Symlink(ocAgentSymlinkTarget(d.RepoRoot, d.OcAgentBin), ocAgentLink); err != nil {
+	ocAgentTarget, ocAgentPresent := d.ocAgentTarget()
+	if !ocAgentPresent {
+		// T-81: refuse LOUDLY rather than publish a link to nothing. The old code
+		// symlinked whatever path had been resolved at warden boot; os.Symlink
+		// happily creates a DANGLING link, the tmux window opens, claude starts,
+		// and the bare `ocagent listen` in the boot prompt is the only thing that
+		// fails — inside the agent's own session, where nobody is reading. From
+		// the outside that member is indistinguishable from one that crashed or
+		// ran out of tokens. This Reason travels back to the server with the
+		// spawn result, so the failure has somewhere to be seen.
+		where := ocAgentTarget
+		if where == "" {
+			where = "<no path: this warden was built without an ocagent resolver>"
+		}
+		return SpawnOutcome{OK: false, Reason: fmt.Sprintf(
+			"ocagent_not_found: no ocagent binary at %s. The agent would start "+
+				"but could never connect. If this machine was just installed, the "+
+				"download may still be running — the next spawn picks it up with no "+
+				"warden restart. Otherwise re-install the warden on this machine.",
+			where)}
+	}
+	if err := d.Symlink(ocAgentTarget, ocAgentLink); err != nil {
 		return SpawnOutcome{OK: false, Reason: fmt.Sprintf(
 			"symlink_failed: publishing workdir ocagent link: %v", err)}
 	}

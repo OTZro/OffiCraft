@@ -1563,6 +1563,25 @@ if ! launchctl bootstrap "$GUI" "$PLIST"; then
   echo "[install]          $BIN_DIR/ocserverd serve" >&2
   exit 1
 fi
+# CONFIRM the bootstrap actually registered the label, in the gap between the two
+# verbs (T-908d). `launchctl bootstrap` can exit 0 and register NOTHING; the next
+# verb, kickstart, is swallowed with `|| true` here, so the FIRST thing to notice
+# used to be the port health gate below — which then reported "the service was
+# registered but nothing is listening", a sentence that is literally FALSE in this
+# state, and offered a `launchctl bootout` that fails for the same reason.
+#
+# BOUNDED AND NON-FATAL ON TIMEOUT (~5s = 25 x 0.2s, the bootout poll above run in
+# the opposite direction): registration can merely LAG a bootstrap that exited 0,
+# and failing here on the lag alone would turn machines that install fine today
+# into machines that refuse to install. This only records WHICH diagnosis the port
+# gate is allowed to print; a machine that comes up listening never reads it.
+registered=0
+for _ in $(seq 1 25); do
+  if launchctl print "$TARGET" >/dev/null 2>&1; then registered=1; break; fi
+  sleep 0.2
+done
+[[ "$registered" == 1 ]] || echo "[install] WARN: launchd still does not know '$LABEL' ~5s after bootstrap exited 0." >&2
+
 launchctl kickstart "$TARGET" >/dev/null 2>&1 || true
 
 # Health gate: "bootstrap returned 0" only means launchd accepted the job, not
@@ -1575,6 +1594,18 @@ for _ in $(seq 1 50); do
   sleep 0.2
 done
 if [[ "$up" != 1 ]]; then
+  if [[ "$registered" != 1 ]]; then
+    # NEVER claim the job was registered here — it was not, and the bootout the
+    # other branch offers would fail with the same "Could not find service" that
+    # this branch exists to explain.
+    echo "[install] FATAL: launchctl bootstrap exited 0 but registered nothing — launchd does not know" >&2
+    echo "[install]        '$LABEL', so the job was never loaded and nothing came up on port $PORT." >&2
+    echo "[install]        The plist to look at: $PLIST" >&2
+    echo "[install]        Retry the load with:  launchctl bootstrap $GUI $PLIST" >&2
+    echo "[install]        Or run it in the foreground: $BIN_DIR/ocserverd serve" >&2
+    echo "[install]        Remove the plist with: rm -f $PLIST" >&2
+    exit 1
+  fi
   echo "[install] FATAL: the '$LABEL' service was registered but nothing is listening on port $PORT after 10s." >&2
   echo "[install]        Check the log: $SERVE_LOG" >&2
   echo "[install]        Remove the job with: launchctl bootout $TARGET && rm -f $PLIST" >&2

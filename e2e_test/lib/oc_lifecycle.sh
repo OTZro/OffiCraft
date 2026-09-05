@@ -304,7 +304,8 @@ dump_boot_window() {
     api_get "/api/chat?with=$mid&limit=200" 2>/dev/null | py -c '
 import sys, json
 try:
-    msgs = json.load(sys.stdin)
+    # GET /api/chat answers {"messages": [...], "next_cursor": ...} (T-48).
+    msgs = json.load(sys.stdin)["messages"]
 except Exception as exc:
     print(f"(could not read chat: {exc})"); sys.exit(0)
 for m in msgs:
@@ -347,7 +348,7 @@ print(json.dumps({"to": sys.argv[1], "body": sys.argv[2]}))
 import sys, json
 mid, since = sys.argv[1], float(sys.argv[2])
 try:
-    msgs = json.load(sys.stdin)
+    msgs = json.load(sys.stdin)["messages"]
 except Exception:
     sys.exit(0)
 cand = [m for m in msgs
@@ -1289,12 +1290,15 @@ for line in str(d.get("log","")).splitlines():
   # verify the warden actually connected its SSE command reader. In namespace mode
   # bootstrap-here (server oc.toml carries [server].namespace) stamps OC_NAMESPACE
   # into the ocwarden install, so the warden installs under the namespaced root.
+  # ocwarden.out.log ONLY: logf -> realMain's `out` -> os.Stdout -> the plist's
+  # StandardOutPath. Greping err.log too would make this probe pass on either
+  # file and therefore prove nothing about which one carries the line.
   WARDEN_ROOT="${OC_ROOT:-$HOME_DIR/.officraft}/warden"
   sse_ok=""
   for _ in $(seq 1 20); do
     if grep -qE 'command reader: enabled \(SSE' \
-         "$WARDEN_ROOT/log/ocwarden.err.log" "$WARDEN_ROOT/log/ocwarden.out.log" \
-         "$REPO_ROOT/var/log/ocwarden.err.log" "$REPO_ROOT/var/log/ocwarden.out.log" 2>/dev/null; then
+         "$WARDEN_ROOT/log/ocwarden.out.log" \
+         "$REPO_ROOT/var/log/ocwarden.out.log" 2>/dev/null; then
       sse_ok=1; break
     fi
     sleep 1

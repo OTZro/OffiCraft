@@ -15,17 +15,35 @@ import { enterShouldSend } from "../lib/composerKeys";
 import {
   ATTACH_ACCEPT,
   useAttachmentStaging,
+  STAGING_TARGET_PER_MOUNT,
 } from "../hooks/useAttachmentStaging";
 import { ComposerAttachmentPreview } from "./ComposerAttachmentPreview";
 import { PaperclipIcon, SendIcon } from "./icons";
 
 export function ReplyComposer({
   placeholder,
+  hasSelection = false,
+  sendNowRef,
   onSend,
 }: {
   placeholder: string;
-  /** Submit the typed answer (text and/or attachments; never called empty).
-   * The promise rejecting keeps the composer content so nothing is lost. */
+  /** Whether the card face has quick-reply options STAGED. This button is the
+   * card's ONE send: the answer it fires carries the ticked options and the
+   * typed text together, so a staged selection alone must be sendable even with
+   * an empty draft — and, symmetrically, an answer with NOTHING staged and
+   * NOTHING typed must not be sendable at all. */
+  hasSelection?: boolean;
+  /** Handed a callback that fires this composer's CURRENT content (typed text
+   * + staged attachments) as part of an answer the CARD is submitting for its
+   * own reason — a single-select chip click, which IS the decision. The
+   * empty-answer refusal does not apply there (the click carries the option),
+   * so the callback bypasses `canSend`; the in-flight latch still holds, so a
+   * second click during the POST cannot double-answer. */
+  sendNowRef?: React.MutableRefObject<(() => void) | null>;
+  /** Submit the answer — the typed text and attachments, which the caller
+   * combines with whatever it has staged. Never called on a wholly empty
+   * answer. The promise rejecting keeps the composer content so nothing is
+   * lost. */
   onSend: (body: string, attachments: ChatAttachmentInput[]) => Promise<void>;
 }) {
   const { t } = useI18n();
@@ -41,7 +59,11 @@ export function ReplyComposer({
     onPickFile,
     removeAttachment,
     clearAttachments,
-  } = useAttachmentStaging();
+  } = useAttachmentStaging(
+    // Mounted under a key that changes with the card/task it belongs to, so a
+    // switch UNMOUNTS this surface and nothing can outlive it (T-48, R9-1).
+    STAGING_TARGET_PER_MOUNT,
+  );
   const fileInputRef = useRef<HTMLInputElement>(null);
   const draftRef = useRef<HTMLTextAreaElement>(null);
   // IME composition guard — same belt-and-braces as the chat composer: an
@@ -52,7 +74,10 @@ export function ReplyComposer({
   const isMobile = useIsMobile();
 
   const canSend =
-    !sending && (draft.trim().length > 0 || pendingAttachments.length > 0);
+    !sending &&
+    (hasSelection ||
+      draft.trim().length > 0 ||
+      pendingAttachments.length > 0);
 
   // Multi-line composer (desktop: Enter sends, Shift+Enter breaks a line;
   // mobile: Enter breaks a line — same as the chat composer): auto-grow the
@@ -63,8 +88,9 @@ export function ReplyComposer({
     if (draftRef.current) autosizeTextarea(draftRef.current);
   }, [draft]);
 
-  async function submit() {
-    if (!canSend) return;
+  async function submit({ force = false }: { force?: boolean } = {}) {
+    if (sending) return;
+    if (!force && !canSend) return;
     const body = draft.trim();
     const attachments: ChatAttachmentInput[] = pendingAttachments.map((a) => ({
       dataB64: a.dataUri,
@@ -84,6 +110,16 @@ export function ReplyComposer({
       setSending(false);
     }
   }
+
+  // Re-published on EVERY render so the callback the card holds closes over
+  // this render's draft/attachments — a stale one would send yesterday's text.
+  useLayoutEffect(() => {
+    if (!sendNowRef) return;
+    sendNowRef.current = () => void submit({ force: true });
+    return () => {
+      sendNowRef.current = null;
+    };
+  });
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     // Shared send rule (IME gate + mobile-newline) — see lib/composerKeys.

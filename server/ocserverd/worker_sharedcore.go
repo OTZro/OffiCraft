@@ -9,13 +9,13 @@ import "strings"
 //	1. 系統互動   /api/system-interaction       (owner-editable; folds to the
 //	                                            seed when unedited — T-791e)
 //	2. 使用者自訂 /api/global-context           (owner-editable additive block)
-//	3. 啟動程序   /api/boot-sequence/{runtime_key}
+//	3. 啟動步驟   /api/boot-sequence/{runtime_key}
 //	                                            (owner-editable studio SOP,
 //	                                            per-runtime; same fold — see
 //	                                            below)
 //
 // Members and workers receive all three, IN THE SAME SLOTS (T-4595): 系統互動
-// first, 使用者自訂 second, 啟動程序 last, with the reader's own persona
+// first, 使用者自訂 second, 啟動步驟 last, with the reader's own persona
 // wedged in between (staff: 角色說明 → 判準（空白則整段跳過）→ 長期筆記;
 // outsource: nothing at all —
 // it has no role, and that empty slot is the ENTIRE difference between the two
@@ -26,7 +26,7 @@ import "strings"
 // out to be either false, a restatement of the shared seed, or a difference
 // nobody could name a harm for.
 //
-// "Byte-for-byte shared" is per RUNTIME, not global: the 啟動程序 block is the
+// "Byte-for-byte shared" is per RUNTIME, not global: the 啟動步驟 block is the
 // boot sequence of the runtime the reader is actually running
 // (bootSequenceSeedName, assets.go), and staff and outsource on the SAME runtime
 // get the same bytes. Handing every worker the Claude seed is not parity — it is
@@ -39,7 +39,7 @@ import "strings"
 // The 使用者自訂 block follows the member rule: skipped entirely when the owner
 // text is blank, so a worker never sees an empty header.
 //
-// The 啟動程序 block is NOT here: it is the recency-authoritative tail and is
+// The 啟動步驟 block is NOT here: it is the recency-authoritative tail and is
 // appended last by buildWorkerBootContext, exactly as buildBootContext does for
 // staff. Grouping all three at the top (the pre-T-4595 shape) put the studio
 // SOP ABOVE the persona for workers and BELOW it for staff — one asymmetry with
@@ -60,13 +60,13 @@ func (s *apiServer) workerSharedHead() (string, error) {
 	}
 	if strings.TrimSpace(userCtx.Text) != "" {
 		parts = append(parts,
-			"# 使用者自訂（Owner Additions）\n\n"+strings.TrimSpace(userCtx.Text))
+			userAdditionsTitle+"\n\n"+strings.TrimSpace(userCtx.Text))
 	}
 
 	return strings.Join(parts, "\n\n"), nil
 }
 
-// workerBootSequence returns the 啟動程序 block for a worker's OWN runtime.
+// workerBootSequence returns the 啟動步驟 block for a worker's OWN runtime.
 //
 // runtime is the worker's OWN runtime (OutsourceWorker.Runtime). The
 // boot-sequence seed is chosen from it through bootSequenceSeedName — the same

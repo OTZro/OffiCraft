@@ -158,20 +158,71 @@ describe("httpApi · owner avatar mutations", () => {
 });
 
 describe("httpApi · perf-light query contracts (T-2b9d/cf91/ec2c)", () => {
-  it("peekChat pulls the filtered+capped read-only window (peek=true), NOT the whole history", async () => {
-    fetchMock.mockImplementation(async () => jsonResponse([]));
-    await httpApi.peekChat("m-1");
+  it("listChat pulls the peer's window and sends NO peek parameter (T-48), NOT the whole history", async () => {
+    fetchMock.mockImplementation(async () => jsonResponse({ messages: [] }));
+    await httpApi.listChat("m-1");
     const { url, method } = await lastRequest();
     const q = new URLSearchParams(url.split("?")[1] ?? "");
     expect(method).toBe("GET");
     expect(url.split("?")[0]).toBe("/api/chat");
-    // LOAD-BEARING: read-only (peek), scoped to the peer, capped — and NEVER
-    // the old whole-company `limit=-1` pull. MUTANT: revert peekChat to
-    // `{ limit: -1 }` and these go red.
-    expect(q.get("peek")).toBe("true");
+    // LOAD-BEARING: scoped to the peer, and the recent window is the SERVER's
+    // default (no `limit` on the wire) — never the old whole-company
+    // `limit=-1` pull. MUTANT: give this call `{ limit: -1 }` and these go red.
     expect(q.get("with")).toBe("m-1");
-    expect(q.get("limit")).toBe("30");
-    expect(q.get("limit")).not.toBe("-1");
+    expect(q.get("limit")).toBeNull();
+    // T-48 removed ?peek= from the wire: GET /api/chat marks nothing read on
+    // any path, so the opt-out has nothing to opt out of — which is also why
+    // the `peekChat` twin of this method is gone. Asserting the parameter's
+    // ABSENCE rather than deleting the check keeps a re-added parameter —
+    // which would now be silently ignored by the server — from going unnoticed.
+    expect(q.get("peek")).toBeNull();
+    // caller_only went the same way with T-48 (owner ruling rc-09f6d801b2b8),
+    // and this route now REFUSES a parameter it does not declare with a 400
+    // naming it — so a re-added one would break the cockpit rather than be
+    // quietly ignored. Asserting its absence here is what catches that before
+    // a user does.
+    expect(q.get("caller_only")).toBeNull();
+  });
+
+  it("listChat reads `messages` out of the T-48 envelope and ignores next_cursor", async () => {
+    // The wire answers an OBJECT since T-48. This pins that the adapter reads
+    // the envelope rather than the old bare array — and that a next_cursor it
+    // does not use cannot leak into the rows. MUTANT: `return wire.messages`
+    // →`return wire` and the shape assertion below goes red.
+    fetchMock.mockImplementation(async () =>
+      jsonResponse({
+        messages: [
+          {
+            id: "c-9",
+            from: "m-1",
+            from_name: "",
+            to: "owner",
+            to_name: "",
+            body: "hi",
+            ts: 1,
+            ts_display: "",
+            meta: {},
+            reply_card_id: "",
+            reply_card_status: "",
+            reply_to: "",
+            body_omitted_chars: 0,
+          },
+        ],
+        next_cursor: "b3wAMQBjLTk",
+      }),
+    );
+    const got = await httpApi.listChat("m-1");
+    expect(got.map((m) => m.id)).toEqual(["c-9"]);
+  });
+
+  it("listChat(-1) still asks for the WHOLE history (the gallery path)", async () => {
+    fetchMock.mockImplementation(async () => jsonResponse({ messages: [] }));
+    await httpApi.listChat("m-1", -1);
+    const q = new URLSearchParams(
+      (await lastRequest()).url.split("?")[1] ?? "",
+    );
+    expect(q.get("with")).toBe("m-1");
+    expect(q.get("limit")).toBe("-1");
   });
 
   it("listMembers({light}) sends fields=light; default omits it", async () => {
@@ -380,5 +431,129 @@ describe("httpApi · scheduled-message custom_months keeps undefined ≠ []", ()
     // the server to refuse a rename.
     expect("custom_months" in renamed).toBe(false);
     expect(renamed.label).toBe("改名");
+  });
+});
+
+// T-4e95 r16 — the WRITE half of the reply link, which nothing was standing on.
+//
+// r15 found the READ half (`mappers.ts`) had no witness and pinned it. The
+// write half is the mirror image and had none either: change this one line to
+// send `""` and 「回覆這則」 is gone in the real app — the banner still shows,
+// the send still succeeds, and the server stores an ordinary message. All 2258
+// tests stayed green on that change.
+//
+// Nothing else in the jsdom suite covers it, and that is a measured claim, not
+// an impression:
+// ChatArea's tests mock the whole `useChat` seam; `mock.reply-to.test.ts` drives
+// the MOCK adapter, which never reaches this file; conformance drives real HTTP
+// from Python, which proves the SERVER is right and says nothing about what the
+// browser sends.
+describe("httpApi · postChat carries the reply link (T-4e95)", () => {
+  const WIRE_MSG = {
+    id: "c-2",
+    from: "owner",
+    to: "m1",
+    body: "回你這句",
+    ts: 2,
+    meta: {},
+    reply_card_id: "",
+    reply_card_status: "",
+    reply_to: "c-1",
+    body_omitted_chars: 0,
+  };
+
+  it("sends reply_to when the composer is aimed at a message", async () => {
+    fetchMock.mockImplementation(async () => jsonResponse(WIRE_MSG));
+    await httpApi.postChat({ to: "m1", body: "回你這句", replyTo: "c-1" });
+    const { url, method, body } = await lastRequest();
+    expect(url).toBe("/api/chat");
+    expect(method).toBe("POST");
+    expect(JSON.parse(String(body)).reply_to).toBe("c-1");
+  });
+
+  it("sends the empty string — the wire's 'replies to nothing' — otherwise", async () => {
+    // Both directions matter: always-"" and always-a-target are each a way to
+    // break this, and one assertion alone cannot tell them apart.
+    fetchMock.mockImplementation(async () =>
+      jsonResponse({ ...WIRE_MSG, reply_to: "" }),
+    );
+    await httpApi.postChat({ to: "m1", body: "普通訊息" });
+    expect(JSON.parse(String((await lastRequest()).body)).reply_to).toBe("");
+  });
+});
+
+describe("httpApi · reply-card answer body (ReplyCardAnswerPostDTO)", () => {
+  const WIRE_CARD = {
+    id: "rc-1",
+    from: "mira",
+    kind: "decision",
+    summary: "這批要走哪幾條線？",
+    body: "",
+    options: [
+      { text: "走海運", ai_pick: false },
+      { text: "走空運", ai_pick: true },
+      { text: "先擱著", ai_pick: false },
+    ],
+    select_mode: "multi",
+    status: "answered",
+    attachments: [],
+    created_ts: 1,
+    answered_ts: 2,
+    expired_ts: null,
+    chat_message_id: "cm-1",
+    answer: { option_idxs: [0, 2], text: "", attachments: [] },
+    task: null,
+  };
+
+  it("sends the circled indices deduped and ascending, whichever order they arrive in", async () => {
+    // Two owners who ticked the same boxes in different orders must produce a
+    // byte-identical body. The server dedupes and sorts too, but the two
+    // requests would still differ on the wire, and one decision must not be two
+    // payloads.
+    fetchMock.mockImplementation(async () => jsonResponse(WIRE_CARD));
+    await httpApi.answerReplyCard("rc-1", { optionIdxs: [2, 0, 2] });
+    const first = await lastRequest();
+    expect(first.url).toBe("/api/reply-cards/rc-1/answer");
+    expect(first.method).toBe("POST");
+    expect(JSON.parse(String(first.body))).toEqual({
+      option_idxs: [0, 2],
+      text: "",
+    });
+
+    await httpApi.answerReplyCard("rc-1", { optionIdxs: [0, 2] });
+    expect(JSON.parse(String((await lastRequest()).body))).toEqual({
+      option_idxs: [0, 2],
+      text: "",
+    });
+  });
+
+  it("sends null — the wire's 'circled nothing' — for a text-only answer", async () => {
+    // Both directions matter, and the wrong one here is not silent-but-equal:
+    // `option_idxs: []` is a 400 server-side, deliberately, so a seam that
+    // flattened an absent list to `[]` would turn every typed answer into an
+    // error.
+    fetchMock.mockImplementation(async () =>
+      jsonResponse({
+        ...WIRE_CARD,
+        answer: { option_idxs: null, text: "收件人是誰？", attachments: [] },
+      }),
+    );
+    await httpApi.answerReplyCard("rc-1", { text: "收件人是誰？" });
+    expect(JSON.parse(String((await lastRequest()).body))).toEqual({
+      option_idxs: null,
+      text: "收件人是誰？",
+    });
+  });
+
+  it("revises through PUT with the exact same body shape", async () => {
+    fetchMock.mockImplementation(async () => jsonResponse(WIRE_CARD));
+    await httpApi.reanswerReplyCard("rc-1", { optionIdxs: [2, 0] });
+    const { url, method, body } = await lastRequest();
+    expect(url).toBe("/api/reply-cards/rc-1/answer");
+    expect(method).toBe("PUT");
+    expect(JSON.parse(String(body))).toEqual({
+      option_idxs: [0, 2],
+      text: "",
+    });
   });
 });

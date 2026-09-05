@@ -13,7 +13,7 @@ package main
 //     intent only (no online column), so the Python legacy `m.online`
 //     fallback parameter has no Go counterpart;
 //   - kind is a CLOSED set; the Python bare hire's kind="" folds to
-//     "assistant" at the ingest seam (CanonicalKind).
+//     "staff" at the ingest seam (CanonicalKind).
 
 import (
 	"encoding/json"
@@ -35,7 +35,7 @@ import (
 // Mirrors the authz literals (adminRoleKey / machineKind) — same vocabulary,
 // different concern.
 const (
-	KindAssistant = "assistant"
+	KindStaff     = "staff"
 	KindWarden    = "warden"
 	KindOutsource = "outsource"
 )
@@ -43,16 +43,29 @@ const (
 // CanonicalKind folds an incoming kind onto the closed set. The Python side's
 // bare hire writes kind="" (a free-form presentation string there); the Go
 // schema requires a legal kind, so blank maps to the default colleague kind
-// "assistant". Anything else outside the closed set is refused.
+// "staff". Anything else outside the closed set is refused.
 func CanonicalKind(kind string) (string, error) {
 	switch kind {
 	case "":
-		return KindAssistant, nil
-	case KindAssistant, KindWarden, KindOutsource:
+		return KindStaff, nil
+	case KindStaff, KindWarden, KindOutsource:
 		return kind, nil
 	}
+	// A caller sending the PRE-RENAME value gets told it was renamed, not just
+	// that it is invalid (T-48). Without this, an older client's request fails
+	// with a message that lists three values and never says "the one you sent
+	// used to be one of them" — the reader's next move is to guess.
+	// 🔑 The legacy value is built from runes ON PURPOSE. Spelled as a literal it
+	// would be swept up by the very repo-wide "assistant"→"staff" replacement it
+	// exists to explain, and this branch would silently start comparing the new
+	// value against itself — unreachable, and nothing would fail.
+	if kind == string([]rune{'a', 's', 's', 'i', 's', 't', 'a', 'n', 't'}) {
+		return "", fmt.Errorf(
+			"member kind %q was renamed to %q (T-48); the closed set is {%q, %q, %q}",
+			kind, KindStaff, KindStaff, KindWarden, KindOutsource)
+	}
 	return "", fmt.Errorf("member kind %q not in {%q, %q, %q}",
-		kind, KindAssistant, KindWarden, KindOutsource)
+		kind, KindStaff, KindWarden, KindOutsource)
 }
 
 // ── member: desired-state vocabulary (owner intent) ──────────────────────────
@@ -101,9 +114,15 @@ const (
 )
 
 // WakingTTLSecs: a phase="waking" signal this old (seconds), with no online
-// session having come up, falls back to offline — the wake failed. Sized at
-// 3× the runtime's 30s presence heartbeat.
-const WakingTTLSecs = 90.0
+// session having come up, falls back to offline — the wake failed. Sized to
+// span several lifecycleCadenceSecs producer ticks, so a wake in flight is
+// re-examined repeatedly before it is declared failed. Keep it a comfortable
+// multiple of that cadence; the ratio is deliberately NOT written down here,
+// because a number in this sentence goes stale the moment either constant
+// moves (T-20: it said "3× the runtime's 30s presence heartbeat" for as long
+// as this was 90.0 — and no such per-member 30s heartbeat exists: presence is
+// derived from the live SSE connection, whose keepalive is 15s).
+const WakingTTLSecs = 120.0
 
 // StoppingTimeoutSecs: once stopping_since is set, a still-online member has
 // this long to wind down before a stuck collect is force-killed.
@@ -111,11 +130,12 @@ const StoppingTimeoutSecs = 120.0
 
 // SoftOffboardGraceSecs: how long a close-out may say NOTHING before its
 // anchor is treated as residue (T-7723 — silence, not the anchor's age).
-// The soft notice says "work the sequence, then call restart_self yourself" and
+// The soft notice says "work the sequence, then call report_stopped yourself" and
 // carries no countdown, and since 2026-08-19 NEITHER soft arm has one running
 // behind it: 下線 (rc-27d1710174dd 「不要兜底：只有你按強制下線才收它」) and
-// 重新聚焦 (rc-c540367065ad 「連時鐘一起拿掉」) are both collected by the agent's
-// own stopped report or by the owner pressing force-stop, and by nothing else.
+// 重新聚焦 (rc-c540367065ad 「連時鐘一起拿掉」) are collected by the agent's own
+// stopped report, or by the owner pressing 加速停止 (T-ed79 — that clock is his,
+// and it only exists once he presses) or 強制停止, and by nothing else.
 //
 // 🔴 So this is NOT a deadline any more, and nothing may re-read it as one.
 // What still uses it is clearStaleStoppingOnOnline — but as a SILENCE window,
@@ -180,16 +200,53 @@ func deriveLiveness(in livenessInput) string {
 	return MemberPresenceOffline
 }
 
-// PresenceState projects a member's presence at now — a thin mapping of the
-// member's durable anchors onto the shared liveness kernel (deriveLiveness).
-// Pure: online is the caller-supplied SSE-connection fact (the ONLY authority —
-// never a DB flag, never a warden receipt: a stop receipt can lie while the
-// process is alive and still answering chat, so SSE connected ⇒ never stopped).
+// PresenceState projects ANY member row's presence at now — staff and outsource
+// alike (T-14: workerPresence is a thin released-row guard in front of THIS
+// call, not a second projection). A thin mapping of the row's durable anchors
+// onto the shared liveness kernel (deriveLiveness). Pure: online is the
+// caller-supplied SSE-connection fact (the ONLY authority — never a DB flag,
+// never a warden receipt: a stop receipt can lie while the process is alive and
+// still answering chat, so SSE connected ⇒ never stopped).
 //
-// A set stopping_since (the graceful-shutdown signal) is the member's StopIntent
-// and takes precedence over every other projection. The waking projection needs
-// owner intent (desired_state online) plus a fresh waking_since; a stale waking
-// signal is a failed wake and reads offline.
+// A set stopping_since (the graceful-shutdown signal) is the StopIntent of BOTH
+// kinds and takes precedence over every other projection.
+//
+// 🔴 IT IS THE ANCHOR, NOT desired_state, FOR BOTH KINDS — AND GETTING THERE
+// WAS THE WHOLE OF T-14's SECOND HALF. The outsource arm used to test
+// `desired_state == offline` here instead, which is a 正職／外包 gate, and the
+// identity-gate ledger's own instruction for a new one is "delete the
+// difference — preferred". It could be deleted, because the two tests already
+// answer the same on every reachable row: BOTH worker stop verbs (停止 and
+// 強制停止) stamp stopping_since before they write the offline intent, and both
+// anchors are necessarily positive — 停止 goes through stopEpochAnchor (the same
+// helper the staff deactivate calls, which cannot return zero) while 強制停止
+// stamps its own anchor inline from forced_stop_at. They are two code paths, not
+// one: an independent review of T-14 caught this comment claiming otherwise.
+// The conclusion is unchanged (the anchor is always set); the reason is not.
+// No other writer puts offline on a worker row — the staff verbs that write
+// offline without an anchor (HandleDismissMember is one) cannot reach a worker
+// row because resolveMember refuses kind=outsource. 🔴 That kind gate is an
+// UNTESTED implicit premise of this collapse: route a member verb through a
+// resolver that does not filter outsource and this expression starts lying.
+//
+// The union was tried FIRST and is wrong — a measured mutant said so. A STAFF
+// row CAN carry desired_state=offline with no anchor, and that state is the
+// ORDINARY one: the out-of-box seed ships Mira and the server warden exactly so.
+// Testing desired_state for everybody renders a station nobody has ever switched
+// on as 「已停止」 instead of 「離線」, a lie about a member nobody ever woke.
+// Pinned by TestPresenceState and the two api_chat offline-mailbox controls.
+//
+// So the stop fact is the ANCHOR, one expression, no kind branch. What that
+// costs is a synthetic row with an offline intent and no anchor reading offline
+// rather than stopped — unreachable through any writer, and the price of the
+// projection being one piece of code instead of two.
+//
+// The waking projection needs owner intent (desired_state online) plus a fresh
+// waking_since; a stale waking signal is a failed wake and reads offline. The
+// intent half is load-bearing and is NOT redundant with StopIntent above: a wake
+// cancelled mid-flight (T-7526) leaves the anchor standing, and without this
+// test the booting process would paint a fresh green over an intent that has
+// already gone offline.
 func PresenceState(m Member, now float64, online bool) string {
 	return deriveLiveness(livenessInput{
 		Online:     online,
@@ -269,9 +326,9 @@ func ValidateMember(m Member) error {
 	if m.ID == "" {
 		return errors.New("member requires a non-empty id")
 	}
-	if m.Kind != KindAssistant && m.Kind != KindWarden && m.Kind != KindOutsource {
+	if m.Kind != KindStaff && m.Kind != KindWarden && m.Kind != KindOutsource {
 		return fmt.Errorf("member %s: kind %q not in {%q, %q, %q}",
-			m.ID, m.Kind, KindAssistant, KindWarden, KindOutsource)
+			m.ID, m.Kind, KindStaff, KindWarden, KindOutsource)
 	}
 	if !ValidRuntime(NormalizeRuntime(m.Runtime)) {
 		return fmt.Errorf("member %s: runtime %q not in {%q, %q}",
@@ -316,14 +373,12 @@ func ValidateRoleDef(rd RoleDef) error {
 	return nil
 }
 
-// ValidateLessons enforces the lessons-overlay invariants: the composite
-// (role_key, task_type) key must be fully populated.
+// ValidateLessons enforces the lessons-overlay invariant: role_key IS the key
+// (T-2 dropped the task_type half of the old composite), so it must be
+// populated.
 func ValidateLessons(l Lessons) error {
 	if l.RoleKey == "" {
 		return errors.New("lessons requires a non-empty role_key")
-	}
-	if l.TaskType == "" {
-		return errors.New("lessons requires a non-empty task_type")
 	}
 	return nil
 }
@@ -1051,7 +1106,7 @@ const dutyCapCharsDefault = 1000
 // measured on its own text. They are two renderings of the same short document;
 // a studio that needs more room for one needs it for the other.
 //
-// The 下線程序 cap (T-c9c0) is sized with the boot sequences rather than the
+// The 〈停止〉 cap (T-c9c0) is sized with the boot sequences rather than the
 // handbook, and for the same reason: it is a short ordered checklist an agent
 // has to work under time pressure (a recycle bounds it; an offboard does not,
 // but the owner is waiting), not a reference text.
@@ -1059,6 +1114,18 @@ const (
 	systemInteractionCapCharsDefault = 60000
 	bootSequenceCapCharsDefault      = 15000
 	offboardCapCharsDefault          = 15000
+	// taskEventCapCharsDefault caps each of the four task-event procedures
+	// (T-3201). Same number as the offboard sequence and for the same reason:
+	// these are short procedures an agent reads mid-flight, not accumulating
+	// memory, and the ceiling exists to stop one growing into a handbook.
+	//
+	// 🔴 A CONSTANT, NOT YET A `doc.cap_chars.*` SETTING. Every cap above is
+	// adjustable at runtime through SettingsDTO, and making these six the same
+	// would add fields to a wire contract — spec/openapi.json, the generated
+	// MCP catalog and the cockpit's settings surface all move with it. That is
+	// an interface change this ticket owes the owner a look at before it
+	// happens, so the number is code until he has had it.
+	taskEventCapCharsDefault = 15000
 )
 
 // min*CapChars / maxDocCapChars bound the adjustable caps. Each floor is THAT
@@ -1149,6 +1216,29 @@ func docCapRefusal(cap int, docName, before, after string) string {
 		utf8.RuneCountInString(before))
 }
 
+// docWipeRefusal is the ONE refusal text behind the wipe guard
+// (WholeDocWipeBlocked), the same way docCapRefusal is the one text behind the
+// cap. It names the document and the ONE way forward, because being refused is
+// otherwise the only way to learn that allow_shrink exists at all.
+//
+// wayOut is the seam-specific escape the caller also has — the way back to the
+// factory text, which is NOT the same sentence everywhere: replace_global_context
+// names a tool (reset_global_context), the boot documents name a gesture ("reset
+// it to the shipped default"), and the lessons / insight seams have no second
+// way out and pass "". It is a parameter rather than a fifth hardcoded sentence
+// so folding these four together changed no byte any caller reads.
+//
+// 🔴 FOUR SEAMS, NOT FIVE. api_taskmanuals.go's replace_task_manual_learnings
+// says "…the existing learnings with an empty DOC" — a different skeleton, not
+// just a different name — so it is deliberately NOT folded in here. Bending it
+// to fit would mean editing the sentence an agent reads, which is a text change
+// wearing a refactor's clothes. Leave it where it is until someone decides, on
+// purpose, to reword it.
+func docWipeRefusal(docName, wayOut string) string {
+	return "this would replace the existing " + docName + " with an empty one — pass allow_shrink=true " +
+		"if that is intended" + wayOut + "; nothing was written"
+}
+
 // ── user_context: the ADDITIVE user-custom block fold ────────────────────────
 
 // FoldUserContext folds the owner's user-custom ADDITIVE boot-context block.
@@ -1219,7 +1309,7 @@ func ValidTaskLock(l string) bool {
 //     task and nothing else happens. It has been narrowed twice, both by the
 //     owner on 2026-08-17 (T-f265): it used to MINT a task on the creator —
 //     withdrawn because that task's own first line told an ordinary member to
-//     terminate it, and terminate_task is admin-only — and the durable chat
+//     terminate it, and terminate_task was admin-only at the time (T-b56e opened it to the executor on 2026-08-20 — the ruling below stands on its own reasoning, not on that gate) — and the durable chat
 //     notice that replaced it was withdrawn too (card rc-e04adbc42574, option
 //     ①), on the ruling that once work is handed over it belongs to whoever
 //     holds it and the system should not report back. So this value now differs
@@ -1385,8 +1475,8 @@ func TaskIsTerminal(status string) bool {
 
 // agentTaskTransitions is the CLOSED legal-transition set of the agent report
 // path (POST /api/tasks/{id}/status). waiting_owner is NOT on either side of
-// this table: it is entered ONLY by opening a card (open_gate / create_reply_card
-// auto-bind) and LEFT ONLY when that card is answered — the server itself
+// this table: it is entered ONLY by opening a card (create_reply_card with an
+// explicit linked_task) and LEFT ONLY when that card is answered — the server itself
 // restores the task to in_progress on answer (releaseCardHold).
 // So the agent neither reports INTO waiting_owner (the handler 400s that, not
 // its lever) nor OUT of it (a report from waiting_owner is a 409 — the card
@@ -1412,8 +1502,8 @@ func CanAgentTaskTransition(from, to string) bool {
 
 // agentStepTransitions is the step twin (contract §B.2): pending →
 // in_progress → done. waiting_owner is NOT on either side, exactly like the
-// task table: the card-open paths set it (open_gate / create_reply_card
-// auto-bind — the handler 400s an agent report INTO it), and the answer path
+// task table: the card-open path sets it (create_reply_card with an explicit
+// linked_task — the handler 400s an agent report INTO it), and the answer path
 // restores the step to in_progress (releaseCardHold — a report
 // OUT of it is a 409). After the server restores the step, the agent advances
 // it in_progress → done as usual; if the answer did NOT settle the question the
@@ -1438,15 +1528,28 @@ func CanAgentStepTransition(from, to string) bool {
 
 // ── tasks: display projections ────────────────────────────────────────────────
 
-// TaskNo derives the display number ("T-XXXX") from a task id ("t-<hex12>"):
-// the first four hex chars after the prefix (kyle ruling H3 — display-only,
-// collisions possible, never a lookup key).
+// TaskNo is the task id, unchanged. There is no display projection any more.
+//
+// It SUPERSEDES kyle ruling H3, which cut the number to the first four hex
+// chars ("t-72dd79b666d0" → "T-72dd") and accepted collisions because it was
+// display-only. Owner 2026-08-25: 「UI 也不用特意把 task_no 縮短,該是多長就
+// 該多長」「不用讓他吃短碼,讓我們顯示長碼」and 「Make it simple, no need
+// complicated mechanism unless my approval」.
+//
+// 🔴 WHY IT IS NOT EVEN "T-" + the hex — the intermediate version this replaced.
+// Lookup is `SELECT … WHERE id = ?` against `id TEXT PRIMARY KEY` with no
+// COLLATE NOCASE (migrations/00004_tasks.sql), i.e. byte-exact. A number shown
+// as "T-72dd79b666d0" against an id of "t-72dd79b666d0" therefore still 404s
+// when pasted back — one character of re-casing was enough to buy nothing.
+// Making the lookup case-insensitive would be a mechanism, which is what the
+// ruling above forbids. Returning the id costs no mechanism at all, and the
+// number that someone reads off the UI is then usable BECAUSE IT IS THE ID,
+// not because anything maps it back.
+//
+// The function survives as the ONE seam every display site already calls, so
+// this stays a single decision rather than 12 call sites each deciding again.
 func TaskNo(taskID string) string {
-	hex := strings.TrimPrefix(taskID, "t-")
-	if len(hex) > 4 {
-		hex = hex[:4]
-	}
-	return "T-" + hex
+	return taskID
 }
 
 // TaskProgress counts the flattened leaf progress (SPEC §3.1: every step row
@@ -1465,6 +1568,26 @@ func TaskProgress(steps []TaskStep) (done, total int) {
 		}
 	}
 	return done, total
+}
+
+// CurrentStep is the ONE definition of "which step is the task on now": the
+// FIRST step, in timeline order (order_idx, id — dal.ListTaskSteps' order),
+// that is not TERMINAL. A superseded row is frozen replan history and a done
+// row is finished, so neither can ever be the working node (T-1aea,
+// StepIsTerminal). Returns "", "" when the plan is empty or every step has
+// reached a terminal state — an honest "there is no current step" that must
+// never be laundered into the first row of the plan.
+//
+// 🔴 This exists so the rule lives in exactly one place. Both the wake snapshot
+// (resumeTasksFor) and the light task list read it; dal.AllTaskCurrentStep is
+// the SQL twin for the list's one grouped query — keep the three agreeing.
+func CurrentStep(steps []TaskStep) (id, name string) {
+	for _, st := range steps {
+		if !StepIsTerminal(st.Status) {
+			return st.ID, st.Name
+		}
+	}
+	return "", ""
 }
 
 // DeriveTaskStatus computes a task's status PURELY from its steps — the single

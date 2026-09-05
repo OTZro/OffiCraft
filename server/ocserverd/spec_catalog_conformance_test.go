@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -57,6 +58,14 @@ import (
 //	update_task_manual.display_name → HandleCreateTaskManualApiTaskManualsPost + HandleUpdateTaskManualApiTaskManualsTypeKeyPost
 //	ingest_telemetry.binaries/claude → HandleIngestTelemetryApiMonitoringTelemetryPost (the asObject reads)
 //
+// ⚠️ ONE OF THE SIX ENTRIES ABOVE IS HISTORY TWICE OVER: get_chat.peek. T-48
+// deleted the parameter outright (GET /api/chat writes no watermark on ANY
+// path, so there is nothing left to opt out of) — the handler no longer reads
+// a params.Peek, openapi no longer accepts it, and the catalog advertises no
+// such lever. The row is kept because the traced-read verdict is what the
+// repair was argued from; it is NOT a live drift entry, and the "repaid = now
+// advertised" sentence below does not apply to it.
+//
 // The last one deserves a note because it was initially GUESSED to be
 // CLI-only: binaries and claude are read in the same handler, by the same
 // asObject calls, as hardware and self_update — and those two ARE already in
@@ -108,18 +117,13 @@ var knownCatalogDrift = map[string][]string{}
 // catalog omitting it is CORRECT and openapi is the one describing a parameter
 // that does nothing.
 //
-// open_gate.bind: ReplyCardCreateDTO is SHARED by two operations. Bind is read
-// in exactly one place in the whole server — api_replycards.go:401, inside
-// HandleCreateReplyCard — and HandleOpenTaskGate (api_tasks.go) decodes the same
-// DTO and never touches it. It arrived with T-4166 on the shared DTO.
-//
-// Kept separate from knownCatalogDrift deliberately: filing this as "debt" would
-// record a bug that does not exist, and would invite someone to "fix" it by
-// advertising a lever open_gate ignores — which is the exact failure this ticket
-// is about, just pointed the other way.
-var openapiOverweight = map[string][]string{
-	"open_gate": {"bind"},
-}
+// EMPTY since T-18. Its only entry was open_gate.bind, and it existed because
+// ReplyCardCreateDTO was SHARED by two operations: bind was read inside
+// HandleCreateReplyCard and ignored by HandleOpenTaskGate, which decoded the
+// same DTO. T-18 removed open_gate — the DTO now has ONE operation, so no field
+// on it can be read by one face and ignored by another. The map is kept as the
+// seam a future deliberate entry goes through.
+var openapiOverweight = map[string][]string{}
 
 // deliberatelyOffMCP is the THIRD category, and the one the comment above
 // knownCatalogDrift said this codebase could not express: openapi accepts the
@@ -161,9 +165,28 @@ var openapiOverweight = map[string][]string{
 // NOT knownCatalogDrift: that map is debt to be repaid, and every entry there
 // was traced to its read and confirmed MISSING. Filing this there would invite
 // the next person to "repay" it by advertising the lever.
+//
+// update_settings.onboarding_dismissed: T-0648. The handler reads it (it stamps
+// the owner's 「不再顯示」 on the first-run onboarding report), and an agent COULD
+// honestly send it — it is withheld for what the lever DOES. The banner is the
+// one place a fresh install says WHY its assistant never woke up, and this
+// field is the owner's own acknowledgement of that warning; an agent has no
+// honest occasion to silence a message addressed to the owner, and the write is
+// now permanent (the report is the only thing that could clear it, and nothing
+// writes a second one today). The cockpit banner's button is the only intended
+// caller. The neighbouring cockpit-personal acts — change-password, the two
+// push-subscription writes — are owner-only AND MCPExclude for the same
+// reasoning; this one rides the shared settings route, so the tools/list face
+// is where that line gets drawn.
+//
+// ⚠️ UNLIKE list_reply_cards.view ABOVE, THIS ENTRY IS NOT OWNER-APPROVED YET.
+// It is the conservative default while the question is with him: advertising it
+// later is one line here plus the descriptor, and un-advertising it after
+// agents have seen it is not.
 var deliberatelyOffMCP = map[string][]string{
 	"ingest_telemetry": {"warden_shape", "cutover_effect"},
 	"list_reply_cards": {"view"},
+	"update_settings":  {"onboarding_dismissed"},
 }
 
 type openapiSpec struct {
@@ -221,10 +244,10 @@ var knownToolDescriptionDrift = map[string]map[string]string{
 		"openapi_summary": "Mark a waiting card expired (its author, the owner, or an admin agent; not an answer; terminal).",
 	},
 	"refocus_outsource_worker": {
-		"openapi_summary": "Refocus (換手) an outsource worker's context (owner/admin agent, online-only else 409).",
-	},
-	"stop_outsource_worker": {
-		"openapi_summary": "Stop (停止) an outsource worker (owner/admin agent; kill + hold down).",
+		// T-65 包②: the openapi summary is the SHORT owner-facing line and the
+		// x-mcp description is the long one an agent needs, so these two stay
+		// deliberately different — the baseline records that, not a bug.
+		"openapi_summary": "Refocus (換手) an outsource worker's context; on a STOPPED worker it queues the 起來 instead of refusing (owner/admin agent).",
 	},
 	"update_settings": {
 		"route_summary": "Edit settings (owner and agent token TTLs / handover threshold); live immediately.",
@@ -491,4 +514,157 @@ func TestEveryMCPToolDescriptionAgreesWithItsSources(t *testing.T) {
 	if observedBaselineEntries != baselineEntries {
 		t.Fatalf("only %d/%d description-drift baseline entries joined a live tool/source — the baseline has stopped being evidence", observedBaselineEntries, baselineEntries)
 	}
+}
+
+// 🔴 THE ENUM HAS TO REACH THE AGENT, NOT JUST THE TYPE CHECKER. T-3201 made
+// `kind` a closed set in spec/openapi.json and DELETED the listing endpoint that
+// used to answer "which boot documents exist" at runtime. For a cockpit that
+// trade is a win — a missing row stops compiling — but an MCP agent has no
+// compiler. If the enum is absent from spec/mcp-catalog.json, that agent lost
+// the listing and gained nothing: its only remaining way to find an address is
+// to guess and collect 404s.
+//
+// 🔴 AND NO EXISTING GATE CATCHES IT. bin/gen-mcp-catalog copies
+// x-mcp.legacy.descriptor VERBATIM and validates only name/description equality,
+// so the descriptor's inputSchema can say anything at all — including, as it did
+// when this test was written, prose promising an ENUM beside a bare
+// `"type": "string"`. `make drift-mcp-catalog` regenerates and byte-compares, so
+// it agrees with the drift happily. This is the confrontation.
+//
+// Derived from the spec on BOTH sides: the values come from the BootDocKind
+// schema and the tools come from whichever operations $ref it, so nothing here
+// is a second list to keep in step.
+func TestFrozenCatalogOffersTheBootDocKindEnumToAgents(t *testing.T) {
+	rawAPI, err := os.ReadFile("../../spec/openapi.json")
+	if err != nil {
+		t.Fatalf("read openapi: %v", err)
+	}
+	var api map[string]any
+	if err := json.Unmarshal(rawAPI, &api); err != nil {
+		t.Fatalf("parse openapi: %v", err)
+	}
+	rawCat, err := os.ReadFile("../../spec/mcp-catalog.json")
+	if err != nil {
+		t.Fatalf("read catalog: %v", err)
+	}
+	var cat map[string]any
+	if err := json.Unmarshal(rawCat, &cat); err != nil {
+		t.Fatalf("parse catalog: %v", err)
+	}
+
+	dig := func(m map[string]any, path ...string) any {
+		var cur any = m
+		for _, step := range path {
+			next, ok := cur.(map[string]any)
+			if !ok {
+				return nil
+			}
+			cur = next[step]
+		}
+		return cur
+	}
+	strs := func(v any) []string {
+		list, ok := v.([]any)
+		if !ok {
+			return nil
+		}
+		out := make([]string, 0, len(list))
+		for _, item := range list {
+			s, ok := item.(string)
+			if !ok {
+				return nil
+			}
+			out = append(out, s)
+		}
+		return out
+	}
+
+	want := strs(dig(api, "components", "schemas", "BootDocKind", "enum"))
+	if len(want) == 0 {
+		t.Fatal("spec/openapi.json declares no BootDocKind enum — the address vocabulary has no source, " +
+			"and every assertion below would be vacuous")
+	}
+
+	// The catalog's tools, by name.
+	catTools := map[string]map[string]any{}
+	for _, item := range dig(cat, "tools").([]any) {
+		tool, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := tool["name"].(string)
+		catTools[name] = tool
+	}
+
+	checked := 0
+	paths, _ := dig(api, "paths").(map[string]any)
+	for path, opsAny := range paths {
+		ops, ok := opsAny.(map[string]any)
+		if !ok {
+			continue
+		}
+		for method, opAny := range ops {
+			op, ok := opAny.(map[string]any)
+			if !ok {
+				continue
+			}
+			// Does this operation address a document BY the enum?
+			refsEnum := false
+			for _, pAny := range strs2list(op["parameters"]) {
+				if name, _ := pAny["name"].(string); name != "kind" {
+					continue
+				}
+				if ref, _ := dig(pAny, "schema", "$ref").(string); strings.HasSuffix(ref, "/BootDocKind") {
+					refsEnum = true
+				}
+			}
+			if !refsEnum {
+				continue
+			}
+			name, _ := dig(op, "x-mcp", "name").(string)
+			if include, _ := dig(op, "x-mcp", "include").(bool); !include || name == "" {
+				continue
+			}
+			tool, served := catTools[name]
+			if !served {
+				t.Errorf("%s %s addresses a document by the BootDocKind enum but tool %q is not in "+
+					"spec/mcp-catalog.json", method, path, name)
+				continue
+			}
+			checked++
+			got := strs(dig(tool, "inputSchema", "properties", "kind", "enum"))
+			if len(got) == 0 {
+				t.Errorf("tool %q offers no enum for `kind` — spec/openapi.json declares the closed set "+
+					"%v, and the listing endpoint that used to answer this question is gone, so an agent "+
+					"holding this catalog can only guess an address and collect 404s. Add the enum to that "+
+					"tool's x-mcp.legacy.descriptor and regenerate.", name, want)
+				continue
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("tool %q advertises a DIFFERENT closed set than the frozen spec:\n catalog %v\n spec    %v",
+					name, got, want)
+			}
+		}
+	}
+	// Non-vacuity: a rename that stopped any operation from $ref-ing the enum
+	// would otherwise leave this test green with nothing to say.
+	if checked == 0 {
+		t.Fatal("no MCP tool addresses a document by the BootDocKind enum — either the $ref was renamed " +
+			"or these tools left the catalog; this guard measured nothing")
+	}
+}
+
+// strs2list narrows an OpenAPI `parameters` array to the objects in it.
+func strs2list(v any) []map[string]any {
+	list, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(list))
+	for _, item := range list {
+		if m, ok := item.(map[string]any); ok {
+			out = append(out, m)
+		}
+	}
+	return out
 }

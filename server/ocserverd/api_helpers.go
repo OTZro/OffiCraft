@@ -62,6 +62,76 @@ func currentMachineClaim(r *http.Request) string {
 	return machineID
 }
 
+// receiptReporterMachine names the MACHINE that is speaking on this request —
+// the one question a warden command_result receipt has never been able to
+// answer on its own (CommandResult carries no warden id, and per
+// caller-identity-convention it must never grow one: caller identity is taken
+// from the verified token, never from a request parameter).
+//
+// The resolution is entirely inside the identity we already hold:
+//
+//   - a WARDEN's credential is minted by mintWardenToken with sub == the warden
+//     member's own id, and a warden member's id IS the machine id
+//     (api_machines.go onboard: "mint a NEW warden member whose own id IS the
+//     machine id"). It deliberately carries NO machine_id claim — "a warden
+//     carries NO self-binding" (authz.go). So sub is the machine.
+//   - an AGENT / WORKER boot token is something running ON a machine rather
+//     than the machine itself, and mintAgentToken stamps machine_id = its host.
+//     A non-empty claim is therefore the marker for "not a warden", and we
+//     return "" rather than mistaking a member id for a machine id.
+//
+// 🔴 THAT IMPLICATION RUNS ONE WAY ONLY. "non-empty claim ⇒ not a warden" is
+// true; its converse — "claim-less ⇒ warden" — is FALSE, and the counter-
+// examples are live, not hypothetical:
+//
+//   - /api/mint hands out long-lived agent tokens with the claim deliberately
+//     blank (api_auth.go: mintJWT(m.ID, "agent", ttl, …, "") — lifecycle.md
+//     §1.3 mint table: /api/mint — machine_id "none").
+//   - an ordinary member with no placement pin boots claim-less, and the owner
+//     can put it in that state at will: activate/relocate take machine_id ""
+//     to CLEAR the pin (api_members.go — 「"" 仍清掉 pin」).
+//
+// api_monitoring.go already says this at the telemetry `machine` fallback
+// ("claim-less tokens (/api/mint long-lived tokens … a member without
+// desired_machine_id boots claim-less too)"). It is repeated here because the
+// two directions do NOT have the same standing, and only one of them is
+// guarded — read this before assuming the counter-examples above are handled:
+//
+//   - CLAIM-BEARING is what the check above handles, and it is the reason that
+//     one line is load-bearing rather than defensive. Delete it and the token's
+//     sub — a MEMBER id — comes back as a MACHINE id, which consumers read as
+//     "a DIFFERENT machine answered" (the KNOWN-mismatch arm) instead of
+//     UNKNOWN: the receipt watch then refuses to disarm and stamps
+//     receipt_missing on a receipt the server is holding in its hand. Pinned by
+//     TestReceiptReporter_ClaimBearingTokenIsNotTheMachineItRunsOn, which exists
+//     because deleting that line left the whole suite green.
+//   - CLAIM-LESS non-warden tokens (the two counter-examples above) are NOT
+//     handled, today, in the present tense. The check cannot see them — on the
+//     wire they are shaped exactly like a warden — so this function still hands
+//     back their own member id. Member ids and machine ids live in ONE primary
+//     key space (a machine IS a member row with Kind == machineKind —
+//     resolveMachine below is just GetMember plus that kind test), so such an id
+//     can never collide with a real other machine: the comparison necessarily
+//     mismatches and every consumer takes its fail-closed arm (keep waiting /
+//     keep retrying). The cost is at most a spurious receipt_missing, which is
+//     UNKNOWN and not failed. KNOWN RESIDUE — nothing above prevents it, and
+//     nothing goes red for it. Measured on 9056a4e1: a claim-less agent's
+//     receipt left the worker at last_op_reason = "receipt_missing: the stop was
+//     handed to machine m-dark but no receipt came back within 90s…".
+//
+// Do NOT "improve" this by inferring wardenhood from a blank claim. If a caller
+// ever needs a hard "is this a warden", ask the roster (member.Kind ==
+// KindWarden); the claim can only ever answer the other direction.
+//
+// "" means UNKNOWN, never "nobody". Every caller must treat it as no evidence
+// and fall back to the behaviour it had before it could ask.
+func receiptReporterMachine(r *http.Request) string {
+	if currentMachineClaim(r) != "" {
+		return "" // something running on a machine, not the machine
+	}
+	return currentActor(r)
+}
+
 // principalOfRequest resolves the caller's principal class (the in-handler
 // twin of the route choke — handlers.principal_at_least call sites).
 func (s *apiServer) principalOfRequest(r *http.Request) string {
@@ -87,7 +157,26 @@ func decodeJSONBodyRequired(w http.ResponseWriter, r *http.Request, dst any, req
 	return decodeJSONBodyStrict(w, r, dst, required...)
 }
 
-// decodeJSONBodyStrict is the shared mutable-request decoder. It has two
+// decodeJSONBodyPresent decodes like decodeJSONBodyRequired and ALSO reports
+// which top-level keys the caller actually sent, so a handler can tell a field
+// that was OMITTED from one explicitly sent as null. A Go pointer collapses the
+// two (both decode to nil), and for create_reply_card's linked_task that
+// collapse would be the whole bug back again: "I did not say" would look
+// identical to "I said this ask is not about a task". The names list still
+// answers the wire-frozen 422 face; a handler that wants its own status and its
+// own sentence (a 400 that spells out both legal shapes) reads the set instead.
+func decodeJSONBodyPresent(w http.ResponseWriter, r *http.Request, dst any, required ...string) (map[string]bool, bool) {
+	return decodeJSONBodyKeys(w, r, dst, required...)
+}
+
+// decodeJSONBodyStrict is the bool-only face every other handler uses; the
+// shared body lives in decodeJSONBodyKeys.
+func decodeJSONBodyStrict(w http.ResponseWriter, r *http.Request, dst any, required ...string) bool {
+	_, ok := decodeJSONBodyKeys(w, r, dst, required...)
+	return ok
+}
+
+// decodeJSONBodyKeys is the shared mutable-request decoder. It has two
 // properties that stop a malformed request from masquerading as a valid one:
 //
 //  1. DisallowUnknownFields — any key the DTO does not declare is a 422, not a
@@ -102,24 +191,25 @@ func decodeJSONBodyRequired(w http.ResponseWriter, r *http.Request, dst any, req
 //     it empty" from "the caller did not say". Absent key ⇒ 422, never a write.
 //
 // Both faults answer 422 (the wire-frozen validation_error source), matching
-// decodeJSONBodyRequired. Semantic refusals (anchor miss, wipe guard) stay 400.
-func decodeJSONBodyStrict(w http.ResponseWriter, r *http.Request, dst any, required ...string) bool {
+// decodeJSONBodyRequired. The first result is the set of top-level keys the
+// caller actually SENT (see decodeJSONBodyPresent). Semantic refusals (anchor miss, wipe guard) stay 400.
+func decodeJSONBodyKeys(w http.ResponseWriter, r *http.Request, dst any, required ...string) (map[string]bool, bool) {
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "could not read request body")
-		return false
+		return nil, false
 	}
 	var keys map[string]json.RawMessage
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &keys); err != nil {
 			writeError(w, http.StatusUnprocessableEntity, "invalid request body: "+err.Error())
-			return false
+			return nil, false
 		}
 		dec := json.NewDecoder(bytes.NewReader(raw))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(dst); err != nil {
 			writeError(w, http.StatusUnprocessableEntity, "invalid request body: "+err.Error())
-			return false
+			return nil, false
 		}
 		if err := dec.Decode(&struct{}{}); err != io.EOF {
 			if err == nil {
@@ -127,16 +217,20 @@ func decodeJSONBodyStrict(w http.ResponseWriter, r *http.Request, dst any, requi
 			} else {
 				writeError(w, http.StatusUnprocessableEntity, "invalid request body: "+err.Error())
 			}
-			return false
+			return nil, false
 		}
 	}
 	for _, name := range required {
 		if _, ok := keys[name]; !ok {
 			writeError(w, http.StatusUnprocessableEntity, "field required: "+name)
-			return false
+			return nil, false
 		}
 	}
-	return true
+	sent := make(map[string]bool, len(keys))
+	for name := range keys {
+		sent[name] = true
+	}
+	return sent, true
 }
 
 // relocateNeedsMachineMsg is the 400 a relocate answers when the body carries no
@@ -166,6 +260,13 @@ func internalError(w http.ResponseWriter, err error) {
 
 var errNotFound = errors.New("not found")
 
+// errWindDownLadderBackwards is the wind-down ladder's refusal (下線 → 加速 →
+// 強制, 「後者一旦發出我們就不該發出前者」), raised where the refusal has to travel
+// back through a function that returns an error rather than writing a response
+// itself — workerRestartSelf. Its handler maps it to the SAME 409 the staff arm
+// of that handler writes: one rule, one sentence, two arms.
+var errWindDownLadderBackwards = errors.New("wind-down ladder may not move backwards")
+
 // resolveMember returns the LIVE member for memberID (errNotFound when absent
 // or soft-removed). kind='outsource' rows resolve as errNotFound too: since
 // the P7d table fold an outsource worker lives IN the member table, but the
@@ -173,44 +274,83 @@ var errNotFound = errors.New("not found")
 // lifecycle rides the outsource routes / the relocate fallback, and an ow- id
 // on a member endpoint stays an honest 404, exactly as before the merge.
 //
-// ⚠️ This 404 coexists with dal.ListMembersIncludingOutsource, which DOES put
-// ow- rows in the GET /api/members response. So a caller can see a worker in
-// the roster list and still get a 404 from every member verb — deliberately.
-// Anything that reads "it is in members, therefore I may call member verbs on
-// it" is wrong at runtime; the two halves are only consistent when read
-// together (see the twin note on ListMembersIncludingOutsource in dal.go).
-func (s *apiServer) resolveMember(memberID string) (*Member, error) {
-	m, err := s.dal.GetMember(memberID)
-	if err != nil {
-		return nil, err
-	}
-	if m == nil || m.RosterStatus == RosterStatusRemoved || m.Kind == KindOutsource {
-		return nil, errNotFound
-	}
-	return m, nil
-}
+// ⚠️ This 404 coexists with dal.ListMembers, which DOES put ow- rows in the
+// GET /api/members response (since T-14 項目 6 removed its
+// `WHERE kind != 'outsource'` there is no second, wider query — this is the
+// only one). So a caller can see a worker in the roster list and still get a
+// 404 from every member verb — deliberately. Anything that reads "it is in
+// members, therefore I may call member verbs on it" is wrong at runtime; the
+// two halves are only consistent when read together (see the note on
+// ListMembers in dal.go).
+// memberScope is the second argument every member lookup must carry: whether
+// this door serves the WHOLE roster or staff only.
+//
+// 🔴 IT IS A REQUIRED PARAMETER RATHER THAN A SECOND FUNCTION, AND THAT IS THE
+// WHOLE POINT (owner ruling 2026-08-28: 「只有某些行為如果真的需要只拿正職或外包，
+// 才下額外參數指定」). Two differently-named functions would let the NEXT member
+// verb reach the open one by simply typing the shorter name — no decision, no
+// prompt to make one. A parameter cannot be omitted: every new call site is
+// made to say which population it serves, permanently, and not merely during
+// the refactor that introduced the split.
+//
+// The zero value is deliberately NOT "any": a scope that arrives unset is a
+// caller that never chose, and defaulting that to the wider population is the
+// exact failure this ticket exists to remove.
+type memberScope int
 
-// resolveResumeSummaryTarget is resolveMember WITHOUT the kind='outsource'
-// fold, for the ONE verb the owner released to workers: reading a worker's
-// resume summary from the cockpit (T-4595, ruling rc-64b712bfc703 option ①).
+const (
+	// memberScopeUnset is the zero value and is never legal — see the type doc.
+	memberScopeUnset memberScope = iota
+	// anyMember serves the whole roster, contractors included. This is the
+	// DEFAULT POSTURE for reads: GET /api/members already lists ow- rows to the
+	// same principal, so an item door refusing them withheld nothing and cost
+	// the cockpit one guaranteed 404 plus a whole-roster refetch per contractor
+	// chat line.
+	anyMember
+	// staffOnly additionally refuses kind='outsource'.
+	//
+	// 🔴 WHY EACH CALLER PASSES IT — do not relax one without answering its reason:
+	//   - mint / bootstrap: a contractor's token TTL and its boot document both
+	//     come from the worker path; the staff path would hand it the WRONG
+	//     document, not merely too much authority.
+	//   - activate / deactivate / force-stop / accelerated-stop / refocus: the
+	//     contractor equivalents live under /api/outsource-workers/* and drive a
+	//     DIFFERENT kill funnel. Two funnels onto one latch is the double-kill
+	//     that T-72dd fixed.
+	//   - dismiss (DELETE): a contractor leaves by being RELEASED with its task,
+	//     not by being fired; soft-deleting the row under a live task strands it.
+	//   - relocate: 🔴 SPECIAL — this one needs errNotFound as CONTROL FLOW. Its
+	//     handler catches the refusal and falls through to the worker relocate
+	//     core (P7c, rc-2786636f30e5). Widen it and an ow- id takes the member
+	//     reconcile path instead, which is not the same operation.
+	//   - webhook create / update / revoke, and the public POST /in inlet:
+	//     nothing reclaims a webhook token when a worker is released, and /in is
+	//     the only UNAUTHENTICATED surface here.
+	staffOnly
+)
+
+// errScopeUnset is what a caller gets for passing the zero memberScope. It is a
+// programming error surfaced as a refusal rather than a silent widening.
+var errScopeUnset = errors.New("member lookup called without a memberScope")
+
+// resolveMember looks up ONE member row by id, folding the two states that mean
+// "there is nobody here" — no row at all, and a soft-removed one — plus
+// kind='outsource' when the caller asked for staffOnly.
 //
-// WHY A SECOND RESOLVER RATHER THAN WIDENING resolveMember: that function has
-// 16 production call sites across five files, so dropping its outsource arm
-// would open every member verb to ow- ids at once — account and token, member
-// lifecycle, machines, webhooks. The owner picked the blast radius of one.
-// The shape is not invented here: api_members.go already keeps a sibling
-// resolver that deliberately does not fold outsource away, and GetMember has
-// the same precedent for a worker reading its own row.
-//
-// It keeps BOTH of resolveMember's other refusals: an absent row and a
-// soft-removed one are still errNotFound, so a released worker's summary stops
-// being readable at exactly the moment its roster row goes.
-func (s *apiServer) resolveResumeSummaryTarget(memberID string) (*Member, error) {
+// The list door has answered for contractors since the P7 convergence
+// (rc-2786636f30e5, 「外包對齊正職」); this is the item door catching up.
+func (s *apiServer) resolveMember(memberID string, scope memberScope) (*Member, error) {
+	if scope == memberScopeUnset {
+		return nil, errScopeUnset
+	}
 	m, err := s.dal.GetMember(memberID)
 	if err != nil {
 		return nil, err
 	}
 	if m == nil || m.RosterStatus == RosterStatusRemoved {
+		return nil, errNotFound
+	}
+	if scope == staffOnly && m.Kind == KindOutsource {
 		return nil, errNotFound
 	}
 	return m, nil
@@ -309,6 +449,43 @@ func refocusDeadlineOf(refocusSince float64, cfg reconcileConfig, refocusOp stri
 	return refocusDeadline(refocusSince, grace)
 }
 
+// winddownDeadlineOf is the ONE expression for "when is this member collected",
+// across BOTH wind-down axes, and every face that shows a deadline reads it: the
+// wire field (MemberDTO.refocus_deadline) and the sentence the agent is handed
+// (offboardNoticeFor).
+//
+// Two axes exist because 停止 and 換手 are genuinely different operations, not
+// because anybody wanted two:
+//
+//   - 換手 (desired_state stays online) anchors on refocus_since;
+//   - 下線 (desired_state=offline) anchors on stopping_since and has no
+//     refocus_since at all, so refocusDeadlineOf alone answers 0 for it — which
+//     was correct while that arm could never carry a clock, and stopped being
+//     correct the moment the owner got a 加速停止 button that works there.
+//
+// 🔴 AND WHETHER THERE IS AN EPOCH TO RUN A CLOCK ON is gracefulStopEpochOpen
+// (api_members.go), asked once, here. The 下線 arm's other two zero conditions
+// used to be written out — stopping_since <= 0 and forcedEpochLive — which made
+// them the NEGATION of the same pair offboardKindOf spells positively to decide
+// whether to send a sentence at all. TestOffboardKindOf_AFinalCallAlwaysHasAClock
+// exists because those two spellings could come apart; they are now one call.
+//
+// 🔴 The AUTHORITY on whether there is a clock is winddownKindFor in both arms,
+// asked once, here. A second test for the accelerated cause would be a second
+// copy of the ruling — the exact split T-ed79 removed — and the harm is
+// asymmetric and silent either way: an announced deadline nobody honours makes
+// an agent cut its hand-off short; an unannounced one cuts the hand-off off.
+func winddownDeadlineOf(m Member, cfg reconcileConfig) float64 {
+	if m.DesiredState == DesiredStateOffline {
+		grace, clocked := recycleGraceFor(m.RefocusOp, cfg)
+		if !clocked || !gracefulStopEpochOpen(m) {
+			return 0.0
+		}
+		return m.StoppingSince + grace
+	}
+	return refocusDeadlineOf(m.RefocusSince, cfg, m.RefocusOp)
+}
+
 // observedHost resolves a member's OBSERVED machine (handlers.observed_host):
 // SSE machine claim → self-reported telemetry.machine; a warden attributes to
 // its own id. Honest-empty "" when nothing is observed.
@@ -348,17 +525,29 @@ func (s *apiServer) observedHost(m Member) string {
 // member and zeroed the badge the delta was announcing). The outsource
 // single-item handler was already doing it the right way; this makes members
 // match. NOT a wire change: MemberDTO has always declared unread_count.
+//
+// 🔴 THE AGGREGATE IS THE DATABASE'S, AND THIS IS THE ONLY DOOR TO IT (T-48).
+// Everything that shows an unread number comes through here: the member roster
+// and single-member GET, the cockpit's red dot
+// (HandleChatUnreadCountApiChatUnreadCountGet), and all three contractor faces
+// in api_outsource.go. It is the ONLY function in the codebase that may call
+// s.dal.UnreadCountsFor — pinned by a test, because a shared DAL method is not
+// the same thing as a shared entry point: six handlers each reaching past this
+// one into the DAL would be six places to fix the next time the rule moves, and
+// that is exactly how this ended up with five copies of a whole-table fold.
+//
+// 🔴 WHAT DOES *NOT* BELONG HERE: what each surface then DOES with the map. The
+// red dot filters out removed members and released workers before summing; the
+// roster binds a per-member number into a DTO; the contractor faces index by
+// worker id. Those differences are real — they are the surfaces disagreeing
+// about their own audience, not about the algorithm — and folding them in here
+// would be the wrong kind of sharing. This returns the raw per-peer map and
+// stops.
+//
+// Before T-48 this was a whole-chat_message table read plus a Go fold, and there
+// were FIVE copies of it (here, the red dot, and three in api_outsource.go).
 func (s *apiServer) unreadCountsForRequest(r *http.Request) (map[string]int, error) {
-	actor := currentActor(r)
-	messages, err := s.dal.ListChat()
-	if err != nil {
-		return nil, err
-	}
-	receipts, err := s.dal.ListChatReads(actor, "")
-	if err != nil {
-		return nil, err
-	}
-	return UnreadCounts(messages, receipts, actor), nil
+	return s.dal.UnreadCountsFor(currentActor(r))
 }
 
 func (s *apiServer) newMemberDTO(m Member, roleName, observedMachine string, unreadCount int) memberDTO {
@@ -383,11 +572,13 @@ func (s *apiServer) newMemberDTO(m Member, roleName, observedMachine string, unr
 		RefocusSince:     m.RefocusSince,
 		RefocusOp:        m.RefocusOp,
 		// The grace this member's epoch is ACTUALLY collected on, and 0 when
-		// nothing collects it on time at all — an owner-pressed 重新聚焦 runs no
-		// clock (owner 2026-08-19), so the cockpit must show NO deadline rather
-		// than a time the owner would watch pass with nothing happening. Reading
-		// RecycleGrace straight would report exactly that kind of ceiling.
-		RefocusDeadline: refocusDeadlineOf(m.RefocusSince, s.reconcileCfg, m.RefocusOp),
+		// nothing collects it on time at all — which since T-ed79 is EVERY cause
+		// except the two 加速停止 arms (context_high and accelerated_stop), not
+		// just the owner-pressed 重新聚焦 this comment used to name. The cockpit
+		// must show NO deadline rather than a time the owner would watch pass with
+		// nothing happening. Reading RecycleGrace straight would report exactly
+		// that kind of ceiling, for most of the closed set.
+		RefocusDeadline: winddownDeadlineOf(m, s.reconcileConfigLive()),
 		LastOp:          m.LastOp,
 		LastOpOK:        m.LastOpOK,
 		LastOpLog:       m.LastOpLog,
@@ -409,7 +600,7 @@ func (s *apiServer) newMemberDTO(m Member, roleName, observedMachine string, unr
 // is left HONEST-EMPTY: not computed here, so a light consumer must not read
 // it. last_op* is likewise dropped (row text the identity view never shows),
 // which is where most of the per-member byte weight goes. Kind remains present
-// for outsource rows returned by ListMembersIncludingOutsource.
+// for outsource rows returned by ListMembers.
 func (s *apiServer) newMemberLightDTO(m Member, roleName string) memberDTO {
 	return memberDTO{
 		ID:            m.ID,

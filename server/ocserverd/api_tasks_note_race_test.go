@@ -21,8 +21,8 @@ import (
 //
 // The WRITING side was already safe: api_tasks_note.go writes through
 // dal.SetTaskStepNote, a single-column UPDATE. The danger came from the other
-// side — update_step_status (api_tasks.go), armStepWithCard (open_gate /
-// create_reply_card auto-bind), and the reassign step-reset loop all replay the
+// side — update_step_status (api_tasks.go), armStepWithCard (a create_reply_card
+// carrying an explicit linked_task), and the reassign step-reset loop all replay the
 // note they happened to read a moment earlier, destroying a handover note the
 // note endpoint had already answered 200 to. Nothing anywhere reports it.
 //
@@ -247,7 +247,7 @@ func TestTaskStepNoteRaceGuardHasTeeth(t *testing.T) {
 // until this transaction commits. That split needs the REAL two-pool wiring;
 // NewDAL's single handle would block the reads too.
 func TestNoOpPatchStepNoteStillCatchesAConcurrentStepDeletion(t *testing.T) {
-	api := newAPIServer(newSplitPoolDAL(t), NewHub(), []byte("tasks-test-secret"),
+	api := newAPIServer(newSplitPoolDAL(t), NewHub(), singleKeyring([]byte("tasks-test-secret")),
 		3600, assetRoot(t.TempDir()))
 	const seeded = "做到哪：改到一半\n下一步：待補"
 	taskID, stepID := seedStepWithNote(t, api, seeded)

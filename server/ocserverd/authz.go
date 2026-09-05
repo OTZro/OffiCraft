@@ -243,6 +243,95 @@ func permanentCredentialRefusal(claims map[string]any, lookup func(id string) (*
 	return err != nil || m == nil || m.Kind != machineKind || m.RosterStatus != RosterStatusActive
 }
 
+// authRefusalHeader / refusalAgentSuperseded name a 401 that is a STANDING,
+// authoritative refusal rather than transient bad luck, on the ONE refusal where
+// the difference decides whether a live process should keep retrying or stop.
+//
+// 🔴 WHY A MARKER AT ALL. The agent iat floor refuses with the same
+// 401 "invalid token" as a server whose secret is not loaded yet, a token that
+// simply expired, or a restart in progress. cli/ocagent's listener treats a
+// non-authoritative failure as "reconnect with backoff, forever" — correct for
+// every one of those, and a silent orphan for this one: the superseded
+// generation would re-dial every ≤15s for the rest of the machine's uptime,
+// holding a tmux + model session that nothing on the cockpit can even see,
+// because the member's presence now belongs to the SUCCESSOR. A client cannot
+// tell the two apart from the status line alone — 401 is 401 — so the server,
+// which is the only side that knows which refusal it just made, says so.
+//
+// It rides a RESPONSE HEADER and not the body: the body text is what agents
+// read (two seeds quote "every later MCP call 401s with nothing saying why"),
+// and this must not become an instruction to a model. It is transport-level
+// advice to the process holding the socket.
+//
+// 🔴 IT IS ONLY EVER SET ON THIS ONE REFUSAL. Setting it on any other 401 —
+// expiry, an unconfigured secret, a bad signature — turns a self-healing retry
+// into a self-kill, which is strictly worse than the hammering it fixes. That
+// direction is pinned from the client side by
+// TestListener_APlain401NeverTripsFailClosed (cli/ocagent).
+const (
+	authRefusalHeader      = "X-OC-Auth-Refusal"
+	refusalAgentSuperseded = "agent-superseded"
+)
+
+// agentIatFloorRefusal is the AGENT-side credential floor (T-14 項目 4B): an
+// agent-scope token whose `iat` is STRICTLY LESS THAN its own member's
+// agent_iat_floor was minted for a generation that member has already replaced,
+// and is refused.
+//
+// 🔴 IT IS NOT requireAuth's ownerIatFloor WITH A SECOND CALLER, and could not
+// be. That one is a single global number, because the owner has no roster row
+// and the only thing it can be keyed on is the last password change. An agent's
+// floor is PER MEMBER — each member's own last 開工 — so it is read off the
+// member row, through the SAME lookup the two refusals above already use rather
+// than a second roster read. Same family of seam, different shape.
+//
+// The floor is raised by report_waking, which stores the WAKING CALLER'S OWN
+// iat. With a strictly-less-than comparison that means the session that raised
+// the floor is never refused by it, whatever the gap between its mint and its
+// boot — the property using now() would not have.
+//
+// 🔴 KIND == machineKind IS EXEMPT, and that is a safety property rather than
+// an optimisation. mintWardenToken issues scope="agent" credentials with NO exp
+// for a machine member, so scope alone cannot tell a warden from an agent. A
+// warden does not call report_waking today — but that is a fact about today's
+// client, not a contract, and one added line there would raise a floor above a
+// credential that can never expire out of the way: every machine still carrying
+// an older permanent token would go dark PERMANENTLY, with a hand re-install as
+// the only recovery. Pinned by
+// TestAgentIatFloor_WardenPermanentTokenIsExempt.
+//
+// Everything else fails OPEN by construction: a non-agent scope, a missing
+// lookup (the token-only plumbing face), an unresolvable sub, or a row with no
+// floor (0 — every pre-migration row) is not refused here. This gate only ever
+// refuses a token that is demonstrably older than a wake its own member
+// reported; it is not a second chance to deny an unknown caller, which is what
+// the refusals above are for.
+//
+// ⚠️ NOT SOLVED: `iat` is whole seconds, so two generations of one member that
+// start inside the SAME second are indistinguishable to this comparison (owner
+// 2026-08-28: 「先不管搶同一秒的問題好了」).
+func agentIatFloorRefusal(claims map[string]any, lookup func(id string) (*Member, error)) bool {
+	if scope, _ := claims["scope"].(string); scope != principalAgent {
+		return false
+	}
+	if lookup == nil {
+		return false
+	}
+	sub, _ := claims["sub"].(string)
+	m, err := lookup(sub)
+	if err != nil || m == nil || m.Kind == machineKind || m.AgentIatFloor <= 0 {
+		return false
+	}
+	iat, ok := claims["iat"].(float64) // encoding/json numbers land as float64
+	if !ok {
+		// A token with no iat cannot be placed on either side of the floor. It
+		// is refused rather than admitted: on a member that HAS a floor, an
+		// un-datable credential is exactly the shape this gate exists to stop.
+		return true
+	}
+	return iat < m.AgentIatFloor
+}
+
 // machineRevokedMsg is the refusal text. It states the FACT (this machine is
 // off the roster, so this credential is dead) and deliberately stops there: no
 // "retry without", no "use the other endpoint", no hint that some subset of

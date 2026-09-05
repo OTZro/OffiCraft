@@ -66,11 +66,19 @@ def asker(client, owner_token) -> AgentIdentity:
     return AgentIdentity(member_id=member_id, token=token, role_key="")
 
 
+DEFAULT_OPTIONS = ({"text": "AI pick", "ai_pick": True}, {"text": "other"})
+
+
 def _open_card(client, asker: AgentIdentity, summary="need a call",
-               kind="decision", options=("AI pick", "other")) -> dict:
+               kind="decision", options=DEFAULT_OPTIONS,
+               select_mode=None) -> dict:
+    body = {"kind": kind, "summary": summary, "options": list(options),
+            "linked_task": None}
+    if select_mode is not None:
+        body["select_mode"] = select_mode
     r = client.post(
         "/api/reply-cards",
-        json={"kind": kind, "summary": summary, "options": list(options)},
+        json=body,
         headers=_auth(asker.token),
     )
     assert r.status_code == 200, f"open card failed: {r.status_code} {r.text}"
@@ -103,7 +111,10 @@ def test_card_opens_waiting_and_rides_the_chat_stream(client, owner_token, asker
     card = _open_card(client, asker, summary="ship the release?")
     assert card["status"] == "waiting"
     assert card["from"] == asker.member_id
-    assert card["options"][0] == "AI pick"  # [0] = the AI recommendation slot
+    # ai_pick — not position — is what marks the AI's recommendation.
+    assert card["options"] == [{"text": "AI pick", "ai_pick": True},
+                               {"text": "other", "ai_pick": False}]
+    assert card["select_mode"] == "single"
     assert card["answer"] is None and card["answered_ts"] is None
 
     # The companion chat message exists, is FROM the asker TO the owner, and
@@ -112,7 +123,7 @@ def test_card_opens_waiting_and_rides_the_chat_stream(client, owner_token, asker
         f"/api/chat?with={asker.member_id}&limit=-1", headers=_auth(owner_token)
     )
     assert r.status_code == 200, r.text
-    msgs = {m["id"]: m for m in r.json()}
+    msgs = {m["id"]: m for m in r.json()["messages"]}
     msg = msgs.get(card["chat_message_id"])
     assert msg, f"card's chat message missing: {card['chat_message_id']}"
     assert msg["from"] == asker.member_id and msg["to"] == "owner"
@@ -125,17 +136,54 @@ def test_create_validation_rules(client, asker):
         return client.post(
             "/api/reply-cards", json=body, headers=_auth(asker.token))
 
-    base = {"kind": "decision", "summary": "s", "options": ["a", "b"]}
-    assert post({**base, "kind": "poll"}).status_code == 400
-    assert post({**base, "summary": "   "}).status_code == 400
-    assert post({**base, "options": []}).status_code == 400
-    assert post({**base, "options": ["a", "b", "c", "d", "e"]}).status_code == 400
-    assert post({**base, "options": ["a", "  "]}).status_code == 400
-    # four options is the inclusive cap
-    assert post({**base, "options": ["a", "b", "c", "d"]}).status_code == 200
+    base = {"kind": "decision", "summary": "s", "options": [{"text": "a"}, {"text": "b"}],
+            "linked_task": None}
+
+    def refused(body, message):
+        """400 FOR THE STATED REASON, compared IN FULL.
+
+        linked_task is required since T-18 and its refusal is also a 400, so a
+        status-only assertion here would stay green while every rule below went
+        untested — drop linked_task from `base` and nothing would notice. A
+        substring probe has the same hole one level down: the linked_task
+        sentence names task_id and step_id, so a fragment like "options" could
+        in principle match the wrong refusal. Pin the whole sentence."""
+        r = post(body)
+        assert r.status_code == 400, f"{r.status_code} {r.text}"
+        assert r.json()["error"]["message"] == message, r.text
+
+    refused({**base, "kind": "poll"}, "kind must be 'decision' or 'action'")
+    refused({**base, "summary": "   "}, "summary must not be blank")
+    refused({**base, "options": []}, "options must carry at least one choice")
+    refused({**base, "options": [{"text": "a"}, {"text": "b"}, {"text": "c"},
+                                 {"text": "d"}, {"text": "e"}]},
+            "a single-select card may carry at most 4 options")
+    # T-43: the cap is per select_mode, so the multi card refuses at ITS OWN
+    # number — asserting only the single one would leave 20 unpinned.
+    refused({**base, "select_mode": "multi",
+             "options": [{"text": str(i)} for i in range(21)]},
+            "a multi-select card may carry at most 20 options")
+    refused({**base, "options": [{"text": "a"}, {"text": "  "}]},
+            "options must not be blank")
+    refused({**base, "select_mode": "many"},
+            "select_mode must be 'single' or 'multi'")
+    # ai_pick replaces the old positional convention, and a single-select card
+    # may answer "which does the AI suggest" at most once.
+    refused({**base, "options": [{"text": "a", "ai_pick": True},
+                                 {"text": "b", "ai_pick": True}]},
+            "a single-select card may mark at most one option ai_pick")
+    # ...which is a select_mode rule, not a blanket ban: multi takes both.
+    assert post({**base, "select_mode": "multi",
+                 "options": [{"text": "a", "ai_pick": True},
+                             {"text": "b", "ai_pick": True}]}).status_code == 200
+    # four options is the inclusive cap on a single card…
+    assert post({**base, "options": [{"text": "a"}, {"text": "b"}, {"text": "c"}, {"text": "d"}]}).status_code == 200
+    # …and twenty is the inclusive cap on a multi one (T-43).
+    assert post({**base, "select_mode": "multi",
+                 "options": [{"text": str(i)} for i in range(20)]}).status_code == 200
     # missing required keys are the 422 (decode-layer) face
-    assert post({"summary": "s", "options": ["a"]}).status_code == 422
-    assert post({"kind": "action", "options": ["a"]}).status_code == 422
+    assert post({"summary": "s", "options": [{"text": "a"}]}).status_code == 422
+    assert post({"kind": "action", "options": [{"text": "a"}]}).status_code == 422
     assert post({"kind": "action", "summary": "s"}).status_code == 422
 
 
@@ -156,7 +204,7 @@ def test_card_opens_with_question_attachments(client, owner_token, asker):
         "/api/reply-cards",
         json={
             "kind": "decision", "summary": "see the screenshots?",
-            "options": ["go", "hold"],
+            "options": [{"text": "go"}, {"text": "hold"}], "linked_task": None,
             "attachments": [
                 {"id": ref["id"]},
                 {"data_b64": _PNG_B64, "filename": "inline.png",
@@ -205,17 +253,37 @@ def test_card_without_attachments_serves_an_empty_array(client, owner_token, ask
 
 
 def test_card_attachment_input_validation(client, asker):
-    base = {"kind": "decision", "summary": "s", "options": ["a"]}
+    # 🔴 linked_task is REQUIRED (T-18) and its refusal is ALSO a 400. Without it
+    # in `base` every assertion below still passed while proving nothing: the
+    # create was rejected at the linked_task gate and never reached a single
+    # attachment rule. So each case now asserts the REASON, not just the status —
+    # a 400 for the wrong reason is indistinguishable from a 400 for the right
+    # one, which is the exact failure mode this whole ticket is about.
+    base = {"kind": "decision", "summary": "s", "options": [{"text": "a"}],
+            "linked_task": None}
 
     def post(atts):
         return client.post(
             "/api/reply-cards", json={**base, "attachments": atts},
             headers=_auth(asker.token))
 
-    # unknown ref / both id+data_b64 / over the 10-item cap — all 400.
-    assert post([{"id": "att-does-not-exist"}]).status_code == 400
-    assert post([{"id": "att-x", "data_b64": _PNG_B64}]).status_code == 400
-    assert post([{"data_b64": _PNG_B64}] * 11).status_code == 400
+    def refused_because(atts, needle):
+        r = post(atts)
+        assert r.status_code == 400, f"{r.status_code} {r.text}"
+        msg = r.json()["error"]["message"]
+        assert needle in msg, (
+            f"refused for the wrong reason: wanted {needle!r}, got {msg!r}")
+        assert "linked_task" not in msg, (
+            "this case never reached the attachment rules — it was rejected at "
+            f"the linked_task gate: {msg!r}")
+
+    # unknown ref / both id+data_b64 / over the 10-item cap — all 400, each for
+    # its own reason (T-5e8a).
+    refused_because([{"id": "att-does-not-exist"}], "att-does-not-exist")
+    refused_because([{"id": "att-x", "data_b64": _PNG_B64}],
+                    "carries both id and data_b64")
+    refused_because([{"data_b64": _PNG_B64}] * 11,
+                    "at most 10 attachments")
 
 
 # ── answer: the only close ───────────────────────────────────────────────────
@@ -226,11 +294,11 @@ def test_option_answer_closes_the_card_and_decrements_the_badge(
 ):
     card = _open_card(client, asker)
     before = _waiting_count(client, owner_token)
-    r = _answer(client, owner_token, card["id"], {"option_idx": 0})
+    r = _answer(client, owner_token, card["id"], {"option_idxs": [0]})
     assert r.status_code == 200, r.text
     answered = r.json()
     assert answered["status"] == "answered"
-    assert answered["answer"]["option_idx"] == 0
+    assert answered["answer"]["option_idxs"] == [0]
     assert answered["answered_ts"]
     assert _waiting_count(client, owner_token) == before - 1
 
@@ -244,7 +312,7 @@ def test_free_text_counter_question_also_closes_the_card(
     r = _answer(client, owner_token, card["id"], {"text": "who is the recipient?"})
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "answered"
-    assert r.json()["answer"]["option_idx"] is None
+    assert r.json()["answer"]["option_idxs"] is None
     assert r.json()["answer"]["text"] == "who is the recipient?"
 
 
@@ -252,25 +320,127 @@ def test_answer_validation_rules(client, owner_token, asker):
     card = _open_card(client, asker)
     assert _answer(client, owner_token, card["id"], {}).status_code == 400
     assert _answer(
-        client, owner_token, card["id"], {"option_idx": 2}
+        client, owner_token, card["id"], {"option_idxs": [2]}
     ).status_code == 400  # two options → idx 2 out of range
     assert _answer(
-        client, owner_token, card["id"], {"option_idx": -1}
+        client, owner_token, card["id"], {"option_idxs": [-1]}
     ).status_code == 400
     assert _answer(
-        client, owner_token, "rc-conf-missing", {"option_idx": 0}
+        client, owner_token, "rc-conf-missing", {"option_idxs": [0]}
     ).status_code == 404
     # the card is untouched by the refused answers
     assert _get_card(client, owner_token, card["id"])["status"] == "waiting"
 
 
+MULTI_OPTIONS = ({"text": "甲"}, {"text": "乙"}, {"text": "丙"})
+
+
+def test_empty_option_idxs_list_is_not_an_answer(client, owner_token, asker):
+    """``option_idxs: []`` carries no decision and must be refused exactly like
+    an empty body.
+
+    Its own test because the guard changed SHAPE: the field used to be one
+    nullable integer, where "absent" was the only way to carry no option. As a
+    LIST, ``[]`` is present-but-empty — and a server that tested presence rather
+    than length would close the card and release its task hold on a decision the
+    owner never made, answering 200 with nothing wrong on the wire to see."""
+    card = _open_card(client, asker, select_mode="multi", options=MULTI_OPTIONS)
+
+    r = _answer(client, owner_token, card["id"], {"option_idxs": []})
+
+    assert r.status_code == 400, f"{r.status_code} {r.text}"
+    assert r.json()["error"]["message"] == (
+        "answer must carry an option, text, or an attachment"), r.text
+    after = _get_card(client, owner_token, card["id"])
+    assert after["status"] == "waiting"
+    assert after["answer"] is None and after["answered_ts"] is None
+
+
+def test_answer_option_idxs_are_stored_deduped_and_ascending(
+    client, owner_token, asker
+):
+    """The owner's CLICK ORDER is not part of the decision: [2,0] and [0,2] say
+    the same thing and must come back off the wire identical.
+
+    A reader that could tell them apart once read a re-ordered re-answer as a
+    CHANGED one and swallowed a delivery."""
+    descending = _open_card(client, asker, summary="order A",
+                            select_mode="multi", options=MULTI_OPTIONS)
+    ascending = _open_card(client, asker, summary="order B",
+                           select_mode="multi", options=MULTI_OPTIONS)
+
+    assert _answer(client, owner_token, descending["id"],
+                   {"option_idxs": [2, 0]}).status_code == 200
+    assert _answer(client, owner_token, ascending["id"],
+                   {"option_idxs": [0, 2]}).status_code == 200
+
+    a = _get_card(client, owner_token, descending["id"])["answer"]
+    b = _get_card(client, owner_token, ascending["id"])["answer"]
+    assert a["option_idxs"] == [0, 2], a
+    assert a["option_idxs"] == b["option_idxs"]
+
+    dup = _open_card(client, asker, summary="dupes",
+                     select_mode="multi", options=MULTI_OPTIONS)
+    assert _answer(client, owner_token, dup["id"],
+                   {"option_idxs": [1, 1, 0]}).status_code == 200
+    assert _get_card(client, owner_token, dup["id"])["answer"]["option_idxs"] == [0, 1]
+
+
+def test_single_select_card_refuses_two_indices(client, owner_token, asker):
+    """A single-select card takes ONE circled option. Quietly keeping the first
+    of two would record a decision the owner did not make, on a card that looks
+    perfectly well-formed afterwards."""
+    card = _open_card(client, asker, options=MULTI_OPTIONS)  # select_mode defaults to single
+    assert card["select_mode"] == "single"
+
+    r = _answer(client, owner_token, card["id"], {"option_idxs": [0, 2]})
+
+    assert r.status_code == 400, f"{r.status_code} {r.text}"
+    assert r.json()["error"]["message"] == (
+        "this card is single-select: option_idxs may carry at most one index"), r.text
+    assert _get_card(client, owner_token, card["id"])["status"] == "waiting"
+
+    # One index is fine on the same card...
+    assert _answer(client, owner_token, card["id"],
+                   {"option_idxs": [2]}).status_code == 200
+    assert _get_card(client, owner_token, card["id"])["answer"]["option_idxs"] == [2]
+
+    # ...and a MULTI card of the same shape takes both, so the refusal above is
+    # the select_mode gate rather than a blanket ban on two indices.
+    multi = _open_card(client, asker, summary="multi twin",
+                       select_mode="multi", options=MULTI_OPTIONS)
+    assert _answer(client, owner_token, multi["id"],
+                   {"option_idxs": [0, 2]}).status_code == 200
+    answered = _get_card(client, owner_token, multi["id"])
+    assert answered["answer"]["option_idxs"] == [0, 2]
+
+
+def test_multi_select_digest_carries_every_circled_option(
+    client, owner_token, asker
+):
+    """The LIGHT list row is the agent-facing contract, so a multi-select answer
+    must show EVERY circled option there — reporting only the first would tell
+    the asker the owner chose less than it did, with nothing malformed to
+    notice."""
+    card = _open_card(client, asker, summary="multi digest",
+                      select_mode="multi", options=MULTI_OPTIONS)
+    assert _answer(client, owner_token, card["id"],
+                   {"option_idxs": [2, 0]}).status_code == 200
+
+    pane = client.get("/api/reply-cards?status=answered",
+                      headers=_auth(owner_token)).json()
+    row = {c["id"]: c for c in pane}[card["id"]]
+    assert row["answer"]["option_idxs"] == [0, 2]
+    assert row["answer"]["options"] == ["甲", "丙"]
+
+
 def test_second_answer_is_refused_one_card_one_shot(client, owner_token, asker):
     card = _open_card(client, asker)
-    assert _answer(client, owner_token, card["id"], {"option_idx": 0}).status_code == 200
-    r = _answer(client, owner_token, card["id"], {"option_idx": 1})
+    assert _answer(client, owner_token, card["id"], {"option_idxs": [0]}).status_code == 200
+    r = _answer(client, owner_token, card["id"], {"option_idxs": [1]})
     assert r.status_code == 409, f"second POST answer must 409, got {r.status_code}"
     # the stored answer did not change
-    assert _get_card(client, owner_token, card["id"])["answer"]["option_idx"] == 0
+    assert _get_card(client, owner_token, card["id"])["answer"]["option_idxs"] == [0]
 
 
 def test_no_close_or_skip_surface_exists(client, owner_token, asker):
@@ -291,14 +461,14 @@ def test_no_close_or_skip_surface_exists(client, owner_token, asker):
 
 def test_reanswer_replaces_answer_and_stays_answered(client, owner_token, asker):
     card = _open_card(client, asker)
-    assert _answer(client, owner_token, card["id"], {"option_idx": 0}).status_code == 200
+    assert _answer(client, owner_token, card["id"], {"option_idxs": [0]}).status_code == 200
     first = _get_card(client, owner_token, card["id"])
     r = _answer(client, owner_token, card["id"],
-                {"option_idx": 1, "text": "changed my mind"}, method="PUT")
+                {"option_idxs": [1], "text": "changed my mind"}, method="PUT")
     assert r.status_code == 200, r.text
     revised = r.json()
     assert revised["status"] == "answered"  # never reopens
-    assert revised["answer"]["option_idx"] == 1
+    assert revised["answer"]["option_idxs"] == [1]
     assert revised["answer"]["text"] == "changed my mind"
     assert revised["answered_ts"] >= first["answered_ts"]  # re-enters the 24h window
     # the badge never re-counts a revised card
@@ -312,7 +482,7 @@ def test_reanswer_replaces_answer_and_stays_answered(client, owner_token, asker)
 
 def test_reanswer_requires_an_answered_card(client, owner_token, asker):
     card = _open_card(client, asker)
-    r = _answer(client, owner_token, card["id"], {"option_idx": 0}, method="PUT")
+    r = _answer(client, owner_token, card["id"], {"option_idxs": [0]}, method="PUT")
     assert r.status_code == 409, f"PUT on a waiting card must 409, got {r.status_code}"
     assert _get_card(client, owner_token, card["id"])["status"] == "waiting"
 
@@ -339,7 +509,7 @@ def test_answered_pane_carries_the_decision_digest_and_skips_waiting(
     waiting = _open_card(client, asker, summary="still waiting")
     answered = _open_card(client, asker, summary="answered ask")
     assert _answer(
-        client, owner_token, answered["id"], {"option_idx": 1}
+        client, owner_token, answered["id"], {"option_idxs": [1]}
     ).status_code == 200
     pane = client.get(
         "/api/reply-cards?status=answered", headers=_auth(owner_token)
@@ -350,8 +520,8 @@ def test_answered_pane_carries_the_decision_digest_and_skips_waiting(
     # The decision DIGEST (T-3f31): the picked index AND its original wording
     # ride the light row; the full option list does NOT (查看當初選項 is a
     # get_reply_card pull now).
-    assert row["answer"]["option_idx"] == 1
-    assert row["answer"]["option"] == "other"
+    assert row["answer"]["option_idxs"] == [1]
+    assert row["answer"]["options"] == ["other"]
     assert "options" not in row and "body" not in row
     assert waiting["id"] not in by_id
     # newest answer first
@@ -372,13 +542,13 @@ def test_list_rows_are_light_title_plus_decision_only(client, owner_token, asker
     # Give the card a heavy interior via the create body.
     heavy = client.post(
         "/api/reply-cards",
-        json={"kind": "decision", "summary": "heavy ask",
-              "body": "細" * 3000, "options": ["A" * 400, "B" * 400]},
+        json={"kind": "decision", "summary": "heavy ask", "linked_task": None,
+              "body": "細" * 3000, "options": [{"text": "A" * 400}, {"text": "B" * 400}]},
         headers=_auth(asker.token),
     ).json()
     long_text = "答" * 400
     assert _answer(client, owner_token, heavy["id"], {
-        "option_idx": 0, "text": long_text,
+        "option_idxs": [0], "text": long_text,
         "attachments": [{"data_b64": _PNG_B64, "filename": "p.png",
                          "mime": "image/png"}],
     }).status_code == 200
@@ -396,15 +566,16 @@ def test_list_rows_are_light_title_plus_decision_only(client, owner_token, asker
     row = {c["id"]: c for c in answered_pane}[heavy["id"]]
     # body/options never ride; the answer digest is bounded.
     assert "body" not in row and "options" not in row
-    assert row["answer"]["option_idx"] == 0
-    assert row["answer"]["option"] == "A" * 400  # the original wording
+    assert row["answer"]["option_idxs"] == [0]
+    assert row["answer"]["options"] == ["A" * 400]  # the original wording
     assert row["answer"]["text"].endswith("…")
     assert len(row["answer"]["text"]) < len(long_text)
     assert row["answer"]["attachments"] == 1  # a COUNT, not refs
     # The full interior still rides the single-card read.
     full = _get_card(client, owner_token, heavy["id"])
     assert full["body"] == "細" * 3000
-    assert full["options"] == ["A" * 400, "B" * 400]
+    assert full["options"] == [{"text": "A" * 400, "ai_pick": False},
+                               {"text": "B" * 400, "ai_pick": False}]
     assert full["answer"]["text"] == long_text
     assert full["answer"]["attachments"][0]["filename"] == "p.png"
 
@@ -421,13 +592,13 @@ def test_view_full_serves_the_same_pane_as_whole_cards(client, owner_token, aske
     card = _open_card(client, asker, summary="full view ask")
     heavy = client.post(
         "/api/reply-cards",
-        json={"kind": "decision", "summary": "heavy full ask",
-              "body": "細" * 3000, "options": ["A" * 400, "B" * 400]},
+        json={"kind": "decision", "summary": "heavy full ask", "linked_task": None,
+              "body": "細" * 3000, "options": [{"text": "A" * 400}, {"text": "B" * 400}]},
         headers=_auth(asker.token),
     ).json()
     long_text = "答" * 400
     assert _answer(client, owner_token, heavy["id"], {
-        "option_idx": 0, "text": long_text,
+        "option_idxs": [0], "text": long_text,
         "attachments": [{"data_b64": _PNG_B64, "filename": "p.png",
                          "mime": "image/png"}],
     }).status_code == 200
@@ -450,7 +621,8 @@ def test_view_full_serves_the_same_pane_as_whole_cards(client, owner_token, aske
         headers=_auth(owner_token)).json()}[heavy["id"]]
     # Everything T-3f31 took OUT of the light row is present again...
     assert full_row["body"] == "細" * 3000
-    assert full_row["options"] == ["A" * 400, "B" * 400]
+    assert full_row["options"] == [{"text": "A" * 400, "ai_pick": False},
+                                   {"text": "B" * 400, "ai_pick": False}]
     assert full_row["chat_message_id"]
     # ...including the answer in full: untruncated text and real attachment
     # REFS, where the light digest carried a preview and a COUNT (an int). The
@@ -590,7 +762,7 @@ def test_answer_reaches_the_agent_with_card_context(
         agent_sse.wait_for_frame("reply_card")  # the create delta
 
         r = _answer(client, owner_token, card["id"], {
-            "option_idx": 1,
+            "option_idxs": [1],
             "text": "see the screenshot",
             "attachments": [{"data_b64": _PNG_B64, "filename": "proof.png",
                              "mime": "image/png"}],
@@ -607,8 +779,9 @@ def test_answer_reaches_the_agent_with_card_context(
         # the pull path: the AGENT's own token reads the full card back.
         full = _get_card(client, asker.token, card["id"])
         assert full["summary"] == "context ride-back"
-        assert full["options"] == ["AI pick", "other"]
-        assert full["answer"]["option_idx"] == 1
+        assert full["options"] == [{"text": "AI pick", "ai_pick": True},
+                                   {"text": "other", "ai_pick": False}]
+        assert full["answer"]["option_idxs"] == [1]
         assert full["answer"]["text"] == "see the screenshot"
         atts = full["answer"]["attachments"]
         assert len(atts) == 1 and atts[0]["filename"] == "proof.png"
@@ -665,7 +838,7 @@ def test_expire_is_terminal_no_reopen_no_answer(client, owner_token, asker):
     # one-shot terminal: a second expire, an answer, and a re-answer all 409.
     assert _expire(client, owner_token, card["id"]).status_code == 409
     assert _answer(
-        client, owner_token, card["id"], {"option_idx": 0}
+        client, owner_token, card["id"], {"option_idxs": [0]}
     ).status_code == 409
     assert _answer(
         client, owner_token, card["id"], {"text": "late"}, method="PUT"
@@ -678,7 +851,7 @@ def test_expire_refused_on_answered_or_missing_cards(
     client, owner_token, asker
 ):
     card = _open_card(client, asker)
-    assert _answer(client, owner_token, card["id"], {"option_idx": 0}).status_code == 200
+    assert _answer(client, owner_token, card["id"], {"option_idxs": [0]}).status_code == 200
     assert _expire(client, owner_token, card["id"]).status_code == 409
     assert _get_card(client, owner_token, card["id"])["status"] == "answered"
     assert _expire(client, owner_token, "rc-conf-missing").status_code == 404
@@ -706,14 +879,15 @@ def test_expiring_a_gate_card_resumes_the_task_and_step(
     # submit_plan answers with a bounded receipt (T-a98d); read the rows back.
     step_id = client.get(f"/api/tasks/{task_id}", headers=h_agent).json()["steps"][0]["id"]
     # Task status is DERIVED (T-9ca5): report the step in_progress so the task
-    # derives in_progress — a gate can only arm on an in_progress task.
+    # derives in_progress — a card can only bind an in_progress task.
     assert client.post(
         f"/api/tasks/{task_id}/steps/{step_id}/status",
         json={"status": "in_progress"}, headers=h_agent,
     ).status_code == 200
     r = client.post(
-        f"/api/tasks/{task_id}/steps/{step_id}/gate",
-        json={"kind": "decision", "summary": "go?", "options": ["go", "hold"]},
+        "/api/reply-cards",
+        json={"kind": "decision", "summary": "go?", "options": [{"text": "go"}, {"text": "hold"}],
+              "linked_task": {"task_id": task_id, "step_id": step_id}},
         headers=h_agent,
     )
     assert r.status_code == 200, r.text
@@ -751,14 +925,15 @@ def test_closing_a_task_retires_its_waiting_card(client, owner_token, asker):
     # submit_plan answers with a bounded receipt (T-a98d); read the rows back.
     step_id = client.get(f"/api/tasks/{task_id}", headers=h_agent).json()["steps"][0]["id"]
     # Task status is DERIVED (T-9ca5): lift the task to in_progress via the step
-    # report so the gate can arm.
+    # report so the card can bind.
     assert client.post(
         f"/api/tasks/{task_id}/steps/{step_id}/status",
         json={"status": "in_progress"}, headers=h_agent,
     ).status_code == 200
     r = client.post(
-        f"/api/tasks/{task_id}/steps/{step_id}/gate",
-        json={"kind": "decision", "summary": "go?", "options": ["go"]},
+        "/api/reply-cards",
+        json={"kind": "decision", "summary": "go?", "options": [{"text": "go"}],
+              "linked_task": {"task_id": task_id, "step_id": step_id}},
         headers=h_agent,
     )
     assert r.status_code == 200, r.text
@@ -773,7 +948,7 @@ def test_closing_a_task_retires_its_waiting_card(client, owner_token, asker):
     waiting = client.get("/api/reply-cards?status=waiting",
                          headers=_auth(owner_token)).json()
     assert card_id not in [c["id"] for c in waiting]
-    r = _answer(client, owner_token, card_id, {"option_idx": 0})
+    r = _answer(client, owner_token, card_id, {"option_idxs": [0]})
     assert r.status_code == 409, r.text
     assert "expired" in r.json()["error"]["message"], r.text
     # A second expire is refused (terminal, no re-close) …

@@ -29,8 +29,8 @@ func newWiredTestServerWithDB(t *testing.T) (*httptest.Server, []byte, *sql.DB) 
 		t.Fatalf("seed: %v", err)
 	}
 	secret := []byte(interopSecret)
-	api := newAPIServer(dal, NewHub(), secret, 3600, "../..")
-	h, err := buildHandler(specsFor(api), secret, dal.GetMember, nil)
+	api := newAPIServer(dal, NewHub(), singleKeyring(secret), 3600, "../..")
+	h, err := buildHandler(specsFor(api), api.keys, dal.GetMember, nil)
 	if err != nil {
 		t.Fatalf("buildHandler: %v", err)
 	}
@@ -302,7 +302,7 @@ func attachmentFaces() []attachmentFace {
 		{
 			name: "reply card create", recordTable: "reply_card",
 			send: post("/api/reply-cards",
-				`{"kind":"decision","summary":"ship it?","options":["yes","no"],"attachments":[`+inline+`]}`, false),
+				`{"kind":"decision","summary":"ship it?","options":[{"text":"yes"},{"text":"no"}],"linked_task":null,"attachments":[`+inline+`]}`, false),
 		},
 		{
 			// Review T2: this face was named as fixed but had no orphan case,
@@ -346,7 +346,7 @@ func attachmentFaces() []attachmentFace {
 				agentTok, _ := mintJWT("mira", "agent", 300, secret, now, "")
 				status, resp := doRaw(t, "POST", srv.URL+"/api/reply-cards", agentTok,
 					"application/json",
-					[]byte(`{"kind":"decision","summary":"ship it?","options":["yes","no"]}`))
+					[]byte(`{"kind":"decision","summary":"ship it?","options":[{"text":"yes"},{"text":"no"}],"linked_task":null}`))
 				if status != 200 {
 					t.Fatalf("open card: %d %s", status, resp)
 				}
@@ -357,7 +357,7 @@ func attachmentFaces() []attachmentFace {
 				ownerTok, _ := mintJWT(wireOwnerID, "owner", 300, secret, now, "")
 				return doRaw(t, "POST", srv.URL+"/api/reply-cards/"+cardID+"/answer",
 					ownerTok, "application/json",
-					[]byte(`{"option_idx":0,"text":"see attached","attachments":[`+inline+`]}`))
+					[]byte(`{"option_idxs":[0],"text":"see attached","attachments":[`+inline+`]}`))
 			},
 		},
 	}

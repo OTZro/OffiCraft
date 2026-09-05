@@ -16,7 +16,7 @@
 import { useLayoutEffect } from "react";
 import { I18nProvider } from "../../src/i18n";
 import { TaskCard } from "../../src/components/TaskCard";
-import { mkTask, mkStep, MIRA, NOOP, WORKERS } from "./taskFixtures";
+import { mkTask, mkNoteStep, MIRA, NOOP, WORKERS } from "./taskFixtures";
 import { LIGHT_PACK } from "./ThemeContrastStory";
 
 const LONG_NOTE = (n: number) =>
@@ -35,21 +35,24 @@ const LONG_NOTE = (n: number) =>
 // that at both widths (~776/820px scrollports).
 const makeTask = (i: number) =>
   mkTask({
-    id: `t-c${i}`,
-    taskNo: `T-c${i}`,
+    id: `t-c${i}ab5291a01`,
+    taskNo: `t-c${i}ab5291a01`,
     title: `第 ${i} 張任務卡:收合後畫面要停在這張`,
     status: "in_progress",
     description: "九個步驟,每一步都有一則備註。",
     progressDone: 3,
     progressTotal: 9,
     steps: Array.from({ length: 9 }, (_, s) =>
-      mkStep({
-        id: `c${i}-s-${s + 1}`,
-        name: `節點 ${s + 1}`,
-        dod: `第 ${s + 1} 步的驗收標準。`,
-        status: s < 3 ? "done" : s === 3 ? "in_progress" : "pending",
-        note: LONG_NOTE(s + 1),
-      })
+      // T-66: size on the card, text behind the per-step read (see mkNoteStep).
+      mkNoteStep(
+        {
+          id: `c${i}-s-${s + 1}`,
+          name: `節點 ${s + 1}`,
+          dod: `第 ${s + 1} 步的驗收標準。`,
+          status: s < 3 ? "done" : s === 3 ? "in_progress" : "pending",
+        },
+        LONG_NOTE(s + 1)
+      )
     ),
   });
 

@@ -28,8 +28,15 @@ const (
 	// settingPasswordHash is the argon2id PHC hash of the owner password
 	// (password.go). Absent = password not yet set (first-run flow, B3).
 	settingPasswordHash = "auth.password_hash"
-	// settingJWTSecret is the HS256 signing secret, base64url of the raw key
-	// bytes. Always present after first boot (migrated or minted).
+	// settingJWTSecret is the PRE-RING HS256 signing key, base64url of the raw
+	// key bytes. Always present after first boot (migrated or minted).
+	//
+	// Since T-62 the live key set is the ring in keyring.go
+	// (auth.jwt_keys / auth.jwt_active_key_id) and THAT is what signs and
+	// verifies. This row is not deleted and not updated by a rotation: it is
+	// what loadKeyring adopts as the ring's first key on an install that has
+	// never rotated, and it is the key every token issued before the ring
+	// existed is signed with.
 	settingJWTSecret = "auth.jwt_secret"
 	// settingPasswordChangedAt (epoch seconds, default 0) is written by
 	// change-password (B3); owner-scope tokens with iat before it are refused
@@ -48,6 +55,44 @@ const (
 	// deleted on success (possession proves host shell access — the gate
 	// against a public-tunnel visitor claiming a fresh server).
 	settingClaimToken = "auth.claim_token"
+	// settingMFAOffered is the ship-dark FEATURE FLAG: does this server offer the
+	// second factor at all? Absent/false is the default, so an install that
+	// upgrades into this build is completely unaffected until its owner opts in.
+	//
+	// 🔴 IT GATES SET-UP, NEVER VERIFICATION, and that asymmetry is the whole
+	// safety property. While it is false, enroll/activate are refused and the
+	// cockpit hides the entry — but a factor that is ALREADY armed keeps being
+	// demanded at login, /api/auth/status keeps reporting mfa_required, and
+	// disable keeps working. If the flag switched verification off it would BE
+	// the bypass: a stolen owner token could withdraw the feature and walk past
+	// the factor that exists to stop exactly that. Same reasoning as the
+	// both-factors rule on disable.
+	settingMFAOffered = "auth.mfa_offered"
+	// The owner's TOTP second factor (totp.go). Three keys, because enrolment
+	// is a two-step ceremony and replay defence needs a floor:
+	//
+	//   settingTOTPSecret — the ACTIVE base32 secret. Present ⇒ MFA is on and
+	//     /api/login demands a code. This is the single bit that ARMS the second
+	//     factor.
+	//
+	//     🔴 settingMFAOffered above is NOT a second opinion about that, and the
+	//     distinction is load-bearing: "may the factor be set up" (a rollout
+	//     decision) and "is a factor armed" (a security fact) are different
+	//     questions, and only the secret answers the second one. There is still
+	//     deliberately no flag that could disagree with the presence of a usable
+	//     secret about whether login demands a code — every verification path
+	//     reads THIS key and never the flag.
+	//   settingTOTPPendingSecret — a minted-but-unproven secret, written by
+	//     enroll and consumed by activate. It exists so a secret can NEVER be
+	//     promoted to active until the owner has produced a working code from
+	//     it: enrolling into the active slot directly would let a mistyped QR
+	//     scan lock the owner out of their own server on the next login.
+	//   settingTOTPLastStep — the highest RFC 6238 time step already spent.
+	//     A code stays valid across the acceptance window, so without this
+	//     floor the same six digits replay for ~90 seconds.
+	settingTOTPSecret        = "auth.totp_secret"
+	settingTOTPPendingSecret = "auth.totp_pending_secret"
+	settingTOTPLastStep      = "auth.totp_last_step"
 	// ctx.* mirror the SseContextHighConfig knobs (defaults in
 	// defaultSseContextHigh; only handover_pct gets UI in B3).
 	//
@@ -64,6 +109,18 @@ const (
 	settingCodexCompactionThreshold = "codex.compaction_threshold"
 	settingCodexNoticeRound         = "codex.notice_round"
 	settingMonitoringRefreshSeconds = "monitoring.refresh_seconds"
+	// settingAcceleratedGraceSecs (T-ed79, owner 2026-08-21 「120 秒這個設定可以
+	// 調整，統一在第二門檻跟加速停止使用」) is the grace a CLOCKED wind-down gets,
+	// in seconds. Its shipped default is StoppingTimeoutSecs, which is where the
+	// 120 came from.
+	//
+	// 🔴 It is deliberately ONE key for BOTH clocked causes rather than one per
+	// cause. The clock (recycleGraceFor) and the sentence (offboardKindOf →
+	// offboardNoticeFor) already read a single judgement (winddownKindFor); a
+	// second knob would re-open the same split from the other end — the agent
+	// quoted one number while the tick collected on another. This key says HOW
+	// LONG; it never says WHO is on a clock.
+	settingAcceleratedGraceSecs = "stop.accelerated_grace_secs"
 	// settingOutsourceMaxParallel (M3, owner ruling ③) is the GLOBAL cap on
 	// concurrently live (assigned + active) outsource workers — the Phase 2
 	// assignment scheduler's admission knob; member tasks never count (H7).
@@ -112,6 +169,24 @@ const (
 	// move in both directions. See domain.go for the range and why its ceiling is
 	// tied to resumeChatFetch.
 	settingChatBudgetChars = "chat.budget_chars"
+	// settingBackupRetain (T-8, owner 2026-08-27: 「我覺得應該只保留最新的 N 版
+	// 備份，N 可以設定，剩餘的應該直接移除」) is N — how many database backup
+	// files survive rotation. Its default, floor and ceiling all live in
+	// backup.go (backupRetainDefault / minBackupRetain / maxBackupRetain), which
+	// is also where the two things a reader will otherwise get wrong are written
+	// down:
+	//
+	//   - N counts VERSIONS, not days. The calendar depth it buys depends on how
+	//     many backups that stretch of days happened to produce.
+	//   - N is PER POOL, not per directory. Two pools ⇒ up to 2 × N files.
+	//
+	// 🔴 This row has TWO readers and that is deliberate: the cockpit face reads
+	// it through the boot snapshot below (so GET /api/settings can show it and
+	// PATCH can move it), and the backup engine reads the row DIRECTLY at
+	// snapshot time (liveBackupRetain in backup.go) because it holds no
+	// apiServer and three of its four triggers run without one. Both are bounded
+	// by the same three constants, so they cannot disagree about what is legal.
+	settingBackupRetain = "backup.retain"
 	// The retired updater.url / updater.invite_code keys belonged to the
 	// removed ocupdaterd updater-server chain (updates now ship as GitHub
 	// Releases on pkyosx/OffiCraft — update_check.go). They are no longer
@@ -213,17 +288,36 @@ const defaultOutsourceMaxParallel = 3
 const defaultCodexCompactionThreshold = 3
 const defaultMonitoringRefreshSeconds = 5
 
+// The stop.accelerated_grace_secs bounds. The default is StoppingTimeoutSecs —
+// the constant the 120 has always come from — so an install that never writes
+// the key behaves exactly as it did before the knob existed.
+//
+// The floor is 10 s rather than 1: the value is a hand-off window an agent is
+// told about and then works inside, and a single-digit one is indistinguishable
+// from force-stop while still printing a countdown clause that invites the agent
+// to use it. The ceiling is one hour — past that the clock stops being an
+// escalation and becomes the "no clock at all" the soft causes already have.
+const (
+	acceleratedGraceSecsDefault = int(StoppingTimeoutSecs)
+	minAcceleratedGraceSecs     = 10
+	maxAcceleratedGraceSecs     = 3600
+)
+
 // authSettings is the boot-time snapshot cmdServe stamps onto the apiServer.
 type authSettings struct {
 	secret                       []byte
 	passwordHash                 string // "" = not set in DB (first-run: set-password flow)
 	passwordChangedAt            int64  // epoch secs; owner tokens with iat before it are refused
+	mfaOffered                   bool   // auth.mfa_offered — may the factor be SET UP? never gates verification
+	totpSecret                   string // "" = MFA off; non-empty ⇒ /api/login demands a TOTP code
+	totpLastStep                 int64  // highest TOTP step already spent (replay floor)
 	ownerTokenTTL                int64
 	agentTokenTTL                int64
 	ctxhigh                      SseContextHighConfig
 	codexCompactionThreshold     int // codex.compaction_threshold — the FINAL round (handover)
 	codexNoticeRound             int // codex.notice_round — the FIRST, soft notice round (T-a9d6)
 	monitoringRefreshSeconds     int
+	acceleratedGraceSecs         int    // stop.accelerated_grace_secs (default acceleratedGraceSecsDefault)
 	outsourceMaxParallel         int    // task.outsource_max_parallel (default 3)
 	docCapCharsDuty              int    // doc.cap_chars.duty (default dutyCapCharsDefault)
 	docCapCharsInsight           int    // doc.cap_chars.insight (default contextDocMaxCharsDefault)
@@ -234,6 +328,7 @@ type authSettings struct {
 	docCapCharsBootSequence      int    // doc.cap_chars.boot_sequence (default bootSequenceCapCharsDefault; ONE cap, both runtimes)
 	docCapCharsOffboard          int    // doc.cap_chars.offboard (default offboardCapCharsDefault)
 	chatBudgetChars              int    // chat.budget_chars (default chatBudgetCharsDefault)
+	backupRetain                 int    // backup.retain (default backupRetainDefault; N is PER POOL, and counts versions not days)
 	updaterReceiveBeta           bool   // updater.receive_beta (default false = official releases only)
 	updaterAutoUpdate            bool   // updater.auto_update (default false = manual upgrades only)
 	orgName                      string // org.name ("" = never set → localized default in the topbar)
@@ -268,6 +363,7 @@ func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, erro
 		ctxhigh:                  cfg.SseContextHigh,
 		codexCompactionThreshold: defaultCodexCompactionThreshold,
 		monitoringRefreshSeconds: defaultMonitoringRefreshSeconds,
+		acceleratedGraceSecs:     acceleratedGraceSecsDefault,
 	}
 
 	stored, err := d.GetSetting(settingJWTSecret)
@@ -318,6 +414,44 @@ func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, erro
 		}
 		out.passwordHash = phc
 		logf("migrated oc.toml [auth].password into DB settings as an argon2id hash")
+	}
+
+	// The ship-dark feature flag. Anything other than a literal "true" is false,
+	// including a missing row — an install that has never heard of this key must
+	// come up with the feature dark.
+	offered, err := d.GetSetting(settingMFAOffered)
+	if err != nil {
+		return out, err
+	}
+	out.mfaOffered = offered != nil && *offered == "true"
+
+	// The active TOTP secret. A stored value that does not DECODE is a hard boot
+	// error, not a silently-ignored one: the alternative is booting with MFA
+	// quietly off because a row got mangled, which is the failure mode an owner
+	// would never notice until it mattered. The pending secret is deliberately
+	// NOT loaded into the snapshot — it is read straight from the DB by activate
+	// (a once-per-enrolment path with no hot reader).
+	totpSecret, err := d.GetSetting(settingTOTPSecret)
+	if err != nil {
+		return out, err
+	}
+	if totpSecret != nil && *totpSecret != "" {
+		if _, err := decodeTOTPSecret(*totpSecret); err != nil {
+			return out, fmt.Errorf("settings %s: %w", settingTOTPSecret, err)
+		}
+		out.totpSecret = *totpSecret
+	}
+
+	lastStep, err := d.GetSetting(settingTOTPLastStep)
+	if err != nil {
+		return out, err
+	}
+	if lastStep != nil {
+		n, err := strconv.ParseInt(*lastStep, 10, 64)
+		if err != nil || n < 0 {
+			return out, fmt.Errorf("settings %s: not a non-negative integer: %q", settingTOTPLastStep, *lastStep)
+		}
+		out.totpLastStep = n
 	}
 
 	legacyTTL, err := d.GetSetting(settingLegacyTokenTTL)
@@ -407,6 +541,21 @@ func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, erro
 		}
 		out.monitoringRefreshSeconds = n
 	}
+	// stop.accelerated_grace_secs — range-checked at load for the same reason
+	// every other bounded integer here is: a hand-edited DB row must not install
+	// a grace the PATCH face would have refused. SAME bounds as that face
+	// (acceleratedGraceInRange), so a value that survives a save can never be the
+	// value that refuses to boot on the next start.
+	if v, err := d.GetSetting(settingAcceleratedGraceSecs); err != nil {
+		return out, err
+	} else if v != nil {
+		n, err := strconv.Atoi(*v)
+		if err != nil || !acceleratedGraceInRange(n) {
+			return out, fmt.Errorf("settings %s: %s: %q",
+				settingAcceleratedGraceSecs, acceleratedGraceRangeMsg, *v)
+		}
+		out.acceleratedGraceSecs = n
+	}
 
 	out.outsourceMaxParallel = defaultOutsourceMaxParallel
 	if v, err := d.GetSetting(settingOutsourceMaxParallel); err != nil {
@@ -491,6 +640,16 @@ func loadAuthSettings(d *DAL, cfg Config, logf func(string)) (authSettings, erro
 	// face would have refused.
 	if err := loadCap(settingChatBudgetChars, minChatBudgetChars, maxChatBudgetChars,
 		&out.chatBudgetChars, chatBudgetCharsDefault); err != nil {
+		return out, err
+	}
+
+	// backup.retain (T-8) — range-checked at load for the same reason as the
+	// caps above, and here it matters more than anywhere else on this list: this
+	// is the only setting whose value decides how many files get DELETED. A
+	// hand-edited row the PATCH face would have refused must stop the server,
+	// not quietly become rotation's instruction.
+	if err := loadCap(settingBackupRetain, minBackupRetain, maxBackupRetain,
+		&out.backupRetain, backupRetainDefault); err != nil {
 		return out, err
 	}
 
@@ -638,15 +797,10 @@ const envNewPassword = "OC_NEW_PASSWORD"
 // error is already printed; done is always safe to call.
 func openAuthDAL(name string, env func(string) string, out io.Writer) (d *DAL, auth authSettings, done func(), rc int) {
 	done = func() {}
-	cfg, warnings, err := loadConfig(configPath(env))
-	if err != nil {
-		fmt.Fprintf(out, "[ocserverd] FATAL: %v\n", err)
-		return nil, auth, done, 1
+	cfg, dsn, rc := announceResolution(name, env, out)
+	if rc != 0 {
+		return nil, auth, done, rc
 	}
-	for _, w := range warnings {
-		fmt.Fprintf(out, "[ocserverd] WARN: %s\n", w)
-	}
-	dsn := resolveDSN(env, cfg)
 	dbPath, ok := sqliteFilePath(dsn)
 	if !ok {
 		fmt.Fprintf(out, "[ocserverd] FATAL: %s supports sqlite DSNs only for now (got %q)\n", name, dsn)
@@ -703,6 +857,41 @@ func cmdSetPassword(env func(string) string, out io.Writer) int {
 		return 1
 	}
 	fmt.Fprintln(out, "[ocserverd] set-password: owner password hash stored in DB settings (takes effect at the next serve start)")
+	return 0
+}
+
+// cmdMFADisable (ocserverd mfa-disable) clears the owner's TOTP second factor
+// from DB settings. It is THE lost-authenticator recovery path, and the only
+// one — POST /api/auth/mfa/disable deliberately cannot serve that purpose,
+// because it demands a live code from the very device that was lost.
+//
+// 🔴 WHY THIS IS NOT A BACKDOOR. It substitutes proof of HOST SHELL ACCESS for
+// proof of the factor, which is the same trust substitution the first-run claim
+// token already makes, and it grants nothing new: whoever can run this can also
+// run `set-password`, read the SQLite file, or replace the binary. A second
+// factor was never a defence against someone standing on the host — it defends
+// the network face, where the password alone used to be enough.
+//
+// It is deliberately IDEMPOTENT and silent about whether a factor was armed: an
+// operator running this has already lost access and does not need a puzzle, and
+// "was MFA on?" is not a secret worth a distinct exit code here.
+//
+// Exit codes: 0 = cleared (or nothing was armed), 1 = fatal.
+func cmdMFADisable(env func(string) string, out io.Writer) int {
+	d, _, done, rc := openAuthDAL("mfa-disable", env, out)
+	defer done()
+	if rc != 0 {
+		return rc
+	}
+	// Every key the ceremony can leave behind, so a re-enrolment starts clean
+	// rather than inheriting a floor or a stale pending secret.
+	for _, key := range []string{settingTOTPSecret, settingTOTPPendingSecret, settingTOTPLastStep} {
+		if err := d.DeleteSetting(key); err != nil {
+			fmt.Fprintf(out, "[ocserverd] FATAL: clear %s: %v\n", key, err)
+			return 1
+		}
+	}
+	fmt.Fprintln(out, "[ocserverd] mfa-disable: the owner's second factor is cleared (takes effect at the next serve start)")
 	return 0
 }
 

@@ -49,12 +49,21 @@ export interface Messages {
   taskMarkDuplicateBody: (taskNo: string) => string;
   taskDuplicateOf: (taskNo: string) => string;
   taskReassignTitle: (taskNo: string) => string;
+  // ── task artifact versions (T-60) ──
+  taskArtifactVersionCount: (n: number) => string;
+  taskArtifactVersionLabel: (when: string) => string;
+  taskArtifactVersionBy: (actorId: string) => string;
+  taskArtifactOpaque: (mime: string) => string;
+  // ── login / the credential-attempt brake ──
+  loginThrottled: (secs: number) => string;
   // ── replies ──
   replyWaited: (elapsed: string) => string;
   replyOpenedAt: (time: string) => string;
   replyAnsweredAt: (time: string) => string;
   replyExpiredAt: (time: string) => string;
   replyExpireConfirmBody: (summary: string) => string;
+  replySelectedCount: (n: number) => string;
+  replyPickedOptions: (options: string[]) => string;
   // ── office ──
   outsourceLabel: (codename: string) => string;
   // ── worker detail ──
@@ -71,7 +80,11 @@ export interface Messages {
   memberMachineMovingTo: (machine: string) => string;
   agentPendingChange: (value: string) => string;
   workerMachineMovingTo: (machine: string) => string;
-  agentWindDownForChange: (by: string) => string;
+  /** `by` is the deadline text, or null when the wind-down is on NO clock —
+   * which since T-ed79 is every cause except the second context threshold. The
+   * no-clock sentence must not contain any time at all. */
+  agentWindDownForChange: (by: string | null) => string;
+  agentWindDownOnDeadline: (by: string | null) => string;
   // ── RESUME SUMMARY · the COLLAPSE marker (T-8b0d follow-up) ──
   // 🔴 There is deliberately NO composer for the TRUNCATION marker beside it.
   // A shared composer is exactly how the two would drift into sharing a word,
@@ -102,6 +115,11 @@ export interface Messages {
   machineUninstallConfirmBody: (name: string) => string;
   machineUninstallWarnBody: (name: string, count: number) => string;
   machineDeleteConfirmBody: (name: string) => string;
+  /** 成本歸零 confirm. Takes the RENDERED amount (already through formatCost, or
+   * the dash) rather than a number: the panel has it, and a second formatting
+   * site is a second place for the rounding rule to drift. */
+  costResetConfirmBody: (amount: string) => string;
+  accountCostResetConfirmBody: (amount: string) => string;
   // ── settings ──
   themeImportSkipped: (count: number, sample: string[]) => string;
   themeDeleteConfirm: (name: string) => string;
@@ -147,6 +165,7 @@ export function makeMessages(t: Dict, language: Lang): Messages {
   // languages disagree: en writes a space, zh runs the characters together.
   const sp = language === "zh" ? "" : " ";
   const tasks = t.tasks;
+  const login = t.login;
   const replies = t.replies;
   const chat = t.chat;
   const mp = t.mp;
@@ -190,10 +209,35 @@ export function makeMessages(t: Dict, language: Lang): Messages {
     // (「量於 3d 前」, with spaces). Caught in independent review.
     monitorMeasuredAgo: (age) =>
       `${mon.measuredAgoLead} ${age} ${mon.measuredAgoTail}`,
+    // 「3版」/「3 versions」 — the artifact row's versions entry (T-60). Only
+    // ever printed for n > 1 (one version is not a history), so the tail needs
+    // no singular twin.
+    taskArtifactVersionCount: (n) =>
+      `${n}${sp}${tasks.artifacts.versionsCountTail}`,
+    // Which version the `-` side of a comparison IS. Same reason the document
+    // reader names its own: two unlabelled columns do not say which is which.
+    taskArtifactVersionLabel: (when) =>
+      `${tasks.artifacts.versionsVersionLabel} ${when}`,
+    // The raw actor id, never a resolved display name — this panel holds no
+    // roster, and inventing a name for an id it cannot resolve would misname
+    // whoever replaced the deliverable.
+    taskArtifactVersionBy: (actorId) =>
+      `${tasks.artifacts.versionsByLabel} ${actorId}`,
+    // A file this panel can neither render nor compare. It names the mime the
+    // SERVER reported rather than calling the version empty.
+    taskArtifactOpaque: (mime) =>
+      `${tasks.artifacts.versionsOpaqueLead}${mime}${tasks.artifacts.versionsOpaqueTail}`,
     taskProgress: (done, total) =>
       `${tasks.progressLabel} ${done}/${total}`,
     // 「步驟 N/M · 已歷時 X」 is ONE visible string. Leaving elapsed as a template
     // left 步驟 overridable and 已歷時 not, inside that one sentence.
+    // The 429 wait. The space AFTER the number is language-specific and is the
+    // OPPOSITE of `sp`: zh writes 「請於 42 秒後再試。」 (spaces both sides), en
+    // writes "in 42s." (none). It cannot reuse `sp`, and it is not baked into
+    // the tail fragment because a wording editor renders fragments verbatim and
+    // a leading space there would be invisible to whoever edits it.
+    loginThrottled: (secs) =>
+      `${login.throttledLead} ${secs}${language === "zh" ? " " : ""}${login.throttledTail}`,
     taskElapsed: (elapsed) => `${tasks.elapsedLabel} ${elapsed}`,
     taskPlanningBy: (name) =>
       `${tasks.planningByLead} ${name} ${tasks.planningByTail}`,
@@ -214,6 +258,20 @@ export function makeMessages(t: Dict, language: Lang): Messages {
     replyExpiredAt: (time) => `${replies.expiredAtLabel} ${time}`,
     replyExpireConfirmBody: (summary) =>
       `${replies.expireConfirmBodyLead}${summary}${replies.expireConfirmBodyTail}`,
+    // How many options are ticked on a multi-select card. LITERAL spaces on
+    // both sides of the number — deliberately NOT `sp`: zh writes 「已選 2 項」
+    // with the digit spaced off the han characters exactly as en writes
+    // "Selected 2 options", so this is not one of the joins that differ by
+    // language and must not be routed through the variable that says they do.
+    replySelectedCount: (n) =>
+      `${replies.selectedCountLead} ${n} ${
+        n === 1 ? replies.selectedCountTailOne : replies.selectedCountTailMany
+      }`,
+    // Every circled option on one line (the collapsed task-card row). Joined by
+    // the locale's own list separator — the same one every other list in this
+    // file uses, so a multi-select decision is punctuated like a list and not
+    // like a sentence someone concatenated.
+    replyPickedOptions: (options) => options.join(listSep),
 
     // The outsource identity label has ONE source of the word 外包 now: the
     // section title. It used to have two (a title leaf and an identically
@@ -246,8 +304,29 @@ export function makeMessages(t: Dict, language: Lang): Messages {
     // 「正在收尾以套用你的改動 · 最晚 14:32 生效」 — the deadline is a CEILING
     // (the collect fires as soon as the agent reports stopped), so the wording
     // says 最晚 rather than promising a time.
+    //
+    // 🔴 `by === null` is the NORMAL case since T-ed79, not a degenerate one:
+    // relocate and runtime/model are 停止 (no clock), so refocus_deadline
+    // arrives as 0 → null and there is no time to quote. The label alone IS the
+    // sentence then — appending 「最晚 … 生效」 with a placeholder, or falling
+    // back to the 「上次重新聚焦」 history line, would both put back the
+    // misreading T-7f28 removed. Nothing time-shaped may appear in this arm.
     agentWindDownForChange: (by) =>
-      `${mp.windDownForChangeLabel}${sp}·${sp}${mp.windDownByLabel} ${by} ${mp.windDownEffectSuffix}`,
+      by === null
+        ? mp.windDownForChangeLabel
+        : `${mp.windDownForChangeLabel}${sp}·${sp}${mp.windDownByLabel} ${by} ${mp.windDownEffectSuffix}`,
+
+    // 「正在收尾，已給死線 · 最晚 14:32 生效」 — the two CLOCKED causes
+    // (accelerated_stop, context_high). Same 最晚 wording as above and for the
+    // same reason: the collect fires the instant the agent reports stopped, so
+    // the time is a ceiling. 🔴 Unlike the arm above, `by === null` here is NOT
+    // an ordinary answer — a clocked cause always carries a deadline — so the
+    // fallback exists only so a stale/absent field degrades to a true sentence
+    // rather than a placeholder time.
+    agentWindDownOnDeadline: (by) =>
+      by === null
+        ? mp.windDownDeadlineLabel
+        : `${mp.windDownDeadlineLabel}${sp}·${sp}${mp.windDownByLabel} ${by} ${mp.windDownEffectSuffix}`,
 
     // MARK shape, not sentence shape: one word plus the count, and nothing
     // else. What "folded" MEANS is stated once per chat block
@@ -356,6 +435,14 @@ export function makeMessages(t: Dict, language: Lang): Messages {
       `${mach.uninstallWarnBody1}${name}${mach.uninstallWarnBody2}${count}${mach.uninstallWarnBody3}`,
     machineDeleteConfirmBody: (name) =>
       `${mach.deleteConfirmBodyLead}${name}${mach.deleteConfirmBodyTail}`,
+    costResetConfirmBody: (amount) =>
+      `${t.mp.costResetConfirmBodyLead}${amount}${t.mp.costResetConfirmBodyTail}`,
+    // The ACCOUNT's own figure (T-53, owner ruling rc-5c5d7c7c6dcd). Its own
+    // pair of strings rather than the member one with a different noun: this
+    // sentence has to say that no member figure is touched, which is the whole
+    // difference the owner asked for and the thing he checks before pressing.
+    accountCostResetConfirmBody: (amount) =>
+      `${t.monitor.costResetConfirmBodyLead}${amount}${t.monitor.costResetConfirmBodyTail}`,
 
     // `sample` is the SHORT head of the skipped set, never the whole thing; the
     // count carries the rest and the trailing marker says it was cut.

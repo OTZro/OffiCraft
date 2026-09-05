@@ -91,9 +91,9 @@ func writeInsightOn(t *testing.T, api *apiServer, role, text string) *httptest.R
 func writeLearningOn(t *testing.T, api *apiServer, role, text string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	api.HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(rec,
-		ownerReq(t, http.MethodPost, "/api/lessons/"+role+"/general", map[string]any{"text": text}),
-		role, "general")
+	api.HandleReplaceLessonsApiLessonsRoleKeyPost(rec,
+		ownerReq(t, http.MethodPost, "/api/lessons/"+role, map[string]any{"text": text}),
+		role)
 	return rec
 }
 
@@ -322,7 +322,7 @@ func TestReadFacesReportTheirOwnSegmentsCap(t *testing.T) {
 	if insight.CapChars != insightCap {
 		t.Fatalf("InsightDTO.cap_chars must be the INSIGHT cap %d, got %d", insightCap, insight.CapChars)
 	}
-	lessons, err := api.foldLessonsDTO(role, "general")
+	lessons, err := api.foldLessonsDTO(role)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +398,7 @@ func TestOverCapDocsMayOnlyGetShorter_AllThreeSegments(t *testing.T) {
 		{
 			name: "learning", cap: learningCap,
 			seed: func(t *testing.T, api *apiServer, text string) {
-				if err := api.dal.PutLessons(Lessons{RoleKey: role, TaskType: "general", Text: text}); err != nil {
+				if err := api.dal.PutLessons(Lessons{RoleKey: role, Text: text}); err != nil {
 					t.Fatal(err)
 				}
 			},
@@ -406,7 +406,7 @@ func TestOverCapDocsMayOnlyGetShorter_AllThreeSegments(t *testing.T) {
 				return writeLearningOn(t, api, role, text)
 			},
 			read: func(t *testing.T, api *apiServer) string {
-				got, err := api.foldLessonsDTO(role, "general")
+				got, err := api.foldLessonsDTO(role)
 				if err != nil {
 					t.Fatal(err)
 				}

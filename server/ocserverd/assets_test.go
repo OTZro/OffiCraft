@@ -68,6 +68,31 @@ func TestReadSeedFileErrsWhenEmbedMiss(t *testing.T) {
 	}
 }
 
+func TestSystemInteractionSeedIncludesTheOwnerAdHocOutsourceRule(t *testing.T) {
+	seed, err := assetRoot("").readSeedFile(systemInteractionSeedMD)
+	if err != nil {
+		t.Fatalf("read system_interaction.md: %v (run bin/build-seedsdist)", err)
+	}
+
+	const heading = "### 學習經驗寫入位置"
+	const rule = "- 你是外包成員、而且執行的是臨時任務（沒有任務類型）時，不要寫入任何學習經驗 —— 這種情況沒有你該寫的位置。正確的做法是開這張任務的人在建立時就綁定對的任務類型"
+	start := strings.Index(seed, heading)
+	if start < 0 {
+		t.Fatalf("shipped system interaction seed is missing %q", heading)
+	}
+	section := seed[start:]
+	if end := strings.Index(section, "\n## "); end >= 0 {
+		section = section[:end]
+	}
+	if strings.Count(section, rule) != 1 {
+		t.Fatalf("shipped seed must contain the owner-approved ad-hoc outsource rule exactly once; %s",
+			seedExcerpt(systemInteractionSeedMD, section))
+	}
+	if strings.Contains(section, "- \""+strings.TrimPrefix(rule, "- ")) {
+		t.Fatal("shipped seed must not wrap the owner-approved rule in outer quotes")
+	}
+}
+
 func TestBuildBootContextSelectsRuntimeBootSequence(t *testing.T) {
 	s := newWorkerTestServer(t)
 	for _, tc := range []struct {
@@ -80,7 +105,7 @@ func TestBuildBootContextSelectsRuntimeBootSequence(t *testing.T) {
 		{"codex", RuntimeCodex, "# Codex App Server 執行環境", "# Claude Code 執行環境"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			boot, err := s.buildBootContext("assistant", &Member{Runtime: tc.runtime}, "general")
+			boot, err := s.buildBootContext("assistant", &Member{Runtime: tc.runtime})
 			if err != nil {
 				t.Fatalf("buildBootContext: %v", err)
 			}

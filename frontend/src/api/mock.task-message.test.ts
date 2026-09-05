@@ -1,6 +1,6 @@
 // Mock adapter parity for the task-card message box (owner → executor, POST
 // /api/tasks/{id}/message). The server stores the TRIMMED body prefixed with
-// the task's display number ([T-xxxx]); the mock must produce the identical
+// the task's number ([<task id>]); the mock must produce the identical
 // string so FE dev/tests reflect real behavior. This pins the trim + prefix
 // against a body that carries leading/trailing whitespace.
 
@@ -43,7 +43,7 @@ describe("mock task message box — server parity", () => {
 
     await mockApi.postTaskMessage(task.id, { body: "  先做 P0 的部分  " });
 
-    const thread = await mockApi.peekChat("mira");
+    const thread = await mockApi.listChat("mira");
     expect(thread.map((m) => m.body)).toContain("[T-abcd] 先做 P0 的部分");
   });
 
@@ -56,7 +56,7 @@ describe("mock task message box — server parity", () => {
       attachments: [{ dataB64: "Zm9v", mime: "text/plain", filename: "f.txt" }],
     });
 
-    const thread = await mockApi.peekChat("mira");
+    const thread = await mockApi.listChat("mira");
     expect(thread.map((m) => m.body)).toContain("");
   });
 });

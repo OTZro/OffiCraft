@@ -1,14 +1,15 @@
 // Style ownership: a component that USES a stylesheet's classes must IMPORT it.
 //
 // The bug this exists for (T-7526): `machine-picker.css` was imported by exactly
-// one module, `MachinePicker.tsx`, reachable only through
-// WorkerDetailPanel → useRelocateMachine → MachinePicker. BOTH detail panels
-// render their settings dialog with the `.machine-picker*` classes but neither
-// imported the stylesheet — they were free-riding on that transitive import.
-// The moment the worker panel stopped driving the hook, the last production
-// importer went with it and BOTH dialogs rendered completely unstyled: no
-// centred box, no backdrop, a raw browser <select>. The MEMBER panel — untouched
-// by that change — broke too.
+// one module, itself reachable from production only through a chain of OTHER
+// components' imports. BOTH detail panels render their settings dialog with the
+// `.machine-picker*` classes but neither imported the stylesheet — they were
+// free-riding on that transitive import. The moment one link in the chain
+// stopped being driven, the last production importer went with it and BOTH
+// dialogs rendered completely unstyled: no centred box, no backdrop, a raw
+// browser <select>. The MEMBER panel — untouched by that change — broke too.
+// (Those chain modules have since been deleted; both panels now import the sheet
+// directly, which is exactly the state this guard holds them in.)
 //
 // Nothing caught it. jsdom evaluates no CSS, so the whole vitest suite stayed
 // green; `tsc` sees no link between a class string and a stylesheet; and the one
@@ -51,6 +52,10 @@ const OWNED_SHEETS = [
   // which imports settings.css — so it would free-ride exactly like the two
   // above until the day something else opens it.
   "doc-hist-modal.css",
+  // T-60: the artifact version reader. Mounted from TaskArtifactsPopover, which
+  // draws the `.task-artifacts*` block out of tasks.css — so this sheet would
+  // free-ride on whatever the task page happens to import.
+  "task-artifact-versions.css",
 ] as const;
 
 /** Sheets whose BEM block is not just the filename. `member-detail.css` owns the
@@ -64,7 +69,10 @@ const OWNED_SHEETS = [
  * literal `mp__` found exactly one file and left the four real consumers
  * unchecked — non-empty, and still nearly vacuous. Corpus size is not the same
  * question as corpus coverage. */
-const BLOCK_OVERRIDES: Record<string, string> = { "member-detail.css": "mp" };
+const BLOCK_OVERRIDES: Record<string, string> = {
+  "member-detail.css": "mp",
+  "task-artifact-versions.css": "ta-versions",
+};
 
 function blockOf(sheet: string): string {
   return BLOCK_OVERRIDES[sheet] ?? sheet.replace(/\.css$/, "");

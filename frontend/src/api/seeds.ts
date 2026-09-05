@@ -25,6 +25,12 @@ import SEED_INSIGHT_ASSISTANT_RAW from "../../../seeds/insight_assistant.md?raw"
 import SEED_BOOT_SEQUENCE_RAW from "../../../seeds/boot_sequence.md?raw";
 import SEED_BOOT_SEQUENCE_CODEX_RAW from "../../../seeds/boot_sequence_codex.md?raw";
 import SEED_OFFBOARD_RAW from "../../../seeds/offboard.md?raw";
+import SEED_ACCELERATED_STOP_RAW from "../../../seeds/accelerated_stop.md?raw";
+import SEED_TASK_CLOSEOUT_RAW from "../../../seeds/task_closeout.md?raw";
+import SEED_TASK_REASSIGN_PREDECESSOR_RAW from "../../../seeds/task_reassign_predecessor.md?raw";
+import SEED_TASK_TAKEOVER_WITH_PREDECESSOR_RAW from "../../../seeds/task_takeover_with_predecessor.md?raw";
+import SEED_TASK_TAKEOVER_FRESH_RAW from "../../../seeds/task_takeover_fresh.md?raw";
+import SEED_TASK_UNBLOCKED_RAW from "../../../seeds/task_unblocked.md?raw";
 
 /** The out-of-box owner id (mirrors the server seed). */
 export const MOCK_OWNER_ID = "owner";
@@ -44,12 +50,12 @@ export const SEED_SYSTEM_INTERACTION_MD = foldOwnerId(SEED_SYSTEM_INTERACTION_RA
 /** seeds/role_def_assistant.md — the REAL Mira persona. */
 export const SEED_ROLE_ASSISTANT_MD = foldOwnerId(SEED_ROLE_ASSISTANT_RAW);
 
-/** seeds/lessons.md — the REAL accumulated-lessons seed (task_type "general"),
+/** seeds/lessons.md — the REAL accumulated-lessons seed,
  * is_default=true → the folded GET returns exactly this (UI labels it "預設").
  * An owner edit later overlays it. */
 export const SEED_LESSONS_MD = foldOwnerId(SEED_LESSONS_RAW);
 
-/** seeds/boot_sequence.md — the standalone 啟動程序 section appended LAST (after
+/** seeds/boot_sequence.md — the standalone 啟動步驟 section appended LAST (after
  * Global → Role → Insight → Lessons) so the concrete boot steps are the recency-
  * authoritative tail an agent reads. */
 export const SEED_BOOT_SEQUENCE_MD = foldOwnerId(SEED_BOOT_SEQUENCE_RAW);
@@ -58,10 +64,33 @@ export const SEED_BOOT_SEQUENCE_MD = foldOwnerId(SEED_BOOT_SEQUENCE_RAW);
  * when a member's runtime is codex. */
 export const SEED_BOOT_SEQUENCE_CODEX_MD = foldOwnerId(SEED_BOOT_SEQUENCE_CODEX_RAW);
 
-/** seeds/offboard.md — the 下線程序 checklist the server hands an agent at the
+/** seeds/offboard.md — the 〈停止〉 checklist the server hands an agent at the
  * moment it is about to collect that session (T-c9c0). One document for every
  * agent and every runtime; it is NOT part of the boot fold. */
 export const SEED_OFFBOARD_MD = foldOwnerId(SEED_OFFBOARD_RAW);
+
+/** The six lifecycle procedures T-3201 turned from Go string literals into
+ * documents. They are NOT part of the boot fold either: each is the text the
+ * server hands an agent at the moment the event it names happens.
+ *
+ * ⚠️ T-6f44 (owner's decision 2): ALL OF THEM ARE EDITABLE. This used to say
+ * "the last two ship as READ-ONLY documents"; the owner ruled on 2026-08-24
+ * that 〈新任務〉 and 〈擋著你手上任務的票解開了〉 become editable like the other
+ * eight, and BOOT_DOC_READ_ONLY in mock.ts — which this note points at — has
+ * been the EMPTY set since. The refusal machinery is kept there rather than
+ * deleted, for the day a document ships read-only again. */
+export const SEED_ACCELERATED_STOP_MD = foldOwnerId(SEED_ACCELERATED_STOP_RAW);
+export const SEED_TASK_CLOSEOUT_MD = foldOwnerId(SEED_TASK_CLOSEOUT_RAW);
+export const SEED_TASK_REASSIGN_PREDECESSOR_MD = foldOwnerId(
+  SEED_TASK_REASSIGN_PREDECESSOR_RAW
+);
+export const SEED_TASK_TAKEOVER_WITH_PREDECESSOR_MD = foldOwnerId(
+  SEED_TASK_TAKEOVER_WITH_PREDECESSOR_RAW
+);
+export const SEED_TASK_TAKEOVER_FRESH_MD = foldOwnerId(
+  SEED_TASK_TAKEOVER_FRESH_RAW
+);
+export const SEED_TASK_UNBLOCKED_MD = foldOwnerId(SEED_TASK_UNBLOCKED_RAW);
 
 /** seeds/insight_assistant.md — the assistant's FACTORY judgement calls (T-e1e3).
  * 🔴 PER-ROLE, and there is deliberately no `SEED_INSIGHT_MD`: lessons folds one

@@ -14,6 +14,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -145,7 +146,7 @@ const (
 	// messages and nothing older raises it too (see resumeChatBlock for why that
 	// one-sidedness is the right side to err on). Wording it as a fact would
 	// make this text false in exactly that case.
-	resumeChatCutHint = "這條線上**可能**還有更早的訊息沒被帶進來。它在讀取或字數上限被切斷，而沒有人往切口後面看過——所以就算其實沒有更舊的，這一句也會出現；只有真的去抓才知道。（這跟 `body_omitted_chars` 是**兩回事**：那個是「這一則就在這裡，只是被摺短了」，確定的事實；這一句講的是「整則整則可能不在」，是個可能。）要確認並讀回來：呼叫 `get_chat`，`with` 填對方的 id，再把這份資料裡「對方那條線最舊的那一則」的 `before_ts` 與 `before_id` 一起帶上。這兩個游標欄位**必須成對送**，只送一個會被退回（422）。如果某個人的**整條線一則都不在**這份資料裡（他最後一則太舊，整條被擠出去了），那就沒有游標可抄——這時只填 `with`、不帶游標，直接從最新的往回讀，並**一起帶上 `peek`**（值要填字串 `true`，填別的會被當成沒填、而且不會報錯）：不帶 `peek` 的那條路會順手把那條線標成已讀（連你還沒看過的新訊息一起），而帶游標的補抓不會這樣。"
+	resumeChatCutHint = "這條線上**可能**還有更早的訊息沒被帶進來。它在讀取或字數上限被切斷，而沒有人往切口後面看過——所以就算其實沒有更舊的，這一句也會出現；只有真的去抓才知道。（這跟 `body_omitted_chars` 是**兩回事**：那個是「這一則就在這裡，只是被摺短了」，確定的事實；這一句講的是「整則整則可能不在」，是個可能。）要確認並讀回來：呼叫 `get_chat`，`with` 填對方的 id，再把這份資料裡「對方那條線最舊的那一則」的 `before_ts` 與 `before_id` 一起帶上。這兩個游標欄位**必須成對送**，只送一個會被退回（422）。如果某個人的**整條線一則都不在**這份資料裡（他最後一則太舊，整條被擠出去了），那就沒有游標可抄——這時只填 `with`、不帶游標，直接從最新的往回讀就好。`get_chat` **不會把任何東西標成已讀**（不管有沒有帶游標）：要標已讀是另一隻 API，`POST /api/chat/mark-read`，明確送出才會寫。"
 	// resumeDutyPreview caps a roster row's duty and resumeTaskTitlePreview
 	// caps a contractor's task title (T-1b09). Both exist because this
 	// payload is read by EVERY member on EVERY wake, so an unbounded field
@@ -230,7 +231,7 @@ const (
 	// task rows (resumeTasksN), so an agent holding more tasks than that can
 	// have a step stuck on an answered card and still read 0 here. Both notes
 	// now say which population the number is over, and that 0 is not proof.
-	peekNote                     = "Size-only preview of resume_summary — counts/sizes ONLY, no chat or task content. estimated_total_chars is exactly chat_chars + tasks_detail_chars + roster_chars + machines_chars + steps_on_answered_card_chars + doc_capacity_chars, all six reported in overview: the WHOLE chat block as the snapshot renders it (chat_chars is the rendered block's cost, NOT the sum of the message bodies), plus the plan text its task rows omit, the two studio-floor blocks, the answered-card pointers its task rows carry, and the near-cap document rows (doc_capacity_chars is 0 unless one of your long-lived documents is close to its character cap). steps_on_answered_card > 0 means that many steps AMONG THE FEW MOST-RECENTLY-UPDATED TASKS the snapshot carries — not across all your tasks — are sitting on a reply card the owner ALREADY answered while the step is still in_progress, and nobody has acted on the answer yet; pull resume_summary (or the cards) and read it before anything else. It is a FLOOR, not a total: the task block is capped at the most recently updated tasks, so when you hold more tasks than that cap, an older task stuck on an answered card is not counted here and 0 does not prove there is none — use list_tasks / list_reply_cards to be sure. So it is what pulling the snapshot actually costs. Use it to decide: if small (rule of thumb < 20000 chars, ≈ 5k tokens) call resume_summary directly in your main session; if large, spawn a cheap sub-agent (e.g. haiku) to call resume_summary and return a compressed digest, so the full payload never burns your own context."
+	peekNote                     = "Size-only preview of resume_summary — counts/sizes ONLY, no chat or task content. estimated_total_chars is exactly chat_chars + tasks_detail_chars + roster_chars + machines_chars + steps_on_answered_card_chars, all five reported in overview: the WHOLE chat block as the snapshot renders it (chat_chars is the rendered block's cost, NOT the sum of the message bodies), plus the plan text its task rows omit, the two studio-floor blocks, and the answered-card pointers its task rows carry. steps_on_answered_card > 0 means that many steps AMONG THE FEW MOST-RECENTLY-UPDATED TASKS the snapshot carries — not across all your tasks — are sitting on a reply card the owner ALREADY answered while the step is still in_progress, and nobody has acted on the answer yet; pull resume_summary (or the cards) and read it before anything else. It is a FLOOR, not a total: the task block is capped at the most recently updated tasks, so when you hold more tasks than that cap, an older task stuck on an answered card is not counted here and 0 does not prove there is none — use list_tasks / list_reply_cards to be sure. So it is what pulling the snapshot actually costs. Use it to decide: if small (rule of thumb < 20000 chars, ≈ 5k tokens) call resume_summary directly in your main session; if large, spawn a cheap sub-agent (e.g. haiku) to call resume_summary and return a compressed digest, so the full payload never burns your own context."
 	attachmentOctetStream        = "application/octet-stream"
 	attachmentDefaultPastedImage = "pasted-image"
 	// chatBodyMaxChars caps a chat message BODY at 4,000 UTF-8 CHARACTERS
@@ -255,6 +256,28 @@ const (
 	// `grep -n 'msg := ChatMessage{' server/ocserverd/*.go` names every writer,
 	// and each one answers for its own body length.
 	chatBodyMaxChars = 4000
+	// shortLabelMaxChars caps the SHORT NAMING fields at 128 UTF-8 CHARACTERS
+	// (runes via utf8.RuneCountInString — NOT bytes, so 128 CJK characters, 384
+	// bytes, still passes; a byte cap would have rejected them). Today it binds
+	// two fields, both of which are a NAME that a card prints on one line:
+	//   * a task artifact's label   (POST /api/tasks/{task_id}/artifact)
+	//   * a chat attachment's filename (resolveChatAttachment — the ONE seam the
+	//     inline base64 path and the `ocagent upload` streaming path share, so
+	//     the cap binds both without a second copy)
+	// Over-length is REFUSED (400), never silently truncated: a name the server
+	// quietly shortened is a name that no longer matches the thing it names.
+	//
+	// 128 is the owner's number, verbatim 「128字元」 (c-92c734ef561e), on
+	// 「過去先不管 新的都要限制長度」 (c-5d058a53ef74). Both halves of that are
+	// load-bearing: EXISTING ROWS ARE LEFT ALONE — there is no migration, no
+	// backfill and no truncation of stored data, so a read can still return a
+	// longer label than a write would now accept.
+	//
+	// 🔴 The refusal message says the length and the limit and NOTHING ELSE — no
+	// advice about where the text should go instead. Owner, verbatim:
+	// 「不用在錯誤訊息寫」 (c-b9bb4cfde26a). That is deliberately UNLIKE the
+	// chatBodyMaxChars refusal above, which does point at attachments.
+	shortLabelMaxChars = 128
 )
 
 // imageMimeExt maps a sniffed image mime to the default pasted-image
@@ -320,7 +343,7 @@ func (s *apiServer) resolveChatRecipient(id string) (string, error) {
 		return "", err
 	}
 	if m == nil || m.RosterStatus != RosterStatusActive ||
-		(m.Kind != KindAssistant && m.Kind != KindOutsource) {
+		(m.Kind != KindStaff && m.Kind != KindOutsource) {
 		return "", errNotFound
 	}
 	return id, nil
@@ -374,6 +397,17 @@ func resolveChatAttachment(raw []byte, filename, mimeType string) (*ChatAttachme
 	}
 	var name *string
 	if trimmed := strings.TrimSpace(filename); trimmed != "" {
+		// The 128-rune cap (shortLabelMaxChars). Enforced HERE, on the shared
+		// seam, so the inline base64 path and the `ocagent upload` streaming
+		// path cannot disagree — and BEFORE PutChatAttachment, so a refused name
+		// never leaves a stored blob behind. Counted in runes: 128 CJK
+		// characters pass. The defaulted pasted-image name below is a server
+		// constant and cannot be over-length, so it is not re-checked.
+		if n := utf8.RuneCountInString(trimmed); n > shortLabelMaxChars {
+			return nil, chatBadRequest{"attachment filename is " +
+				strconv.Itoa(n) + " chars, over the " +
+				strconv.Itoa(shortLabelMaxChars) + "-char limit"}
+		}
 		name = &trimmed
 	} else if isImage {
 		ext, ok := imageMimeExt[resolved]
@@ -551,6 +585,14 @@ func (s *apiServer) HandlePostChatApiChatPost(w http.ResponseWriter, r *http.Req
 			meta[k] = v
 		}
 	}
+	// The meta map above is copied through WHOLESALE, so a caller can put
+	// anything under any key — including the key the reply link is stored under.
+	// Delete it here, before anything else can read it: reply_to is validated
+	// and written by this handler alone, and a link that arrived pre-made would
+	// bypass the existence check below. (There is no same-conversation check any
+	// more — it was deleted on 2026-08-21; see chatReplyToForeignMsg's obituary
+	// further down. Existence is the whole gate now.)
+	delete(meta, chatReplyToMetaKey)
 	// EVERY item goes to the resolver — an item carrying neither id nor
 	// data_b64 is a 400 there, not a silent drop (T-e2b2).
 	var inputs []ChatAttachmentInputDTO
@@ -580,6 +622,30 @@ func (s *apiServer) HandlePostChatApiChatPost(w http.ResponseWriter, r *http.Req
 	if err != nil {
 		writeResolveError(w, err, "chat recipient", trimString(body.To))
 		return
+	}
+	// EXISTENCE IS THE ONLY GATE (owner ruling, 2026-08-21). There used to be a
+	// second one — the target had to sit in the SAME CONVERSATION as the message
+	// being posted — and it is deliberately gone: the owner wants to quote a
+	// line out of two other members' thread in order to step into it and ask
+	// about it, and that check made exactly that impossible. It was also never
+	// buying confidentiality, because the by-ids read already reaches as far as
+	// the ordinary listing does (serveChatByIDs' note) — the quoted text was
+	// readable before anyone quoted it.
+	//
+	// Existence stays, and stays a 400: an id naming no message is a mistake in
+	// THIS REQUEST, not a state of the world the server should store around.
+	if replyTo := trimString(strOrEmpty(body.ReplyTo)); replyTo != "" {
+		quoted, err := s.dal.ListChatByIDs([]string{replyTo})
+		if err != nil {
+			internalError(w, err)
+			return
+		}
+		if len(quoted) == 0 {
+			writeError(w, http.StatusBadRequest,
+				fmt.Sprintf(chatReplyToUnknownMsg, replyTo))
+			return
+		}
+		meta[chatReplyToMetaKey] = replyTo
 	}
 	var fresh []ChatAttachment
 	if len(resolved) > 0 {
@@ -615,7 +681,35 @@ func (s *apiServer) HandlePostChatApiChatPost(w http.ResponseWriter, r *http.Req
 			Body: "你有一則新訊息。",
 		})
 	}
-	writeJSON(w, http.StatusOK, s.servedChatMessageDTO(msg))
+	// 🔴 THIS internalError RUNS AFTER THE MESSAGE IS ALREADY COMMITTED, PUBLISHED
+	// AND PUSHED. PutChatWithAttachments, hub.Publish and enqueueWebPush have all
+	// happened by the time this line can fire, so a 500 here is a 500 about a
+	// message that IS in the database, IS on every open SSE stream, and HAS been
+	// pushed to the owner's phone. The browser's send path catches the failure
+	// and restores the draft — so the owner would see a message sitting in the
+	// thread AND still sitting in the composer, and pressing Enter would send it
+	// a second time.
+	//
+	// TODAY IT CANNOT FIRE, for exactly one reason: servedChatMessageDTO's only
+	// error is the reply-quote read, and the reply_to EXISTENCE GATE above
+	// already read that same single id through the same ListChatByIDs before
+	// anything was stored. A row that cannot be read fails there, at a point
+	// where nothing has been committed.
+	//
+	// ⚠️ THAT IS A COINCIDENCE OF THE CURRENT SHAPE, AND IT IS THE FIRST THING A
+	// BATCHING CHANGE WOULD BREAK. Batch the quote reads (the note on
+	// resumeChatBlock names that as a future change), or relax the gate to a
+	// cheaper existence check, and this branch becomes reachable — with the write
+	// already durable behind it. WHOEVER MAKES THAT CHANGE MUST FIX THIS FIRST:
+	// either build the DTO BEFORE the commit, or answer 200 with the quote
+	// omitted here (the message really was accepted; the echo is the only thing
+	// that failed). Do not leave a post-commit 500 on a path that can reach it.
+	dto, err := s.servedChatMessageDTO(msg)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, dto)
 }
 
 // servedChatMessageDTO builds the chat-message view AND joins the live reply
@@ -625,14 +719,142 @@ func (s *apiServer) HandlePostChatApiChatPost(w http.ResponseWriter, r *http.Req
 // stored meta only ever holds the id (stamped waiting at open, never updated on
 // answer), so the status MUST be joined here. Best-effort: a lookup miss/error
 // leaves "" (the FE then just fetches the card, as it did before this field).
-func (s *apiServer) servedChatMessageDTO(m ChatMessage) chatMessageDTO {
+func (s *apiServer) servedChatMessageDTO(m ChatMessage) (chatMessageDTO, error) {
 	dto := newChatMessageDTO(m)
 	if id := replyCardIDFromMeta(m.Meta); id != "" {
 		if c, err := s.dal.GetReplyCard(id); err == nil && c != nil {
 			dto.ReplyCardStatus = c.Status
 		}
 	}
-	return dto
+	// The quote, joined HERE so that EVERY door that serves a chat message
+	// serves it: the listing, the history page, the by-ids read and the POST
+	// echo — and the task-message box in api_tasks.go, the fifth — all come
+	// through this one function. Putting it on the individual handlers instead
+	// would be five places for one rule, and the door someone
+	// forgot would be indistinguishable on screen from a message whose original
+	// is genuinely gone.
+	//
+	// It is also the ONE join on this function that returns an error rather than
+	// swallowing it — see chatReplyQuote. reply_card_status above is genuinely
+	// best-effort (a miss just makes the browser fetch the card, as it did
+	// before that field existed); the quote is not, because its absence is drawn
+	// as an assertion.
+	quote, err := s.chatReplyQuote(dto.ReplyTo, nil)
+	if err != nil {
+		return chatMessageDTO{}, err
+	}
+	dto.ReplyToChat = quote
+	return dto, nil
+}
+
+// chatReplyQuote reads the message an id names and projects it into the quote
+// line's view. nil for "" (this message is not a reply) and nil for an id
+// nothing carries any more (the original was cleared, or the member it belonged
+// to is gone).
+//
+// 🔴 NO CONDITION, NO CACHE, NO BATCH (T-4e95, owner ruling 2026-08-21). One
+// point read per replying message, every time. Replies are rare and almost
+// always name something far out of the reader's loaded window, so the "it is
+// probably already on screen, skip it" optimisation would essentially never
+// fire — while costing a permanent second code path whose wrong answer looks
+// exactly like its right one.
+//
+// 🔴 A READ FAILURE IS NOT A MISS, AND THIS FUNCTION MUST NOT CONFLATE THEM.
+// Absence here is rendered by the browser as one FIXED, ASSERTIVE sentence —
+// 「這則訊息已不存在」 / "This message no longer exists" — which is a claim about
+// the world. `len(quoted) == 0` earns that claim: the row is not there. `err !=
+// nil` does not: the database could not answer, the message is very probably
+// still sitting in it, and printing the gone sentence turns a transient fault
+// into a false statement the reader has no way to see through. So the error goes
+// UP and this read fails loudly (500), the way every other DAL error on these
+// handlers already does.
+//
+// The alternative considered and rejected: keep best-effort but widen the DTO so
+// the browser could distinguish "unreadable" from "gone". That buys a third
+// on-screen state, a third sentence in two locales, and a third thing to keep
+// true. The owner ruled against it on 2026-08-21: bad data should be noisy, and
+// a studio that keeps running quietly on top of it is the worse outcome.
+//
+// 🔴 SAY THE PRICE OUT LOUD, BECAUSE AN EARLIER VERSION OF THIS COMMENT DENIED
+// IT. It read: this only 500s on a fault that is "already a 500 one line earlier
+// in every one of these handlers (the listing read itself)". That is true of a
+// WHOLE-STORE fault and false of a SINGLE-ROW one — and a single row is the only
+// fault class anyone has actually been able to construct here (a `meta` column
+// that is not JSON makes scanChat fail for that row and no other). It is also
+// exactly what this file's own test seeds, and that test deliberately parks the
+// bad row in a THIRD PARTY'S conversation so the handler's own read does not
+// trip over it first. The comment asserted the opposite of what the test does.
+//
+// So, measured (same one bad row, unchanged, across the whole table):
+//
+//	                            before a reply quotes it   after
+//	GET /api/chat?ids=                   200                500
+//	GET /api/chat?before_ts= (page)      200                500
+//	GET /api/resume-summary              200                500
+//	GET /api/resume-summary-size         200                500
+//
+// The last two are the WAKE PATH, and that is the cost worth naming: an agent
+// that once replied to a row which later goes bad CANNOT BOOT — both of those
+// calls are in its boot sequence, and both 500.
+//
+// ⚠️ DO NOT READ "the boot sequence" AS SOMETHING THIS REPO PINS. 啟動步驟 is a
+// per-studio, owner-EDITABLE document (replace_boot_sequence / reset_boot_sequence),
+// not a fixture in this tree, so no test here can hold it to any order and this
+// sentence cannot be verified for a running studio at all — to check a real one,
+// read that studio's live doc via get_boot_sequence, not this comment. What IS
+// checkable is the shipped seed, `seeds/boot_sequence.md`, and against it the
+// ordering is OFF BY ONE: step 1 is report_waking (neither of these endpoints),
+// and step 2 is peek_resume_summary_size then resume_summary — so they are the
+// SECOND and THIRD calls there, not the first two. That does not weaken the
+// point, which is only that both sit early enough to be hit before the agent can
+// do anything else. It does mean the count is not load-bearing; do not build on
+// it. It does not matter
+// whether the bad row is in that agent's own thread: ListChatInvolving is capped
+// at resumeChatFetch (500), so a row in ANOTHER conversation, or simply older
+// than that agent's newest 500 messages, is never scanned by the snapshot's own
+// read — the quote join is the only thing that reaches it. This join therefore
+// UPGRADES a single unreadable row from "invisible" to "takes the studio down
+// until someone fixes the data", on purpose. That is the ruling; it is not an
+// accident and it is not free.
+//
+// 🔴 TWO OF THE SIX MEASURED DOORS THAT SERVE A QUOTE HAVE NO WITNESS ROW IN
+// THAT TEST,
+// AND THE REASON IS NOT AN OVERSIGHT. Their error branch is UNREACHABLE for a
+// single-row fault, because each one hits the same bad row through a read of its
+// own FIRST (verified by mutating this function to swallow the error and
+// re-running all six — the four in the table above plus these two: these two
+// still 500, the other four turn 200):
+//   - GET /api/chat?with= — the cursorless page reads and scans every row it
+//     serves (s.dal.ListChatLatest since T-48; it was a whole-table
+//     s.dal.ListChat() when this was measured, and the reachability argument is
+//     the same either way ONLY for a bad row inside the served window. A bad row
+//     OLDER than the window is no longer read by this door at all, which would
+//     make its quote-join branch reachable — if that case is ever worth a
+//     witness row, this is the one to add).
+//   - POST /api/chat echo — the reply_to EXISTENCE gate above calls
+//     ListChatByIDs on that very id before anything is stored, and 500s there.
+//
+// A row for either would pass against a swallowing mutant, which is a guard that
+// proves nothing. If the POST gate is ever batched or relaxed, its echo branch
+// becomes reachable and needs its own row.
+//
+// ⚠️ AND THERE IS A SEVENTH DOOR THAT NOBODY MEASURED: GET
+// /api/members/{member_id}/resume-summary. It calls the identical
+// resumeSnapshotParts the two wake-path rows do, so it must 500 the same way —
+// but that is READ OFF THE CODE, not measured, and it is in neither the table
+// above nor the two exceptions below. Do not count it as witnessed.
+func (s *apiServer) chatReplyQuote(replyTo string, names map[string]string) (*chatReplyQuoteDTO, error) {
+	if replyTo == "" {
+		return nil, nil
+	}
+	quoted, err := s.dal.ListChatByIDs([]string{replyTo})
+	if err != nil {
+		return nil, err
+	}
+	if len(quoted) == 0 {
+		return nil, nil
+	}
+	return newChatReplyQuoteDTO(quoted[0], names), nil
 }
 
 // ── by-id re-read (T-a828) ───────────────────────────────────────────────────
@@ -672,24 +894,116 @@ const (
 	chatByIDsNotFoundMsg = "no message carries id %s — the whole call is refused rather " +
 		"than answered short, because a shortened answer is indistinguishable from the " +
 		"folded message you are trying to read back; drop that id and ask again"
-	// chatByIDsNotYoursMsg is the permission refusal. It states the rule and
-	// offers NO way around it, deliberately: there is no parameter, no flag and
-	// no other endpoint that widens a by-id read past the caller's own
-	// conversations, and a refusal that hints at one teaches a bypass that
-	// either does not exist or should not be used.
+	// ── the T-48 start_id/end_id window ─────────────────────────────────────
 	//
-	// 🔴 IT SPEAKS FOR THIS PATH, NOT FOR THE WHOLE TOOL. It used to open by
-	// naming the endpoint as the thing that is bounded to the caller's own
-	// messages, and that claim is FALSE: the ordinary listing filters on `with`
-	// — a PARTICIPANT — not on the caller, so a plain read of a peer's line
-	// answers with a conversation the caller was never in, and that is the
-	// designed behaviour, not a leak (`caller_only` is what narrows a listing to
-	// the caller). Only the by-ids read is bounded to the caller's own ends. A
-	// refusal that overstates its own reach teaches every agent that reads it a
-	// rule the server does not enforce, which is worse than saying nothing.
-	chatByIDsNotYoursMsg = "message %s is between other members — a by-ids read returns only " +
-		"messages you sent or received (one such id refuses the whole call), and holding " +
-		"an id is not permission to read someone else's conversation"
+	// chatWindowMaxLimit bounds `limit` on the WINDOW path only. It is a ROW
+	// count, and that is the honest description of what it does: 200 rows was
+	// MEASURED at 687 KB, so this constant does NOT bound the payload. Nothing
+	// on this route does. Say so rather than let the next reader assume the
+	// number is a size guard.
+	//
+	// 🔴 It deliberately does NOT reach the anchorless legacy path. There
+	// `limit=-1` (uncapped) is a spec-verbatim promise with committed callers,
+	// and `limit=0` answers an empty list; T-48's own first rule is that a
+	// request sending neither anchor behaves byte for byte as it does today.
+	// Tightening those is a different ticket with a different owner question.
+	chatWindowMaxLimit = 200
+	// chatWindowBadLimitMsg states the bound AND that it is path-specific, so a
+	// caller that has been passing limit=-1 for years is not left guessing why
+	// the same value it always sent is suddenly refused.
+	chatWindowBadLimitMsg = "limit must be between 1 and %d when start_id or end_id is " +
+		"given (got %d) — the legacy anchorless listing keeps its own semantics, " +
+		"where a negative limit is uncapped and 0 is an empty page"
+	// chatWindowAnchorNotFoundMsg refuses an anchor no message carries, and
+	// names it. 404 rather than an empty 200 for the reason the `ids` refusal
+	// gives: an empty page is what a REAL window at the end of the stream
+	// answers, so a mistyped anchor and an exhausted one must not read alike.
+	chatWindowAnchorNotFoundMsg = "no message carries id %s — a window anchor must name a " +
+		"real message, because an empty page is what a real window at the edge of the " +
+		"stream returns and the two must not be indistinguishable"
+	// chatWindowMixedCursorsMsg refuses the two cursor families in one request.
+	// Honouring one and dropping the other is the failure mode being bought
+	// off: they disagree about DIRECTION, so the silent winner decides which
+	// end of the stream the caller reads and the caller never learns which.
+	chatWindowMixedCursorsMsg = "start_id/end_id cannot be combined with the deprecated " +
+		"before_ts/before_id cursor — the two families disagree about direction; " +
+		"send one family or the other"
+	// chatWindowContradictionMsg refuses start_id strictly NEWER than end_id.
+	// Deliberately not an empty array: an empty array is the honest answer of a
+	// real but empty window, so a contradictory request would be answered in
+	// the same bytes as a legitimate one that found nothing.
+	chatWindowContradictionMsg = "start_id %s is newer than end_id %s — the window is " +
+		"empty by construction; refused rather than answered with an empty array, " +
+		"which is what a real empty window returns"
+	// chatReplyToMetaKey is where a reply link is STORED — the same open meta
+	// map every caller can write to, which is why the POST handler deletes any
+	// caller-supplied value under this key before writing its own. The key is
+	// named once here so the deletion, the validation and the read cannot drift
+	// apart into three spellings of the same string.
+	chatReplyToMetaKey = "reply_to"
+	// chatReplyToUnknownMsg refuses a reply_to naming no message. 400 rather
+	// than 404: the thing that was not found is a FIELD OF THIS REQUEST, not the
+	// resource the request addresses — a 404 here would say "POST /api/chat does
+	// not exist", which is a different and false statement.
+	chatReplyToUnknownMsg = "reply_to names no message (%s) — you can only reply to a message " +
+		"that exists; re-read the conversation and use the id it carries"
+	// ── the T-48 cursor + unread backfill ───────────────────────────────────
+	//
+	// chatCursorUnreadableMsg answers a token this API did not mint. It says
+	// "copy it back verbatim" rather than describing the encoding on purpose:
+	// the token is opaque, and a caller that knows how to build one has already
+	// bought itself a page boundary that moves when the encoding does.
+	chatCursorUnreadableMsg = "cursor is not a cursor this API issued — copy the previous " +
+		"response's next_cursor back verbatim; it is opaque, and constructing or " +
+		"editing one is not supported"
+	// chatCursorWrongWayMsg refuses a cursor minted by the OTHER direction. The
+	// alternative — honouring the position and ignoring which way it was meant
+	// to walk — answers 200 with a page from the wrong end of the stream, and
+	// the caller has no way to tell that from a real one. Same reasoning as
+	// chatWindowMixedCursorsMsg, one level down.
+	chatCursorWrongWayMsg = "this cursor continues %s and cannot be used on a path that " +
+		"continues %s — a cursor belongs to the query that minted it; start that " +
+		"walk again without one"
+	// chatCursorMixedMsg refuses `cursor` alongside either older cursor family,
+	// for the reason chatWindowMixedCursorsMsg gives: one keyset walk per
+	// request, or the silent winner picks the answer.
+	chatCursorMixedMsg = "cursor cannot be combined with before_ts/before_id or " +
+		"start_id/end_id — one keyset walk per request; send the cursor alone"
+	// chatUnreadMixedMsg refuses `unread` alongside a stream-position cursor.
+	// They are not two filters over one set: a window/keyset request names a
+	// position in the WHOLE stream, and unread names a set defined by the
+	// caller's per-sender watermarks. Serving the intersection would answer
+	// something neither parameter asked for.
+	chatUnreadMixedMsg = "unread cannot be combined with before_ts/before_id or " +
+		"start_id/end_id — those name a position in the whole stream, unread names " +
+		"the set your read watermarks define; page unread with cursor instead"
+	// chatUnknownParamMsg refuses a query parameter this route does not
+	// declare. It NAMES the offenders and then lists what is accepted: a caller
+	// that mistyped one name learns which one and what it should have been,
+	// without a second round trip or a read of the spec. See
+	// unknownChatQueryParams for why this route refuses where others ignore.
+	chatUnknownParamMsg = "unknown query parameter(s) on GET /api/chat: %s — this route " +
+		"refuses parameters it does not declare rather than ignoring them, because an " +
+		"ignored parameter silently answers a question you did not ask; accepted here: %s"
+	// chatUnreadTrue is the only value that turns the backfill on. A STRING
+	// flag, matching the convention this route already used for its removed
+	// `peek`: anything else reads as not sent rather than as an error.
+	chatUnreadTrue = "true"
+	// chatCursorOlder / chatCursorNewer are the DIRECTION tag baked into every
+	// cursor. It is carried IN the token rather than inferred from the request
+	// so that a cursor handed to the wrong path is refused instead of silently
+	// answering from the wrong end — the direction is a property of the walk
+	// that minted it, not of the request replaying it.
+	chatCursorOlder = "o"
+	chatCursorNewer = "n"
+	// chatCursorOlderName / chatCursorNewerName are what those tags are called
+	// in a refusal. A caller reading "o" learns nothing.
+	chatCursorOlderName = "towards older messages"
+	chatCursorNewerName = "towards newer messages"
+	// (chatReplyToForeignMsg — the refusal for a reply_to pointing OUT of the
+	// conversation being posted into — was DELETED with the check itself on
+	// 2026-08-21, owner ruling. Quoting sideways into a thread is the use case
+	// now, not the abuse. See HandlePostChatApiChatPost.)
 )
 
 // requestedChatIDs normalises the repeatable ?ids= parameter: blanks dropped,
@@ -714,32 +1028,6 @@ func requestedChatIDs(ids *[]string) []string {
 	return out
 }
 
-// chatMessageInvolvesCaller is the participation boundary, and it is one
-// expression on purpose: a caller may read a message back only when it is one
-// of the two ends of it.
-//
-// The comparison is against the VERIFIED JWT sub (§14 — identity comes from
-// auth, never from a parameter) and against the STORED sender/recipient, so
-// nothing in the request can move this line. It is written against
-// currentActor(r) rather than a hoisted local so that it is VISIBLE to
-// authz_surface_gate_test.go: this is authorisation living outside the route
-// table's Requires column, and that gate exists precisely so such a predicate
-// has to be enumerated with a reason rather than added quietly.
-func chatMessageInvolvesCaller(r *http.Request, m ChatMessage) bool {
-	return m.Sender == currentActor(r) || m.Recipient == currentActor(r)
-}
-
-// chatMessagesTheCallerWasIn returns the first named id the caller was not a
-// party to, so the refusal can name it.
-func chatMessagesTheCallerWasIn(r *http.Request, byID map[string]ChatMessage, ids []string) (foreign string, ok bool) {
-	for _, id := range ids {
-		if !chatMessageInvolvesCaller(r, byID[id]) {
-			return id, false
-		}
-	}
-	return "", true
-}
-
 // serveChatByIDs answers `?ids=` — the named messages IN FULL, oldest→newest.
 //
 // 🔴 NO WATERMARK ADVANCE. Re-reading a message the snapshot already showed you
@@ -747,14 +1035,22 @@ func chatMessagesTheCallerWasIn(r *http.Request, byID map[string]ChatMessage, id
 // here would mark a whole thread read on the strength of one unfolded line —
 // the same reasoning that keeps a history page from advancing it.
 //
-// REFUSAL ORDER is cap → unknown id → not yours, and each refusal names the id
-// it is about. The unknown-before-foreign order means an id that exists but
-// belongs to two other members answers 403 while an id that exists nowhere
-// answers 404, so a caller CAN learn that some id exists. That is accepted with
-// eyes open: ids are server-minted `c-` + 12 random hex (48 bits), so they are
-// not enumerable, and the case this seam was built for is an agent holding an
-// id it was already shown. The alternative — one indistinguishable refusal —
-// costs every honest caller the ability to tell a typo from a boundary.
+// REFUSAL ORDER is cap → unknown id. The unknown-id refusal names the id; the
+// cap refusal cannot and does not — chatByIDsTooManyMsg is formatted with the
+// limit and the count asked for, deliberately (see its own note), because at
+// that point no single id is what is wrong.
+//
+// 🔴 NO PARTICIPATION CHECK, AND THAT IS A DELIBERATE WIDENING (T-4e95, owner
+// ruling). This path used to refuse with 403 any id whose sender and recipient
+// were both someone else. That bound guarded nothing: the ordinary listing
+// filters on `with` — a PARTICIPANT — not on the caller, so the very same
+// message was already readable by asking for that peer's line (designed
+// behaviour, not a leak). What the stricter rule actually produced was two
+// doors onto the same rows disagreeing about who may open them, which cost an
+// honest caller the
+// ability to follow a message's reply_to and cost a dishonest one nothing. If
+// this reach is ever wrong, it is wrong for BOTH doors and must be fixed on
+// both — do not quietly re-narrow this one and leave the listing open.
 func (s *apiServer) serveChatByIDs(w http.ResponseWriter, r *http.Request, ids []string) {
 	if len(ids) > chatByIDsMax {
 		writeError(w, http.StatusBadRequest,
@@ -776,135 +1072,560 @@ func (s *apiServer) serveChatByIDs(w http.ResponseWriter, r *http.Request, ids [
 			return
 		}
 	}
-	if foreign, ok := chatMessagesTheCallerWasIn(r, byID, ids); !ok {
-		writeError(w, http.StatusForbidden, fmt.Sprintf(chatByIDsNotYoursMsg, foreign))
-		return
+	// NO next_cursor: the caller named the set, so there is no direction to
+	// continue in. Guessing one (older than the oldest named id, say) would
+	// hand back a token that walks a stream this request never asked about.
+	s.writeChatPage(w, msgs, "")
+}
+
+// ── unknown query parameters (T-48, owner ruling) ────────────────────────────
+//
+// Owner, verbatim: 「如果送了 server 不認得的參數應該是要 error 告訴他這個參數不
+// 存在才對」, scoped to THIS ROUTE ONLY (rc-84f98080af16). Every other route keeps
+// today's behaviour of ignoring what it does not know.
+//
+// 🔴 THE ACCEPTED SET IS READ OFF THE GENERATED PARAMS STRUCT, NOT WRITTEN OUT
+// HERE. HandleListChatApiChatGetParams is generated from spec/openapi.json, so
+// its `form` tags ARE the declared parameter list; a second list in this file
+// would be a copy of the same fact, and a copy of a fact is the exact disease
+// this ticket has spent its whole life curing. Add a parameter to the spec,
+// regenerate, and this guard already knows about it — there is nothing to
+// remember to update, which is the only kind of guard that stays true.
+//
+// The one name that is NOT in the spec and still allowed is the `?token=`
+// transport credential, which extractToken accepts on every gated route for
+// clients that cannot set a header (EventSource, <img src>). It is spelled once,
+// in server.go, and read from there rather than retyped.
+//
+// WHY 400 AND NOT 422: the request is not a well-formed request carrying an
+// unprocessable value — it names something that does not exist. And the message
+// NAMES THE PARAMETER, because "bad parameters" tells a caller to re-read the
+// whole query string looking for which one.
+
+// chatDeclaredQueryParams is the accepted set, sorted, for the refusal message.
+func chatDeclaredQueryParams() []string {
+	out := make([]string, 0, len(chatQueryParamSet))
+	for name := range chatQueryParamSet {
+		out = append(out, name)
 	}
+	sort.Strings(out)
+	return out
+}
+
+// unknownChatQueryParams returns the query parameter names this route does not
+// accept, sorted so a request that gets several wrong is refused with the same
+// message every time.
+func unknownChatQueryParams(r *http.Request) []string {
+	var unknown []string
+	for name := range r.URL.Query() {
+		if !chatQueryParamSet[name] {
+			unknown = append(unknown, name)
+		}
+	}
+	sort.Strings(unknown)
+	return unknown
+}
+
+// chatQueryParamSet is derived ONCE from the generated params struct — see the
+// note above for why it is derived rather than declared.
+var chatQueryParamSet = func() map[string]bool {
+	out := map[string]bool{authTokenQueryParam: true}
+	t := reflect.TypeOf(HandleListChatApiChatGetParams{})
+	for i := 0; i < t.NumField(); i++ {
+		tag, ok := t.Field(i).Tag.Lookup("form")
+		if !ok {
+			continue
+		}
+		if name, _, _ := strings.Cut(tag, ","); name != "" {
+			out[name] = true
+		}
+	}
+	return out
+}()
+
+// ── the T-48 continuation cursor ─────────────────────────────────────────────
+//
+// One opaque string standing in for the composite (ts, id) keyset position the
+// deprecated before_ts/before_id pair spelled out, PLUS the direction the walk
+// that minted it was going. Callers copy it back verbatim; nothing outside this
+// file may take it apart.
+//
+// 🔴 IT IS A POSITION, NEVER AN OFFSET OR A ROW COUNT. That is the whole reason
+// the wire carries a token instead of a page number: messages keep arriving
+// while a caller pages, and an offset silently re-slices the stream under it —
+// a row read twice, or worse, a row skipped and never seen again. A (ts, id)
+// position names a place in a total order that new rows cannot renumber.
+//
+// 🔴 THE DIRECTION TRAVELS INSIDE THE TOKEN. It could have been inferred from
+// the request instead, and that is exactly the bug: an unread cursor replayed
+// on a plain listing would then answer 200 with a page from the wrong end and
+// nothing would say so. Carrying it means a misused cursor is a 422.
+//
+// The encoding is base64url of "<dir>\x00<ts>\x00<id>". strconv 'g' with
+// precision -1 is the shortest form that round-trips a float64 exactly, so a
+// cursor decodes to the same ts it was minted from — bit for bit, which is what
+// the strict keyset comparison needs.
+
+// encodeChatCursor mints the token for a page ending (in its own direction) at
+// `a`.
+func encodeChatCursor(dir string, a chatAnchor) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(
+		dir + "\x00" + strconv.FormatFloat(a.TS, 'g', -1, 64) + "\x00" + a.ID))
+}
+
+// decodeChatCursor reads a token back, refusing anything this API did not mint.
+// `want` is the direction the calling path continues in; a token tagged the
+// other way is refused rather than honoured, and the refusal names both
+// directions in words.
+func decodeChatCursor(token, want string) (chatAnchor, string, bool) {
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		return chatAnchor{}, chatCursorUnreadableMsg, false
+	}
+	parts := strings.Split(string(raw), "\x00")
+	if len(parts) != 3 || parts[2] == "" {
+		return chatAnchor{}, chatCursorUnreadableMsg, false
+	}
+	dir := parts[0]
+	if dir != chatCursorOlder && dir != chatCursorNewer {
+		return chatAnchor{}, chatCursorUnreadableMsg, false
+	}
+	ts, err := strconv.ParseFloat(parts[1], 64)
+	if err != nil {
+		return chatAnchor{}, chatCursorUnreadableMsg, false
+	}
+	if dir != want {
+		return chatAnchor{}, fmt.Sprintf(chatCursorWrongWayMsg,
+			chatCursorDirName(dir), chatCursorDirName(want)), false
+	}
+	return chatAnchor{TS: ts, ID: parts[2]}, "", true
+}
+
+func chatCursorDirName(dir string) string {
+	if dir == chatCursorNewer {
+		return chatCursorNewerName
+	}
+	return chatCursorOlderName
+}
+
+// chatPageWindow is the row budget one page asks the DAL for: `limit` + 1.
+//
+// The extra row is NEVER returned. It exists solely so the handler can answer
+// "is there more in this direction" as a FACT rather than an inference: a page
+// that comes back exactly `limit` long is ambiguous (the stream might end
+// precisely there), and answering that ambiguity by emitting a cursor anyway
+// costs the caller one pointless extra round trip per walk and, worse, makes
+// "cursor absent" stop meaning "the end". A caller that trusts the token more
+// than the page length is the caller this design wants.
+// A NEGATIVE limit is uncapped and a ZERO limit reads nothing; neither has a
+// "next page" to detect, so neither gets the extra row.
+func chatPageWindow(limit int) int {
+	if limit <= 0 {
+		return limit
+	}
+	return limit + 1
+}
+
+// writeChatPage renders one page into the T-48 envelope. Every path of
+// GET /api/chat goes through here, so no path can quietly answer a bare array
+// again — the shape is one function, not a convention each handler repeats.
+func (s *apiServer) writeChatPage(w http.ResponseWriter, msgs []ChatMessage, nextCursor string) {
 	out := []chatMessageDTO{}
 	for _, m := range msgs {
-		out = append(out, s.servedChatMessageDTO(m))
+		dto, err := s.servedChatMessageDTO(m)
+		if err != nil {
+			internalError(w, err)
+			return
+		}
+		out = append(out, dto)
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, chatListDTO{Messages: out, NextCursor: nextCursor})
+}
+
+// requestedChatWindow reads the T-48 window anchors off the GENERATED params.
+//
+// It used to read r.URL.Query() directly, because the spec carrying these two
+// parameters lived on its own branch and hand-adding the generated fields would
+// have made the drift gate red for a file this branch does not own. That branch
+// has merged, so the generated fields exist and this reads them.
+//
+// PRESENCE, not emptiness, selects the window path: `?start_id=` sent blank is
+// SENT, and is refused as an id no message carries. Dropping a blank anchor
+// back onto the legacy path would answer a malformed window request with a full
+// unbounded listing and no word said — the exact silent-fallback shape this
+// ticket exists to remove.
+// 🔑 That distinction survives the swap, and it was MEASURED, not assumed: the
+// generated binder yields a pointer to "" for `?start_id=` and nil when the
+// parameter is absent, so a nil check is exactly the old q.Has().
+func requestedChatWindow(params HandleListChatApiChatGetParams) (startID string, hasStart bool, endID string, hasEnd bool) {
+	if params.StartId != nil {
+		startID, hasStart = *params.StartId, true
+	}
+	if params.EndId != nil {
+		endID, hasEnd = *params.EndId, true
+	}
+	return startID, hasStart, endID, hasEnd
+}
+
+// chatWindowRequest is one window read, already stripped of the transport.
+type chatWindowRequest struct {
+	filter     chatListFilter
+	limit      int
+	startID    string
+	hasStart   bool
+	endID      string
+	hasEnd     bool
+	beforeSent bool
+	cursorSent bool
+}
+
+// serveChatWindow answers ?start_id= / ?end_id= — the T-48 window, both ends
+// INCLUSIVE, still oldest→newest. It is reached ONLY when at least one anchor
+// was sent; a request sending neither never touches this function, which is
+// what keeps T-48's first and most important rule ("neither given ⇒ today's
+// behaviour, byte for byte") a structural property rather than a promise.
+//
+// REFUSAL ORDER is fixed and tested, because a request can be wrong in more
+// than one way at once and a caller fixing them one at a time needs the order
+// to be stable:
+//
+//  1. mixed cursor families (before_ts/before_id, or cursor)  422
+//  2. limit outside 1..200                                    422
+//  3. an anchor naming no message                             404
+//  4. start_id strictly newer than end_id                     422
+//
+// 1 and 2 come first because they are answerable without touching the table:
+// the request is malformed on its face, and reporting a 404 for an anchor in a
+// request that was never going to be served would send the caller hunting for a
+// missing message instead of fixing the parameter it actually got wrong.
+//
+// 🔴 THE 200-ROW CAP BOUNDS ROWS, NOT BYTES — 200 rows measured 687 KB. This
+// path has NO payload bound; do not read the cap as one.
+//
+// 🔴 NO READ-WATERMARK WRITE, like every other path on this route since T-48.
+func (s *apiServer) serveChatWindow(w http.ResponseWriter, r *http.Request, req chatWindowRequest) {
+	if req.beforeSent {
+		writeError(w, http.StatusUnprocessableEntity, chatWindowMixedCursorsMsg)
+		return
+	}
+	// `cursor` is the third cursor family and this path mints none, so a cursor
+	// arriving here can only have come from another walk. Refused for the same
+	// reason as the pair above, not silently dropped.
+	if req.cursorSent {
+		writeError(w, http.StatusUnprocessableEntity, chatCursorMixedMsg)
+		return
+	}
+	if req.limit < 1 || req.limit > chatWindowMaxLimit {
+		writeError(w, http.StatusUnprocessableEntity,
+			fmt.Sprintf(chatWindowBadLimitMsg, chatWindowMaxLimit, req.limit))
+		return
+	}
+	wanted := []string{}
+	if req.hasStart {
+		wanted = append(wanted, req.startID)
+	}
+	if req.hasEnd && req.endID != req.startID {
+		wanted = append(wanted, req.endID)
+	}
+	found, err := s.dal.ListChatByIDs(wanted)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	byID := make(map[string]ChatMessage, len(found))
+	for _, m := range found {
+		byID[m.ID] = m
+	}
+	// Anchors are resolved WITHOUT the listing filters on
+	// purpose: "does this message exist" and "is it in the slice you asked
+	// for" are different questions, and folding them together would answer a
+	// real id outside the filter with a 404 that says the message does not
+	// exist. The FILTER still applies to the rows returned below — a window
+	// anchored outside it simply comes back empty, which is the honest answer.
+	var start, end *chatAnchor
+	if req.hasStart {
+		m, ok := byID[req.startID]
+		if !ok {
+			writeError(w, http.StatusNotFound,
+				fmt.Sprintf(chatWindowAnchorNotFoundMsg, req.startID))
+			return
+		}
+		start = &chatAnchor{TS: m.TS, ID: m.ID}
+	}
+	if req.hasEnd {
+		m, ok := byID[req.endID]
+		if !ok {
+			writeError(w, http.StatusNotFound,
+				fmt.Sprintf(chatWindowAnchorNotFoundMsg, req.endID))
+			return
+		}
+		end = &chatAnchor{TS: m.TS, ID: m.ID}
+	}
+	if start != nil && end != nil && start.newerThan(*end) {
+		writeError(w, http.StatusUnprocessableEntity,
+			fmt.Sprintf(chatWindowContradictionMsg, req.startID, req.endID))
+		return
+	}
+	msgs, err := s.dal.listChatWindow(req.filter, start, end, req.limit)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	// NO next_cursor, for the same reason the by-ids path emits none: the
+	// caller named both edges of what it wanted.
+	s.writeChatPage(w, msgs, "")
 }
 
 // GET /api/chat — the stream oldest→newest, capped to the most recent limit
 // (default 30; negative = uncapped; 0 = empty). ?with= filters to a
-// participant, and listing a specific conversation ADVANCES the caller's read
-// watermark to the newest returned ts (auto read-receipt).
+// participant.
+//
+// THE ANSWER IS AN OBJECT (T-48): {messages, next_cursor}, on every path, never
+// a bare array. The array had nowhere to say "there is more in this direction",
+// so a caller could only infer exhaustion from a short page — and a page is
+// short for reasons that have nothing to do with exhaustion (a participant
+// filter, a one-sided sender/recipient narrowing, an unread set spread across
+// senders). next_cursor is
+// OPAQUE, encodes a (ts, id) POSITION plus the direction it walks, and its
+// ABSENCE is the only end-of-walk signal. See encodeChatCursor.
+//
+// PATH PRECEDENCE, decided here and nowhere else:
+//
+//	?ids=      → serveChatByIDs   (answered on its own; nothing else consulted)
+//	?unread=   → serveChatUnread  (refuses the stream-position cursors)
+//	?start_id= / ?end_id= → serveChatWindow
+//	?before_ts= + ?before_id=     (DEPRECATED keyset pair)
+//	otherwise  → the newest page, optionally continued by ?cursor=
+//
+// THIS ROUTE NEVER WRITES A READ WATERMARK (T-48, owner ruling 2026-09-02:
+// 「get_chat不應該可以標示已讀未讀，這應該要另一隻API明確表示有這個意圖」). A
+// cursorless ?with= list used to advance the caller's watermark for that
+// conversation (an "auto read-receipt", on the theory that listing a
+// conversation IS reading it) — it is not: a member whose only action was
+// holding the SSE downlink open had its watermark written for messages nobody
+// had looked at. Marking a conversation read is now ONLY
+// POST /api/chat/mark-read, which states that intent explicitly. ?peek=true
+// (T-cf91) existed solely to OPT OUT of that receipt and is REMOVED from the
+// wire rather than kept and ignored: a parameter with no effect reads to the
+// next caller like a protection that is there.
+//
+// 🔴 THE UNREAD PATH IS NOT AN EXCEPTION TO THAT. Reading your unread does not
+// clear it. It is the loudest place the rule could have been broken — a
+// backfill reads exactly like "I have now seen these" — and it is not broken:
+// serveChatUnread calls no writer at all.
+//
+// 🔑 The harm was MEASURED, not reasoned about (T-48 repro, isolated station,
+// a real `ocagent listen`): an agent that had only attached its listener —
+// never woken, never shown a line — grew a chat_read (X,X) row whose ts
+// equalled a message nobody had read, so "unread" was cleared by the act of
+// polling. Do not reintroduce a write here.
+//
+// WINDOW BY MESSAGE ID (T-48): ?start_id= walks TOWARDS THE NEWEST from that
+// message and ?end_id= TOWARDS THE OLDEST, both ends INCLUSIVE — the direction
+// before_ts/before_id cannot express. Sending EITHER selects serveChatWindow
+// and its guardrails (mixed cursors 422, limit 1..200 422, unknown anchor 404,
+// contradictory pair 422). Sending NEITHER never reaches that function at all,
+// which is how "today's behaviour, byte for byte" is kept structural: the
+// legacy limit semantics below (negative = uncapped, 0 = empty) are untouched.
 //
 // SCROLLBACK (T-bf82): ?before_ts=&before_id= (both together, else 422) is a
 // composite keyset cursor — the page is the `limit` messages strictly OLDER
 // than (before_ts, before_id) in the stream's total (ts, id) order, still
-// oldest→newest. A HISTORY PAGE NEVER ADVANCES THE READ WATERMARK: reading
-// old context is not reading the conversation's newest messages — sliding the
-// watermark from a history page would falsely clear unread that lives above
-// the loaded window. The cursorless path below is byte-compatible unchanged.
-//
-// ?peek=true (T-cf91) is the READ-ONLY conversation view: with ?with= it
-// filters + caps EXACTLY like the marking path but SKIPS the read-watermark
-// advance — a background window (or any refresh that must not consume unread)
-// gets the same recent conversation window without a read-receipt side effect.
-// This replaces the old client-side workaround of pulling the WHOLE company
-// stream (limit=-1) just to dodge the ?with= auto-mark and filtering in the
-// browser: the payload was the entire chat history, growing without bound.
-// Omitting peek (or any value other than "true") is byte-for-byte the old
-// behaviour — the marking auto-receipt still fires on a plain ?with= list.
+// oldest→newest. DEPRECATED: ?cursor= is the same walk in one opaque token.
 //
 // ?ids= (T-a828) is answered FIRST and ON ITS OWN — see serveChatByIDs. It is
-// not a filter layered on the listing below: with/limit/before_*/peek are not
-// consulted at all, so nothing about the paths above changes for a caller that
-// does not send it. A request whose ids are all blank is not a by-id read and
-// falls through here unchanged.
+// not a filter layered on the listing below: nothing else is consulted at all,
+// so nothing about the paths above changes for a caller that does not send it.
+// A request whose ids are all blank is not a by-id read and falls through here
+// unchanged.
 func (s *apiServer) HandleListChatApiChatGet(w http.ResponseWriter, r *http.Request, params HandleListChatApiChatGetParams) {
+	if unknown := unknownChatQueryParams(r); len(unknown) > 0 {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf(chatUnknownParamMsg,
+			strings.Join(unknown, ", "), strings.Join(chatDeclaredQueryParams(), ", ")))
+		return
+	}
 	if ids := requestedChatIDs(params.Ids); len(ids) > 0 {
 		s.serveChatByIDs(w, r, ids)
 		return
 	}
-	with := strOrEmpty(params.With)
-	peek := trimmedOrEmpty(params.Peek) == "true"
-	callerOnly := params.CallerOnly != nil && *params.CallerOnly
 	actor := currentActor(r)
+	// ONE filter value for every listing path below. `sender`/`recipient` are
+	// one-sided where `with` matches either side, so ?sender=a&recipient=b pins
+	// a direction `with` cannot express; they AND with each other and with
+	// `with`. They also replace the removed `caller_only` flag: "only mine" is
+	// this caller's own id in one of them, which — unlike the boolean — says
+	// which side.
+	filter := chatListFilter{
+		participant: strOrEmpty(params.With),
+		sender:      strOrEmpty(params.Sender),
+		recipient:   strOrEmpty(params.Recipient),
+	}
 	limit := chatListDefaultLimit
 	if params.Limit != nil {
 		limit = *params.Limit
 	}
-	if params.BeforeTs != nil || params.BeforeId != nil {
+	startID, hasStart, endID, hasEnd := requestedChatWindow(params)
+	beforeSent := params.BeforeTs != nil || params.BeforeId != nil
+	// PRESENCE, not emptiness — the same rule requestedChatWindow states: a
+	// blank ?cursor= is SENT, and is refused as unreadable rather than dropped
+	// back onto the cursorless path, where a malformed continuation would be
+	// answered with the newest page and no word said.
+	cursorSent := params.Cursor != nil
+
+	if strOrEmpty(params.Unread) == chatUnreadTrue {
+		if beforeSent || hasStart || hasEnd {
+			writeError(w, http.StatusUnprocessableEntity, chatUnreadMixedMsg)
+			return
+		}
+		s.serveChatUnread(w, actor, filter, limit, params.Cursor)
+		return
+	}
+	if hasStart || hasEnd {
+		s.serveChatWindow(w, r, chatWindowRequest{
+			filter:     filter,
+			limit:      limit,
+			startID:    startID,
+			hasStart:   hasStart,
+			endID:      endID,
+			hasEnd:     hasEnd,
+			beforeSent: beforeSent,
+			cursorSent: cursorSent,
+		})
+		return
+	}
+	if beforeSent {
+		if cursorSent {
+			writeError(w, http.StatusUnprocessableEntity, chatCursorMixedMsg)
+			return
+		}
 		if params.BeforeTs == nil || params.BeforeId == nil {
 			writeError(w, http.StatusUnprocessableEntity,
 				"before_ts and before_id must be supplied together")
 			return
 		}
 		// History page: cursor-bounded SQL read (LIMIT in the query — never a
-		// full-table pull) and NO PutChatRead — see the handler note above.
-		caller := ""
-		if callerOnly {
-			caller = actor
-		}
-		msgs, err := s.dal.listChatBefore(with, caller, *params.BeforeTs, *params.BeforeId, limit)
-		if err != nil {
-			internalError(w, err)
-			return
-		}
-		out := []chatMessageDTO{}
-		for _, m := range msgs {
-			out = append(out, s.servedChatMessageDTO(m))
-		}
-		writeJSON(w, http.StatusOK, out)
+		// full-table pull). No PutChatRead here, and none on the cursorless
+		// path either — see the handler note above.
+		s.serveChatOlder(w, filter, chatAnchor{TS: *params.BeforeTs, ID: *params.BeforeId}, limit)
 		return
 	}
-	msgs, err := s.dal.ListChat()
+	if cursorSent {
+		before, refusal, ok := decodeChatCursor(*params.Cursor, chatCursorOlder)
+		if !ok {
+			writeError(w, http.StatusUnprocessableEntity, refusal)
+			return
+		}
+		s.serveChatOlder(w, filter, before, limit)
+		return
+	}
+	// The newest-page read: participant filter, caller filter and the
+	// most-recent-`limit` cut all live in SQL (ListChatLatest). This used to be
+	// ListChat() — the WHOLE chat_message table into Go — followed by the same
+	// three steps as slice work, which on 48,153 real rows cost 68.115ms to
+	// return at most 30 of them. Same rows, same order, same count: 0.697ms.
+	msgs, err := s.dal.listChatLatest(filter, chatPageWindow(limit))
 	if err != nil {
 		internalError(w, err)
 		return
 	}
-	if with != "" {
-		filtered := msgs[:0]
-		for _, m := range msgs {
-			if m.Sender == with || m.Recipient == with {
-				filtered = append(filtered, m)
-			}
-		}
-		msgs = filtered
+	msgs, next := trimChatPageOlder(msgs, limit)
+	s.writeChatPage(w, msgs, next)
+}
+
+// serveChatOlder answers the two walks that go TOWARDS THE OLDER — the
+// deprecated before_ts/before_id pair and the ?cursor= token that replaces it —
+// so the two cannot drift into answering the same request differently. The
+// anchor is exclusive; the page is still oldest→newest.
+func (s *apiServer) serveChatOlder(w http.ResponseWriter, f chatListFilter, before chatAnchor, limit int) {
+	msgs, err := s.dal.listChatBefore(f, before.TS, before.ID, chatPageWindow(limit))
+	if err != nil {
+		internalError(w, err)
+		return
 	}
-	if callerOnly {
-		filtered := msgs[:0]
-		for _, m := range msgs {
-			if m.Sender == actor || m.Recipient == actor {
-				filtered = append(filtered, m)
-			}
-		}
-		msgs = filtered
+	msgs, next := trimChatPageOlder(msgs, limit)
+	s.writeChatPage(w, msgs, next)
+}
+
+// trimChatPageOlder cuts the one extra row chatPageWindow asked for off an
+// OLDER-walking page and mints the cursor for the next one.
+//
+// The page arrives oldest→newest, so the surplus row is the OLDEST one — drop
+// the front. The next cursor then names the oldest row STILL IN THE PAGE, which
+// is exactly the exclusive upper bound the next page needs.
+//
+// 🔴 NO SURPLUS ⇒ NO CURSOR, and no cursor is the end of the walk. This is the
+// only place that decision is made for this direction, so "the walk terminates"
+// is a property of one function rather than a habit spread over two handlers.
+//
+// 🔴 THE CURSOR ALWAYS STRICTLY ADVANCES, because it is minted from a row that
+// was RETURNED and the next page is strictly older than it. A caller looping
+// "until next_cursor is absent" therefore cannot spin: each turn either hands
+// back at least one row and a strictly older position, or ends. An uncapped
+// (negative limit) read returns everything and mints nothing, and a limit of 0
+// reads nothing and so has no position to name.
+func trimChatPageOlder(msgs []ChatMessage, limit int) ([]ChatMessage, string) {
+	if limit <= 0 || len(msgs) <= limit {
+		return msgs, ""
 	}
-	if limit >= 0 {
-		if limit == 0 {
-			msgs = nil
-		} else if len(msgs) > limit {
-			msgs = msgs[len(msgs)-limit:]
-		}
-	}
-	if with != "" && !peek && len(msgs) > 0 {
-		newest := msgs[0].TS
-		for _, m := range msgs {
-			if m.TS > newest {
-				newest = m.TS
-			}
-		}
-		effective, advanced, err := s.dal.PutChatRead(ChatRead{
-			ReaderID: currentActor(r), PeerID: with, LastReadTS: newest,
-		})
-		if err != nil {
-			internalError(w, err)
+	msgs = msgs[len(msgs)-limit:]
+	return msgs, encodeChatCursor(chatCursorOlder, chatAnchor{TS: msgs[0].TS, ID: msgs[0].ID})
+}
+
+// serveChatUnread answers ?unread=true — the caller's OWN unread, OLDEST FIRST,
+// `limit` taking the OLDEST batch and ?cursor= walking TOWARDS THE NEWER.
+//
+// OLDEST FIRST IS THE OPPOSITE END from the default listing, and that is the
+// point: a backfill is re-read in the order it was said, so the batch a caller
+// gets first must be the one it fell behind on first. Taking the newest batch
+// instead would print the end of a conversation before its beginning.
+//
+// 🔴 UNREAD IS JUDGED PER (caller, sender) — see DAL.listChatUnread, which
+// holds the SQL and the reason. Nothing here narrows or widens that.
+//
+// 🔴 NOTHING IS WRITTEN. Paging the whole backlog leaves every line of it
+// unread; POST /api/chat/mark-read is the only door that clears it.
+//
+// `limit` keeps this route's legacy semantics rather than the window path's
+// 1..200 bound: 0 is an empty page and a NEGATIVE limit is uncapped (and then
+// mints no cursor, because everything is already in the answer).
+func (s *apiServer) serveChatUnread(w http.ResponseWriter, actor string, f chatListFilter, limit int, cursor *string) {
+	var after *chatAnchor
+	if cursor != nil {
+		a, refusal, ok := decodeChatCursor(*cursor, chatCursorNewer)
+		if !ok {
+			writeError(w, http.StatusUnprocessableEntity, refusal)
 			return
 		}
-		if advanced {
-			s.publishChatRead(effective, requestTrigger(r))
-		}
+		after = &a
 	}
-	out := []chatMessageDTO{}
-	for _, m := range msgs {
-		out = append(out, s.servedChatMessageDTO(m))
+	if limit == 0 {
+		s.writeChatPage(w, nil, "")
+		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	msgs, err := s.dal.listChatUnread(actor, f, after, chatPageWindow(limit))
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	msgs, next := trimChatPageNewer(msgs, limit)
+	s.writeChatPage(w, msgs, next)
+}
+
+// trimChatPageNewer is trimChatPageOlder's mirror for a walk going TOWARDS THE
+// NEWER: the page arrives oldest→newest, so the surplus row is the NEWEST one —
+// drop the back — and the next cursor names the newest row STILL IN THE PAGE,
+// the exclusive lower bound of the next batch.
+//
+// The same two guarantees hold and for the same reasons: no surplus ⇒ no cursor
+// ⇒ the walk has ended, and the cursor strictly advances because it is minted
+// from a returned row that the next page starts strictly after.
+func trimChatPageNewer(msgs []ChatMessage, limit int) ([]ChatMessage, string) {
+	if limit <= 0 || len(msgs) <= limit {
+		return msgs, ""
+	}
+	msgs = msgs[:limit]
+	last := msgs[len(msgs)-1]
+	return msgs, encodeChatCursor(chatCursorNewer, chatAnchor{TS: last.TS, ID: last.ID})
 }
 
 // isPreviewableMime: a mime the browser renders in a new tab (image/*, text/*,
@@ -964,8 +1685,8 @@ func (s *apiServer) HandleGetChatAttachmentApiChatAttachmentAttachmentIdGet(w ht
 	_, _ = w.Write(att.Data)
 }
 
-// GET /api/chat/attachments/{attachment_id}/share-link — mint the permanent
-// share link for ONE attachment: the serve path carrying its ?sig= HMAC
+// GET /api/chat/attachments/{attachment_id}/share-link — mint the share link
+// for ONE attachment: the serve path carrying its ?sig= HMAC
 // credential (sharesig.go). Gated like every chat route; 404 for an unknown
 // blob id so a caller cannot mint links into the void. The URL is
 // server-relative — the client prefixes its own origin.
@@ -981,7 +1702,7 @@ func (s *apiServer) HandleGetChatAttachmentShareLinkApiChatAttachmentsAttachment
 	}
 	writeJSON(w, http.StatusOK, ChatAttachmentShareLinkDTO{
 		Url: "/api/chat/attachment/" + attachmentId +
-			"?sig=" + shareSigFor(s.secret, attachmentId),
+			"?sig=" + shareSigForRing(s.keys, attachmentId),
 	})
 }
 
@@ -989,28 +1710,28 @@ func (s *apiServer) HandleGetChatAttachmentShareLinkApiChatAttachmentsAttachment
 // every attachment of the member's conversations, newest→oldest, each row
 // carrying the message's sender identity. READ-ONLY (no watermark advance);
 // a blank with is 422.
+//
+// Reads chat_attachment_ref (migration 00074), NOT chat_message. Before that
+// index existed this handler pulled the WHOLE chat table into memory and
+// filtered, flattened and sorted it in Go — measured against the live site,
+// the whole-table read was ~25 ms of a 1.18 s response, so the index is not
+// what makes this endpoint fast; it is what stops the cost growing with the
+// table. The rows still all come back in one response (no paging in this
+// pass), which is where the remaining ~473 ms lives.
 func (s *apiServer) HandleListChatAttachmentsApiChatAttachmentsGet(w http.ResponseWriter, r *http.Request, params HandleListChatAttachmentsApiChatAttachmentsGetParams) {
 	peer := trimmedOrEmpty(params.With)
 	if peer == "" {
 		writeError(w, http.StatusUnprocessableEntity, "with is required")
 		return
 	}
-	msgs, err := s.dal.ListChat()
+	// newest→oldest, with equal-ts messages in ascending id order and a
+	// message's posted attachment order preserved — the same total order the
+	// pre-index handler produced with a stable sort, now served by the index.
+	refs, err := s.dal.ListChatAttachmentRefsFor(peer)
 	if err != nil {
 		internalError(w, err)
 		return
 	}
-	var involved []ChatMessage
-	for _, m := range msgs {
-		if m.Sender == peer || m.Recipient == peer {
-			involved = append(involved, m)
-		}
-	}
-	// newest→oldest, STABLE (equal-ts messages keep stream order; a message's
-	// posted attachment order is preserved).
-	sort.SliceStable(involved, func(i, j int) bool {
-		return involved[i].TS > involved[j].TS
-	})
 	members, err := s.dal.ListMembers()
 	if err != nil {
 		internalError(w, err)
@@ -1020,30 +1741,23 @@ func (s *apiServer) HandleListChatAttachmentsApiChatAttachmentsGet(w http.Respon
 	for _, m := range members { // ANY roster status — dismissed still reads by name
 		names[m.ID] = m.Name
 	}
+	// A ref with no id never reaches the index (both the backfill and the
+	// triggers drop it), so the "never fabricate a serve URL" guard the
+	// in-memory version carried lives in the migration now.
 	entries := []chatGalleryEntryDTO{}
-	for _, m := range involved {
-		refs, _ := m.Meta["attachments"].([]any)
-		for _, refAny := range refs {
-			ref, _ := refAny.(map[string]any)
-			attID, _ := ref["id"].(string)
-			if attID == "" {
-				continue // never fabricate a serve URL for a ref with no id
-			}
-			mimeType, _ := ref["mime"].(string)
-			filename, _ := ref["filename"].(string)
-			entries = append(entries, chatGalleryEntryDTO{
-				ID:        attID,
-				URL:       "/api/chat/attachment/" + attID,
-				Filename:  filename,
-				Mime:      mimeType,
-				IsImage:   strings.HasPrefix(mimeType, "image/"),
-				MessageID: m.ID,
-				From:      m.Sender,
-				FromName:  names[m.Sender],
-				To:        m.Recipient,
-				TS:        m.TS,
-			})
-		}
+	for _, r := range refs {
+		entries = append(entries, chatGalleryEntryDTO{
+			ID:        r.AttachmentID,
+			URL:       "/api/chat/attachment/" + r.AttachmentID,
+			Filename:  r.Filename,
+			Mime:      r.Mime,
+			IsImage:   strings.HasPrefix(r.Mime, "image/"),
+			MessageID: r.MessageID,
+			From:      r.Sender,
+			FromName:  names[r.Sender],
+			To:        r.Recipient,
+			TS:        r.TS,
+		})
 	}
 	writeJSON(w, http.StatusOK, entries)
 }
@@ -1126,7 +1840,6 @@ func (s *apiServer) HandleResumeSummaryApiResumeSummaryGet(w http.ResponseWriter
 		Roster:             snap.Roster,
 		Machines:           &snap.Machines,
 		Overview:           snap.Overview,
-		DocCapacity:        snap.DocCapacity,
 		Note:               resumeNote,
 	})
 }
@@ -1145,9 +1858,6 @@ type resumeWakeSnapshot struct {
 	Roster      []resumeRosterMemberDTO
 	Machines    resumeMachinesDTO
 	Overview    resumeOverviewDTO
-	// DocCapacity is the near-cap document block (T-6bd2), empty on a station
-	// whose long-lived documents all still have room.
-	DocCapacity []docCapacityRow
 }
 
 // resumeSnapshotParts assembles the caller's wake snapshot: the recent chat
@@ -1222,21 +1932,19 @@ func (s *apiServer) resumeSnapshotParts(actor string) (resumeWakeSnapshot, error
 	if err != nil {
 		return resumeWakeSnapshot{}, err
 	}
-	chat, cut, chatChars := resumeChatBlock(
+	chat, cut, chatChars, err := s.resumeChatBlock(
 		actor, msgs, names, cardsByID,
 		resumeChatPackBudget(s.chatBudget(), snap.GeneratedAt))
+	if err != nil {
+		return resumeWakeSnapshot{}, err
+	}
 	snap.Chat, snap.ChatCut = chat, cut
 
-	tasks, tasksOpenTotal, stepNotes, err := s.resumeTasksFor(actor, cardsByID)
+	tasks, tasksOpenTotal, err := s.resumeTasksFor(actor, cardsByID)
 	if err != nil {
 		return resumeWakeSnapshot{}, err
 	}
 	snap.Tasks = tasks
-	// T-6bd2 — the near-cap block. It is assembled LAST and cannot fail: see the
-	// no-error note on docCapacityFor. On a station whose documents all have
-	// room it is empty, and an empty slice is omitted from the payload entirely
-	// rather than carried as [], so a wake that has nothing to say says nothing.
-	snap.DocCapacity = s.docCapacityFor(actor, stepNotes)
 	detailChars := 0
 	answeredSteps, answeredStepChars := 0, 0
 	for _, t := range tasks {
@@ -1267,12 +1975,6 @@ func (s *apiServer) resumeSnapshotParts(actor string) (resumeWakeSnapshot, error
 
 		StepsOnAnsweredCard:      answeredSteps,
 		StepsOnAnsweredCardChars: answeredStepChars,
-		// The near-cap block is text this payload CARRIES, so it is sized here
-		// like the roster and the answered-card pointers — and folded into the
-		// peek's estimated_total_chars for the same reason. It reads
-		// snap.DocCapacity, the very slice that is serialised, so the number and
-		// the block cannot describe different things.
-		DocCapacityChars: docCapacityChars(snap.DocCapacity),
 	}
 	return snap, nil
 }
@@ -1316,8 +2018,19 @@ func resumeChatCarriesFullBody(subject string, m ChatMessage) bool {
 // resumeChatMessageDTO projects ONE message for the wake snapshot: names beside
 // ids, a rendered timestamp beside the epoch one, the body collapsed unless
 // exempt, and the reply card folded in place.
-func resumeChatMessageDTO(subject string, m ChatMessage, names map[string]string, cards map[string]ReplyCard) chatMessageDTO {
+func (s *apiServer) resumeChatMessageDTO(subject string, m ChatMessage, names map[string]string, cards map[string]ReplyCard) (chatMessageDTO, error) {
 	d := newChatMessageDTO(m)
+	// The SAME unconditional join the served path does (chatReplyQuote), with
+	// the snapshot's own name map handed in — so a waking agent reads what a
+	// reply was aimed at without a second tool call, exactly as the browser does
+	// without a second request. Its error rides up the same way: a wake snapshot
+	// that could not read a quote fails, rather than telling the waking agent a
+	// message it was answering no longer exists.
+	quote, err := s.chatReplyQuote(d.ReplyTo, names)
+	if err != nil {
+		return chatMessageDTO{}, err
+	}
+	d.ReplyToChat = quote
 	d.FromName = resumeDisplayName(m.Sender, names)
 	d.ToName = resumeDisplayName(m.Recipient, names)
 	d.TSDisplay = resumeDisplayTime(m.TS)
@@ -1341,11 +2054,11 @@ func resumeChatMessageDTO(subject string, m ChatMessage, names map[string]string
 			if c.FromMember == subject {
 				options := c.Options
 				if options == nil {
-					options = []string{}
+					options = []ReplyCardOption{}
 				}
 				d.Card = &chatInlineReplyCardDTO{
 					Options:           options,
-					AnswerOptionIdx:   c.AnswerOptionIdx,
+					AnswerOptionIdxs:  c.AnswerOptionIdxs,
 					AnswerText:        c.AnswerText,
 					AnsweredTS:        c.AnsweredTS,
 					AnsweredAtDisplay: resumeDisplayTime(c.AnsweredTS),
@@ -1353,7 +2066,7 @@ func resumeChatMessageDTO(subject string, m ChatMessage, names map[string]string
 			}
 		}
 	}
-	return d
+	return d, nil
 }
 
 // resumeChatCollapseIsWorthIt answers whether folding a body actually SAVES
@@ -1383,24 +2096,38 @@ func resumeChatCollapseIsWorthIt(omitted int) bool {
 
 // resumeChatMessageChars is the rune cost ONE projected message puts on the
 // wire. It counts the body as CARRIED (post-collapse) plus everything the wake
-// format adds around it. Ids are deliberately NOT counted: they were already on
-// the wire before this format existed and were never in chat_chars, so counting
-// them now would move the number for a reason that has nothing to do with what
-// changed.
+// format adds around it. Ids are deliberately NOT counted — the rule is flatly
+// "no id-shaped field is billed", and it is a RULE rather than a history: an
+// earlier version of this note justified it as "they were already on the wire
+// before this format existed", which was true of `id`/`from`/`to` and FALSE of
+// `reply_to`, a field T-4e95 added. The conclusion did not change (an id is a
+// fixed-size handle the reader follows, not prose it has to read), but the
+// reason had to, because the old one silently stopped applying the moment a new
+// id-shaped field arrived. Applies to every id-shaped field, present and
+// future.
 func resumeChatMessageChars(d chatMessageDTO) int {
 	n := utf8.RuneCountInString(d.Body) +
 		utf8.RuneCountInString(d.FromName) +
 		utf8.RuneCountInString(d.ToName) +
 		utf8.RuneCountInString(d.TSDisplay) +
 		len(strconv.Itoa(d.BodyOmittedChars))
+	// The quote line is PROSE THIS PAYLOAD CARRIES, so it is billed like every
+	// other character the wake format adds. Its id is not, under the same flat
+	// rule as every other id-shaped field above — the rule, not a history about
+	// which fields happened to exist first.
+	if d.ReplyToChat != nil {
+		n += utf8.RuneCountInString(d.ReplyToChat.FromName) +
+			utf8.RuneCountInString(d.ReplyToChat.ToName) +
+			utf8.RuneCountInString(d.ReplyToChat.Content)
+	}
 	if d.Card != nil {
 		for _, o := range d.Card.Options {
-			n += utf8.RuneCountInString(o)
+			n += utf8.RuneCountInString(o.Text)
 		}
 		n += utf8.RuneCountInString(d.Card.AnswerText) +
 			utf8.RuneCountInString(d.Card.AnsweredAtDisplay)
-		if d.Card.AnswerOptionIdx != nil {
-			n += len(strconv.Itoa(*d.Card.AnswerOptionIdx))
+		for _, idx := range d.Card.AnswerOptionIdxs {
+			n += len(strconv.Itoa(idx))
 		}
 	}
 	return n
@@ -1435,18 +2162,34 @@ func resumeChatMessageChars(d chatMessageDTO) int {
 // packer that spent the whole constant would put overview.chat_chars over it by
 // construction, which is the defect this whole change exists to remove.
 //
+// 🔴 PROJECT INSIDE THE WALK, NOT BEFORE IT. This used to build a DTO for ALL
+// `msgs` (resumeChatFetch is 500) and then throw most of them away — and since
+// T-4e95 every projection costs a POINT QUERY for the reply quote, the discarded
+// ones were pure waste that grew with the conversation and with nothing else.
+// 🔴 SAY WHICH NUMBER IS WHICH. An earlier version of this line read
+// "10.0ms → 32.2ms, 3.2×", which reads like this change made the snapshot three
+// times SLOWER. It is the other way round. Measured here on a full window (500
+// messages, every one of them a reply, budget 13000, 20 runs after a warm-up):
+// BEFORE (project all 500, then walk) 6.6–7.8ms; AFTER (project inside the walk)
+// 1.1–1.8ms — 4.4× to 5.9× FASTER, and the gap widens with the conversation
+// because the discarded projections are what grow.
+//
+// The output is byte-for-byte what the two-pass version produced: same order,
+// same costs, same cut, no new branch (checked on the same fixture: 113 messages
+// and 12995 chars either way).
+//
+// 🔴 THE ERROR BEHAVIOUR IS NOT THE SAME, THOUGH, and "byte-for-byte" on its own
+// invites the reader to assume nothing changed. The two-pass version projected
+// messages that the budget was always going to throw away, so an unreadable
+// quote on ONE OF THOSE took the whole snapshot to a 500 over a message that was
+// never going to be sent. The one-pass walk never touches them, so that 500 is
+// gone. Same bytes on the success path, strictly fewer failures on the other.
+//
+// Batching the quote reads is a DIFFERENT change and is deliberately not made
+// here.
+//
 // Returns the messages oldest→newest, the cut marker, and the block's rune cost.
-func resumeChatBlock(subject string, msgs []ChatMessage, names map[string]string, cards map[string]ReplyCard, budget int) ([]chatMessageDTO, resumeChatCutDTO, int) {
-	type packedMsg struct {
-		dto  chatMessageDTO
-		cost int
-	}
-	all := make([]packedMsg, 0, len(msgs))
-	for _, m := range msgs {
-		d := resumeChatMessageDTO(subject, m, names, cards)
-		all = append(all, packedMsg{dto: d, cost: resumeChatMessageChars(d)})
-	}
-
+func (s *apiServer) resumeChatBlock(subject string, msgs []ChatMessage, names map[string]string, cards map[string]ReplyCard, budget int) ([]chatMessageDTO, resumeChatCutDTO, int, error) {
 	// The read filled its window, so older messages MAY exist that were never
 	// even fetched. Reported as a cut whether or not the budget stopped the walk.
 	//
@@ -1454,26 +2197,31 @@ func resumeChatBlock(subject string, msgs []ChatMessage, names map[string]string
 	// nothing older reports a cut that is not there. That costs a reader one
 	// wasted get_chat; the opposite error costs it a conversation it never learns
 	// exists.
-	atFetchCap := len(all) >= resumeChatFetch
+	atFetchCap := len(msgs) >= resumeChatFetch
 
 	used := 0
-	first := len(all) // index of the OLDEST message that made it in
 	dropped := false
-	for i := len(all) - 1; i >= 0; i-- { // newest first: `all` is oldest→newest
-		if used+all[i].cost > budget {
+	// Newest first (`msgs` is oldest→newest), so this collects in reverse.
+	rev := make([]chatMessageDTO, 0, len(msgs))
+	for i := len(msgs) - 1; i >= 0; i-- {
+		d, err := s.resumeChatMessageDTO(subject, msgs[i], names, cards)
+		if err != nil {
+			return nil, resumeChatCutDTO{}, 0, err
+		}
+		cost := resumeChatMessageChars(d)
+		if used+cost > budget {
 			// Everything from here back is older, so the walk is over.
 			dropped = true
 			break
 		}
-		used += all[i].cost
-		first = i
+		used += cost
+		rev = append(rev, d)
 	}
 
-	// `all` is already the one chronological stream the chat surface serves, so
-	// the surviving suffix is in order with no re-sort needed.
+	// Back into the one chronological stream the chat surface serves.
 	chat := []chatMessageDTO{}
-	for i := first; i < len(all); i++ {
-		chat = append(chat, all[i].dto)
+	for i := len(rev) - 1; i >= 0; i-- {
+		chat = append(chat, rev[i])
 	}
 
 	cut := resumeChatCutDTO{}
@@ -1481,7 +2229,7 @@ func resumeChatBlock(subject string, msgs []ChatMessage, names map[string]string
 		cut.Omitted = true
 		cut.Hint = resumeChatCutHint
 	}
-	return chat, cut, used
+	return chat, cut, used, nil
 }
 
 // resumeChatPackBudget is what resumeChatBlock may spend on MESSAGES, once the
@@ -1523,11 +2271,14 @@ func resumeChatPackBudget(budget int, generatedAt string) int {
 // 🔴 COST DISCIPLINE — read this before adding anything here. resume_summary is
 // called by EVERY agent on EVERY wake, so a query in this function is paid
 // fleet-wide, forever. In particular this deliberately does NOT reuse the
-// GET /api/members path: that one computes unread counts through a full
-// ListChat() table scan (api_helpers.go unreadCountsForRequest), and hanging
-// the most expensive query in the system off the boot path would multiply it by
-// fleet size. Everything below is one bounded query or in-memory:
-//   - ONE ListMembersIncludingOutsource (single SELECT over the member table)
+// GET /api/members path: that one computes unread counts through a chat-wide
+// aggregate (api_helpers.go unreadCountsForRequest → DAL.UnreadCountsFor), and
+// hanging a whole-chat_message query off the boot path would multiply it by
+// fleet size. ⚠️ That query is CHEAPER than it was when this note was written —
+// T-48 replaced a full ListChat() table scan + a Go fold with one SQL
+// aggregate — but cheaper is not free, and the reason to keep it off the wake
+// path is unchanged. Everything below is one bounded query or in-memory:
+//   - ONE ListMembers (single SELECT over the member table)
 //   - ONE hub.OnlineMembers map (in-memory; NOT one IsOnline call per member)
 //   - observedHost / PresenceState (pure + in-memory)
 //   - ONE role lookup per DISTINCT role, deduped below — not per member
@@ -1544,7 +2295,7 @@ func resumeChatPackBudget(budget int, generatedAt string) int {
 //     contractor — never a per-contractor ListTaskSteps, which would drag
 //     back every step's Name/DoD text onto a path every agent boots through.
 func (s *apiServer) resumeFloorParts(actor string) ([]resumeRosterMemberDTO, resumeMachinesDTO, int, int, map[string]string, error) {
-	members, err := s.dal.ListMembersIncludingOutsource()
+	members, err := s.dal.ListMembers()
 	if err != nil {
 		return nil, resumeMachinesDTO{}, 0, 0, nil, err
 	}
@@ -1842,22 +2593,6 @@ func answeredCardStepChars(rows []resumeAnsweredCardStepDTO) int {
 	return n
 }
 
-// docCapacityChars sizes the doc_capacity block the way rosterChars sizes the
-// roster: every character of text the payload actually carries, the rendered
-// numbers included (a reader pays for "12500" exactly as it pays for the label).
-// `writable` is counted too — it arrives on the wire as the four or five
-// characters of `true`/`false`, and the whole point of this number is that it
-// stops leaving carried text uncounted.
-func docCapacityChars(rows []docCapacityRow) int {
-	n := 0
-	for _, r := range rows {
-		n += utf8.RuneCountInString(r.Doc) + utf8.RuneCountInString(r.Action) +
-			len(strconv.Itoa(r.SizeChars)) + len(strconv.Itoa(r.CapChars)) +
-			len(strconv.Itoa(r.Remaining)) + len(strconv.FormatBool(r.Writable))
-	}
-	return n
-}
-
 func machinesChars(m resumeMachinesDTO) int {
 	n := utf8.RuneCountInString(m.YouAreOn)
 	for _, x := range m.List {
@@ -1909,29 +2644,21 @@ func (s *apiServer) HandlePeekResumeSummarySizeApiResumeSummarySizeGet(w http.Re
 		// T-f278: steps_on_answered_card_chars is the FIFTH addend. The
 		// answered-card pointers are text the snapshot CARRIES, so leaving
 		// them out would make the peek understate what it exists to measure —
-		// the same mistake the roster/machine blocks were fixed for above.
-		//
-		// T-6bd2: doc_capacity_chars is the SIXTH, and it is the THIRD time the
-		// note above had to be applied to a block that had just been added —
-		// T-6bd2 shipped doc_capacity as carried text and did not count it.
-		// Measured on the nine-near-cap fixture: the peek reported 890 while the
-		// block it omitted was 1341 characters (2119 bytes of JSON), so the
-		// number the boot threshold gates on described less than half of what
-		// the caller was about to read. So stop reading the paragraph as history
-		// and read it as the rule: a block that is SERIALISED INTO THIS PAYLOAD
-		// is an addend, the moment it is added. tasks_detail_chars is the only
-		// member of the other kind — text the caller would have to go and fetch.
+		// the same mistake the roster/machine blocks were fixed for above. Read
+		// the paragraph as a rule rather than as history: a block that is
+		// SERIALISED INTO THIS PAYLOAD is an addend, the moment it is added.
+		// tasks_detail_chars is the only member of the other kind — text the
+		// caller would have to go and fetch.
 		//
 		// ⚠️ NOTHING HERE CATCHES THE NEXT ONE AUTOMATICALLY.
-		// TestPeekCountsEveryBlockThePayloadCarries pins doc_capacity and
 		// TestEveryFaceOfThePeekSumMatchesWhatTheServerActuallyAdds keeps the
-		// prose faces agreeing with this expression — but a SEVENTH block added
+		// prose faces agreeing with this expression — but a SIXTH block added
 		// to the payload and left out of this sum turns nothing red, exactly as
-		// the previous three did not. Whoever adds it has to add its addend and
+		// the previous two did not. Whoever adds it has to add its addend and
 		// its assertion by hand.
 		EstimatedTotalChars: overview.ChatChars + overview.TasksDetailChars +
 			overview.RosterChars + overview.MachinesChars +
-			overview.StepsOnAnsweredCardChars + overview.DocCapacityChars,
+			overview.StepsOnAnsweredCardChars,
 		Note: peekNote,
 	})
 }
@@ -1944,17 +2671,20 @@ func (s *apiServer) HandlePeekResumeSummarySizeApiResumeSummarySizeGet(w http.Re
 // unmodified resumeSnapshotParts(actor) the self-scoped route uses, called
 // with actor=member_id — no near-copy of the assembly, so this payload can
 // never drift from what resume_summary itself would carry for that member.
-// 404 if member_id does not resolve to a LIVE roster row — but the resolver is
-// resolveResumeSummaryTarget, NOT resolveMember: this is the ONE member verb
-// the owner released to workers (T-4595), so the kind='outsource' fold that
-// every other /api/members/{member_id}/... verb keeps is deliberately absent
-// here and an `ow-` id gets a 200. resolveMember's other two refusals (absent
-// row, soft-removed row) still apply, so a released worker's summary stops
-// being readable the moment its roster row goes.
+// 404 if member_id does not resolve to a LIVE roster row. The lookup is scoped
+// anyMember: this was the FIRST member verb the owner released to workers
+// (T-4595), and since 2026-08-28 reads are that way by default. The other two
+// refusals (absent row, soft-removed row) still apply, so a released worker's
+// summary stops being readable the moment its roster row goes.
 // The original /api/resume-summary route and its identity lock (actor :=
 // currentActor(r), caller = target, always) are untouched by this addition.
 func (s *apiServer) HandleGetMemberResumeSummaryApiMembersMemberIdResumeSummaryGet(w http.ResponseWriter, r *http.Request, memberId string) {
-	m, err := s.resolveResumeSummaryTarget(memberId)
+	// anyMember, not a resolver of its own: this door reads a CONTRACTOR's
+	// resume summary by design (T-4595, rc-64b712bfc703 ①). Before the scope
+	// parameter it needed a second helper (resolveResumeSummaryTarget) purely to
+	// escape a hard-wired refusal; with the scope named at the call site that
+	// helper was one more copy of the same lookup and is gone.
+	m, err := s.resolveMember(memberId, anyMember)
 	if err != nil {
 		writeResolveError(w, err, "member", memberId)
 		return
@@ -1974,10 +2704,9 @@ func (s *apiServer) HandleGetMemberResumeSummaryApiMembersMemberIdResumeSummaryG
 		// machines.you_are_on resolves for the TARGET member, not for the
 		// admin doing the lookup — this route answers "what does THAT agent
 		// wake up to", so every field must be from that agent's vantage.
-		Machines:    &snap.Machines,
-		Overview:    snap.Overview,
-		DocCapacity: snap.DocCapacity,
-		Note:        resumeNote,
+		Machines: &snap.Machines,
+		Overview: snap.Overview,
+		Note:     resumeNote,
 	})
 }
 
@@ -1987,18 +2716,14 @@ func (s *apiServer) HandleGetMemberResumeSummaryApiMembersMemberIdResumeSummaryG
 // what the office actually shows). Kept as its own cheap endpoint so the dot can
 // refetch on every "chat" / "chat_read" SSE delta without pulling the roster.
 func (s *apiServer) HandleChatUnreadCountApiChatUnreadCountGet(w http.ResponseWriter, r *http.Request) {
-	actor := currentActor(r)
-	messages, err := s.dal.ListChat()
+	// The unread numbers come from the ONE entry point every unread face shares
+	// (api_helpers.go). What is below — the live-conversation filter and the sum
+	// — is this surface's own business and deliberately stays here.
+	unread, err := s.unreadCountsForRequest(r)
 	if err != nil {
 		internalError(w, err)
 		return
 	}
-	receipts, err := s.dal.ListChatReads(actor, "")
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	unread := UnreadCounts(messages, receipts, actor)
 	// Count only conversations the owner can still see and clear: active
 	// members + live (not-yet-released) outsource workers. Removed members and
 	// released workers are gone from the office, so their leftover unread must

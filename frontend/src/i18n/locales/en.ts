@@ -28,8 +28,24 @@ export const en: Dict = {
     viewUnified: "Single column",
     viewSplit: "Side by side",
     wholeDocNote: "Whole document (nothing folded)",
+    // The heading over one side, when the host can show that side on its own.
+    openSide: (label: string) => `Open "${label}" on its own`,
     tooLargeLead: "Too long to compare line by line (",
     tooLargeTail: " lines).",
+    // The external, server-signed link to THIS comparison. Icon-only control
+    // (owner 2026-09-03: 「1. 用圖示」), so these three strings are the whole
+    // accessible name — and the failure one has to exist, because a copy that
+    // did not happen must never look like one that did.
+    copyShareLink: "Copy external link",
+    shareLinkCopied: "External link copied",
+    shareLinkCopyFailed: "Could not copy the link",
+  },
+  connection: {
+    lostTitle: "Live updates disconnected",
+    lostBody:
+      "Reconnecting automatically — what you see may be out of date.",
+    reload: "Reload",
+    ariaLabel: "Live connection status",
   },
   nav: {
     office: "Office",
@@ -83,7 +99,7 @@ export const en: Dict = {
     unassigned: "Unassigned",
     adhoc: "Ad-hoc",
     // Card-head label column (T-705e): equal-width labels, chip values. The
-    // ☑ #T-xxxx id badge sits on the badge row (v2) — no field label.
+    // ☑ #<task id> badge sits on the badge row (v2) — no field label.
     typeLabel: "Task type",
     assigneeLabel: "Assignee",
     creatorLabel: "Creator",
@@ -160,6 +176,13 @@ export const en: Dict = {
     // the collapsed label on purpose — it is the only thing that tells a step
     // WITH a note apart from one without while both are closed.
     stepNoteExpand: "Show note",
+    // T-66: the note text is fetched ON OPEN (owner rc-4c8065fb30a5). The card
+    // carries only its size, so there is a real gap between the click and the
+    // text — and the fetch can fail. Without these two the failed overlay is
+    // blank, which reads as "this step's note is empty" — exactly what the
+    // entry control already denied by being there at all.
+    stepNoteLoading: "Loading note…",
+    stepNoteFailed: "Could not load the note. Close and try again.",
     blockedByLabel: "Waiting on",
     // T-1d82: a dep row whose task cannot be resolved (deleted / bad id). Keeps
     // the raw id — it is the only handle left — but says plainly that there is
@@ -228,6 +251,7 @@ export const en: Dict = {
     replyInChat: "Reply in chat",
     gateMark: "Approval",
     replyAnsweredTag: "Answered",
+    replyWaitingTag: "Pending",
     expandReply: "Expand reply card",
     collapseReply: "Collapse reply card",
     // Artifact set (T-3dc5): the deliverables (file/image/link) pinned onto a
@@ -241,9 +265,31 @@ export const en: Dict = {
       empty: "No artifacts yet",
       close: "Close artifacts",
       remove: "Remove artifact",
-      removeConfirm: "Remove this artifact from the task card? (The file itself is kept.)",
+      removeConfirm:
+        "Remove this artifact from the task card? The file it points at NOW is kept, but if this artifact was ever replaced, every earlier version kept behind it is deleted for good — those files included.",
+      loading: "Loading artifacts…",
+      loadFailed: "Could not load artifacts — close and reopen to retry",
       downloadHint: "Download",
       openLinkHint: "Open link",
+      versionsEntry: "View versions",
+      versionsCountTail: "versions",
+      versionsTitle: "Artifact versions",
+      versionsClose: "Close versions",
+      versionsPaneLabel: "View",
+      versionsPaneContent: "Content",
+      versionsPaneDiff: "Diff",
+      versionsCurrent: "Current version",
+      versionsVersionLabel: "Version",
+      versionsByLabel: "by",
+      versionsEmpty: "No earlier versions",
+      versionsLoading: "Loading…",
+      versionsLoadError: "The version history could not be read",
+      versionsContentError: "This version's content could not be read",
+      versionsContentGone: "This version points at nothing",
+      versionsUnnamed: "Untitled",
+      versionsUnpinned: "This artifact is no longer pinned on the task",
+      versionsOpaqueLead: "Not a text file (",
+      versionsOpaqueTail: ") — look at the two versions one at a time instead.",
     },
   },
   // ── Awaiting-reply page (M2 reply cards, B2) ──
@@ -280,6 +326,13 @@ export const en: Dict = {
     expiredNote:
       "Expired without an answer; the member will re-ask if it still matters",
     aiPick: "AI pick",
+    // The line above the options: what KIND of card this is and, more
+    // importantly, what a click DOES. A single-select click answers the card on
+    // the spot, and a reply card is one-shot — "I tapped it to see" cannot be
+    // undone. The tick box / radio says single-or-several; this says consequence.
+    selectedCountLead: "Selected",
+    selectedCountTailOne: "option",
+    selectedCountTailMany: "options",
     yourPick: "Your choice",
     jumpToChat: "View in chat",
     inputPlaceholder: "Type a reply…",
@@ -426,7 +479,20 @@ export const en: Dict = {
       spawn: "Wake",
       cancel: "Cancel",
       stop: "Stop",
+      // The middle rung of the owner's escalation (2026-08-21, 停止 → 加速停止
+      // → 強制停止): put the close-out already under way on a clock and tell
+      // the member the instant. Not a kill, so no confirm.
+      // 🔴 owner 2026-08-22: these three words are ONE button's label at three
+      // stages, not three buttons side by side (「同一個按鈕 升級的概念」). Same
+      // keys, same words — what changed is that one slot now carries them all.
+      "accelerated-stop": "Accelerated stop",
       "force-stop": "Force stop",
+    },
+    // The one ladder slot has exactly two unpressable presentations, and both
+    // say why.
+    reason: {
+      alreadyStopping: "Already winding down — this button upgrades to Accelerated stop once the close-out is on a clock",
+      justAppeared: "Just upgraded — pausing a moment so a repeat click cannot escalate for you",
     },
     message: {
       windDown: "Winding down…",
@@ -441,6 +507,31 @@ export const en: Dict = {
     submit: "Sign in",
     submitting: "Signing in…",
     error: "Incorrect password, try again",
+    // Named BOTH fields on purpose. The server answers one indistinguishable
+    // 401 for a wrong password and a wrong code, because saying which failed
+    // would confirm a correct password to someone who guessed only that half.
+    // So the wall cannot know either — and must not pretend it does.
+    errorWithCode: "Incorrect password or code, try again",
+    codePlaceholder: "6-digit code",
+    codeHint: "From your authenticator app",
+    // 429 + Retry-After: the pool of concurrent verifications is full — not a
+    // wrong password, and not an attempt count; that counter no longer exists.
+    //
+    // LEAD/TAIL static leaves, assembled by i18n/compose.ts — NOT an
+    // interpolation function in the dictionary. theming-and-i18n.md forbids the
+    // latter, and the reason is invisible rather than cosmetic: the message-key
+    // whitelist admits STRING leaves only, so every word inside a template
+    // function is unreachable by a theme's wording overlay AND absent from the
+    // generated key list, which leaves the drift gate green while the sentence
+    // is silently un-overridable.
+    throttledLead: "Too many logins in flight. Try again in",
+    throttledTail: "s.",
+    // Shown when a refused sign-in turns out to be a MISSING code rather than a
+    // wrong password — i.e. this wall was out of date and has just grown its
+    // code field. It must explain why the field appeared, or the owner reads it
+    // as the password having been wrong.
+    codeNowRequired:
+      "This server now asks for a code as well. Enter the one in your authenticator app.",
   },
   firstRun: {
     title: "Set the admin password",
@@ -467,9 +558,26 @@ export const en: Dict = {
       "After you set your password the server installs this machine and wakes your assistant automatically. One step did not pass:",
     stepInstallWarden: "Install this machine",
     stepWakeAssistant: "Wake the assistant",
+    // Failure reasons (T-0648), keyed by the server's `code` — see zh.ts for
+    // WHY these live here instead of being shipped as the server's `reason`,
+    // and for why only the codes whose sentence is entirely fixed text are
+    // listed (the four that embed a Go error string keep the server's own
+    // wording, which IS the diagnosis).
+    reasons: {
+      install_failed:
+        "This machine could not be installed, so the assistant was not woken — waking one onto a machine that is not set up would just leave a grey member with no reason. The details below are the installer's full output.",
+      roster_missing:
+        "This server's own machine record is missing from the roster — the out-of-box setup did not finish. Restart the server and try again.",
+      assistant_missing:
+        "The assistant that ships with the studio is missing from the roster — the out-of-box setup did not finish. Restart the server and try again.",
+      interrupted:
+        "Automatic setup was interrupted partway through (the server restarted while it was running), so it never finished. Install this machine yourself from Monitor › Machines › Install, then bring the assistant online.",
+      faulted:
+        "Automatic setup stopped with an internal error. The server log has the details.",
+    },
     detailShow: "Show details",
     detailHide: "Hide details",
-    dismiss: "Got it",
+    dismiss: "Don't show again",
   },
   // ── Undelivered-dispatch notice (T-7fa1) ─────────────────────────────────
   // 🔴 The copy's scope must equal the BOOL's scope (review r1 BLOCKER-1). The
@@ -546,7 +654,7 @@ export const en: Dict = {
     themeImportLinkWorking: "Fetching…",
     themeImportLinkFailed: "Could not fetch that link",
     themeImportLinkShareNote:
-      "A share link carries no identity, never expires and cannot be revoked — anyone who can reach this studio and has the link can read the theme, including any private images inside it.",
+      "A share link carries no identity and never expires — anyone who can reach this studio and has the link can read the theme, including any private images inside it. A single link cannot be withdrawn; the only way to void one is coarse: remove the key that signed it under Settings › Signing keys, which voids every link that key signed at once.",
     themeImportDup: "A custom theme with that id already exists",
     themeImportReadFailed: "Could not read that file",
     themeLimitReached: "You've reached the custom-theme limit",
@@ -576,6 +684,63 @@ export const en: Dict = {
     pwdErrorCurrent: "That current password is wrong",
     pwdErrorTooShort: "The new password needs at least 8 characters",
     pwdErrorMismatch: "The two new passwords don't match",
+    // 429 from the shared in-flight cap on concurrent credential verifications —
+    // never from a failure count, which no longer exists. Without its own branch
+    // this renders as "that current password is wrong", which would tell an owner
+    // their CORRECT password is wrong. The wait is a moment, not minutes.
+    pwdErrorThrottled: "Too many verifications in flight — wait a moment and retry",
+    // ── second factor (TOTP) ──
+    mfa: "Two-factor authentication",
+    mfaSubOff: "Off — your password is the only key",
+    // The ship-dark rollout flag. Its own sentence because "the feature is not
+    // switched on for this server" and "you have not set it up" are different
+    // facts, and conflating them sends an owner looking for a button that is
+    // deliberately not there.
+    mfaSubUnavailable: "Not enabled on this server",
+    mfaOfferIntro:
+      "Two-factor is off for this server. Turn it on to let it be set up — this only makes the option available, it does not switch anything on for anyone.",
+    mfaOfferOn: "Enable two-factor for this server",
+    mfaOfferOff: "Disable the feature for this server",
+    // Said out loud because it is the whole safety property of the flag.
+    mfaOfferOffHint:
+      "This only hides the set-up option. A second factor that is already switched on keeps being required at sign-in, and can still be turned off above.",
+    mfaErrorOffer: "Could not change that setting",
+    mfaSubOn: "On — an authenticator code is required to sign in",
+    mfaIntro:
+      "Add a code from your phone's authenticator app to every sign-in. Recommended if this server is reachable from outside your machine.",
+    mfaEnrollStart: "Set up two-factor",
+    mfaEnrollStarting: "Preparing…",
+    mfaScanQrHint:
+      "Scan this with your authenticator app, or enter the setup key by hand.",
+    mfaQrAlt: "Setup QR code for two-factor authentication",
+    mfaScanHint:
+      "Add this to your authenticator app, then enter the code it shows to confirm.",
+    mfaSecretLabel: "Setup key",
+    mfaOpenInApp: "Open in authenticator app",
+    mfaCodePlaceholder: "6-digit code",
+    // Activating now re-proves the password, because arming a factor is as
+    // destructive as removing one — a stolen session must not be able to do it.
+    mfaActivateHint:
+      "Confirm with your password and the code from your authenticator.",
+    mfaErrorActivate: "That password or code is wrong",
+    // A 401 that is really a dead session, not a bad credential. These forms
+    // deliberately do not bounce to the login wall on 401 (a wrong credential
+    // must stay an inline error), so an expired token needs saying out loud.
+    mfaErrorSession: "Your session expired — sign in again",
+    mfaActivate: "Confirm and turn on",
+    mfaActivating: "Confirming…",
+    mfaActivated: "Two-factor is on",
+    mfaDisable: "Turn off two-factor",
+    mfaDisableHint:
+      "Confirm with your password and a current code. If you have lost your authenticator, run `ocserverd mfa-disable` on this machine instead.",
+    mfaDisabling: "Turning off…",
+    mfaDisabled: "Two-factor is off",
+    mfaErrorDisable: "That password or code is wrong",
+    // A DIFFERENT failure from a wrong code: the view could not read the
+    // current state at all, so it does not know what to offer. Saying "that
+    // code is wrong" here would name a code the owner never submitted.
+    mfaErrorLoad: "Could not read the two-factor status",
+    mfaRetry: "Try again",
   },
   chat: {
     offlineTitleSuffix: "is offline",
@@ -588,6 +753,7 @@ export const en: Dict = {
     wakeButton: "Wake",
     wakePending: "Waking…",
     emptyRange: "No messages in this range yet",
+    threadLoading: "Loading conversation…",
     inputPlaceholder: (name: string) => `Reply to ${name}…`,
     // M2-4 composer lock: shown IN PLACE OF the reply input while the member
     // is not online (offline / stopped / waking / stopping).
@@ -605,13 +771,48 @@ export const en: Dict = {
     removeAttachmentLabel: "Remove attachment",
     downloadAttachment: "Download",
     read: "Read",
-    // M2 batch 19 unread jump: the floating chip shown when a new message lands
-    // while scrolled up; the thin divider above the first unread message on entry.
-    newMessages: "New messages",
+    // T-48: the round arrow that surfaces whenever the NEWEST message is not in
+    // the viewport, and the x on the new-message preview strip that replaces it
+    // while unseen arrivals are waiting. (`newMessages`, the old 「有新訊息」
+    // pill's label, went with the pill — the strip names the sender and quotes
+    // the line instead, so a fixed sentence has nothing left to say.)
+    jumpToLatest: "Jump to the latest message",
+    newMsgPreviewDismiss: "Dismiss the new-message preview",
+    // M2 batch 19 unread jump: the thin divider above the first unread message
+    // on entry.
     unreadBelow: "Unread messages below",
     // T-bf82 scrollback: the top-of-thread marker once the history is
     // exhausted (hasMore=false).
     historyStart: "Beginning of conversation",
+    // 🔴 T-b0bb: a refetched newest page did not join onto the loaded thread
+    // and the backfill could not close the seam, so messages are missing from
+    // the MIDDLE — count and identity unknown. This string exists because the
+    // server has already marked those messages read: the unread count will not
+    // betray it and nothing else on screen looks wrong.
+    gapSuspected: "Some messages may be missing from this conversation (could not be recovered)",
+    // 🔴 T-48: the jump (跳到原訊息 / a kept link) asked for a message the
+    // server has no record of — a 404 on the anchor-window fetch, not an empty
+    // page. The thread falls back to the bottom, which on its own is EXACTLY
+    // the silent lie this ticket removed: indistinguishable from a jump that
+    // worked. So it is said out loud, on screen, in the reader's language.
+    jumpTargetMissing: "Couldn't find that message — it may have been cleared already.",
+    // 🔴 T-48 F3: a DIFFERENT fact, and it must not borrow the sentence above.
+    // The anchor fetch was overtaken by a newer load often enough to give up
+    // retrying; the message is still there and claiming it was cleared would be
+    // a lie with a dead end behind it. Say what happened — and let the RETRY
+    // BUTTON beside it be the next step. It used to say "open the link again",
+    // which cannot work: the jump latch is spent and the hash has not changed,
+    // so the same link fires no hashchange and no re-render (T-48, R3-5).
+    jumpTargetInterrupted:
+      "The jump was interrupted by newer messages — the message is still there.",
+    // 🔴 T-48: the read FAILED — a 5xx, a dropped connection, a timeout. The
+    // message is almost certainly still there, so this may not borrow either
+    // sentence above: "cleared already" ends the matter and nobody retries a
+    // message that is gone. Say what happened, and offer the retry.
+    jumpTargetUnreachable:
+      "Couldn't load that message just now — the connection to the office had a hiccup.",
+    jumpTargetRetry: "Try again",
+    jumpTargetMissingDismiss: "Dismiss this notice",
     // LINE-style day dividers in the message stream (centered pill at each day
     // crossing; sticky at the top while scrolling). weekday 0=Sun … 6=Sat; the
     // year only appears when it isn't the current year (LINE convention).
@@ -635,14 +836,30 @@ export const en: Dict = {
     galleryTabFiles: "Files",
     galleryEmptyImages: "No images yet",
     galleryEmptyFiles: "No files yet",
-    // M2 batch 18: uploader filter chips (options derived from the actual
-    // attachment senders, stacking with the Images/Files tabs).
+    // M2 batch 18: the uploader filter (options derived from the actual
+    // attachment senders, stacking with the Images/Files tabs). Reshaped from a
+    // chip row into the checkbox dropdown below by T-51 ②.
     gallerySenderFilterLabel: "Filter by uploader",
     gallerySenderAll: "All",
+    // T-51 ②: the chip row became a Jira-style checkbox dropdown, one line
+    // collapsed. There is deliberately NO search box — an early version had one
+    // and the owner removed it (2026-09-02): the whole objection that shaped
+    // this control was 「我怎麼會知道有誰，沒辦法打字」, and the list is sorted by
+    // how much each person sent, so the names worth finding are already on top.
+    gallerySenderSelected: (n: number) => `${n} selected`,
+    gallerySenderClear: "Clear selection",
+    // The empty state WITH a filter on. Distinct from galleryEmptyImages /
+    // galleryEmptyFiles on purpose: those describe the gallery, this one
+    // describes the filter, and saying the first while the second is true tells
+    // the reader their files are gone.
+    galleryEmptyFiltered: "No files from the uploaders you picked",
     galleryClose: "Close gallery",
     galleryPreviewHint: "Preview in a new tab",
     galleryDownloadHint: "Download",
-    // Permanent single-file share link (?sig= HMAC) — copied to the clipboard.
+    // Single-file share link (?sig= HMAC) — copied to the clipboard. No expiry,
+    // but not permanent: it follows the signing-key ring, so removing the key
+    // that signed it voids it (T-62). Kept in step with its Chinese twin in
+    // zh.ts — the first pass fixed one and not the other.
     copyShareLink: "Copy share link",
     shareLinkCopied: "Link copied",
     shareLinkCopyFailed: "Failed to copy link",
@@ -654,7 +871,43 @@ export const en: Dict = {
       close: "Close preview",
       loading: "Loading preview…",
       error: "Could not load the preview",
+      // T-59 — a comparison whose side names a document. The default
+      // column headings for a side that carried no label of its own, plus the
+      // marker that says a side is LIVE: the same link opened next month
+      // shows a different comparison, and the reader has to be able to see that
+      // from the screen rather than infer it.
+      diffSideCurrent: "Current saved content",
+      diffSideSeed: "Shipped default",
+      diffSideRevision: (id: string) => `Revision #${id}`,
+      diffSideLive: (label: string, at: string) => `${label} (read ${at} — changes over time)`,
+      // The compare could not be drawn because ONE SIDE is no longer there: a
+      // reclaimed blob, or a revision pruned out of the retention window. Said
+      // plainly, because the alternative — drawing the surviving side alone —
+      // marks every one of its lines as deleted, which is a confident wrong
+      // answer rather than a missing one.
+      diffSideGone: "One side of this comparison is no longer there, so it cannot be drawn.",
+      // Shown while ONE side is open on its own; takes the reader back to the
+      // comparison rather than closing the overlay, because they got here from
+      // inside it.
+      diffSideBack: "Back to comparison",
       unavailable: "This file cannot be previewed. Please download it.",
+      // T-36 — same "cannot be drawn here", but when the header's new-tab
+      // button is present the line must point at THAT, not back at Download:
+      // not having to copy the file elsewhere is the whole request.
+      unavailableOpenInNewTab:
+        "This file cannot be previewed here. Use “Open in a new tab” above.",
+      // T-36 — open the attachment in a tab of its own (the share link), for
+      // files the browser shows rather than downloads. The note beside it is
+      // deliberately in plain words: it describes what the reader will SEE, not
+      // the mechanism behind it.
+      openInNewTab: "Open in a new tab",
+      newTabStaticNote:
+        "The new tab only shows the file as it is — buttons and boxes on it will not respond.",
+      // T-51 ① — the two paging chevrons. They are the ONLY control for a
+      // zoomed image or a text file, where the arrow keys stay with the pan and
+      // the scroll, so the accessible name has to stand on its own.
+      previous: "Previous item",
+      next: "Next item",
       zoomControls: "Zoom image",
       zoomIn: "Zoom in",
       zoomOut: "Zoom out",
@@ -664,6 +917,53 @@ export const en: Dict = {
     // full-view overlay (a long answer is hard to read in the thread column).
     // Own messages do not carry it.
     expandMessage: "Open full view",
+    // T-4e95 reply-to-a-message: the per-row reply entry, the "replying to"
+    // banner above the composer and its x, and the quote line that points a
+    // message back at the one it answers.
+    //
+    // replyQuoteGone is the QUOTE ROW's miss sentence, and it is FIXED. Since
+    // 2026-08-21 the server ships the quoted message alongside every reply on
+    // every read, so the browser never waits for one: the only way this line
+    // appears is that the original is genuinely gone (cleared, or its sender
+    // removed). It is not retried and never re-resolves into something else.
+    replyAction: "Reply",
+    replyingTo: (name: string) => `Replying to ${name}`,
+    replyCancel: "Cancel reply",
+    // 🔴 THE LABEL CHANGED WITH THE BEHAVIOUR (owner ruling 2026-08-21). It was
+    // "Go to the original message" while the control scrolled the thread. It no
+    // longer scrolls anything: it reads that one message back and opens it in
+    // the full-view overlay. A button that says "go to" and opens a dialog is a
+    // small lie told on every reply row, so the words moved with the mechanism.
+    replyQuoteJump: "View the original message",
+    replyQuoteGone: "This message no longer exists",
+    // The read behind replyQuoteJump failed. NOT a claim about whether the
+    // original exists — that is replyQuoteGone's job and it lives on the quote
+    // line itself. This one only says the fetch did not come back, and it is
+    // said once, beside the button that was pressed.
+    replyQuoteOpenFailed: "Could not load that message",
+    // 🔴 THE BANNER'S MISS LINE IS NOT THE ROW'S, and the two must never be
+    // swapped. The ROW asks "did this read build a quote?" — a no there means
+    // the original really is gone, so that line is entitled to assert it.
+    // The BANNER asks something else entirely: it resolves the target from the
+    // LOADED WINDOW alone (messageById). Scroll back, aim at an old message,
+    // switch peers and come back to a freshly-loaded newest page, and the
+    // message is still there and the send still succeeds — the stored
+    // `reply_to` is right and the quote comes back whole — while the banner
+    // cannot see it. Printing the row's assertion here tells the owner
+    // something he can disprove himself.
+    // So the banner says the state-independent true thing instead.
+    replyingToEarlier: "Replying to an earlier message",
+    // The quote row's own accessible name. This repo has no sr-only utility
+    // (see MemberCard.presence-a11y.test.tsx), so the "this is a quotation, not
+    // what this person is saying now" fact travels as an aria-label on the row.
+    // Without it the accessibility tree linearises a reply as
+    // "Mira. Mira. what they said. View the original message. what I said" —
+    // the one thing this feature exists to convey is the thing a screen reader
+    // could not hear. replyQuoteRole is the version for a quote whose original
+    // is gone, so there is no sender to name; replyQuoteRoleWho names them when
+    // there is one.
+    replyQuoteRole: "Quoted message",
+    replyQuoteRoleWho: (name: string) => `Quoted message from ${name}`,
   },
   mp: {
     back: "Back",
@@ -715,6 +1015,10 @@ export const en: Dict = {
     machineMovingToLabel: "→ Moving to",
     pendingChangeLabel: "→ Changing to",
     windDownForChangeLabel: "Winding down to apply your change",
+    // 加速停止 / the second context threshold (T-ed79): the ONLY two causes that
+    // put the member on a clock. Saying "winding down" without the time would
+    // leave the owner blind to the deadline he just started.
+    windDownDeadlineLabel: "Winding down on a deadline",
     windDownByLabel: "by",
     windDownEffectSuffix: "at the latest",
     standby: "On standby",
@@ -735,6 +1039,13 @@ export const en: Dict = {
     lastOpFail: "failed",
     lastOpLogLabel: "View log",
     estimatedCost: "est. $",
+    costReset: "Reset",
+    costResetHint: "Reset this member's accumulated estimated spend to zero. This cannot be undone.",
+    costResetConfirm: "Reset to zero",
+    costResetError: "Reset failed — the figure was not cleared.",
+    costResetConfirmBodyLead: "This resets the accumulated ",
+    costResetConfirmBodyTail:
+      " to zero and starts counting again from 0. The figure is not kept anywhere else, so it cannot be recovered.",
     terminal: "Terminal · TMUX",
     copyCommand: "Copy command",
     copied: "Copied",
@@ -950,6 +1261,12 @@ export const en: Dict = {
       // This is a pointer from the server, not a completion marker; the
       // owner's answer may require a change.
       answeredCardSteps: "Steps on answered cards (read the card; not done)",
+      // T-91 — the label for the REVERSE dependency edge the wake snapshot's
+      // task row gained. There is deliberately no second key beside it for the
+      // handover hold: the cockpit already words that badge once, as
+      // `tasks.lockReassigning`, and the resume panel reuses it rather than
+      // minting a synonym that could later disagree with it.
+      blockingLabel: "Tickets waiting on this one:",
       generatedAtLabel: "This snapshot was taken at",
       // 🔴 THE PER-MESSAGE MARK IS A MARK, NOT A SENTENCE. It used to be
       // "This message is folded — 46 characters kept on the server (re-read it
@@ -1022,6 +1339,15 @@ export const en: Dict = {
     renamePlaceholder: "Enter display name",
     renameError: "Rename failed",
     accountsEmpty: "No account usage data yet",
+    // 帳號歸零 (T-53, owner ruling rc-5c5d7c7c6dcd) — the ACCOUNT's own figure,
+    // cleared without touching any member's.
+    costReset: "Reset",
+    costResetHint: "Reset this account's accumulated spend to zero. No member's figure is touched. This cannot be undone.",
+    costResetConfirm: "Reset to zero",
+    costResetError: "Reset failed — the figure was not cleared.",
+    costResetConfirmBodyLead: "This resets the account's accumulated ",
+    costResetConfirmBodyTail:
+      " to zero and starts counting again from 0. No member's own figure is touched. The figure is not kept anywhere else, so it cannot be recovered.",
     estimate: "est.",
     fiveHour: "5-hour window",
     sevenDay: "7-day window",
@@ -1237,6 +1563,31 @@ export const en: Dict = {
   // indicator and the monitor page's card. The PRIMARY sentence is always
   // derived from `code` (the reason* keys below); the server's `detail` is
   // shown only as secondary diagnostic text.
+  // Signing-key rotation (T-62)
+  signingKeys: {
+    title: "Signing keys",
+    intro:
+      "The server signs login credentials with a signing key. Several can exist at once: only one signs, the rest still verify — that is the transition window when a key is being replaced.",
+    loading: "Loading…",
+    signingBadge: "signing",
+    retiredBadge: "verify only",
+    createdLabel: "Created",
+    createdUnknown: "In use since before this was recorded",
+    countLabel: (n: number) => `${n} key${n === 1 ? "" : "s"} in the ring`,
+    rotateButton: "Create a new key",
+    rotateHint:
+      "Mints a new key and hands signing over to it. Nobody is logged out: the old key stays and keeps verifying, it just never signs again. Takes effect immediately — no restart.",
+    removeButton: "Remove",
+    removeConfirmTitle: "Remove this key?",
+    removeConfirmBody:
+      "Everything this key signed stops working the moment you confirm, with no grace period and no notice to anyone: credentials signed by it are refused, and the share links produced under it — file links and comparison links alike — break too.",
+    removeConfirmWarden:
+      "⚠️ Machine (warden) credentials carry no expiry and never lapse on their own. What decides whether this is safe is whether every machine has moved ONTO THE CURRENT KEY — not how many days have passed, and not merely whether it reconnected: a machine that came back still holding a credential signed by this key drops off the moment you press remove. A machine that is offline cannot move until it comes back.",
+    removeConfirmCancel: "Cancel",
+    removeConfirmOk: "Remove it",
+    actionFailed: "That action did not go through, and the server gave no reason.",
+    emptyState: "The keys could not be read.",
+  },
   backupHealth: {
     title: "Backup health",
     // `unknown` is not a quieter `healthy` — it means "we cannot tell", and
@@ -1265,6 +1616,9 @@ export const en: Dict = {
   settings: {
     title: "Settings",
     software: "System update & backup",
+    // Global context (T-a241): the boot / lifecycle documents are their own
+    // Settings section now, no longer inside the role journal.
+    globalContext: "Global context",
     roles: "Role journal",
     params: "Parameters",
     // ── theme management (T-16a1 P3b): moved here from the profile dropdown ──
@@ -1353,32 +1707,58 @@ export const en: Dict = {
     updateAvailable: "A newer version is available",
     upgrade: "Update to latest",
     catalogHash: "MCP catalog hash",
-    globalSection: "GLOBAL CONTEXT",
+    globalSection: "BOOT",
     systemName: "System interaction",
     systemSub: "How the system works, injected into every agent · editable",
     customName: "User additions",
     customSub: "Custom content appended to every agent's boot context · editable",
     roleDefsSection: "Role definitions",
-    bootName: "Boot sequence",
+    bootName: "Boot steps",
     bootSub: "What an AI follows while starting up · one per runtime · editable",
     bootRuntimeClaude: "Standard",
     bootRuntimeCodex: "Codex",
-    bootClaudeName: "Boot sequence (Claude Code)",
+    bootClaudeName: "Boot steps (Claude Code)",
     bootClaudeSub: "Boot SOP for the Claude Code runtime · editable",
-    bootCodexName: "Boot sequence (Codex CLI)",
+    bootCodexName: "Boot steps (Codex CLI)",
     bootCodexSub: "Boot SOP for the Codex App Server runtime · editable",
-    offboardName: "Offboard sequence",
+    offboardName: "Stop",
     offboardSub:
       "Wrap-up instructions handed to an agent when the server is about to collect its session · editable",
+    stopSection: "STOP",
+    taskEventSection: "TASK EVENTS",
+    acceleratedStopName: "Accelerated stop",
+    acceleratedStopSub:
+      "What an agent is told when it is asked to wrap up early · carries a deadline · editable",
+    taskCloseoutName: "Task close-out",
+    taskCloseoutSub:
+      "What an agent is told when one of its tasks is judged finished · editable",
+    taskReassignPredecessorName: "Task reassignment · to the predecessor",
+    taskReassignPredecessorSub:
+      "What an agent is told when a task it held is handed to somebody else · editable",
+    taskTakeoverWithPredecessorName: "Task reassignment · to the successor",
+    taskTakeoverWithPredecessorSub:
+      "What an agent is told when it picks up a task somebody else worked on · editable",
+    taskTakeoverFreshName: "New task",
+    taskTakeoverFreshSub:
+      "What an agent is told the first time a task is assigned to it · editable",
+    taskUnblockedName: "The ticket blocking your task is released",
+    taskUnblockedSub:
+      "What an agent is told when the task blocking it is released · editable",
+    bootDocReadOnlyNote:
+      "This document is shown so you can see exactly what agents are told. Nobody may edit it, and it has no version other than the shipped one.",
+    bootDocSaveConfirmAcceleratedStop:
+      "Save this accelerated-stop procedure? Every agent asked to wrap up early reads this content, and reads it with only a short window left — it has to be finishable in that time.",
+    bootDocSaveConfirmTaskEvent:
+      "Save this task-event procedure? Every agent notified of this event from now on reads this content.",
     bootDocNoteHistoryLead: "Version history keeps the last ",
     bootDocNoteHistoryTail:
       " versions, counted in SAVES rather than in time — a run of small saves pushes the older ones out. Restoring the factory version is never affected and is always available.",
     bootDocSaveConfirmBoot:
-      "Save this boot sequence? A broken boot sequence stops agents booting after it from attaching to SSE, so they never come online — silently, with no error anywhere, and with nobody online to fix it. Check the preview first; if it does go wrong, press Restore factory version.",
+      "Save these boot steps? Broken boot steps stop agents booting after it from attaching to SSE, so they never come online — silently, with no error anywhere, and with nobody online to fix it. Check the preview first; if it does go wrong, press Restore factory version.",
     bootDocSaveConfirmSystem:
       "Save this system-interaction document? Every agent that boots after the save reads this content.",
     bootDocSaveConfirmOffboard:
-      "Save this offboard sequence? Every session collected after the save reads this content, with nobody online to ask — a recycle leaves it a few minutes, an offboard waits on you indefinitely. It has to be finishable under both.",
+      "Save this Stop document? Every session collected after the save reads this content, with nobody online to ask — and NOTHING on this path is counting: a plain stop, a refocus, a machine or model change, a token about to expire, the first context threshold all wait on the agent's own report. The one countdown lives in the Accelerated stop document, not this one. So this text has to be finishable with no clock on it.",
     bootDocSaveConfirmAction: "Save",
     // The click-to-open heading of a stacked document (T-6278). Both boot
     // sequences start closed so the page shows both at once; the label is on
@@ -1386,9 +1766,18 @@ export const en: Dict = {
     docExpand: "Expand this document",
     docCollapse: "Collapse this document",
     historyBootSystemTitle: "System interaction · version history",
-    historyBootClaudeTitle: "Boot sequence (Claude Code) · version history",
-    historyBootCodexTitle: "Boot sequence (Codex CLI) · version history",
-    historyBootOffboardTitle: "Offboard sequence · version history",
+    historyBootClaudeTitle: "Boot steps (Claude Code) · version history",
+    historyBootCodexTitle: "Boot steps (Codex CLI) · version history",
+    historyBootOffboardTitle: "Stop · version history",
+    historyAcceleratedStopTitle: "Accelerated stop · version history",
+    historyTaskCloseoutTitle: "Task close-out · version history",
+    historyTaskReassignPredecessorTitle:
+      "Task reassignment · to the predecessor · version history",
+    historyTaskTakeoverWithPredecessorTitle:
+      "Task reassignment · to the successor · version history",
+    historyTaskTakeoverFreshTitle: "New task · version history",
+    historyTaskUnblockedTitle:
+      "The ticket blocking your task is released · version history",
     defaultBadge: "Default",
     edit: "Edit",
     doneEdit: "Done",
@@ -1396,7 +1785,8 @@ export const en: Dict = {
     reset: "Reset",
     editorPlaceholder: "Write in Markdown…",
     docReplaceNote:
-      "Saving REPLACES this whole document with what is in the editor — there is no per-section merge, so anything not pasted back is gone.",
+      "Saving REPLACES the editable half of this document with what is in the editor — there is no per-section merge, so anything not pasted back is gone. The read-only part above is untouched, and there is no way to send an edit to it.",
+    docReadOnlyHead: "Read-only (written by the program, not editable)",
     docActionFailed: "That did not go through — try again.",
     docOverCapLead: "Now ",
     docOverCapMid: " characters, over the limit of ",
@@ -1495,19 +1885,23 @@ export const en: Dict = {
     ttl30d: "30 days",
     notice: "Claude first notice",
     noticeSub:
-      "At this level the offboard sequence is sent, and the agent is asked to close out and hand over under its own power (must be below the final call)",
+      "At this level the Stop document is sent, and the agent is asked to close out and hand over under its own power (must be below the final call)",
     handover: "Claude final call",
     handoverSub:
-      "At this level the final notice goes out and the handover fires; 120 seconds later the session is collected (40–90%)",
+      "At this level the final notice goes out and the handover fires; the session is collected once stop.accelerated_grace_secs elapses (40–90%)",
     codexNotice: "Codex first notice",
     codexNoticeSub:
-      "The compaction round at which the offboard sequence is sent (must be below the final round)",
+      "The compaction round at which the Stop document is sent (must be below the final round)",
     codexHandover: "Codex final round",
     codexHandoverSub:
       "Automatically refocus after this many completed context compactions; context percentage is not used.",
     monitoringRefresh: "Monitoring refresh interval",
     monitoringRefreshSub: "Minimum seconds between monitoring refreshes (1–60)",
     seconds: "seconds",
+    acceleratedGrace: "Accelerated stop deadline",
+    acceleratedGraceSub:
+      "How long an agent has once 加速停止 is pressed — and the same clock the second context threshold runs. The agent is told this exact instant (10–3600)",
+    rounds: "rounds",
     // T-ae38 (split again by T-30f1): one cap became many. Deleting from these
     // documents costs wildly different amounts — a role definition is a
     // standing description, a lessons doc is append-only environment Q&A — so
@@ -1530,6 +1924,13 @@ export const en: Dict = {
     // T-c9b4: the wake snapshot's chat budget. Deliberately not folded into the
     // doc-cap wording above — those floors are their own shipped defaults and
     // can only be raised; this one moves in both directions.
+    // T-8: backup retention N. The sub-label carries the two facts the integer
+    // cannot — versions-not-days and per-pool-not-per-directory — because the
+    // person who needs them is the one turning the knob.
+    backupRetain: "Backups kept",
+    backupRetainSub:
+      "How many database backup files are kept. Everything past this number is DELETED from disk on the next backup — it is not moved aside and it cannot be recovered. Two things this number is NOT. It counts VERSIONS, NOT DAYS: it is a count of files, so how far back it reaches depends entirely on how many backups those days happened to produce — a busy day can use the whole allowance in under three days, a quiet one can stretch it past a week. And it is PER POOL, NOT PER DIRECTORY: routine backups (scheduled and manual) and pre-migration backups keep separate allowances, so 5 here means up to TEN files on disk, not five. The range is 1 to 20; the ceiling is a disk budget, since the space used is roughly two times this number times the size of one backup.",
+    backupRetainUnit: "backups per pool",
     chatBudget: "Wake chat budget",
     chatBudgetSub:
       "How many characters the chat block of a wake snapshot (resume_summary) may spend — the messages, their folded cards, the snapshot header and the cut hint; the peek sizes itself against the same number. The range is 1000 to 13000 and it can be lowered as well as raised: the chat block is repacked on every read, so a smaller budget simply carries fewer messages, and whatever was left out is still reported as omitted.",

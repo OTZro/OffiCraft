@@ -64,7 +64,7 @@ function mkSettled(over: Partial<Member> = {}): Member {
     actualModel: "opus",
     effort: "medium",
     actualEffort: "medium",
-    kind: "assistant",
+    kind: "staff",
     desiredMachineId: "mach-a",
     machine: "mach-a",
     actualMachine: "mach-a",
@@ -195,9 +195,41 @@ describe("AgentDetailPanel · pending-change hints", () => {
 });
 
 describe("AgentDetailPanel · wind-down note", () => {
-  it("says the change is being applied, with a ceiling, instead of when the last refocus was", async () => {
-    const deadline = 1_800_000_000;
+  // 🔴 THIS is the shape the server actually produces today (T-ed79): an owner
+  // op is 停止, so refocus_deadline lands as 0 and the mapper maps it to null.
+  // The previous version of this test hand-built a non-zero deadline on a
+  // runtime/model row — a combination the server can no longer emit — so it
+  // stayed green while the note it guards had become unreachable in the app.
+  // A fixture that bypasses the mapper is only a guard if it is a state the
+  // mapper can still output.
+  it("says the change is being applied — with no time at all — when nothing is on a clock", async () => {
     const { getByTestId, queryByTestId } = await renderPanel({
+      refocusSince: 1_800_000_000,
+      refocusOp: "runtime/model",
+      refocusDeadline: null,
+      model: "claude-opus-5",
+    });
+    const note = getByTestId("mp-wind-down-note").textContent ?? "";
+    expect(note).toContain("正在收尾以套用你的改動");
+    // No clock ⇒ no time may appear. 最晚/生效 is the ceiling wording, and a
+    // bare digit would be a time leaking through a placeholder.
+    expect(note).not.toContain("最晚");
+    expect(note).not.toContain("生效");
+    expect(note).not.toMatch(/\d/);
+    // The history line it replaces must be gone — two lines saying different
+    // things about the same window is worse than either alone.
+    expect(queryByTestId("mp-refocus-since")).toBeNull();
+    expect(note).not.toContain("上次重新聚焦");
+  });
+
+  // The other arm of the same composer, and on THIS gate it is still not
+  // server-reachable: winddownKindFor makes relocate / runtime-model 停止 ⇒
+  // deadline 0 ⇒ mapper null. Kept as a unit test of the render arm so the
+  // ceiling wording does not rot. The two CLOCKED causes have their own
+  // sentence now — see below.
+  it("still quotes the ceiling when the wind-down IS on a clock", async () => {
+    const deadline = 1_800_000_000;
+    const { getByTestId } = await renderPanel({
       refocusSince: deadline - 120,
       refocusOp: "runtime/model",
       refocusDeadline: deadline,
@@ -206,21 +238,45 @@ describe("AgentDetailPanel · wind-down note", () => {
     const note = getByTestId("mp-wind-down-note").textContent ?? "";
     expect(note).toContain("正在收尾以套用你的改動");
     expect(note).toContain(new Date(deadline * 1000).toLocaleTimeString());
-    // The history line it replaces must be gone — two lines saying different
-    // things about the same window is worse than either alone.
-    expect(queryByTestId("mp-refocus-since")).toBeNull();
-    expect(note).not.toContain("上次重新聚焦");
+    expect(note).toContain("最晚");
   });
 
-  it("keeps the plain history line for a handover the owner did not cause", async () => {
-    // A context-pressure handover is not applying anything of the owner's, so
-    // announcing "applying your change" there would be a lie.
+  // 🔴 The two CLOCKED causes get their OWN sentence, and it quotes the clock.
+  // They are not applying a change of the owner's, so 「正在收尾以套用你的改動」
+  // would be a lie — but falling through to 「上次重新聚焦 <time>」 was worse: a
+  // PAST-TENSE history line printed while a deadline is counting down, with the
+  // deadline itself shown nowhere in the UI. The owner who just pressed 加速停止
+  // has to be able to see the clock he armed (T-ed79).
+  it.each(["accelerated_stop", "context_high"] as const)(
+    "announces the deadline while %s is winding down",
+    async (op) => {
+      const deadline = 1_800_000_120;
+      const { getByTestId, queryByTestId } = await renderPanel({
+        refocusSince: 1_800_000_000,
+        refocusOp: op,
+        refocusDeadline: deadline,
+      });
+      const note = getByTestId("mp-wind-down-note").textContent ?? "";
+      expect(note).toContain("正在收尾，已給死線");
+      expect(note).toContain(new Date(deadline * 1000).toLocaleTimeString());
+      expect(note).toContain("最晚");
+      // Never "applying your change" — nothing of the owner's is being applied.
+      expect(note).not.toContain("套用你的改動");
+      // …and the history line it replaces is gone.
+      expect(queryByTestId("mp-refocus-since")).toBeNull();
+      expect(note).not.toContain("上次重新聚焦");
+    },
+  );
+
+  it("keeps the plain history line for an unclocked handover the owner did not cause", async () => {
+    // A bare 重新聚焦 applies nothing of the owner's AND runs no clock, so there
+    // is neither a change to announce nor a time to quote.
     const { queryByTestId } = await renderPanel({
       refocusSince: 1_800_000_000,
-      refocusOp: "context_high",
-      refocusDeadline: 1_800_000_120,
+      refocusOp: "refocus",
     });
     expect(queryByTestId("mp-wind-down-note")).toBeNull();
+    expect(queryByTestId("mp-refocus-since")).not.toBeNull();
   });
 
   it("says nothing when no wind-down is in flight", async () => {

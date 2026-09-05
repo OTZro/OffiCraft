@@ -77,11 +77,29 @@ done
 
 # Strip ambient fleet env (OC_ID / OC_TOKEN / OC_BASE) so the isolated serve and
 # any tool we spawn never talk to the fleet/prod server. Critical: without this,
-# ambient OC_* silently redirects auth/telemetry at the real server.
+# ambient OC_* silently redirects auth/telemetry at the real server. Keep the
+# scrub list here, as the single source of truth; tmux.sh asks this file for the
+# shell command prefix instead of carrying a second, drift-prone copy.
 # OC_RELEASE_API_BASE (t-dc68): pin the GitHub Releases update check at an
 # unroutable loopback — the harness must never reach the real api.github.com
 # (hermeticity + the anonymous rate limit); checks fail fast and honestly.
-oc_env() { env -u OC_ID -u OC_TOKEN -u OC_BASE OC_RELEASE_API_BASE="http://127.0.0.1:1" "$@"; }
+OC_E2E_SCRUB_ENV_ARGS=(-u OC_ID -u OC_TOKEN -u OC_BASE)
+OC_E2E_RELEASE_API_BASE="http://127.0.0.1:1"
+oc_env() {
+  env "${OC_E2E_SCRUB_ENV_ARGS[@]}" \
+    "OC_RELEASE_API_BASE=$OC_E2E_RELEASE_API_BASE" "$@"
+}
+
+# Emit a shell-safe command prefix for a child started by an external carrier
+# (currently tmux). The caller appends its own executable and arguments.
+oc_e2e_scrub_env_command_prefix() {
+  local arg
+  printf 'env'
+  for arg in "${OC_E2E_SCRUB_ENV_ARGS[@]}"; do
+    printf ' %q' "$arg"
+  done
+  printf ' %q' "OC_RELEASE_API_BASE=$OC_E2E_RELEASE_API_BASE"
+}
 
 # python3 as a text tool only (tomllib/json parsing) — not a server dependency.
 py() { python3 "$@"; }
@@ -150,10 +168,15 @@ oc_e2e_teardown_on_exit() { # $1 = the e2e_test dir holding teardown.sh
 # BEFORE dispatch — it records what was ASKED for, which is the question the
 # tests need ("did teardown try to delete anything at all?").
 #
-# OC_E2E_DESTROY_IMPL is the replaceable half: production leaves it unset and
-# gets the real rm; a test sets it to oc_e2e_destroy_record_only and gets a run
-# that is identical except that nothing is removed. That is what lets the tests
-# exercise the REAL teardown while the guard under test is deliberately broken.
+# SAFETY CONTRACT (this seam is where the property is enforced): teardown
+# code DOES run in tests, but only against a throwaway tree and only through the
+# record-only seam below, which records what it would have deleted. Production
+# leaves OC_E2E_DESTROY_IMPL unset and performs the real deletion; tests set it
+# to oc_e2e_destroy_record_only so the same teardown path runs without removing
+# anything. No real fleet is touched.
+#
+# OC_E2E_DESTROY_IMPL is the replaceable half. That is what lets tests exercise
+# the REAL teardown while the guard under test is deliberately broken.
 oc_e2e_destroy() {
   local target
   mkdir -p "$(dirname "$OC_E2E_DESTROY_RECORD")" 2>/dev/null || true

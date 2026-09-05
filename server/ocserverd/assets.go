@@ -112,9 +112,6 @@ const (
 	seedRoleAssistant     = "assistant"
 	seedRoleAssistantName = "Assistant"
 
-	// The single fixed lessons task_type key.
-	seedLessonsTaskType = "general"
-
 	// The owner placeholder every seed file substitutes at read time.
 	ownerPlaceholder = "{OWNER_ID}"
 )
@@ -305,8 +302,8 @@ func (s *apiServer) foldRoleDefDTO(roleKey string) (*roleDefDTO, error) {
 
 // foldLessonsDTO folds a per-role lessons doc (owner overlay ⊕ the ONE shared
 // file seed).
-func (s *apiServer) foldLessonsDTO(roleKey, taskType string) (*lessonsDTO, error) {
-	overlay, err := s.dal.GetLessons(roleKey, taskType)
+func (s *apiServer) foldLessonsDTO(roleKey string) (*lessonsDTO, error) {
+	overlay, err := s.dal.GetLessons(roleKey)
 	if err != nil {
 		return nil, err
 	}
@@ -319,7 +316,6 @@ func (s *apiServer) foldLessonsDTO(roleKey, taskType string) (*lessonsDTO, error
 		SizeChars:     utf8.RuneCountInString(text),
 		CapChars:      s.learningCap(),
 		RoleKey:       roleKey,
-		TaskType:      taskType,
 		Text:          text,
 		OwnerID:       wireOwnerID,
 		SchemaVersion: wireSchemaVersion,
@@ -345,10 +341,9 @@ func (s *apiServer) foldUserContextDTO() (*globalContextDTO, error) {
 
 // bootContext is the folded boot package.
 type bootContext struct {
-	RoleKey  string
-	Name     string
-	TaskType string
-	Context  string
+	RoleKey string
+	Name    string
+	Context string
 }
 
 // bootSequenceSeedName picks the boot-sequence seed for a runtime. It is the
@@ -390,7 +385,7 @@ const (
 	docKindBootSequence      = "boot_sequence"
 )
 
-// The 下線程序 document (T-c9c0). A SINGLETON like the system-interaction block —
+// The 〈停止〉 document (T-c9c0). A SINGLETON like the system-interaction block —
 // one document keyed "global" for every agent and every runtime — because unlike
 // the boot sequence, being collected is the same procedure whatever runtime you
 // are: report, write the in-flight work back, hand yourself over, stop. There is
@@ -440,7 +435,7 @@ func bootSequenceSeedForKey(key string) (string, bool) {
 // user-custom block when non-blank, # Role, # Insight when non-blank, # Lessons,
 // boot-sequence seed — joined "\n\n" + one trailing "\n"). nil = unknown role
 // (caller maps to 404 / fail-closed).
-func (s *apiServer) buildBootContext(role string, member *Member, taskType string) (*bootContext, error) {
+func (s *apiServer) buildBootContext(role string, member *Member) (*bootContext, error) {
 	roleKey := resolveBootRoleKey(role, member)
 	roleDTO, err := s.foldRoleDefDTO(roleKey)
 	if err != nil {
@@ -449,14 +444,11 @@ func (s *apiServer) buildBootContext(role string, member *Member, taskType strin
 	if roleDTO == nil {
 		return nil, nil
 	}
-	if taskType == "" {
-		taskType = seedLessonsTaskType
-	}
 	userCtx, err := s.foldUserContextDTO()
 	if err != nil {
 		return nil, err
 	}
-	lessons, err := s.foldLessonsDTO(roleKey, taskType)
+	lessons, err := s.foldLessonsDTO(roleKey)
 	if err != nil {
 		return nil, err
 	}
@@ -495,14 +487,32 @@ func (s *apiServer) buildBootContext(role string, member *Member, taskType strin
 	// leading copies of the EXACT title line before prepending exactly one, so
 	// the boot context always carries a single title AND an already-poisoned
 	// doc self-heals in the assembled context.
-	lessonsTitle := "# Lessons (" + lessons.RoleKey + " / " + lessons.TaskType + ")"
+	//
+	// 🔴 TWO TITLES ARE STRIPPED, NOT ONE. Until T-2 this title carried the
+	// lessons bucket — "# Lessons (assistant / general)" — so a doc poisoned
+	// BEFORE that change carries the old wording, and stripping only the new
+	// one would leave it wedged at the top of the doc forever with no way for
+	// the self-heal to reach it. Both forms are removed; the legacy form's
+	// bucket half is 'general' because that is the only bucket 00061 left
+	// behind and the only one this title could ever have named after it.
+	lessonsTitle := "# Lessons (" + lessons.RoleKey + ")"
+	legacyLessonsTitle := "# Lessons (" + lessons.RoleKey + " / general)"
 	lessonsBody := strings.TrimSpace(lessons.Text)
-	for strings.HasPrefix(lessonsBody, lessonsTitle) {
-		rest := lessonsBody[len(lessonsTitle):]
-		if rest != "" && !strings.HasPrefix(rest, "\n") {
-			break // title is a prefix of a longer line, not a duplicate title line
+	for {
+		stripped := false
+		for _, title := range []string{lessonsTitle, legacyLessonsTitle} {
+			for strings.HasPrefix(lessonsBody, title) {
+				rest := lessonsBody[len(title):]
+				if rest != "" && !strings.HasPrefix(rest, "\n") {
+					break // title is a prefix of a longer line, not a duplicate title line
+				}
+				lessonsBody = strings.TrimSpace(rest)
+				stripped = true
+			}
 		}
-		lessonsBody = strings.TrimSpace(rest)
+		if !stripped {
+			break
+		}
 	}
 	// T-4595 — the user-custom block moved from below the persona to above it
 	// (it used to sit between the lessons and the boot sequence). Staff and
@@ -512,7 +522,7 @@ func (s *apiServer) buildBootContext(role string, member *Member, taskType strin
 	//	2. 使用者自訂 (shared, skipped entirely when blank)
 	//	3. the persona — staff: 角色說明 → 判準（when non-blank）→ 長期筆記;
 	//	   outsource: NOTHING (no role)
-	//	4. 啟動程序 (shared seed, recency-authoritative tail)
+	//	4. 啟動步驟 (shared seed, recency-authoritative tail)
 	//
 	// Only slot 3 differs between the two, and that is the whole difference.
 	// Putting the owner's additions ABOVE the persona is what makes the two
@@ -521,7 +531,7 @@ func (s *apiServer) buildBootContext(role string, member *Member, taskType strin
 	parts := []string{strings.TrimSpace(sysSeed)}
 	if strings.TrimSpace(userCtx.Text) != "" {
 		parts = append(parts,
-			"# 使用者自訂（Owner Additions）\n\n"+strings.TrimSpace(userCtx.Text))
+			userAdditionsTitle+"\n\n"+strings.TrimSpace(userCtx.Text))
 	}
 	parts = append(parts,
 		"# Role: "+roleTitle+"\n\n"+strings.TrimSpace(roleDTO.DefinitionMD))
@@ -547,10 +557,9 @@ func (s *apiServer) buildBootContext(role string, member *Member, taskType strin
 		name = member.Name
 	}
 	return &bootContext{
-		RoleKey:  roleKey,
-		Name:     name,
-		TaskType: taskType,
-		Context:  strings.Join(parts, "\n\n") + "\n",
+		RoleKey: roleKey,
+		Name:    name,
+		Context: strings.Join(parts, "\n\n") + "\n",
 	}, nil
 }
 
@@ -660,3 +669,63 @@ func materializeBinary(dir, name string, data []byte) (string, error) {
 	}
 	return dst, nil
 }
+
+// The six event-procedure documents T-3201 adds. Same shape as the offboard
+// singleton above — one document per event, key "global" — because what an
+// agent should do when a task closes does not depend on which runtime it is.
+//
+// 🔴 THE SEEDS ARE THE PROGRAM TEXT THESE NOTICES USED TO BE, MOVED WITHOUT A
+// WORD CHANGED. Every sentence in these six files was a Go string literal
+// (sse_bands.go's offboard sentence builder and decideTaskCloseNudge,
+// api_tasks.go's reassign notices, api_tasks_handoff.go's dependency-released
+// notice); the interpolation points are the ONLY thing that changed shape,
+// becoming the {name} variables this kind declares. Six are wired to their send
+// sites and the Go text they replaced is deleted: the two stop procedures, plus
+// 轉派程序（前任）, 解除阻擋 and — once the owner ruled the duplicated 交接備註
+// away (rc-0c36d8739b8f) — the two 接手程序. 任務收尾 was the last one left, and
+// T-7870 wired it: the pure decideTaskCloseNudge now decides only WHETHER a
+// nudge is owed, and closeTask — which is a method, and was already reading the
+// manual two lines above the call — fetches the words. All seven carry their
+// text from the document now, and no Go literal of any of them survives.
+// bootDocSingletonKey is the document key every non-boot_sequence boot document
+// uses. Named rather than repeated so a caller addressing "the one document of
+// this kind" says so, instead of spelling a magic "global" that reads like the
+// 全域脈絡 document it is not.
+// userAdditionsTitle is the ONE title the 使用者自訂 block is served under.
+//
+// 🔴 IT WAS TWO COPIES, AND THAT IS THE WHOLE REASON IT IS A CONSTANT (T-3201).
+// The same literal sat in buildBootContext (staff) and workerSharedHead
+// (outsource), so the day someone corrected one of them, staff and contractors
+// would have booted under two different headings and nothing would have said
+// so. It is also the only line the program ADDS to any of the three boot
+// documents — the read-only head of 使用者自訂, in the vocabulary T-3201 gives
+// the other nine — which is why it is named here rather than inlined twice.
+const userAdditionsTitle = "# 使用者自訂（Owner Additions）"
+
+const bootDocSingletonKey = "global"
+
+const (
+	acceleratedStopSeedMD  = "accelerated_stop.md"
+	acceleratedStopDocKey  = "global"
+	docKindAcceleratedStop = "accelerated_stop"
+
+	taskCloseoutSeedMD  = "task_closeout.md"
+	taskCloseoutDocKey  = "global"
+	docKindTaskCloseout = "task_closeout"
+
+	taskReassignPredecessorSeedMD  = "task_reassign_predecessor.md"
+	taskReassignPredecessorDocKey  = "global"
+	docKindTaskReassignPredecessor = "task_reassign_predecessor"
+
+	taskTakeoverWithPredecessorSeedMD  = "task_takeover_with_predecessor.md"
+	taskTakeoverWithPredecessorDocKey  = "global"
+	docKindTaskTakeoverWithPredecessor = "task_takeover_with_predecessor"
+
+	taskTakeoverFreshSeedMD  = "task_takeover_fresh.md"
+	taskTakeoverFreshDocKey  = "global"
+	docKindTaskTakeoverFresh = "task_takeover_fresh"
+
+	taskUnblockedSeedMD  = "task_unblocked.md"
+	taskUnblockedDocKey  = "global"
+	docKindTaskUnblocked = "task_unblocked"
+)

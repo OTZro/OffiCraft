@@ -32,7 +32,7 @@ import { zh } from "../../src/i18n/locales/zh";
 /** Long CJK headings (what these documents really look like) plus one line
  * carrying an unbreakable token of the kind the boot docs actually cite. */
 const DOC = [
-  "# 啟動程序（Boot Sequence · 版面守衛用）",
+  "# 啟動步驟（Boot Sequence · 版面守衛用）",
   "",
   "## 1. 世界觀 — 這個世界怎麼合作（你是誰、你活在哪、誰聽得到你說的話）",
   "",

@@ -22,10 +22,12 @@ import { GuidePage } from "./components/UserGuidePage";
 import { SettingsPage } from "./components/SettingsPage";
 import { ProfileDropdown } from "./components/ProfileDropdown";
 import { OnboardingBanner } from "./components/OnboardingBanner";
+import { DiffModalHost } from "./components/DiffModalHost";
+import { ConnectionBanner } from "./components/ConnectionBanner";
 import { InlineEdit } from "./components/InlineEdit";
 import { PushNotifications } from "./components/PushNotifications";
 import { useOrgName } from "./hooks/useOrgName";
-import { useOwnerName } from "./hooks/useOwnerName";
+import { OwnerNameProvider, useOwnerName } from "./hooks/useOwnerName";
 import { useReplyCardCount } from "./hooks/useReplyCardCount";
 import { useChatUnread } from "./hooks/useChatUnread";
 import { useTaskCount } from "./hooks/useTaskCount";
@@ -234,6 +236,17 @@ export default function App({ onLogout }: { onLogout?: () => void } = {}) {
   }, [profileOpen]);
 
   return (
+    // The owner's nickname is published to the WHOLE tree, not just the pill:
+    // the chat thread and document history render him as a participant and must
+    // say the same name the pill does (T-4e95 — he set 「韓立」 and the thread
+    // was still printing the theme's default word for the human).
+    <OwnerNameProvider value={userName}>
+    {/* A compare link anywhere in the studio's markdown opens the comparison
+        IN PLACE, over whatever the reader was reading (T-59). Mounted at the
+        root because the links live in chat bubbles, reply cards, task cards and
+        manuals alike — one place to say it, instead of a prop threaded through
+        every surface that renders markdown. */}
+    <DiffModalHost>
     <div className="app">
       <header className="topbar">
         <div className="topbar__brand">
@@ -312,6 +325,14 @@ export default function App({ onLogout }: { onLogout?: () => void } = {}) {
           automatic first-run setup did not produce a working studio. Renders
           nothing at all unless that run actually failed. */}
       <OnboardingBanner />
+
+      {/* T-b0bb: the ONE place the cockpit admits it has stopped receiving.
+          Every view below this line is delta-driven, so a dead downlink and a
+          quiet office render identically — without this bar a frozen page is
+          indistinguishable from a calm one. Sits ABOVE the tabs so it is on
+          screen whichever page the owner is on: the stall is app-wide, not a
+          property of any one tab. Renders nothing while the stream is healthy. */}
+      <ConnectionBanner />
 
       <nav className="nav-tabs">
         <div className="nav-tabs__seg">
@@ -423,5 +444,7 @@ export default function App({ onLogout }: { onLogout?: () => void } = {}) {
         )}
       </main>
     </div>
+    </DiffModalHost>
+    </OwnerNameProvider>
   );
 }

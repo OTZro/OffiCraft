@@ -23,7 +23,7 @@ func fullMember(id string) Member {
 	return Member{
 		ID:               id,
 		Name:             "Mira",
-		Kind:             "assistant",
+		Kind:             "staff",
 		RoleKey:          "assistant",
 		Runtime:          RuntimeClaude,
 		Model:            "opus",
@@ -70,9 +70,17 @@ func TestMemberCRUDRoundTrip(t *testing.T) {
 
 	// Upsert: same id updates in place (no duplicate row).
 	want.Name = "Renamed"
-	want.LastOpOK = nil // and NULL round-trips as nil
 	if err := d.PutMember(want); err != nil {
 		t.Fatalf("upsert: %v", err)
+	}
+	// 🔴 last_op_ok is NOT set through the upsert any more (T-55): the five
+	// receipt columns left PutMember's SET list, so an upsert carrying a nil
+	// leaves whatever the row already holds. Clearing it here through the SOLE
+	// writer is what the assertion below needs — and it is also the point: a
+	// whole-row write can no longer move this column at all, which is what
+	// TestPutMemberNeverOverwritesSingleColumnOwnedFields exists to enforce.
+	if err := d.SetMemberOpReceipt("m-1", "", nil, "", "", 0); err != nil {
+		t.Fatalf("clear receipt: %v", err)
 	}
 	all, err := d.ListMembers()
 	if err != nil {
@@ -85,7 +93,7 @@ func TestMemberCRUDRoundTrip(t *testing.T) {
 
 func TestMemberKindCheckRejectsNonClosedSetValues(t *testing.T) {
 	d := newTestDAL(t)
-	for _, kind := range []string{"", "robot", "Assistant"} {
+	for _, kind := range []string{"", "robot", "Staff", "assistant"} {
 		m := fullMember("m-bad")
 		m.Kind = kind
 		if err := d.PutMember(m); err == nil {
@@ -376,7 +384,7 @@ func TestDeleteChatInvolvingCascadesMetaReferencedAttachments(t *testing.T) {
 	}
 	if err := d.PutReplyCard(ReplyCard{
 		ID: "rc-1", FromMember: "m-2", Kind: replyCardKindDecision,
-		Summary: "s", Options: []string{"A"}, Status: replyCardStatusAnswered,
+		Summary: "s", Options: []ReplyCardOption{{Text: "A"}}, Status: replyCardStatusAnswered,
 		AnswerAttachments: []any{
 			map[string]any{"id": "a-card", "mime": "", "filename": ""},
 		},
@@ -557,21 +565,21 @@ func TestRoleDefCRUDRoundTrip(t *testing.T) {
 func TestLessonsCompositeKeyAndRoleCascade(t *testing.T) {
 	d := newTestDAL(t)
 
-	if l, err := d.GetLessons("assistant", "default"); err != nil || l != nil {
+	if l, err := d.GetLessons("assistant"); err != nil || l != nil {
 		t.Fatalf("never-edited lessons must be (nil, nil), got (%v, %v)", l, err)
 	}
 
-	if err := d.PutLessons(Lessons{RoleKey: "assistant", TaskType: "default", Text: "v1"}); err != nil {
+	if err := d.PutLessons(Lessons{RoleKey: "assistant", Text: "v1"}); err != nil {
 		t.Fatalf("put: %v", err)
 	}
 	// Same (role, task) upserts in place — composite-PK uniqueness.
-	if err := d.PutLessons(Lessons{RoleKey: "assistant", TaskType: "default", Text: "v2"}); err != nil {
+	if err := d.PutLessons(Lessons{RoleKey: "assistant", Text: "v2"}); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
-	if err := d.PutLessons(Lessons{RoleKey: "researcher", TaskType: "default", Text: "other"}); err != nil {
+	if err := d.PutLessons(Lessons{RoleKey: "researcher", Text: "other"}); err != nil {
 		t.Fatalf("put other role: %v", err)
 	}
-	got, err := d.GetLessons("assistant", "default")
+	got, err := d.GetLessons("assistant")
 	if err != nil || got == nil || got.Text != "v2" {
 		t.Fatalf("upsert must replace text, got %+v (%v)", got, err)
 	}
@@ -580,7 +588,7 @@ func TestLessonsCompositeKeyAndRoleCascade(t *testing.T) {
 	if err != nil || n != 1 {
 		t.Fatalf("role cascade: want 1 deleted, got %d (%v)", n, err)
 	}
-	if l, err := d.GetLessons("researcher", "default"); err != nil || l == nil {
+	if l, err := d.GetLessons("researcher"); err != nil || l == nil {
 		t.Fatalf("other role's lessons must survive, got (%v, %v)", l, err)
 	}
 }
@@ -697,7 +705,7 @@ func TestDeleteChatInvolvingSparesQuestionSideCardRefs(t *testing.T) {
 	}
 	if err := d.PutReplyCard(ReplyCard{
 		ID: "rc-q", FromMember: "m-1", Kind: replyCardKindDecision,
-		Summary: "s", Options: []string{"A"}, Status: replyCardStatusWaiting,
+		Summary: "s", Options: []ReplyCardOption{{Text: "A"}}, Status: replyCardStatusWaiting,
 		ChatMessageID: "c-card",
 		Attachments: []any{
 			map[string]any{"id": "a-question", "mime": "", "filename": ""},

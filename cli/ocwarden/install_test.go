@@ -349,19 +349,35 @@ func TestWriteTokfile_DryRunWritesNothing(t *testing.T) {
 // launchctl — EXACT label sequence, bootout tolerance, never pkill
 // ---------------------------------------------------------------------------
 
-// labelGoneRunFn makes `launchctl print` report the label unregistered (non-zero
-// exit) so the post-bootout poll confirms "gone" on its first probe — the common
-// clean-machine path. Other launchctl verbs succeed.
-func labelGoneRunFn(name string, args ...string) (string, error) {
-	if len(args) > 0 && args[0] == "print" {
-		return "", fmt.Errorf("Could not find service %q in domain for user gui: 501", args[1])
+// labelGoneRunFn builds a runFn where `launchctl print` reports the label
+// unregistered (non-zero exit) until a `launchctl bootstrap` has run, and
+// registered afterwards — the common clean-machine path end to end: the
+// post-bootout poll confirms "gone" on its first probe, and the post-bootstrap
+// registration probe (T-0648) confirms the job landed. Other launchctl verbs
+// succeed. It is a FACTORY because that sequence needs state; teardown callers,
+// where no bootstrap ever runs, see the historical always-gone behaviour.
+func labelGoneRunFn() func(string, ...string) (string, error) {
+	bootstrapped := false
+	return func(name string, args ...string) (string, error) {
+		if len(args) == 0 {
+			return "", nil
+		}
+		switch args[0] {
+		case "bootstrap":
+			bootstrapped = true
+		case "print":
+			if !bootstrapped {
+				return "", fmt.Errorf("Could not find service %q in domain for user gui: 501", args[1])
+			}
+			return "com.officraft.ocwarden = {\n\tpid = 4242\n}", nil
+		}
+		return "", nil
 	}
-	return "", nil
 }
 
 func TestLaunchctlReinstall_ExactLabelSequence(t *testing.T) {
 	f := newFakeSys()
-	f.runFn = labelGoneRunFn
+	f.runFn = labelGoneRunFn()
 	i := &installer{out: io.Discard, sys: f.ops()}
 	p := fixedPaths()
 	if err := i.launchctlReinstall(p); err != nil {
@@ -371,6 +387,7 @@ func TestLaunchctlReinstall_ExactLabelSequence(t *testing.T) {
 		{"launchctl", []string{"bootout", "gui/501/com.officraft.ocwarden"}},
 		{"launchctl", []string{"print", "gui/501/com.officraft.ocwarden"}}, // poll-until-gone probe
 		{"launchctl", []string{"bootstrap", "gui/501", p.plistPath}},
+		{"launchctl", []string{"print", "gui/501/com.officraft.ocwarden"}}, // bootstrap-registered-it probe
 		{"launchctl", []string{"kickstart", "-k", "gui/501/com.officraft.ocwarden"}},
 	}
 	if len(f.runs) != len(want) {
@@ -389,11 +406,12 @@ func TestLaunchctlReinstall_ExactLabelSequence(t *testing.T) {
 
 func TestLaunchctlReinstall_BootoutErrorTolerated(t *testing.T) {
 	f := newFakeSys()
+	rest := labelGoneRunFn()
 	f.runFn = func(name string, args ...string) (string, error) {
 		if len(args) > 0 && args[0] == "bootout" {
 			return "", fmt.Errorf("Boot-out failed: 3: No such process")
 		}
-		return labelGoneRunFn(name, args...)
+		return rest(name, args...)
 	}
 	i := &installer{out: io.Discard, sys: f.ops()}
 	if err := i.launchctlReinstall(fixedPaths()); err != nil {
@@ -410,8 +428,17 @@ func TestLaunchctlReinstall_WaitsOutAsyncBootout(t *testing.T) {
 	f := newFakeSys()
 	const lingerPolls = 3
 	prints := 0
+	bootstrapped := false
 	f.runFn = func(name string, args ...string) (string, error) {
+		if len(args) > 0 && args[0] == "bootstrap" {
+			bootstrapped = true
+		}
 		if len(args) > 0 && args[0] == "print" {
+			// After the bootstrap the SAME verb answers the registration probe,
+			// and there the label being back is the success case.
+			if bootstrapped {
+				return "com.officraft.ocwarden = {\n\tpid = 4242\n}", nil
+			}
 			prints++
 			if prints <= lingerPolls {
 				return "com.officraft.ocwarden = {\n\tpid = 4242\n}", nil // still registered
@@ -433,11 +460,12 @@ func TestLaunchctlReinstall_WaitsOutAsyncBootout(t *testing.T) {
 	// bootstrap must come strictly AFTER the last (gone) probe.
 	lastPrint, bootstrapAt := -1, -1
 	for k, r := range f.runs {
-		if len(r.args) > 0 && r.args[0] == "print" {
-			lastPrint = k
-		}
 		if len(r.args) > 0 && r.args[0] == "bootstrap" {
 			bootstrapAt = k
+			break // later `print`s are the registration probe, not bootout polls
+		}
+		if len(r.args) > 0 && r.args[0] == "print" {
+			lastPrint = k
 		}
 	}
 	if bootstrapAt < lastPrint {
@@ -474,11 +502,12 @@ func TestLaunchctlReinstall_BootstrapsAnywayAfterPollBudget(t *testing.T) {
 
 func TestLaunchctlReinstall_BootstrapFailureAborts(t *testing.T) {
 	f := newFakeSys()
+	rest := labelGoneRunFn()
 	f.runFn = func(name string, args ...string) (string, error) {
 		if len(args) > 0 && args[0] == "bootstrap" {
 			return "", fmt.Errorf("bootstrap failed 5: Input/output error")
 		}
-		return labelGoneRunFn(name, args...)
+		return rest(name, args...)
 	}
 	i := &installer{out: io.Discard, sys: f.ops()}
 	if err := i.launchctlReinstall(fixedPaths()); err == nil {
@@ -1262,5 +1291,133 @@ func TestRunInstall_CodexOnlyHostIsValid(t *testing.T) {
 	}
 	if strings.Contains(plist, "<key>OC_CLAUDE_BIN</key>") {
 		t.Fatalf("unresolved Claude must not be stamped:\n%s", plist)
+	}
+}
+
+// TestLaunchctlReinstall_BootstrapExitZeroButUnregisteredBlamesBootstrap pins the
+// field failure this guard exists for (T-0648): `launchctl bootstrap` exited 0 and
+// registered NOTHING, so the FIRST verb to notice was kickstart — and the operator
+// was handed kickstart's misleading exit 113 ("Could not find service ... in domain
+// for user gui: 501") and sent to debug a step that was never broken. When the label
+// never shows up AND kickstart then fails, the installer must name the step that
+// really failed: bootstrap.
+func TestLaunchctlReinstall_BootstrapExitZeroButUnregisteredBlamesBootstrap(t *testing.T) {
+	f := newFakeSys()
+	// `print` never finds the label — before OR after a bootstrap that exits 0, and
+	// not on any probe of the bounded wait — and kickstart then fails the way it did
+	// in the field: exit 113, "Could not find service". That 113 is the misleading
+	// message this guard deletes.
+	f.runFn = func(name string, args ...string) (string, error) {
+		if len(args) > 0 && (args[0] == "print" || args[0] == "kickstart") {
+			return "", fmt.Errorf("exit status 113: Could not find service %q in domain for user gui: 501", args[len(args)-1])
+		}
+		return "", nil
+	}
+	i := &installer{out: io.Discard, sys: f.ops()}
+	err := i.launchctlReinstall(fixedPaths())
+	if err == nil {
+		t.Fatal("a bootstrap that registered nothing must fail the install, not be handed on to kickstart")
+	}
+	if !strings.Contains(err.Error(), "bootstrap") {
+		t.Errorf("error = %q, want it to name the bootstrap step that actually failed", err)
+	}
+	if strings.Contains(err.Error(), "kickstart") {
+		t.Errorf("error = %q, must not send the operator to debug kickstart", err)
+	}
+	// kickstart is still ATTEMPTED — that is what makes this diagnosis free: had
+	// launchd merely been slow, kickstart would have succeeded and the install
+	// would be byte-identical to before. Only kickstart's failure promotes the
+	// unconfirmed registration to the error above.
+	sawKickstart := false
+	for _, r := range f.runs {
+		if len(r.args) > 0 && r.args[0] == "kickstart" {
+			sawKickstart = true
+		}
+	}
+	if !sawKickstart {
+		t.Error("kickstart must still be attempted; an unconfirmed registration alone must not fail the install")
+	}
+}
+
+// TestLaunchctlReinstall_LateRegistrationStillInstalls is the counter-example to the
+// registration probe becoming a NEW way to brick an install: launchd's registration
+// can simply LAG a bootstrap that exited 0. A machine whose label shows up on a
+// later probe must install exactly as before — no error, and above all not the
+// "bootstrap registered nothing" diagnosis, which would be a lie here.
+func TestLaunchctlReinstall_LateRegistrationStillInstalls(t *testing.T) {
+	f := newFakeSys()
+	const registerAfterProbes = 4 // launchd is slow, not broken
+	bootstrapped := false
+	postBootstrapPrints := 0
+	f.runFn = func(name string, args ...string) (string, error) {
+		if len(args) == 0 {
+			return "", nil
+		}
+		switch args[0] {
+		case "bootstrap":
+			bootstrapped = true
+		case "print":
+			if !bootstrapped {
+				return "", fmt.Errorf("Could not find service %q in domain for user gui: 501", args[1])
+			}
+			postBootstrapPrints++
+			if postBootstrapPrints < registerAfterProbes {
+				return "", fmt.Errorf("Could not find service %q in domain for user gui: 501", args[1])
+			}
+			return "com.officraft.ocwarden = {\n\tpid = 4242\n}", nil
+		}
+		return "", nil
+	}
+	i := &installer{out: io.Discard, sys: f.ops()}
+	if err := i.launchctlReinstall(fixedPaths()); err != nil {
+		t.Fatalf("a registration that merely lagged must still install, got: %v", err)
+	}
+	if postBootstrapPrints != registerAfterProbes {
+		t.Errorf("expected %d registration probes (lag then found), got %d", registerAfterProbes, postBootstrapPrints)
+	}
+	if f.slept != registerAfterProbes-1 {
+		t.Errorf("expected %d inter-probe sleeps, got %d", registerAfterProbes-1, f.slept)
+	}
+	sawKickstart := false
+	for _, r := range f.runs {
+		if len(r.args) > 0 && r.args[0] == "kickstart" {
+			sawKickstart = true
+		}
+	}
+	if !sawKickstart {
+		t.Error("a confirmed registration must still be kickstarted")
+	}
+	assertNoForbiddenProcessKill(t, f)
+}
+
+// TestLaunchctlReinstall_UnregisteredBlameKeepsTheNextVerbsOwnReason pins the half
+// of the diagnosis that is easy to lose: naming bootstrap must not COST the evidence.
+// The label never registers AND kickstart then fails for a reason of its OWN (not the
+// familiar 113) — the operator must get both, or a second, unrelated failure reason
+// disappears behind our own diagnosis.
+func TestLaunchctlReinstall_UnregisteredBlameKeepsTheNextVerbsOwnReason(t *testing.T) {
+	f := newFakeSys()
+	f.runFn = func(name string, args ...string) (string, error) {
+		if len(args) > 0 && args[0] == "print" {
+			return "", fmt.Errorf("exit status 113: Could not find service %q in domain for user gui: 501", args[len(args)-1])
+		}
+		if len(args) > 0 && args[0] == "kickstart" {
+			return "", fmt.Errorf("exit status 125: Domain does not support specified action")
+		}
+		return "", nil
+	}
+	i := &installer{out: io.Discard, sys: f.ops()}
+	err := i.launchctlReinstall(fixedPaths())
+	if err == nil {
+		t.Fatal("a bootstrap that registered nothing must fail the install")
+	}
+	if !strings.Contains(err.Error(), "bootstrap") {
+		t.Errorf("error = %q, want it to name the bootstrap step that actually failed", err)
+	}
+	if strings.Contains(err.Error(), "kickstart") {
+		t.Errorf("error = %q, must not send the operator to debug kickstart", err)
+	}
+	if !strings.Contains(err.Error(), "Domain does not support specified action") {
+		t.Errorf("error = %q, want the next verb's OWN reason carried through, not swallowed by our diagnosis", err)
 	}
 }

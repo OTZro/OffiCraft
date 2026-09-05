@@ -129,8 +129,14 @@ func TestDecideHandoverNotice(t *testing.T) {
 	// The owner's pair, verbatim: 「65% / 75% 表示第一次通知會是 65% 第二次通知
 	// 會是 75%」.
 	cfg.NoticePct, cfg.HandoverPct = 65, 75
-	const steps = "# 下線程序\n1. report_stopping()\n2. post_chat 交接"
-	doc := func() string { return steps }
+	// The REAL producer, so which document this band reads is under test rather
+	// than assumed. A closure returning a made-up sentence would go on passing
+	// on a server that sent the final call's document to this soft arm.
+	srv := newReconcileTestServer(t)
+	_, steps, _ := DocSplitHeadBody(mustFoldText(t, srv, srv.offboardSpec()))
+	doc := func() string {
+		return srv.winddownNoticeText(offboardKindSoft, 0)
+	}
 	rec := func(pct float64, extra map[string]any) map[string]any {
 		r := map[string]any{"context_pct": pct, "context_pct_ts": 20.0, "boot_ts": 10.0}
 		for k, v := range extra {
@@ -139,7 +145,7 @@ func TestDecideHandoverNotice(t *testing.T) {
 		return r
 	}
 	notice := func(runtime string, record map[string]any, c SseContextHighConfig) *contextHighSignal {
-		return decideHandoverNotice("m-1", runtime, record, c, 5, 6, doc, nil)
+		return decideHandoverNotice("m-1", runtime, record, c, 5, 6, doc)
 	}
 
 	t.Run("claude fires at the owner's first number, not before", func(t *testing.T) {
@@ -179,18 +185,27 @@ func TestDecideHandoverNotice(t *testing.T) {
 		if sig == nil {
 			t.Fatal("expected a notice")
 		}
-		// Both of the owner's numbers, and where this session is right now: an
-		// agent cannot read its own context %, so a notice without them leaves
-		// it unable to pace itself.
-		if !strings.Contains(sig.Reason, "context 65% (your limits: 65% / 75%)") {
-			t.Fatalf("the notice must carry the pct and both limits: %q", sig.Reason)
+		// ⚠️ THE PCT AND THE LIMITS ARE GONE FROM THE NOTICE (T-6f44, decision 4:
+		// 「{where} 不中文化，直接砍掉」). This block used to require them, on the
+		// argument that an agent cannot read its own context %. The owner's
+		// ruling is that knowing 「你在 59%」 has nothing to do with how to close
+		// out — the notice's job is to say the close-out has started, and the
+		// band it fired in is not an instruction. So the assertion is inverted:
+		// nothing the tick composes may reach the agent.
+		for _, leak := range []string{"context 65%", "your limits:", "compaction round"} {
+			if strings.Contains(sig.Reason, leak) {
+				t.Fatalf("the notice carries %q — the position clause was deleted: %q",
+					leak, sig.Reason)
+			}
 		}
 		// The instruction, asserted on BOTH halves: dropping either one is a
 		// different bug (idle until cut off / stop mid-work) and both are red.
-		if !strings.Contains(sig.Reason, "work the sequence below") {
+		// They are the DOCUMENT's own words now — the English opener that used
+		// to carry them was the read-only head, and it went with {where}.
+		if !strings.Contains(sig.Reason, "## 2. 開始下線") {
 			t.Fatalf("the notice must point at the steps: %q", sig.Reason)
 		}
-		if !strings.Contains(sig.Reason, "then call restart_self yourself") {
+		if !strings.Contains(sig.Reason, "report_stopped") {
 			t.Fatalf("the notice must tell the agent to leave under its own power: %q", sig.Reason)
 		}
 		// The steps are the DOCUMENT's, verbatim — not a summary written in Go.
@@ -205,14 +220,22 @@ func TestDecideHandoverNotice(t *testing.T) {
 		assertQuotesNoTime(t, "a context-pressure notice", sig.Reason)
 	})
 
-	t.Run("the notice survives a document that cannot be read", func(t *testing.T) {
-		sig := decideHandoverNotice("m-1", RuntimeClaude, rec(65, nil), cfg, 5, 6,
-			func() string { return "" }, nil)
-		if sig == nil {
-			t.Fatal("losing the checklist must not lose the notice")
+	// 🔴 THIS DIRECTION REVERSED IN T-3201, and the reversal is the point. The
+	// sentence used to be built in Go beside the document, so an unreadable
+	// document cost the checklist and kept the notice. The sentence IS the
+	// document's read-only head now, so there is nothing left to send: the tick
+	// stays QUIET rather than spending the session's one notice on an empty
+	// reason, and the agent's client falls back on the key being absent.
+	t.Run("a document that cannot be rendered keeps the tick quiet", func(t *testing.T) {
+		if sig := decideHandoverNotice("m-1", RuntimeClaude, rec(65, nil), cfg, 5, 6,
+			func() string { return "" }); sig != nil {
+			t.Fatalf("an empty notice must not be sent at all: %+v", sig)
 		}
-		if !strings.Contains(sig.Reason, "offboard now") {
-			t.Fatalf("the sentence must still be there: %q", sig.Reason)
+		// …and the same for no closure at all, which is the other way the
+		// reason can come back empty.
+		if sig := decideHandoverNotice("m-1", RuntimeClaude, rec(65, nil), cfg, 5, 6,
+			nil); sig != nil {
+			t.Fatalf("no notice source must not send a blank frame: %+v", sig)
 		}
 	})
 
@@ -228,8 +251,19 @@ func TestDecideHandoverNotice(t *testing.T) {
 		if sig == nil {
 			t.Fatal("codex round 5 of the 5/6 pair at 60% must notify")
 		}
-		if !strings.Contains(sig.Reason, "compaction round 5 (your limits: round 5 / round 6)") {
-			t.Fatalf("a codex notice must name ITS axis (rounds), not a pct: %q", sig.Reason)
+		// ⚠️ THE AXIS IS NO LONGER IN THE SENTENCE (T-6f44, decision 4). What this
+		// sub-test actually guards — that codex is JUDGED on rounds and never on
+		// the claude percentage — is asserted above by the two decideHandoverNotice
+		// calls: 65% stays quiet, round 5 of 5/6 fires. That is the whole rule.
+		// What is gone is only the notice REPEATING the axis back, and with it the
+		// ability to tell a codex notice from a claude one by reading it: both
+		// arms send the same document now, which is correct — 〈停止〉 is the same
+		// procedure whatever put the session over its line.
+		for _, leak := range []string{"compaction round", "your limits:", "%"} {
+			if strings.Contains(sig.Reason, leak) {
+				t.Fatalf("a codex notice carries %q — the position clause was deleted: %q",
+					leak, sig.Reason)
+			}
 		}
 	})
 
@@ -258,7 +292,7 @@ func TestDecideTokenExpirySignalRepeatsUntilRestart(t *testing.T) {
 	const now int64 = 20_000
 	claims := map[string]any{"exp": float64(now + tokenExpiryWarningWindow)}
 	oldSession := map[string]any{"boot_ts": float64(now - int64(minSelfRestartSecs) - 1)}
-	member := &Member{ID: "m-expiry", Kind: KindAssistant}
+	member := &Member{ID: "m-expiry", Kind: KindStaff}
 
 	signal, last := decideTokenExpirySignal("m-expiry", claims, member, oldSession, now, 0)
 	if signal == nil {
@@ -331,8 +365,13 @@ func TestDirectedFrameText(t *testing.T) {
 	if envelope.Topic != "warden-command" || envelope.Data.RPC != "start" {
 		t.Fatalf("envelope: %+v", envelope)
 	}
+	// The length check below makes this an EXACT set, not a subset: an extra key
+	// is a field the warden was never told about. `task_type` was in this list
+	// until T-2 — sourced from the lessons bucket, carried for parity only — and
+	// its removal is what this now pins. Its twin lives in
+	// conformance/test_sse.py (§7); both have to move together.
 	want := []string{"member_id", "persona_context", "member_token", "role",
-		"task_type", "runtime", "model", "effort", "session_name"}
+		"runtime", "model", "effort", "session_name"}
 	if len(envelope.Data.Args) != len(want) {
 		t.Fatalf("start args keys: %v", envelope.Data.Args)
 	}
@@ -352,47 +391,47 @@ func TestDecideTaskCloseNudge(t *testing.T) {
 	for _, status := range []string{TaskStatusDone, TaskStatusTerminated} {
 		task := base
 		task.Status = status
-		sig := decideTaskCloseNudge(task, "審查 PR（review-pr）")
+		sig := decideTaskCloseNudge(task)
 		if sig == nil {
 			t.Fatalf("%s must nudge", status)
 		}
 		if sig.Topic != taskCloseTopic || sig.To != "m-exec" ||
-			sig.TaskID != task.ID || sig.TaskNo != "T-7d40" ||
+			sig.TaskID != task.ID || sig.TaskNo != "t-7d40aabbccdd" ||
 			sig.Type != "review-pr" || sig.Status != status {
 			t.Fatalf("%s signal fields: %+v", status, sig)
 		}
-		if !strings.Contains(sig.Reason, "T-7d40") ||
-			!strings.Contains(sig.Reason, "write_task_learnings") {
-			t.Fatalf("reason must name the task and the tool: %q", sig.Reason)
-		}
-		// T-fa76: the sentence shows the display label, but the MCP
-		// ADDRESSING string stays the raw type_key.
-		if !strings.Contains(sig.Reason, "「審查 PR（review-pr）」") ||
-			!strings.Contains(sig.Reason, "type_key=`review-pr`") {
-			t.Fatalf("reason must carry display label AND raw key: %q", sig.Reason)
+		// 🔴 THE DECISION MUST NOT CARRY WORDS (T-7870). The sentence lives in
+		// the 〈任務收尾〉 document and is folded in at the send site; a default
+		// composed here would be a second source of truth for the same words —
+		// which is precisely how this document spent T-3201 editable, versioned,
+		// and unread. An empty Reason is the assertion, not an oversight.
+		if sig.Reason != "" {
+			t.Fatalf("%s: the decision composed a sentence (%q) — the words belong to "+
+				"the document, not to this function", status, sig.Reason)
 		}
 	}
 
-	// A blank label (manual deleted / lookup failed) falls back to the key.
-	fallback := base
-	fallback.Status = TaskStatusDone
-	if sig := decideTaskCloseNudge(fallback, ""); sig == nil ||
-		!strings.Contains(sig.Reason, "「review-pr」") {
-		t.Fatalf("blank label must fall back to the raw key: %+v", sig)
-	}
-
-	// An ad-hoc task (no type) has no manual to write into — never nudges.
-	adhoc := base
-	adhoc.Status = TaskStatusDone
-	adhoc.TypeKey = ""
-	if decideTaskCloseNudge(adhoc, "") != nil {
-		t.Fatal("ad-hoc close must stay quiet")
+	// 🔴 REVERSED BY OWNER RULING (T-91). This asserted that an ad-hoc task
+	// (no type) never nudges, because there is no manual to write learnings
+	// into. The premise is still true and is no longer the question: the
+	// notice's job is telling an executor its ticket is CLOSED, which is
+	// equally true of a typeless one. Same for a DUPLICATED close, whose gate
+	// was removed in the same change.
+	for _, silenced := range []Task{
+		{ID: "t-adhoc", Status: TaskStatusDone, TypeKey: "", ExecutorID: "m-exec"},
+		{ID: "t-dup", Status: TaskStatusDuplicated, TypeKey: "review-pr", ExecutorID: "m-exec"},
+	} {
+		if decideTaskCloseNudge(silenced) == nil {
+			t.Fatalf("%s must nudge: the two gates that used to silence it asked "+
+				"whether there were LESSONS, not whether the executor needed to "+
+				"know its ticket was closed", silenced.ID)
+		}
 	}
 
 	// A non-terminal status never nudges.
 	open := base
 	open.Status = TaskStatusInProgress
-	if decideTaskCloseNudge(open, "") != nil {
+	if decideTaskCloseNudge(open) != nil {
 		t.Fatal("non-terminal status must stay quiet")
 	}
 
@@ -400,7 +439,7 @@ func TestDecideTaskCloseNudge(t *testing.T) {
 	unassigned := base
 	unassigned.Status = TaskStatusTerminated
 	unassigned.ExecutorID = ""
-	if decideTaskCloseNudge(unassigned, "") != nil {
+	if decideTaskCloseNudge(unassigned) != nil {
 		t.Fatal("unassigned close must stay quiet")
 	}
 }
@@ -408,7 +447,7 @@ func TestDecideTaskCloseNudge(t *testing.T) {
 func TestTaskCloseFrameIsABareDirectedEvent(t *testing.T) {
 	task := Task{ID: "t-7d40aabbccdd", TypeKey: "review-pr",
 		ExecutorID: "m-exec", Status: TaskStatusDone}
-	frame, err := directedFrameText(taskCloseTopic, decideTaskCloseNudge(task, ""))
+	frame, err := directedFrameText(taskCloseTopic, decideTaskCloseNudge(task))
 	if err != nil {
 		t.Fatal(err)
 	}

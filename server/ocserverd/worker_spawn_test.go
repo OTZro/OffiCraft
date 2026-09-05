@@ -33,14 +33,22 @@ func newWorkerTestServer(t *testing.T) *apiServer {
 	if err := seedOutOfBox(dal); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	return newAPIServer(dal, NewHub(), []byte("worker-test-secret"), 3600,
+	return newAPIServer(dal, NewHub(), singleKeyring([]byte("worker-test-secret")), 3600,
 		assetRoot(t.TempDir()))
 }
 
+// putWorkerFixture seeds a worker row so that the ROW ENDS UP LOOKING LIKE `w`.
+// The second write is the wind-down anchors, for putTestMember's reason (T-55) —
+// a worker row IS a member row (PutOutsourceWorker is PutMember of the
+// projection), so it drops exactly the same four columns on an existing row.
 func putWorkerFixture(t *testing.T, s *apiServer, w OutsourceWorker) OutsourceWorker {
 	t.Helper()
 	if err := s.dal.PutOutsourceWorker(w); err != nil {
 		t.Fatalf("put worker: %v", err)
+	}
+	if err := s.dal.SetMemberWindDownAnchors(w.ID, w.StoppingSince, w.StoppedSince,
+		w.RefocusSince, w.RefocusOp); err != nil {
+		t.Fatalf("seed wind-down anchors for %s: %v", w.ID, err)
 	}
 	return w
 }
@@ -64,6 +72,13 @@ func connectWarden(t *testing.T, s *apiServer, wardenID string) {
 		t.Fatalf("hub connect %s: %v", wardenID, err)
 	}
 	t.Cleanup(func() { s.hub.Disconnect(l) })
+}
+
+func TestWorkerSpawnRetryWindowMatchesReconcileStartTimeout(t *testing.T) {
+	if workerSpawnRetrySecs != defaultReconcileConfig().StartTimeout {
+		t.Fatalf("worker spawn retry window = %v, want reconcile start timeout %v",
+			workerSpawnRetrySecs, defaultReconcileConfig().StartTimeout)
+	}
 }
 
 // decodeWardenFrame unwraps one FIFO frame ("data: {...}\n\n") into rpc + args.
@@ -116,8 +131,10 @@ func TestBuildWorkerBootContext_FullAssembly(t *testing.T) {
 	// must really be here. Without it every absence assertion below is satisfied
 	// by an empty string.
 	for _, want := range []string{
-		"# Global Context",     // slot 1 — the 系統互動 seed's own H1
-		"# 啟動程序（Boot Sequence", // slot 4 — the shared boot sequence
+		"# Global Context", // slot 1 — the 系統互動 seed's own H1
+		// 釘的是 seed 的 H1 逐字位元組（見 worker_sharedcore_test.go 的
+		// bootSequenceH1）。rc-e12733548e4b 之後是新名。
+		"# 啟動步驟（Boot Sequence", // slot 4 — the shared boot sequence
 		"# Claude Code 執行環境",   // that runtime's 執行環境 section, leading slot 4
 	} {
 		if !strings.Contains(got, want) {
@@ -166,7 +183,7 @@ func TestBuildWorkerBootContext_FullAssembly(t *testing.T) {
 // The seed's shape changed again when the owner rewrote both files (2026-08-15):
 // 執行環境 is now a top-level section that LEADS the boot-sequence block instead
 // of a subsection inside it. So "the boot sequence is the tail" is asserted on
-// the 啟動程序 heading, and 執行環境 is required to be the only heading between
+// the 啟動步驟 heading, and 執行環境 is required to be the only heading between
 // the rest of the document and it.
 func TestBuildWorkerBootContext_RuntimeGuidanceIsTheSeedsOwnAndItIsLast(t *testing.T) {
 	for _, tc := range []struct {
@@ -203,12 +220,12 @@ func TestBuildWorkerBootContext_RuntimeGuidanceIsTheSeedsOwnAndItIsLast(t *testi
 			rest := got[env+len(tc.wantEnvH1):]
 			next := strings.Index(rest, "\n# ")
 			if next < 0 || !strings.HasPrefix(rest[next+1:], bootSequenceH1) {
-				t.Fatalf("%s: 執行環境 is not immediately followed by the 啟動程序 heading — "+
+				t.Fatalf("%s: 執行環境 is not immediately followed by the 啟動步驟 heading — "+
 					"the runtime note must lead the tail block, not sit loose in the "+
 					"document", tc.name)
 			}
 			if strings.Contains(rest[next+1:], "\n# ") {
-				t.Errorf("%s: something follows the 啟動程序 block; it must be last", tc.name)
+				t.Errorf("%s: something follows the 啟動步驟 block; it must be last", tc.name)
 			}
 		})
 	}
@@ -248,7 +265,7 @@ func TestWorkerBootContextIsTheStaffFoldMinusThePersona(t *testing.T) {
 		t.Fatalf("put user context: %v", err)
 	}
 
-	staff, err := s.buildBootContext("", nil, "")
+	staff, err := s.buildBootContext("", nil)
 	if err != nil || staff == nil {
 		t.Fatalf("buildBootContext: %v", err)
 	}
@@ -267,14 +284,14 @@ func TestWorkerBootContextIsTheStaffFoldMinusThePersona(t *testing.T) {
 	// up to (but not including) the START of slot 4, plus the "\n\n" that joined
 	// it to the block before.
 	//
-	// Slot 4 no longer BEGINS at the 啟動程序 heading: the owner's 2026-08-15
+	// Slot 4 no longer BEGINS at the 啟動步驟 heading: the owner's 2026-08-15
 	// rewrite hoisted the runtime 執行環境 note into a top-level section that
-	// leads the block. Cutting at 啟動程序 would leave that note on one side of
+	// leads the block. Cutting at 啟動步驟 would leave that note on one side of
 	// the equality only — which is how this anchor announced the change.
 	role := strings.Index(staff.Context, "# Role: ")
 	boot := strings.Index(staff.Context, "# Claude Code 執行環境")
 	if role < 0 || boot < 0 || role >= boot {
-		t.Fatalf("cannot locate slot 3 in the staff fold (角色說明=%d 啟動程序=%d) — "+
+		t.Fatalf("cannot locate slot 3 in the staff fold (角色說明=%d 啟動步驟=%d) — "+
 			"the staff assembly moved and this equality must be re-derived", role, boot)
 	}
 	// Positive control: the persona really is a substantial block, so "minus
@@ -329,7 +346,7 @@ func TestWorkerBootContextIsTheStaffFoldMinusThePersona(t *testing.T) {
 func TestWorkerBootContextIsInvariantToTheTaskAndItsManual(t *testing.T) {
 	s := newWorkerTestServer(t)
 	if err := s.dal.PutMember(Member{
-		ID: "m-pred", Name: "Ken", Kind: KindAssistant, RosterStatus: RosterStatusActive,
+		ID: "m-pred", Name: "Ken", Kind: KindStaff, RosterStatus: RosterStatusActive,
 	}); err != nil {
 		t.Fatalf("put predecessor: %v", err)
 	}
@@ -675,7 +692,9 @@ func TestNotifyWorkerSpawn_DispatchesMemberStart_AndPaces(t *testing.T) {
 	// boots a worker with no instructions at all), so it now checks the shared
 	// blocks, plus the absences so the removal cannot quietly come back through
 	// the spawn path.
-	for _, want := range []string{"# Global Context", "# 啟動程序（Boot Sequence"} {
+	// 釘的是 seed 的 H1 逐字位元組；rc-e12733548e4b 之後是新名，與 seed 同一顆
+	// commit 換掉。
+	for _, want := range []string{"# Global Context", "# 啟動步驟（Boot Sequence"} {
 		if !strings.Contains(persona, want) {
 			t.Errorf("persona_context is missing the shared block %q", want)
 		}
@@ -861,8 +880,7 @@ func TestNotifyWorkerSpawn_StampsNoMachineSelectedReason(t *testing.T) {
 
 	// SENTINEL: name an online machine and the very same worker dispatches, so
 	// the refusals above are the missing placement, not a broken fixture.
-	blocked.DesiredMachineID = "m-other"
-	if err := s.dal.PutOutsourceWorker(blocked); err != nil {
+	if err := s.dal.SetMemberDesiredMachineID("ow-nm", "m-other"); err != nil {
 		t.Fatalf("pin worker: %v", err)
 	}
 	s.outsourceMu.Lock()
@@ -1002,7 +1020,14 @@ func TestNotifyWorkerSpawn_BlockedReasonNamesTheCause(t *testing.T) {
 		w := blockedSpawnFixture(t, s, c.taskID, c.workerID, c.machine)
 		if c.runtime != "" {
 			w.Runtime = c.runtime
-			putWorkerFixture(t, s, w)
+			// The row already exists (blockedSpawnFixture built it), so the
+			// column moves through its sole writer since T-55. Placement reads
+			// the VALUE it is handed, so the in-memory field is what this case
+			// actually exercises — but leaving the row disagreeing with it would
+			// make this a false green the day placement re-reads the row.
+			if err := s.dal.SetMemberRuntime(c.workerID, c.runtime); err != nil {
+				t.Fatalf("%s: set runtime: %v", c.name, err)
+			}
 		}
 		s.outsourceMu.Lock()
 		if c.bench {
@@ -1053,10 +1078,12 @@ func TestStampWorkerPlacementBlocked_ReReadsTheRowBeforeWriting(t *testing.T) {
 	putWardenFixture(t, s, "m-gone")
 	stale := blockedSpawnFixture(t, s, "t-0000000000e2", "ow-stale", "m-gone")
 
-	// A relocate lands after the tick took its snapshot.
-	moved := readWorker(t, s, "ow-stale")
-	moved.DesiredMachineID = "m-moved"
-	putWorkerFixture(t, s, moved)
+	// A relocate lands after the tick took its snapshot — through the pin's sole
+	// writer, which is what relocateWorkerByID uses since T-55 (a whole-row
+	// worker write no longer carries desired_machine_id).
+	if err := s.dal.SetMemberDesiredMachineID("ow-stale", "m-moved"); err != nil {
+		t.Fatalf("relocate: %v", err)
+	}
 
 	now := 4_000_000.0
 	s.outsourceMu.Lock()
@@ -1078,8 +1105,14 @@ func TestStampWorkerPlacementBlocked_ReReadsTheRowBeforeWriting(t *testing.T) {
 	// to explain, and writing the snapshot back would resurrect it as assigned.
 	released := readWorker(t, s, "ow-stale")
 	released.Status = WorkerStatusReleased
-	released.LastOp, released.LastOpReason, released.LastOpAt = "", "", 0
 	putWorkerFixture(t, s, released)
+	// Clear the receipt through its SOLE writer (T-55) — the whole-row fixture
+	// write above can no longer move these columns, so zeroing them on the
+	// snapshot would leave the FIRST stamp's receipt in place and the assertion
+	// below would pass or fail on that instead of on the second stamp.
+	if err := s.dal.SetMemberOpReceipt("ow-stale", "", nil, "", "", 0); err != nil {
+		t.Fatalf("clear receipt: %v", err)
+	}
 
 	s.outsourceMu.Lock()
 	s.notifyWorkerSpawn(stale, now+workerSpawnRetrySecs+1)
@@ -1337,6 +1370,14 @@ func fsmWorkerFixture(t *testing.T, s *apiServer, id string, status string, crea
 		ID: id, Codename: "O-1", Model: "opus", Effort: "high",
 		TaskID: "t-" + id, Status: status, CreatedTS: createdTS,
 		DesiredMachineID: ServerSelfHost, // explicit placement (owner ruling 2026-07-25)
+		// T-72dd: see the note in TestTick_AssignedWorker_RedispatchesSpawn. This
+		// fixture used to leave desired_state UNSET and relied on
+		// reconcileWorkerLiveness hard-wiring the FSM's Desired to online. Now
+		// that the FSM reads the row, a "" here would route every one of these
+		// cases to decideDown and test the wrong branch entirely. The sole
+		// production creation path writes online explicitly, so this is what a
+		// real worker row carries.
+		DesiredState: DesiredStateOnline,
 	})
 }
 
@@ -1354,6 +1395,14 @@ func TestReconcileWorkerLiveness_ClobberedStartZombieTakeover(t *testing.T) {
 	w.LastOp = reconcileCmdStart
 	w.LastOpReason = "session_already_exists: live session refused clobber"
 	putWorkerFixture(t, s, w)
+	// The receipt reaches the code under test in the VALUE passed below, not off
+	// the row — but the row carried it before T-55 and still should, or the
+	// fixture reads as writing something it does not write. Planted through the
+	// sole writer so the two agree.
+	if err := s.dal.SetMemberOpReceipt("ow-g", w.LastOp, w.LastOpOK, w.LastOpLog,
+		w.LastOpReason, w.LastOpAt); err != nil {
+		t.Fatalf("seed the clobber receipt: %v", err)
+	}
 
 	s.outsourceMu.Lock()
 	s.workerSpawnAt["ow-g"] = now - 5 // recently paced (must not block the reap path)
@@ -1474,6 +1523,14 @@ func TestReconcileWorkerLiveness_LegacyWorkerStartReceiptStillDetectsZombie(t *t
 	w.LastOp = legacyWardenCmdWorkerStart
 	w.LastOpReason = "session_already_exists: live session refused clobber"
 	putWorkerFixture(t, s, w)
+	// The receipt reaches the code under test in the VALUE passed below, not off
+	// the row — but the row carried it before T-55 and still should, or the
+	// fixture reads as writing something it does not write. Planted through the
+	// sole writer so the two agree.
+	if err := s.dal.SetMemberOpReceipt("ow-l", w.LastOp, w.LastOpOK, w.LastOpLog,
+		w.LastOpReason, w.LastOpAt); err != nil {
+		t.Fatalf("seed the clobber receipt: %v", err)
+	}
 	s.outsourceMu.Lock()
 	s.workerSpawnTarget["ow-l"] = ServerSelfHost
 	s.workerReconcileStates["ow-l"] = reconcileState{
@@ -1839,7 +1896,7 @@ func TestReconcileWorkerLiveness_UnknownTargetNamesNoMachine(t *testing.T) {
 // with nothing at all explaining why it never booted.
 func TestNotifyWorkerSpawn_NoSigningSecret_LeavesReceipt(t *testing.T) {
 	s := newWorkerTestServer(t)
-	s.secret = nil
+	s.keys = singleKeyring(nil)
 	connectWarden(t, s, ServerSelfHost)
 	seedMachine(t, s, ServerSelfHost)
 	task := putTaskFixture(t, s, Task{
@@ -2145,6 +2202,23 @@ func TestTick_AssignedWorker_RedispatchesSpawn(t *testing.T) {
 		ID: "ow-a", Codename: "O-10", Model: "opus", Effort: "high",
 		TaskID: task.ID, Status: WorkerStatusAssigned,
 		DesiredMachineID: ServerSelfHost, // explicit placement (owner ruling 2026-07-25)
+		// T-72dd: this fixture used to leave desired_state UNSET, and passed only
+		// because reconcileWorkerLiveness hard-wired the FSM's Desired to online
+		// and never read the row. Now that it reads the row, "" would route to
+		// decideDown and this worker would never be spawned at all.
+		//
+		// "" is a FIXTURE state, not a production one: the sole creation path
+		// (outsource_sched.go's assignment pass) writes DesiredStateOnline
+		// explicitly, so setting it here is what a real assigned worker looks
+		// like — not a workaround for the change.
+		//
+		// 🔴 It is worth knowing that "" SURVIVES a write: the member column's
+		// DEFAULT 'online' does not rescue an explicit empty value (measured,
+		// T-72dd). Nothing validates desired_state either (ValidateMember does
+		// not check it), so a row that acquires "" some other way would silently
+		// stop being spawned rather than fail loudly. No guard is added here —
+		// that is an owner ruling, not an implementation detail.
+		DesiredState: DesiredStateOnline,
 	})
 
 	s.runOutsourceTick(nowSecs())

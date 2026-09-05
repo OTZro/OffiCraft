@@ -47,7 +47,7 @@ function mkMember(over: Partial<Member> = {}): Member {
     lifecycle: "offline",
     model: "opus",
     effort: "medium",
-    kind: "assistant",
+    kind: "staff",
     desiredMachineId: "",
     machine: null,
     account: null,
@@ -129,8 +129,11 @@ describe("MemberDetailPanel · model/effort quick-pick editor", () => {
 
     await confirmSettings();
     await waitFor(() =>
+      // NO `runtime` key: this member's runtime is unset and the owner only
+      // touched model/effort, so the dialog's claude FILL must not be written
+      // over the unset value (T-ae8b). Pinned on its own in
+      // MemberDetailPanel.runtime-unset-not-submitted.test.tsx.
       expect(patchMember).toHaveBeenCalledWith("mira", {
-        runtime: "claude",
         model: "sonnet",
         effort: "high",
       })
@@ -168,7 +171,6 @@ describe("MemberDetailPanel · model/effort quick-pick editor", () => {
     await confirmSettings();
     await waitFor(() =>
       expect(patchMember).toHaveBeenCalledWith("mira", {
-        runtime: "claude",
         model: "claude-x-preview",
         effort: "medium",
       })
@@ -182,7 +184,6 @@ describe("MemberDetailPanel · model/effort quick-pick editor", () => {
     await confirmSettings();
     await waitFor(() =>
       expect(patchMember).toHaveBeenLastCalledWith("mira", {
-        runtime: "claude",
         model: "",
         effort: "medium",
       })
@@ -194,7 +195,7 @@ describe("MemberDetailPanel · model/effort quick-pick editor", () => {
 // 狀態，不能顯示設定值」. The info card states what the member is RUNNING; the
 // settings dialog above stays the one place the launch intent is shown and
 // written. Both halves are pinned here so neither can quietly absorb the other.
-describe("MemberDetailPanel · 投入度 readout vs configured launch intent", () => {
+describe("MemberDetailPanel · 思考強度 readout vs configured launch intent", () => {
   it("reads out the REPORTED effort, not the configured one", () => {
     const utils = renderPanel({
       status: "online",

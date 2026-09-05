@@ -68,7 +68,7 @@ func TestCancellingBatchPatchLessonsFansNoFrame(t *testing.T) {
 	f := newHistoryFixture(t)
 	const role, taskType = seedRoleAssistant, "general"
 	const original = "LESSON: widen the anchor until it is unique.\n"
-	if err := f.api.dal.PutLessons(Lessons{RoleKey: role, TaskType: taskType, Text: original}); err != nil {
+	if err := f.api.dal.PutLessons(Lessons{RoleKey: role, Text: original}); err != nil {
 		t.Fatalf("seed lessons: %v", err)
 	}
 	// Connect AFTER seeding: every frame popped below belongs to a write this
@@ -80,8 +80,8 @@ func TestCancellingBatchPatchLessonsFansNoFrame(t *testing.T) {
 	patch := func(body any) {
 		t.Helper()
 		rec := httptest.NewRecorder()
-		f.api.HandlePatchLessonsApiLessonsRoleKeyTaskTypePatchPost(rec,
-			f.req(http.MethodPost, "/api/lessons/"+role+"/"+taskType+"/patch", body), role, taskType)
+		f.api.HandlePatchLessonsApiLessonsRoleKeyPatchPost(rec,
+			f.req(http.MethodPost, "/api/lessons/"+role+"/patch", body), role)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("patch: status=%d body=%s", rec.Code, rec.Body.String())
 		}

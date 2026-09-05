@@ -97,14 +97,110 @@ stylesheet、而唯一會 render machine picker 的 CT guard 在同一張票裡�
 
 | # | Mutant | 紅了哪條 |
 |---|---|---|
-| R1 | `.mp-identity__buttons { flex-direction: column }`（＝裁定前的形狀） | `identity-actions-row.ct.spec.tsx` **desktop ＋ narrow 兩條都紅** |
-| R2 | 刪掉 ≤720px 的 `.mp-identity__buttons` 兩條規則 | **只有 narrow 紅**（`the pair spans the card, not the right margin`） |
+| R1 | `.mp-identity__buttons { flex-direction: column }`（＝裁定前的形狀） | `identity-actions-row.ct.spec.tsx` **desktop 紅**（當時的斷言名 `one row of four`；同一條現名 **`one row, whole cluster`**，量的還是 `[ALL.length]`） |
+| R2 | 刪掉 ≤720px 的 `.mp-identity__buttons` 規則 | **只有 narrow 紅**（當時的斷言名 `band 1 = 更改, band 2 = the whole ladder`；那條後來拆成樹裡現存的三條 **`band 1 = 更改 alone`**／**`the rest of the cluster keeps its order below 更改`**／**`at most two bands — 不要擠成一團`**） |
 
 ⚠️ **R2 第一版是綠的，而且綠得很有道理** —— 拿掉窄螢幕規則後，`.mp-identity__actions` 的
 `align-items: stretch` 仍然把那一列撐滿，所以「同一列／沒溢出／在卡片內」**每一條都還是真的**；
 真正壞掉的是 `justify-content: flex-end` 讓兩顆鍵**擠在右邊界**——正是 owner 說的「擠成一團」。
-斷言因此改成量**跨距**（span > 卡寬 70%）與**均分**（兩顆寬度差 < 卡寬 20%）。
+斷言因此改成量**跨距**（span > 卡寬 70%）與**均分**（寬度差 < 卡寬 20%）。
 教訓與 T-d451 那條同族：**「東西還在」不等於「東西擺對」**。
+
+#### T-ed79 重測：三顆鍵之後，這條護欄釘的事實換了一個
+
+> ⚠️ **這一小節（含下一小節）描述的是 owner 2026-08-22 之前的世界：階梯是三顆並排的鍵。**
+> 2026-08-22 之後階梯收成同一格，顆數不再是變數 —— 見本節最後的
+> 〈三改：同一個按鈕 升級的概念〉。下面保留原文是**歷史紀錄**。
+
+owner 2026-08-21 把單顆 停止 換成 停止 → 加速停止 → 強制停止 的階梯，於是
+**「更改 ＋ 停止 同一列」在窄寬度下不再是這個元件的事實**：四顆四字標籤在 375 的卡片
+（內寬 289）上排不下——光是階梯本身自然寬就要 ~300。護欄改成**依寬度分形狀**：
+desktop 仍然一列四顆（2026-07-31 那條裁定在有空間的地方照舊成立），narrow 釘的是
+**刻意的兩帶**（更改 一帶、整條階梯一帶、依 owner 順序、均分），外加**兩個寬度都成立**的
+「任兩顆不重疊（矩形交集）／四個邊都不出卡片／標籤不被自己的鍵裁掉／頁面不長橫捲軸」。
+**沒有任何一條斷言被放寬**——`toBeLessThan(4)` 那條的 same-row 容忍度原封不動，只是改成
+用來分帶；重疊檢查從「停止 起點在 更改 右邊」升級成真正的矩形交集，卡片邊界從 2 條（左右）
+升成 4 條，並新增了 clientWidth/scrollWidth 的裁字檢查。
+
+版面同時修了（`flex: 1 1 0` → `flex: 1 1 100%` ＋ `align-items: stretch`）：舊規則把卡片
+**對半分**給 更改 和整組階梯，階梯在自己那半裡疊成三層，`align-items: center` 再把這塊
+三層的方塊對著單顆 更改 垂直置中——這就是 `s.y - c.y = 38` 的來源，也就是為什麼
+owner 最想按的 停止 反而跑到 更改 **上面**。實測 320／360／375／390／430／600／720
+七個寬度：全部兩帶、階梯一行、`scrollWidth ≤ width`、`pageOver = 0`。
+
+| # | T-ed79 新增 mutant | 紅了哪條 |
+|---|---|---|
+| R3 | ≤720px 改 `flex-wrap: nowrap` ＋ `> * { flex: 0 0 auto }` | narrow：當時叫 `band 1 = 更改, band 2 = the whole ladder`，現存的對應斷言是 **`band 1 = 更改 alone`**／**`the rest of the cluster keeps its order below 更改`**／**`at most two bands — 不要擠成一團`** |
+| R3' | ≤720px 的 `.member-actions` 釘死 `width: 500px; flex-wrap: nowrap`（＝真的溢出卡片，帶形還是對的） | narrow：`mp-change right edge` —— 這是**執行期組出來的訊息**，樣板是 spec 裡的 **`` `${id} right edge` ``**（grep 找字面會 0 行，要找樣板） |
+| R4 | `.member-actions .btn + .btn { margin-left: -40px }`（＝真的互相疊上去） | narrow：`member-action-stop and member-action-accelerated-stop overlap by 32x30` —— 同樣是執行期訊息，樣板 **`` `${ALL[i]} and ${ALL[j]} overlap by ${overlapX}x${overlapY}` ``**。⚠️ 2026-08-22 之後**這個配對本身不可能再出現**（階梯只剩一格），現在能配對的是 更改／喚醒／那一格 |
+| R5 | 階梯每顆鍵鎖成 `flex: 0 0 52px; overflow: hidden`（＝標籤被裁掉，boundingBox 看不出來） | narrow：`member-action-accelerated-stop label clipped vertically` —— 執行期訊息，樣板 **`` `${id} label clipped vertically` ``** |
+
+#### 再重測：「按了才出現」把顆數也變成變數（**已退場的世界，見下一小節**）
+
+owner 2026-08-21 第二條裁定（「不是一開始就顯示三個按鈕」「按了才出現」）之後，這一列的
+**顆數本身**是狀態的函數：2（更改＋停止）／3（系統開的軟下線多一顆 加速停止）／
+4（owner 按過 停止，`stopping` 另外帶一顆 喚醒 救援）／5（上了時鐘再多 強制停止）。
+CASES 因此從兩種形狀改成**四種**，最寬的五顆那個 case 一字未動，另外補上最窄的兩顆——
+**沒有一條斷言被放寬**（same-row 容忍度 4、矩形交集、四邊卡片邊界、clientWidth/scrollWidth
+裁字檢查、跨距 70%／均分 20%、頁面橫捲軸全部原封不動）。desktop 那條 `one row of four`
+只是改名成 `one row, whole cluster`，量的還是 `[ALL.length]`。
+
+🔴 **上面這段的 2／3／4／5 顆在 2026-08-22 之後不再成立**：階梯收成同一格之後只剩
+**2**（更改 ＋ 那一格）與 **3**（`stopping` 多一顆 喚醒 楔形救援）。四／五顆的最壞情況
+是**在產品裡消失了**，不是被量測放過。
+
+新增的行為 mutant（`MemberActionButtons.tsx`）：
+
+| # | Mutant | 紅了哪條 |
+|---|---|---|
+| M17 | 出現條件拿掉（當時的 `LADDER_BY_STAGE["accelerated"]`＝三顆一開始就都在；那個識別字已於 2026-08-22 換成 `RUNG_BY_STAGE`） | `MemberActionButtons > reveals one more rung per stage and renders NO unreachable rung`：`online, nothing winding down: rungs revealed: expected [ 'member-action-stop', …(2) ] to deeply equal [ 'member-action-stop' ]`；外包端同時紅 `停止 → the worker goes 停止中 and 加速停止 is REVEALED, 強制停止 still is not` 與 `強制停止 appears only after 加速停止…`（`expected <button…> to be null`） |
+| M18 | 拿掉剛出現那顆的不可按窗口（`armed` 直接讀 `stage`） | 當時叫 `MemberActionButtons > holds a rung that JUST appeared inert until it arms` |
+
+⚠️ **M17／M18 這兩列點名的測試名在現在的樹裡是 0 hit**（連同 M17 引的
+`停止 → the worker goes 停止中 and 加速停止 is REVEALED, 強制停止 still is not` 與
+`強制停止 appears only after 加速停止…`）—— 它們是三顆並排世界的測試名，2026-08-22 那次
+改寫把它們換掉了。**不要照字面去找。** 現在承接同一件事的是下一小節列出的那五條。
+
+R3'／R4／R5 是這次特地種來證明**新護欄仍有鑑別力**的三支：分別打「溢出卡片」「互相重疊」
+「看起來有寬度其實字被吃掉」，三支都紅。還原一律 `cp` 備份覆蓋回去，最後 `git diff --stat`
+確認只剩下真正要留的兩個檔。
+
+#### 三改：owner 2026-08-22「同一個按鈕 升級的概念 不是不同按鈕」（T-ed79 本包）
+
+reply card rc-2afe8b557e9c 選項 [D]：「停止 → 加速停止 → 強制停止 UI 顯示怪怪的，他應該
+體感上像是同一個按鈕 升級的概念 不是不同按鈕」。於是階梯收成**同一格**——label／action／
+testid 隨階段換，用過的那一階不再留在旁邊。實作上 `LADDER_BY_STAGE`（回傳一個陣列）換成
+`RUNG_BY_STAGE`（`Record<StopLadderStage, ActionKey>`，回傳**單一** rung）。
+
+CT 的 CASES 仍然是四個，只是變數從「幾顆鍵」換成「那一格是哪一階」——`強制停止` 是三個標籤
+裡最長的，一格裝得下 `停止` **不等於**裝得下它，所以那是獨立的一次量測。
+**沒有一條斷言被放寬**（same-row 容忍度 4、矩形交集、四邊卡片邊界、clientWidth/scrollWidth
+裁字檢查、跨距 70%／均分 20%、頁面橫捲軸全部原封不動）；新增的是「階梯永遠只有一格」這條
+計數斷言。
+
+| # | Mutant | 紅了哪條 |
+|---|---|---|
+| R0 | 階梯改回三階並排（`RUNG_BY_STAGE` 退回回傳陣列） | `identity-actions-row.ct.spec.tsx`：**每一個寬度、兩個面板都紅**，在 `the ladder is ONE button, whatever rung it is on` |
+
+🔴 **R0 這一列的來源和其他列不同，誠實標明**：它是 T-ed79 收尾的**文件修補**時，從 CT spec
+檔頭（`frontend/visual-guards/identity-actions-row.ct.spec.tsx` 的
+`Mutants (all MEASURED, see docs/design/worker-panel-parity-mutants.md)`）**轉錄**過來的，
+補的是「spec 指著這份 md、這份 md 裡卻沒有 R0」這條斷鏈。**寫下這一列的人沒有重跑那支
+mutant**；要獨立重放，請照本檔開頭的方法自己跑一次。
+
+同一件事在單元層的護欄（下面五條**都在現在的樹裡**，grep 得到）：
+
+* `MemberActionButtons > renders ONE ladder button and UPGRADES it — never a second rung beside it`
+* `MemberActionButtons > holds the button inert for LADDER_ARM_MS after it upgrades`
+* `MemberActionButtons > re-arms on EVERY upgrade, so 加速停止 → 強制停止 is guarded too`
+* `WorkerDetailPanel > 停止 → the worker goes 停止中 and the ladder cell UPGRADES to 加速停止, not to a second button`
+* `WorkerDetailPanel > 強制停止 is reached only by upgrading through 加速停止, ASKS FIRST, then kills and collapses the row to 喚醒`
+
+🔴 **這一次拿掉的是「槽位分離」這道保護**，記在這裡免得下一個人以為它還在：三顆並排時
+按過的那一階留在原地（作廢），新出現的那一階拿到**新的槽**，沒有任何一個槽會被回收成更狠的
+動作。一格就是那個被回收的槽。owner 在卡上被逐字告知這一點，也被提了長按 [C] 與確認框 [B]，
+他選了 [D]——不加任何新防護。因此 `LADDER_ARM_MS` 是唯一剩下的東西，不要弱化它，也不要在
+這裡加一道 owner 明白拒絕過的保護。
 
 ### 行為（`WorkerDetailPanel.tsx` / `MemberDetailPanel.tsx`）
 
@@ -116,7 +212,7 @@ stylesheet、而唯一會 render machine picker 的 CT guard 在同一張票裡�
 | M11 | 無編輯的早退也套用到喚醒（照原值確認＝什麼都不做） | ④ | `喚醒 ASKS FIRST…` |
 | M12 | 狀態格（含「已釋放」）加回去 | ② | `released…and NO 已釋放 status cell remains` |
 | M13 | 離線原因跟著狀態格一起被刪 | ② | `離線: the dot reads 離線 and the structured reason survives…` |
-| M14 | 喚醒的字改回 worker 私有葉子 | ③ | `stop → the dot flips to 已停止 and the row swaps 更改／停止 for 喚醒` |
+| M14 | 喚醒的字改回 worker 私有葉子 | ③ | 現名 `停止 → the worker goes 停止中 and the ladder cell UPGRADES to 加速停止, not to a second button`（2026-08-22 收成同一格時最後一次改名；再之前叫 `停止 → the worker goes 停止中 and 加速停止 is REVEALED, 強制停止 still is not`，最早叫 `stop → the dot flips to 已停止 and the row swaps 更改／停止 for 喚醒`——外包的 停止 從當場砍改成優雅收工，那顆斷言的結論整個反過來了） |
 | M15 | 外包的 `.mp-identity__buttons` 換掉（兩顆不再同一列） | ① | 同上那條 |
 | M16 | 正職的 `.mp-identity__buttons` 換掉 | ① | `puts 更改 and the stop action in the same button row, 更改 first` |
 | M16b | 正職那一列裡把「更改」拿掉（順序／存在性半邊） | ① | 上述 ＋ 既有的 `says 更改 for an online member…` |

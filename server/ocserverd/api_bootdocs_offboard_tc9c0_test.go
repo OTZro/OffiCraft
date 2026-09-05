@@ -1,6 +1,6 @@
 package main
 
-// T-c9c0 — the 下線程序 document. Its replace / reset / cap / no-op / authz /
+// T-c9c0 — the 〈停止〉 document. Its replace / reset / cap / no-op / authz /
 // history behaviour is covered by the shared table in api_bootdocs_t791e_test.go
 // (bootDocCases). What is here is the part that table cannot see: the three
 // places where forgetting this kind fails SILENTLY.
@@ -20,17 +20,33 @@ import (
 func TestRestoringTheOffboardDocFansAGlobalContextDelta(t *testing.T) {
 	f := newHistoryFixture(t)
 
-	writeOffboard := func(text string) {
+	// 🔴 THE PRECONDITION FLIPPED IN T-6f44 AND MUST STAY A PRECONDITION. The
+	// offboard document carried a read-only head until decision 4 deleted {where}
+	// and the head with it; 〈停止〉 is now the first of the ten with none, so its
+	// seed must carry NO marker. The check is kept rather than dropped because it
+	// is the same hazard in either direction: a seed and a registry row that
+	// disagree change what every write below stores. The registry side of the
+	// same rule is TestBootDocRegistry_ASeedCarriesAMarkerExactlyWhenItsKindIsSplit.
+	offboardSeed, _, err := f.api.root.seedBlockMD(offboardSeedMD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, split := DocSplitHeadBody(offboardSeed); split {
+		t.Fatal("the offboard seed carries a marker again, but its kind declares no " +
+			"Split — the whole text is served as the editable body, so the head " +
+			"above the marker just became the owner's to overwrite")
+	}
+	writeOffboard := func(body string) {
 		t.Helper()
 		rec := httptest.NewRecorder()
 		f.api.HandleReplaceOffboardApiOffboardPost(rec,
-			f.req(http.MethodPost, "/api/offboard", map[string]any{"text": text}))
+			f.req(http.MethodPost, "/api/offboard", map[string]any{"body": body}))
 		if rec.Code != http.StatusOK {
-			t.Fatalf("replace offboard %q: status=%d body=%s", text, rec.Code, rec.Body.String())
+			t.Fatalf("replace offboard %q: status=%d body=%s", body, rec.Code, rec.Body.String())
 		}
 	}
-	writeOffboard("# 下線程序\n\nfirst\n")
-	writeOffboard("# 下線程序\n\nsecond\n")
+	writeOffboard("# 停止\n\nfirst\n")
+	writeOffboard("# 停止\n\nsecond\n")
 
 	// Connect AFTER the writes so the queue holds only the restore frame.
 	listener, err := f.api.hub.Connect("", "")
@@ -46,7 +62,7 @@ func TestRestoringTheOffboardDocFansAGlobalContextDelta(t *testing.T) {
 
 	raw := listener.pop()
 	if raw == nil {
-		t.Fatal("restoring the 下線程序 doc fanned NO frame: the restore answered 200 and changed the " +
+		t.Fatal("restoring the 〈停止〉 doc fanned NO frame: the restore answered 200 and changed the " +
 			"database, so nothing else in the build will tell you — every open surface is now showing " +
 			"stale text. Add docKindOffboard to publishDocumentHistoryRestore.")
 	}

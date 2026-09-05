@@ -14,7 +14,11 @@ const (
 	ownerAdditionsH1 = "# 使用者自訂（Owner Additions）"
 	roleH1           = "# Role: "
 	lessonsH1        = "# Lessons ("
-	bootSequenceH1   = "# 啟動程序（Boot Sequence"
+	// 釘的是 seeds/boot_sequence*.md 的 H1 逐字位元組。owner 在
+	// rc-e12733548e4b 裁定出貨文字一併改名（啟動程序 → 啟動步驟），兩份 seed
+	// 的 H1 與這一行在同一顆 commit 裡一起換。這是**逐字**的 pin，不是模糊
+	// 比對：下一次改名一樣要在這裡打字，否則測試會紅 —— 那正是它的用途。
+	bootSequenceH1 = "# 啟動步驟（Boot Sequence"
 )
 
 // workerCtx builds a worker boot context over a minimal fixture.
@@ -41,7 +45,7 @@ func workerCtxOn(t *testing.T, s *apiServer) string {
 func memberCtx(t *testing.T) (*apiServer, *bootContext) {
 	t.Helper()
 	s := newWorkerTestServer(t)
-	bc, err := s.buildBootContext("", nil, "")
+	bc, err := s.buildBootContext("", nil)
 	if err != nil {
 		t.Fatalf("buildBootContext: %v", err)
 	}
@@ -70,7 +74,9 @@ func unfilteredWorkerSharedHeadWant(t *testing.T, s *apiServer, ownerText string
 	if err != nil {
 		t.Fatalf("read system_interaction.md: %v", err)
 	}
-	parts := []string{strings.TrimSpace(sys)}
+	// DocRendered: the seed carries a read-only head above docBodyMarker since
+	// T-3201, and the marker line never reaches a reader.
+	parts := []string{strings.TrimSpace(DocRendered(sys, "\n\n"))}
 	if strings.TrimSpace(ownerText) != "" {
 		parts = append(parts, ownerAdditionsH1+"\n\n"+strings.TrimSpace(ownerText))
 	}
@@ -104,7 +110,7 @@ func TestMemberBootContextStartsWithGlobalContext(t *testing.T) {
 //     fourth, wedged between the lessons and the boot sequence)
 //  3. persona    — staff: 角色說明 → 判準（blank ⇒ skipped）→ 長期筆記;
 //     outsource: NOTHING (no role)
-//  4. 啟動程序   — shared seed, recency-authoritative tail
+//  4. 啟動步驟   — shared seed, recency-authoritative tail
 //
 // Both halves are asserted here on purpose. The member fold is what every
 // staff agent reads on every boot, so the reorder needs a guard of its own
@@ -116,7 +122,7 @@ func TestBothBootContextsUseTheSameFourSlots(t *testing.T) {
 		if err := s.dal.PutUserContext(UserContext{Text: ownerMark}); err != nil {
 			t.Fatalf("put user context: %v", err)
 		}
-		bc, err := s.buildBootContext("", nil, "")
+		bc, err := s.buildBootContext("", nil)
 		if err != nil || bc == nil {
 			t.Fatalf("buildBootContext: %v", err)
 		}
@@ -125,11 +131,11 @@ func TestBothBootContextsUseTheSameFourSlots(t *testing.T) {
 		owner := mustIndex(t, ctx, ownerAdditionsH1, "使用者自訂")
 		role := mustIndex(t, ctx, roleH1, "角色說明")
 		lessons := mustIndex(t, ctx, lessonsH1, "長期筆記")
-		boot := mustIndex(t, ctx, bootSequenceH1, "啟動程序")
+		boot := mustIndex(t, ctx, bootSequenceH1, "啟動步驟")
 
 		if !(owner < role && role < lessons && lessons < boot) {
-			t.Fatalf("staff slots out of order: 使用者自訂=%d 角色說明=%d 長期筆記=%d 啟動程序=%d\n"+
-				"要的順序是 系統互動 → 使用者自訂 → 角色說明 →（判準）→ 長期筆記 → 啟動程序",
+			t.Fatalf("staff slots out of order: 使用者自訂=%d 角色說明=%d 長期筆記=%d 啟動步驟=%d\n"+
+				"要的順序是 系統互動 → 使用者自訂 → 角色說明 →（判準）→ 長期筆記 → 啟動步驟",
 				owner, role, lessons, boot)
 		}
 		// The owner block must sit AFTER the shared seed, not before it.
@@ -147,11 +153,11 @@ func TestBothBootContextsUseTheSameFourSlots(t *testing.T) {
 		ctx := workerCtxOn(t, s)
 
 		owner := mustIndex(t, ctx, ownerAdditionsH1, "使用者自訂")
-		boot := mustIndex(t, ctx, bootSequenceH1, "啟動程序")
+		boot := mustIndex(t, ctx, bootSequenceH1, "啟動步驟")
 
 		if owner >= boot {
-			t.Fatalf("outsource slots out of order: 使用者自訂=%d 啟動程序=%d\n"+
-				"要的順序是 系統互動 → 使用者自訂 → 啟動程序", owner, boot)
+			t.Fatalf("outsource slots out of order: 使用者自訂=%d 啟動步驟=%d\n"+
+				"要的順序是 系統互動 → 使用者自訂 → 啟動步驟", owner, boot)
 		}
 		if owner == 0 {
 			t.Fatal("使用者自訂 must follow the 系統互動 seed, not lead the document")
@@ -186,7 +192,7 @@ func TestMemberBootContextByteIdenticalToSpecAssembly(t *testing.T) {
 	if err != nil || roleDTO == nil {
 		t.Fatalf("fold role: %v", err)
 	}
-	lessons, err := s.foldLessonsDTO(bc.RoleKey, bc.TaskType)
+	lessons, err := s.foldLessonsDTO(bc.RoleKey)
 	if err != nil {
 		t.Fatalf("fold lessons: %v", err)
 	}
@@ -202,10 +208,15 @@ func TestMemberBootContextByteIdenticalToSpecAssembly(t *testing.T) {
 	if roleTitle == "" {
 		roleTitle = roleDTO.Key
 	}
-	// §2.2 order: 系統互動 → 使用者自訂 → Role → Insight → Lessons → 啟動程序.
+	// §2.2 order: 系統互動 → 使用者自訂 → Role → Insight → Lessons → 啟動步驟.
 	// Insight, like the owner block, is skipped ENTIRELY when its folded text
 	// is blank — the gate is the text, not is_default/has_seed.
-	parts := []string{strings.TrimSpace(sysSeed)}
+	// DocRendered, not the raw file: since T-3201 these seeds carry a
+	// read-only head above docBodyMarker, and what a READER gets is the two
+	// halves joined — the marker line never reaches an agent. The join is
+	// spelled here rather than read from the registry, so changing it there
+	// comes back red.
+	parts := []string{strings.TrimSpace(DocRendered(sysSeed, "\n\n"))}
 	if strings.TrimSpace(userCtx.Text) != "" {
 		parts = append(parts, ownerAdditionsH1+"\n\n"+strings.TrimSpace(userCtx.Text))
 	}
@@ -215,8 +226,8 @@ func TestMemberBootContextByteIdenticalToSpecAssembly(t *testing.T) {
 		parts = append(parts, "# Insight ("+bc.RoleKey+")\n\n"+body)
 	}
 	parts = append(parts,
-		"# Lessons ("+bc.RoleKey+" / "+bc.TaskType+")\n\n"+strings.TrimSpace(lessons.Text),
-		strings.TrimSpace(bootSeed))
+		"# Lessons ("+bc.RoleKey+")\n\n"+strings.TrimSpace(lessons.Text),
+		strings.TrimSpace(DocRendered(bootSeed, "\n\n")))
 	want := strings.Join(parts, "\n\n") + "\n"
 	if bc.Context != want {
 		t.Fatalf("member boot context drifted from the §2.2 assembly (got %d bytes, want %d)", len(bc.Context), len(want))
@@ -280,7 +291,9 @@ func TestWorkerBootSequenceFollowsTheWorkersRuntime(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read %s: %v", tc.bootSeed, err)
 			}
-			if want := strings.TrimSpace(seed); got != want {
+			// DocRendered — the seed's read-only head is joined to its body and
+			// the marker line is dropped (T-3201).
+			if want := strings.TrimSpace(DocRendered(seed, "\n\n")); got != want {
 				t.Fatalf("runtime %q must be assembled from %s (got %d bytes, want %d)",
 					tc.runtime, tc.bootSeed, len(got), len(want))
 			}

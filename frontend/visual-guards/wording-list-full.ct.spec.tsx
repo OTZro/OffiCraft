@@ -264,11 +264,24 @@ test("the browser's own find, whole-page select-all and print can see the whole 
   // than on the capability it is about. Scanning forward keeps the row deep (it
   // starts at the same 70% mark and only ever moves further down) while making
   // the needle's existence independent of the dictionary's exact length.
+  // The forward scan also has to skip COMPOSE FRAGMENTS. `window.find` matches
+  // against what the browser laid out, and a fragment that carries its own
+  // leading/trailing whitespace (`settings.historyBlockedReasonMid` is
+  // `'" is over the '`) never appears in the layout with that whitespace intact
+  // — so a needle like that is unfindable no matter how long it is, and the
+  // probe reddens on its own setup rather than on the capability it is about.
+  // That is the same failure the length filter above was added for, one key
+  // later: T-40 added one message key, the 70% index slid onto that fragment,
+  // and this test went red on a change that touched nothing it guards.
+  // Requiring the needle to equal its own trim keeps the probe on a whole,
+  // laid-out label without pinning it to any particular key.
   const startIdx = Math.floor(MESSAGE_KEYS.length * 0.7);
+  const usableNeedle = (code: string) => {
+    const text = readDictMessage(en, code) ?? "";
+    return text.length > 3 && text === text.trim();
+  };
   const deep =
-    MESSAGE_KEYS.slice(startIdx).find(
-      (code) => (readDictMessage(en, code) ?? "").length > 3,
-    ) ?? MESSAGE_KEYS[startIdx];
+    MESSAGE_KEYS.slice(startIdx).find(usableNeedle) ?? MESSAGE_KEYS[startIdx];
   const needle = readDictMessage(en, deep) ?? "";
   expect(needle, "the probe needs a real English original to search for").toBeTruthy();
   expect(needle.length, "…and one long enough to be a real search").toBeGreaterThan(3);

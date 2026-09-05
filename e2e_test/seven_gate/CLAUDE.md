@@ -21,7 +21,9 @@
 
 ## 3. task/card/peer 的載體條件
 
-- reply card 若由 active task 的 agent 開出，server 會把卡綁到一個 `in_progress` step 並進 `waiting_owner`；owner 端必須在背景只回答本 run agent 的卡，否則卡成功反而鎖住 task、後續 closeout 不可能成立。收尾用確切 PID 清 owner responder，不用模糊 kill。
+- reply card 帶 `linked_task={task_id, step_id}` 開出時，server 會把卡綁到該 step 並進 `waiting_owner`（T-18 起 `linked_task` 必填，不給是 400，server 不再自己猜）；owner 端必須在背景只回答本 run agent 的卡，否則卡成功反而鎖住 task、後續 closeout 不可能成立。收尾用確切 PID 清 owner responder，不用模糊 kill。
+- owner responder 的答覆呼叫**不得吞 rc**（曾經是行尾 `|| true`）：答覆被拒 = 那個 step 永遠出不了 `waiting_owner`、⑦ 不可能成立，而 verdict 會把這個載體自己的故障寫成 agent 的紅。每次被拒都要寫進 `$RUN_DIR/responder.fault`，`run.sh` 在判定後讀它並以 rc 2 拒絕整輪 —— 那不是 verdict，是載體的自述。
+- 答覆圈的是**帶 `ai_pick` 的那個選項**（讀完整卡取旗標），不是第一個；選項本身是 `{text, ai_pick}` 物件、卡有 `select_mode`、答覆是 `option_idxs` 清單。位置自 T-40 起不再有任何意義。
 - `actors/stub.sh` 是 REST actor，不是 agent；它只供判定讀取與 skip-case 的負向控制。`actors/live.sh` 才是實 agent：onboard machine、啟動真 `ocwarden run`、owner activate 帶 `machine_id`、spawn claude；它只做 owner 端交辦、給機器、回卡、friction，不代做 agent 的 task/plan/step/closeout。
 - live actor 預設嚴格關閉，只在 `OC_SG_LIVE_AGENT=1` 才可能花真 API 額度；錯值不得啟動。真 live 路徑至今未執行過，不能把 stub 綠、相依項可解析或另一支 E2E 的結果宣稱成 live 通過。
 - 不用 `task_system_e2e.sh` 當本載體的 live actor：它起的是 outsource worker、走另一套 namespaced 安裝／全站 reset，而本載體要 member token 與 `creator_id == agent`。可借用的只是呼叫記錄與磁碟產物驗收原語。

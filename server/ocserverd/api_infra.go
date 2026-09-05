@@ -36,6 +36,22 @@ const (
 	sseHeartbeat = 15 * time.Second
 	ssePoll      = 250 * time.Millisecond
 
+	// These values are part of the operator-facing detach log contract. Keep
+	// them exact and stable: the log is how an operator separates a normal
+	// peer drop from a takeover, a failed write, or the station itself closing.
+	// sseDetachReasonUnset is the PRE-DECISION state, and it must never equal
+	// any reason we can conclude. setDetachReason's "first concrete cause wins"
+	// rule is a comparison against this value: while the initial value doubled
+	// as a conclusion (peer-closed did, until T-3b4e review), a later call
+	// silently overwrote a real cause and nothing went red. The printed
+	// default lives in detachReasonForLog, so the operator-facing vocabulary
+	// is unchanged.
+	sseDetachReasonUnset           = ""
+	sseDetachReasonTakeover        = "takeover"
+	sseDetachReasonPeerClosed      = "peer-closed"
+	sseDetachReasonWriteFailed     = "write-failed"
+	sseDetachReasonStationShutdown = "station-shutdown"
+
 	// sseStationSHAHeader carries this station's build sha to the client when
 	// the stream opens (T-5b83), so ocagent's connection line can name the
 	// build it just attached to.
@@ -49,6 +65,41 @@ const (
 	// for the guard this still owes.
 	sseStationSHAHeader = "X-Officraft-Station-Sha"
 )
+
+// markStationShutdown records the process-level cause before the server
+// cancels request contexts or the upgrade re-execs. Without this ordering a
+// server shutdown is indistinguishable from a peer FIN/RST inside an SSE
+// handler.
+func (s *apiServer) markStationShutdown() {
+	s.stationShuttingDown.Store(true)
+}
+
+func (s *apiServer) clearStationShutdown() {
+	s.stationShuttingDown.Store(false)
+}
+
+func (s *apiServer) cancelStationContext() {
+	if s.stationCancel != nil {
+		s.stationCancel()
+	}
+}
+
+// detachReasonForLog keeps the operator vocabulary exactly as it was: an exit
+// that concluded nothing is still reported as peer-closed, which is what a
+// return with no recorded cause means. The sentinel never reaches the log.
+func detachReasonForLog(reason string) string {
+	if reason == sseDetachReasonUnset {
+		return sseDetachReasonPeerClosed
+	}
+	return reason
+}
+
+func (s *apiServer) sseContextDetachReason() string {
+	if s.stationShuttingDown.Load() {
+		return sseDetachReasonStationShutdown
+	}
+	return sseDetachReasonPeerClosed
+}
 
 // sseWriteTimeout bounds a single SSE write to the client socket (T-7e07,
 // BACKSTOP layer). The PRIMARY half-open reaper is TCP keepalive on the
@@ -119,6 +170,47 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 		// freshness comes from the spawn/stop boundary clearing it
 		// (clearSessionBootTS), so a genuinely new session re-stamps here.
 		s.onFirstConnect(memberID)
+		// 🔴 T-80: THIS is where "which signing key is that machine on" is answered,
+		// and the reason is the difference between two things that look identical
+		// from inside the auth gate:
+		//
+		//	a machine PRESENTED this credential   ← any gated request proves this
+		//	a machine is RUNNING on this credential ← only this one proves it
+		//
+		// A warden renewing itself presents its CANDIDATE credential to a gated
+		// route before it writes it to disk (cli/ocwarden/renewapply.go probes,
+		// then writes, then execs). Recording at the gate therefore answered the
+		// FIRST question while the settings page asks the SECOND — so a probe whose
+		// write then failed left the station saying "converged" about a machine
+		// still running on the outgoing key, which is the number reading SAFE at the
+		// exact moment it must not. This connection cannot lie that way: the stream
+		// is opened with the credential this process actually loaded at startup, so
+		// "presented" and "running on" are the same event here by construction, not
+		// by anyone remembering to exclude the probe.
+		//
+		// It is deliberately NOT a list of endpoints-that-do-not-count. That shape
+		// needs every future "try the candidate first" path to remember to opt out,
+		// and the failure when someone forgets is silent and points at SAFE.
+		//
+		// 🔴 AND IT IS AFTER hub.Connect, WHICH IS LOAD-BEARING. The observation
+		// may enqueue a `renew` summons, and enqueueToWarden is fail-CLOSED on a
+		// machine the hub does not hold online. Placed before Connect this machine
+		// is not online yet, so its own summons is refused at the exact moment it
+		// arrives — the fleet would converge only for machines that happened to be
+		// asked while some OTHER connection was already up. Measured, not
+		// reasoned: the renew-summons tests went red on that ordering.
+		// After Connect the enqueue lands and the drain below writes it onto this
+		// very stream.
+		//
+		// ⚠️ IF YOU MOVED THIS LINE AND ARE READING THIS BECAUSE SOMETHING WENT
+		// RED: it is the ordering. Four tests die — TestAMachineStillOnAnOutgoing
+		// KeyIsToldToRenew, TestTheRenewFrameCarriesNoCredentialAtAll,
+		// TestAStaleMachineIsAskedOnceNoMatterHowOftenItCallsBack and
+		// TestAStaleMachineIsAskedAgainOnceTheIntervalHasPassed — and two of them
+		// report it as PREMISE FAILED, which points at their setup rather than at
+		// this line. The ordering is guarded (measured with that mutant), but no
+		// test NAMES it, so this note is the map from that red to this cause.
+		s.noteTokenKeyObservation(claimsFromContext(r.Context()), verifyingKeyFromContext(r.Context()))
 		// T-98f4 sticky placement: this connection is the PROOF that the session
 		// actually came up, and its token's machine claim names where. Record it
 		// so the next rebirth stays put instead of re-deriving placement from a
@@ -130,6 +222,15 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 		// new session is live here → never a zero-live-session window.
 		s.identitySweepOnConnect(memberID, machineID)
 	}
+	detachReason := sseDetachReasonUnset
+	setDetachReason := func(reason string) {
+		// The first concrete cause wins. In particular, a write failure that
+		// happens while the station is closing is still useful socket evidence,
+		// not a retroactive peer/context guess.
+		if detachReason == sseDetachReasonUnset {
+			detachReason = reason
+		}
+	}
 	defer func() {
 		// last gates the §5.2 edge hooks: a kicked listener's Disconnect
 		// reports false (the takeover already removed it; the new listener
@@ -137,8 +238,8 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 		// online→offline edge — never mid-takeover.
 		last := s.hub.Disconnect(listener)
 		if memberID != "" {
-			fmt.Fprintf(os.Stderr, "[sse] detach member=%s gen=%d last=%t\n",
-				memberID, listener.Gen, last)
+			fmt.Fprintf(os.Stderr, "[sse] detach member=%s gen=%d last=%t reason=%s\n",
+				memberID, listener.Gen, last, detachReasonForLog(detachReason))
 		}
 		if memberID != "" && last {
 			// Last-disconnect edge (spec/sse.md §5.2): bank the live telemetry
@@ -174,7 +275,6 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 			_ = rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
 		}
 	}
-
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
@@ -189,7 +289,11 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 	w.Header().Set(sseStationSHAHeader, s.processSHA)
 	w.WriteHeader(http.StatusOK)
 	armWriteDeadline()
-	_, _ = w.Write([]byte(": connected\n\n"))
+	if _, err := w.Write([]byte(": connected\n\n")); err != nil {
+		// Keep the pre-existing greeting behaviour (the handler continues into
+		// its normal loop) while retaining the concrete socket evidence.
+		setDetachReason(sseDetachReasonWriteFailed)
+	}
 	flusher.Flush()
 
 	// This connection's runtime, resolved ONCE (the notice rule differs per
@@ -212,18 +316,20 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 	lastTokenExpiryReminder := int64(0)
 	nextTokenExpiryCheck := int64(0)
 
-	// The two TEXT sources of the handover notice, built once per connection
-	// rather than once per tick. Building them is free; RUNNING them is not —
-	// each is a fold over durable documents — which is why handoverNoticeTick
-	// decides whether this tick can emit BEFORE it calls either one.
-	noticeOffboardText := s.offboardText
-	noticeDocCapacity := func() string {
-		return docCapacityLines(s.docCapacityFor(memberID, s.stepNoteCapacityFor(memberID)))
+	// The notice source, bound once per connection rather than once per tick.
+	// Binding it is free; RUNNING it is not — it is a fold over a durable
+	// document — which is why handoverNoticeTick decides whether this tick can
+	// emit BEFORE it calls it. SOFT, always: the first context threshold is an
+	// advance warning and nothing collects it at a named instant, so it reads
+	// 〈停止〉 and quotes no deadline (see decideHandoverNotice).
+	noticeText := func() string {
+		return s.winddownNoticeText(offboardKindSoft, 0)
 	}
 
 	write := func(frame []byte) bool {
 		armWriteDeadline()
 		if _, err := w.Write(frame); err != nil {
+			setDetachReason(sseDetachReasonWriteFailed)
 			return false
 		}
 		flusher.Flush()
@@ -233,7 +339,39 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 	ctx := r.Context()
 	lastBeat := time.Now()
 	for {
+		// Leaving here DISCONNECTS a live stream early — by up to
+		// upgradeRestartDelay (upgrade.go), the gap between the mark and the
+		// re-exec. Two things about that, and the second is not ours to keep
+		// true (T-3b4e review):
+		//   · No client reconnects inside that window today, so the early exit
+		//     causes no attach/detach churn: ocagent sleeps its backoff before
+		//     re-dialing and that backoff RESETS to listenBackoffStart (1s,
+		//     cli/ocagent/listen.go) on a healthy stream, and the cockpit uses
+		//     a bare EventSource with no `retry:` from us, so it takes the
+		//     browser default (seconds). BOTH FIGURES ARE READ FROM THE CODE,
+		//     NOT MEASURED against a real upgrade.
+		//   · That quiet therefore RESTS ON CLIENT BACKOFF, not on anything
+		//     this file guarantees. Drop a client's backoff to zero, or attach
+		//     one with none, and the churn appears — and NOTHING here goes red.
+		// Only the UPGRADE path reaches this shape at all: a signal shutdown
+		// runs httpServer.Shutdown (server.go), which stops accepting, so a new
+		// connection is refused at accept rather than admitted and bounced.
+		if s.stationShuttingDown.Load() {
+			setDetachReason(sseDetachReasonStationShutdown)
+			return
+		}
+		select {
+		case <-listener.kicked:
+			if s.stationShuttingDown.Load() {
+				setDetachReason(sseDetachReasonStationShutdown)
+			} else {
+				setDetachReason(sseDetachReasonTakeover)
+			}
+			return
+		default:
+		}
 		if ctx.Err() != nil {
+			setDetachReason(s.sseContextDetachReason())
 			return
 		}
 		select {
@@ -242,6 +380,11 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 			// holds the slot — return NOW (≤ssePoll after the kick) and let the
 			// defer clean up (Disconnect is a map no-op; last=false keeps the
 			// §5.2 edge hooks off while the member stays online).
+			if s.stationShuttingDown.Load() {
+				setDetachReason(sseDetachReasonStationShutdown)
+			} else {
+				setDetachReason(sseDetachReasonTakeover)
+			}
 			return
 		default:
 		}
@@ -256,7 +399,7 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 		// agent cannot read its own context %, so the server pushes it).
 		if memberID != "" {
 			if frame, ok := s.handoverNoticeTick(
-				memberID, connRuntime, noticeOffboardText, noticeDocCapacity); ok {
+				memberID, connRuntime, noticeText); ok {
 				if !write(frame) {
 					return
 				}
@@ -330,8 +473,14 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 		}
 		select {
 		case <-ctx.Done():
+			setDetachReason(s.sseContextDetachReason())
 			return
 		case <-listener.kicked:
+			if s.stationShuttingDown.Load() {
+				setDetachReason(sseDetachReasonStationShutdown)
+			} else {
+				setDetachReason(sseDetachReasonTakeover)
+			}
 			return // taken over mid-quiet-wait — same cleanup path as above
 		case <-time.After(ssePoll):
 		}
@@ -375,9 +524,12 @@ func (s *apiServer) HandleEventsApiEventsGet(w http.ResponseWriter, r *http.Requ
 //     removal lifecycle is the one-shot uninstall intent, not this gate.
 //
 // Legit flows that stay untouched: a LIVE connection at deactivate time keeps
-// its stream (the wind-down nudge rides it); stop→start clears the anchors
-// and flips desired online in the SAME activate write, so the gate lifts
-// atomically; recycle/handover keeps desired online throughout. An unknown
+// its stream (the wind-down nudge rides it); stop→start clears the anchors and
+// flips desired online, and since T-55 that is TWO writes, not one — the anchors
+// through their sole writer first, desired_state with the row write after. The
+// gate keys on desired_state, so it lifts on the SECOND of the two and a failure
+// between them leaves the gate standing (refusing) rather than half-lifted, which
+// is the safe side; recycle/handover keeps desired online throughout. An unknown
 // sub (no roster row) is admitted unchanged.
 func (s *apiServer) sseStopGateRefusal(memberID string) string {
 	m, err := s.dal.GetMember(memberID)
@@ -419,7 +571,17 @@ func (s *apiServer) sseStopGateRefusal(memberID string) string {
 		// that has reported stopped is finished; a member the owner FORCE-
 		// stopped was cut off deliberately and must not come back on its own.
 		// Anything else with a stop anchor is a close-out in flight.
-		if m.StoppedSince <= 0.0 && !forcedEpochLive(*m) {
+		//
+		// The second half of that is gracefulStopEpochOpen (api_members.go), and
+		// this site used to write its two terms out by hand. Under
+		// stopped_since <= 0 the enclosing guard has ALREADY established
+		// stopping_since > 0 (its disjunction has no other arm left), so the
+		// hand-written forced term and the call below decide exactly the same
+		// rows — the call merely re-asks a term that is already true.
+		// This is the ENTITLEMENT of a graceful stop epoch, the same compound
+		// autoHandoverWorker's stop arm asks; it is staff-only because the
+		// outsource kind returns above.
+		if m.StoppedSince <= 0.0 && gracefulStopEpochOpen(*m) {
 			return ""
 		}
 		return "member '" + m.ID + "' has a stop in effect (desired_state=offline) — " +
@@ -614,6 +776,56 @@ func (s *apiServer) clearSessionBootTS(id string) {
 		// it over a refocus would immediately recycle the fresh replacement
 		// session.
 		delete(entry, "compaction_count")
+		// …and the session's CONTEXT REPORT, both halves (T-72dd).
+		//
+		// 🔴 WHY, AND ONLY WHY. This is NOT known to be the cause of the
+		// silent no-op this ticket chased — that question is neither confirmed
+		// nor excluded. The reason it changes is narrower and stands on its
+		// own: TWO READERS OF THIS KEY DISAGREE. actionableContextPct (the
+		// gate/threshold reader) refuses a pct whose context_pct_ts is not
+		// strictly newer than boot_ts, and boot_ts is what the line above just
+		// deleted; foldActorRuntime (the cockpit / get_monitoring reader, in
+		// wire.go) takes context_pct RAW with no such test. Leaving the pair
+		// standing across a boundary therefore leaves the panel showing a
+		// number that no threshold in the server will ever act on — the
+		// displayed percentage and the judged percentage are two different
+		// numbers, which is wrong whatever else is or is not broken.
+		//
+		// Dropping BOTH halves is what makes them agree: the gate reader
+		// already answers "no number", and now the cockpit's honest dash says
+		// the same thing until the fresh session files its first report. It is
+		// the same rule compaction_count is deleted under one line up — this is
+		// the OLD session's reading, and it does not describe the new one.
+		//
+		// 🔴 AND THESE TWO DELETES ARE NOT "PURELY OBSERVATIONAL". That ⚠️
+		// beside noteContextGateSkip describes the DIAGNOSTIC LINE and nothing
+		// else; it does not cover this pair, and reading it as a claim about
+		// the whole ticket is wrong. Whether these deletes move a threshold is
+		// decided by the ctx stale-guard setting, which actionableContextPct
+		// takes as a parameter:
+		//
+		//   - guard ON (the code default): boot_ts was dropped one line up, so
+		//     the guard already refuses the pct for want of an anchor. Removing
+		//     the pair changes nothing any threshold sees. Observational.
+		//   - guard OFF: that function returns the raw pct WITHOUT ever reading
+		//     boot_ts. So before this change a dead session's leftover pct
+		//     stayed actionable across the boundary and could still drive the
+		//     auto-refocus and advance-notice predicates in reconcile.go and
+		//     the SSE context band. After it, that reading is simply absent.
+		//     That is a BEHAVIOUR CHANGE — it suppresses auto-refocus fired on
+		//     a dead session's residue — and a deliberate one: a fresh session's
+		//     first window must not be judged on its predecessor's number, and
+		//     the new session restores a real one the moment it reports.
+		//
+		// The guard-OFF branch is REACHABLE, not theoretical: the value is
+		// settings-driven and read from the DB at startup, so the default is a
+		// default and not a guarantee. (A developer spot-check of one live
+		// deployment's settings at the time of writing found no row for the
+		// key, i.e. that site was running the default — one site at one moment,
+		// which is not evidence that nobody ever turns it off, and says nothing
+		// about any other deployment.)
+		delete(entry, "context_pct")
+		delete(entry, "context_pct_ts")
 		s.gauge.Set(id, entry)
 	}
 	// The advance-notice claim (T-c382) is keyed on the anchor being dropped
@@ -623,6 +835,20 @@ func (s *apiServer) clearSessionBootTS(id string) {
 	s.handoverNoticedMu.Lock()
 	delete(s.handoverNoticed, id)
 	s.handoverNoticedMu.Unlock()
+	// The context-gate diagnostic's throttle window (T-72dd) is session-scoped
+	// for BOTH of the reasons the claim above is, and it is dropped here rather
+	// than left to accumulate for exactly the reason written one comment up:
+	// "rather than leaving one record per agent id alive for the process's
+	// lifetime". A worker id is minted per task, so an un-pruned cell per actor
+	// is a slow leak with no upper bound but the process.
+	//
+	// It is also the behaviour we want. The window exists to stop one actor
+	// repeating itself WITHIN a session; a NEW session is a new set of numbers,
+	// and making it serve out its predecessor's window would suppress the first
+	// — most interesting — description of it.
+	s.ctxGateDiagMu.Lock()
+	delete(s.ctxGateDiagAt, id)
+	s.ctxGateDiagMu.Unlock()
 	// Write-on-change: the clear runs on every session boundary, and an
 	// unconditional UPDATE would cost a row write per boundary for nothing.
 	m, err := s.dal.GetMember(id)
@@ -671,8 +897,9 @@ func (s *apiServer) publishOutsourcePresenceEdge(memberID string) {
 // bankLiveCost is the ONE cost-banking fold for BOTH actor kinds (T-ba6b —
 // owner constitution: 外包＝系統代管的正職員工, so the worker reuses the member
 // mechanism instead of a parallel copy): pop the actor's live telemetry cost
-// and add it to the durable banked_cost — member.banked_cost or
-// outsource_worker.banked_cost, whichever the id resolves to. Callers: the
+// and add it to the durable member.banked_cost of whichever kind the id
+// resolves to (the outsource_worker table was folded into member in 00025, so
+// both kinds are the same column and the same sole writer). Callers: the
 // SSE last-disconnect edge (both kinds ride the same /api/events surface) and
 // every worker kill funnel (respawnWorkerNow / stopWorkerNow — refocus, 換
 // model, relocate, stop, auto-handover), so a kill+respawn no longer zeroes
@@ -694,19 +921,348 @@ func (s *apiServer) bankLiveCost(actorID string) {
 	// on the outsource_worker topic, never as a member patch — pre-fold parity).
 	if m, err := s.dal.GetMember(actorID); err == nil && m != nil && m.Kind != KindOutsource {
 		pop()
-		m.BankedCost += cost
-		if err := s.putMember(*m, actorID); err != nil {
+		if err := s.dal.AddMemberBankedCost(actorID, cost); err != nil {
 			fmt.Fprintf(os.Stderr, "[bank] cost bank failed for member %q: %v\n", actorID, err)
+			return
 		}
+		// The member delta this fold used to get for free from putMember. It
+		// is not decoration: the wind-down / recycle hooks key on a member
+		// delta naming self, and this fold runs ON the last-disconnect edge.
+		m.BankedCost += cost
+		s.publishMemberPatch(*m, actorID)
 		return
 	}
 	if w, err := s.dal.GetOutsourceWorker(actorID); err == nil && w != nil {
 		pop()
-		w.BankedCost += cost
-		if err := s.dal.PutOutsourceWorker(*w); err != nil {
+		// No delta on purpose (pre-fold parity): a worker's changes ride the
+		// outsource_worker projection, never a member patch naming an ow- id.
+		if err := s.dal.AddMemberBankedCost(actorID, cost); err != nil {
 			fmt.Fprintf(os.Stderr, "[bank] cost bank failed for worker %q: %v\n", actorID, err)
 		}
 	}
+}
+
+// dropLiveCost removes the live telemetry cost from an actor's entry and
+// reports what it removed (nil when there was nothing there). It is the half of
+// a cost reset that bankLiveCost's pop() is the half of a bank: same key, same
+// read-modify-Set shape, so the two operations cannot drift apart on where the
+// live figure lives.
+//
+// 🔴 CALL IT AFTER THE DURABLE WRITE HAS SUCCEEDED, never before. It is not
+// undoable and its subject exists nowhere else, so calling it first turns any
+// durable-write failure into unrecoverable data loss on a request that then
+// answers 500. bankLiveCost pops BEFORE its write for the opposite reason
+// (exactly-once banking on an edge that will not be retried) — do not copy that
+// ordering here.
+func (s *apiServer) dropLiveCost(actorID string) *float64 {
+	entry := s.telemetry.Get(actorID)
+	if entry == nil {
+		return nil
+	}
+	cost, ok := entry["cost"].(float64)
+	if !ok {
+		return nil
+	}
+	delete(entry, "cost")
+	s.telemetry.Set(actorID, entry)
+	return &cost
+}
+
+// HandleResetCostApiMembersMemberIdCostResetPost — POST
+// /api/members/{member_id}/cost/reset, the cockpit's 成本歸零 button (owner
+// ruling rc-7dea0deefa63, option 0「最小、不可逆」).
+//
+// 🔴 BOTH HALVES OR NEITHER. The owner-visible 估計$ is two numbers added on the
+// client: the durable banked_cost column and the live in-memory telemetry
+// figure. Clearing only the durable half is not a smaller version of this
+// button — the live figure reappears on the very next cockpit read, which the
+// owner cannot tell apart from the button doing nothing at all. That is why the
+// live drop is not an optimisation here and why a test pins it.
+//
+// 🔴 IRREVERSIBLE, deliberately. No snapshot is kept and there is no undo route:
+// spend is stored as two accumulators with no per-charge ledger behind them, so
+// nothing else in this system holds the discarded figure. The response is
+// therefore a RECEIPT of what was destroyed — the two values as they stood
+// immediately before the write, which is the last moment they exist anywhere.
+// It is not an undo and must never grow into one without a fresh owner ruling.
+//
+// The actor is resolved the way bankLiveCost resolves it, so ONE route serves
+// both kinds: a staff member, or an outsource worker.
+//
+// 🔴 A RELEASED WORKER IS ACCEPTED, and it is the one outsource write door that
+// takes a removed roster row (owner ruling rc-1344cc76a24a, 2026-09-02:「連已經
+// 退場的也要能清（帳號卡才會真的歸零）」, overriding this route's earlier 404).
+// The reason it must differ from its neighbours: released is the STEADY STATE
+// for a worker — ReleaseWorkersForTask fires on every task close — and a
+// released worker's own 估計$ is still rendered, so refusing it here would
+// leave a figure on screen that the button next to it cannot clear. The other
+// outsource doors refuse released rows because they drive a LIVE session; this
+// one only edits a number that is still being displayed.
+//
+// ⚠️ THE REASON THE OWNER GAVE FOR THAT RULING NO LONGER FOLLOWS, while the
+// ruling itself stands. He asked for it so that「帳號卡才會真的歸零」 — true
+// under the model of that day, where the account card was a fold over its
+// actors. A day later rc-5c5d7c7c6dcd made the card an accumulator of its own,
+// so clearing actors (released or not) no longer moves it at all; the account
+// has its own button now. Kept as written rather than quietly re-motivated:
+// a stale rationale attached to a live ruling is how the next reader concludes
+// the ruling itself is stale.
+//
+// Staff are different and stay filtered: removing a member HARD-DELETES the row
+// AND its telemetry entry (api_roles.go, the repo's only telemetry.Delete), so
+// a removed member has no figure anywhere and there is nothing here to clear.
+func (s *apiServer) HandleResetCostApiMembersMemberIdCostResetPost(w http.ResponseWriter, r *http.Request, memberId string) {
+	// Staff first, mirroring bankLiveCost: an outsource member banks (and so
+	// resets) through the WORKER branch, never as a member patch.
+	if m, err := s.dal.GetMember(memberId); err == nil && m != nil &&
+		m.RosterStatus != RosterStatusRemoved && m.Kind != KindOutsource {
+		// 🔴 DURABLE FIRST, LIVE SECOND, and the order is the whole safety
+		// property (found by independent review, T-54). The live figure lives
+		// only in memory and this call is its executioner: drop it before the
+		// durable write and a failed write answers 500 having ALREADY destroyed
+		// half the number, with the receipt — the one record of what was
+		// destroyed — never reaching the caller. Nothing anywhere could
+		// reconstruct it. This way round, a failed write leaves BOTH halves
+		// exactly as they were, and the owner simply presses again.
+		//
+		// 🔴 AND IT IS A SINGLE-COLUMN WRITE, mirroring bankLiveCost: handing
+		// the whole row to putMember would write NOTHING, because banked_cost is
+		// deliberately insert-only — a whole-row write never lands it on an
+		// existing row (T-14 項目 6).
+		// The receipt comes back from the same transaction that destroys the
+		// figure, so it names what was actually destroyed.
+		clearedBankedFig, err := s.dal.ZeroMemberBankedCost(memberId)
+		if err != nil {
+			internalError(w, err)
+			return
+		}
+		clearedBanked := nonZeroCost(clearedBankedFig)
+		// The member delta putMember used to fan for free — the same half
+		// bankLiveCost publishes by hand for the same reason.
+		m.BankedCost = 0
+		s.publishMemberPatch(*m, requestTrigger(r))
+		cleared := s.dropLiveCost(memberId)
+		s.publishMonitoringSignal(memberId, requestTrigger(r))
+		writeJSON(w, http.StatusOK, costResetDTO{
+			MemberID:          memberId,
+			ClearedCost:       cleared,
+			ClearedBankedCost: clearedBanked,
+		})
+		return
+	}
+	wk, err := s.dal.GetOutsourceWorker(memberId)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	// NO status filter: a released worker is reset like any other (see the
+	// ruling in this handler's doc). Only a genuinely unknown id is a 404.
+	if wk == nil {
+		writeError(w, http.StatusNotFound, "member '"+memberId+"' not found")
+		return
+	}
+	// Durable first, live second — the same ordering the member arm above
+	// explains, for the same reason. Both arms must fail the same way. And the
+	// same single-column seam: a worker's banked_cost IS member.banked_cost
+	// (P7d), so the whole-row writers cannot move it either.
+	clearedBankedFig, err := s.dal.ZeroMemberBankedCost(memberId)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	clearedBanked := nonZeroCost(clearedBankedFig)
+	wk.BankedCost = 0
+	cleared := s.dropLiveCost(memberId)
+	s.publishOutsourceWorker(*wk, requestTrigger(r))
+	s.publishMonitoringSignal(memberId, requestTrigger(r))
+	writeJSON(w, http.StatusOK, costResetDTO{
+		MemberID:          memberId,
+		ClearedCost:       cleared,
+		ClearedBankedCost: clearedBanked,
+	})
+}
+
+// accountSpendAccountedKey is the accumulator's own high-water mark on the
+// telemetry entry: the reported cost figure that has ALREADY been credited to
+// the account.
+//
+// 🔴 IT IS A SEPARATE KEY FROM "cost" ON PURPOSE, for two reasons and neither
+// is tidiness. First, "cost" is overwritten IN PLACE by the ingest before the
+// accrual runs, so by then the previous figure is simply gone — the baseline has
+// to be recorded somewhere of its own or there is no baseline at all. Second,
+// bankLiveCost DELETES "cost" at the end of a session (it moves the figure into
+// the actor's durable column); a baseline living there would vanish with it, and
+// the first report after a reconnect would read as a brand-new session and
+// credit its whole cumulative figure a SECOND time — a double-count this code
+// would have MANUFACTURED, on top of the reconnect bias the ticket already
+// documents and leaves alone. So banking must NOT clear this key: doing so turns
+// TestAccountSpend_BankingASessionDoesNotMakeTheNextReportCountTwice red (6
+// becomes 12), which is exactly what it is there for.
+const accountSpendAccountedKey = "cost_accounted"
+
+// accrueAccountSpend credits the NEW spend in one telemetry report to the
+// account it was reported under (T-53, owner ruling rc-5c5d7c7c6dcd
+// 「分開：帳號卡自己一份數字，清它不動成員」).
+//
+// It is called from the telemetry ingest and from nowhere else, because a
+// report arriving is the only moment new spend becomes visible. It never reads
+// or writes any ACTOR figure: that separation is the ruling.
+//
+// 🔴 HOW "THE NEW PART" IS COMPUTED, which is the whole correctness of this
+// function. An agent reports its session's CUMULATIVE cost, so the increase is
+// this report minus the last one credited. A report LOWER than the last is not
+// a refund and not a mistake — it is a NEW SESSION counting from zero — so its
+// whole value is new spend, and the baseline restarts there. The three
+// plausible-looking alternatives are all wrong in ways nothing would flag:
+// skipping a decrease loses everything the new session spends until it passes
+// the old figure; adding the difference makes the account figure go DOWN, which
+// is the silent-lie shape this design exists to avoid; and treating the report
+// as an absolute would erase the earlier sessions' spend. Pinned end-to-end by
+// TestAccountSpend_ASessionRestartCountsFromZeroRatherThanGoingBackwards.
+//
+// 🔴 THE BASELINE ADVANCES ONLY AFTER THE WRITE SUCCEEDS, and that ordering is
+// the difference between "one report was lost" and "that money is gone for
+// good" (found by independent review, T-56). A failed write is best-effort by
+// design — failing the ingest would turn a bookkeeping problem into a monitoring
+// outage — but best-effort only holds if the NEXT report can still see the
+// delta. Advance the baseline first and the failed increment is subtracted from
+// a report that was never credited: permanently missing, with a 200 on the way
+// out and nothing but a stderr line to say so.
+//
+// A NEW SESSION also resets the baseline explicitly, from the waking report —
+// see startAccountSpendSession. The decrease rule below is the fallback for a
+// session that never announced itself, and it is a KNOWN, ACCEPTED under-count,
+// not a complete substitute: see the boundary note on startAccountSpendSession.
+func (s *apiServer) accrueAccountSpend(entry map[string]any) {
+	account, _ := entry["account"].(string)
+	if account == "" {
+		return
+	}
+	cost, ok := entry["cost"].(float64)
+	if !ok {
+		return
+	}
+	accounted, seen := entry[accountSpendAccountedKey].(float64)
+	delta := cost
+	if seen && cost >= accounted {
+		delta = cost - accounted
+	}
+	if delta <= 0 {
+		// Nothing to credit, so nothing can be lost by moving the mark.
+		entry[accountSpendAccountedKey] = cost
+		return
+	}
+	if err := s.dal.AddAccountSpend(account, delta); err != nil {
+		// Leave the baseline where it was: the next report will carry this
+		// delta again, because its own increase is measured from the last
+		// figure that was actually banked.
+		fmt.Fprintf(os.Stderr, "[account] spend accrual failed for %q: %v\n", account, err)
+		return
+	}
+	entry[accountSpendAccountedKey] = cost
+}
+
+// startAccountSpendSession forgets the accrual baseline because a NEW SESSION is
+// starting: the next cost this actor reports is counted from zero, so its whole
+// figure is new spend rather than an increase over the previous session's.
+//
+// 🔴 WHY AN EXPLICIT BOUNDARY, when accrueAccountSpend already treats a DECREASE
+// as a restart (T-56): that fallback cannot see a restart whose first report
+// happens to land at or above the old figure — a short session followed by a
+// busier one — and it therefore under-credits the difference, silently. It also
+// cannot tell a session that CHANGED ACCOUNT apart from one that carried on: on
+// the wire those two look identical, and crediting the whole figure to the new
+// account would invent money that was already banked against the old one. The
+// waking report is the one place the server is TOLD a generation began, so it is
+// where the question stops being a guess.
+//
+// 🔴 THE RESIDUAL BOUNDARY, ACCEPTED AND NOT CLOSED (named at the request of
+// independent review, T-56): a reporter that never announces waking still has
+// only the decrease fallback, so a generation of its whose first report lands AT
+// OR ABOVE the previous one is credited the difference rather than its whole
+// figure. The account card then reads LOW, permanently, and nothing flags it.
+// This is accepted rather than fixed because the wire carries no other signal
+// that a generation began; every OffiCraft member calls report_waking as step 1
+// of its boot sequence, so the gap covers only a reporter outside that contract,
+// and closing it would mean guessing from the numbers again. Pinned — the low
+// number asserted deliberately — by
+// TestAccountSpend_AReporterThatNeverWakesUnderCountsAndThatIsAccepted.
+//
+// Best-effort and silent when there is nothing to forget: an actor with no
+// telemetry entry yet has no baseline to clear, which is the same state this
+// produces.
+func (s *apiServer) startAccountSpendSession(actorID string) {
+	entry := s.telemetry.Get(actorID)
+	if entry == nil {
+		return
+	}
+	if _, present := entry[accountSpendAccountedKey]; !present {
+		return
+	}
+	delete(entry, accountSpendAccountedKey)
+	s.telemetry.Set(actorID, entry)
+}
+
+// HandleResetAccountCostApiAccountsCostResetPost — POST /api/accounts/cost/reset,
+// the cockpit's 帳號歸零 button (owner ruling rc-5c5d7c7c6dcd, 2026-09-02).
+//
+// 🔴 IT TOUCHES NO ACTOR, and that is the entire point of the ruling: the owner
+// asked for the account figure and the per-member figure to be clearable
+// independently, because what he watches is spend per account. Pressing this
+// leaves every member's and worker's 估計$ exactly as it was.
+//
+// IRREVERSIBLE: no snapshot, no undo route, and no per-charge ledger behind the
+// accumulator, so the response is a receipt of the figure as it stood
+// immediately before the write — the last moment it exists anywhere.
+//
+// An unknown account tag is NOT a 404. An account is a free telemetry string
+// with no roster row, so 「沒有這個帳號」 and 「這個帳號沒東西可清」 are the same
+// state: 200, cleared_cost null. That also makes the second press honest rather
+// than an error, and the second press is the likely one.
+func (s *apiServer) HandleResetAccountCostApiAccountsCostResetPost(w http.ResponseWriter, r *http.Request) {
+	var body AccountCostResetRequestDTO
+	if !decodeJSONBody(w, r, &body) {
+		return
+	}
+	account := trimString(body.Account)
+	if account == "" {
+		writeError(w, http.StatusUnprocessableEntity, "account cannot be blank")
+		return
+	}
+	had, err := s.dal.ZeroAccountSpend(account)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	// The cockpit's account card is folded from the monitoring read, so the
+	// signal is what makes the zero appear without a manual refresh.
+	s.publishMonitoringSignal(account, requestTrigger(r))
+	writeJSON(w, http.StatusOK, accountCostResetDTO{
+		Account: account,
+		// nonZeroCost, so "there was nothing to clear" reads as absent rather
+		// than as "zero was cleared" — the same null semantics as the per-actor
+		// receipt and as the read side.
+		ClearedCost: nonZeroCost(had),
+	})
+}
+
+// nonZeroCost mirrors foldActorRuntime's rule for the banked figure: 0 is not
+// put on the wire. On this receipt that reads as "there was nothing banked to
+// clear" rather than "zero was cleared", and it keeps the reset's two fields
+// field-for-field identical to the read side so a client reuses one summing
+// rule instead of growing a second one.
+func nonZeroCost(v float64) *float64 {
+	if v == 0 {
+		return nil
+	}
+	return &v
+}
+
+// publishMonitoringSignal fans the same owner-only cockpit invalidation the
+// telemetry ingest fans, so a reset converges the 估計$ cell without waiting for
+// the next sample. No agent consumes it.
+func (s *apiServer) publishMonitoringSignal(actorID, trigger string) {
+	s.hub.Publish("monitoring", "signal", "monitoring", actorID, nil, audienceOwnerOnly(), trigger)
 }
 
 // ── POST /api/mcp ────────────────────────────────────────────────────────────
@@ -850,7 +1406,22 @@ func (s *apiServer) HandleMcpApiMcpPost(w http.ResponseWriter, r *http.Request) 
 			rpcError(w, id, rpcInvalidParams, "unknown tool: '"+name+"'")
 			return
 		}
-		s.fillLessonsIdentityArgs(r, name, arguments)
+		if retired := s.fillLessonsIdentityArgs(r, name, arguments); retired != nil {
+			// A RETIRED ARGUMENT IS A TOOL-LEVEL REFUSAL, not a JSON-RPC
+			// invalid-params error — same CallToolResult shape a REST 400
+			// takes, so the caller reads the field name and the replacement
+			// instead of a transport-level complaint it cannot act on.
+			status := http.StatusBadRequest
+			raw, marshalErr := json.Marshal(map[string]map[string]string{
+				"error": {"code": errorCodeForStatus(status), "message": retired.Error()},
+			})
+			if marshalErr != nil {
+				rpcError(w, id, rpcInternalError, "tool validation failed: "+marshalErr.Error())
+				return
+			}
+			rpcResult(w, id, callToolResult(status, raw))
+			return
+		}
 		reqPath, rawQuery, body, splitErr := splitToolArguments(spec, arguments)
 		if splitErr != nil {
 			// A known tool with a missing path argument is a tool-level input
@@ -888,32 +1459,58 @@ func (s *apiServer) HandleMcpApiMcpPost(w http.ResponseWriter, r *http.Request) 
 //
 // The once-per-session fact is enforced by claimHandoverNotice, which runs
 // AFTER decideHandoverNotice has composed the signal — and composing it runs
-// `offboard` and `docCapacity`, each a fold over durable documents. But
-// decideHandoverNotice returns non-nil on EVERY tick once the agent is past its
-// notice point, not just the first: the "fires once" gate is downstream of it.
-// So for the whole remainder of a high-band session — a tick every ssePoll —
-// this used to compose a frame that was then thrown away, at the full cost of
-// both folds. The independent review measured 21.3µs → 574.2µs per tick (26.9×,
-// empty station) for what the doc-capacity closure added; measured again on
-// this fix, a SILENT tick costs 246ns with this guard and 374µs without it on
-// an empty station, 199ns vs 701µs once all nine documents are near their caps.
+// `offboard`, a fold over a durable document. But decideHandoverNotice returns
+// non-nil on EVERY tick once the agent is past its notice point, not just the
+// first: the "fires once" gate is downstream of it. So for the whole remainder
+// of a high-band session — a tick every ssePoll — this used to compose a frame
+// that was then thrown away, at the full cost of the fold. Measured on an empty
+// station, a SILENT tick costs 246ns with this guard and 374µs without it.
 //
 // handoverNoticeSettled is asked FIRST for that reason. It is read-only (gauge
 // record + the process-local claim cache, no query), so it cannot change what
 // is sent — only whether the work of composing an already-spent notice is done
-// at all. TestHandoverNoticeTick_ClosuresAreNotRunAfterTheClaim counts the
+// at all. TestHandoverNoticeTick_ClosureIsNotRunAfterTheClaim counts the
 // closure calls and fails if this order is reversed.
 func (s *apiServer) handoverNoticeTick(
-	memberID, connRuntime string, offboard, docCapacity func() string,
+	memberID, connRuntime string, notice func() string,
 ) ([]byte, bool) {
 	record := s.gauge.Get(memberID)
 	if s.handoverNoticeSettled(memberID, record) {
 		return nil, false
 	}
+	// 🔴 ALREADY WINDING DOWN ⇒ SAY NOTHING (owner, 2026-08-24, verbatim:
+	// 「下線 → 加速 → 強制。後者一旦發出我們就不該發出前者」).
+	//
+	// This band is the ONE wind-down path that never read the member row at
+	// all: it decided purely from the gauge (how full the context is) and its
+	// own once-per-session claim. So an agent the owner had ALREADY put into
+	// 加速停止 — counting down to a deadline — would, the moment its usage
+	// crossed the FIRST threshold, be handed a 停止 notice telling it there is
+	// no hurry. Measured, not reasoned: with the member parked in
+	// accelerated_stop and the gauge over the notice point, this tick emitted
+	// the frame.
+	//
+	// 🔴 THE SISTER GUARD IS NOT THIS ONE. armRefocusEpoch's ladder governs who
+	// may overwrite refocus_op — a DB field's write order. This governs a push
+	// that never touches that field. Two paths, two writes, two dedup
+	// mechanisms: neither covers the other, which is why both exist.
+	//
+	// Placed AFTER the settled check on purpose, and the ordering comment above
+	// is the reason: settled is read-only and ~free, this costs a member read.
+	// Placed BEFORE decideHandoverNotice for the same reason — a row read is far
+	// cheaper than the document fold that composing the notice runs.
+	//
+	// NOT claimed when it goes quiet. Claiming would spend the session's single
+	// notice on a tick nobody was sent, so an agent whose wind-down is later
+	// cleared would never be told it is near the line at all.
+	if m, err := s.dal.GetMember(memberID); err == nil && m != nil &&
+		winddownStageOf(*m) != winddownStageNone {
+		return nil, false
+	}
 	signal := decideHandoverNotice(
 		memberID, connRuntime, record,
 		s.ctxHighConfig(), s.codexNoticeRoundSetting(), s.codexCompactionThreshold,
-		offboard, docCapacity)
+		notice)
 	if signal == nil {
 		return nil, false
 	}

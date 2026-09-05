@@ -52,6 +52,38 @@ package main
 // one-word shrug, not a fluent one. Verified by the T-5336 review, which did
 // exactly that and got two green gates.
 //
+// 🔴 A NAMED DEBT — THE SCANNER MATCHES THE SELECTOR NAME, NOT THE TYPE.
+// `mentionsIdentity` treats any `.Kind` / `.RoleKey` selector as identity, and
+// it has no idea what it was selected FROM. That is deliberate reach (it is how
+// the "直接比對 kind" shape gets caught at all), and it is also a false-positive
+// generator: `art.Kind == ArtifactKindLink` — a task ARTIFACT's content kind,
+// file/image/link, nothing to do with any caller — trips it just as readily as
+// `m.Kind == KindWarden` does. Every non-member type that grows a `Kind` field
+// mis-fires here, and the T-60 artifact line has now done it twice.
+//
+// 🔑 MIS-FIRES ARE REGISTERED, NOT HIDDEN. The first one was settled by reading
+// the artifact's kind into a local so the scanner could not see it. That is the
+// one direction this file must never take: hiding drives the mis-fire count to
+// zero, so the gate keeps LOOKING healthy exactly as it goes blind, and nobody
+// is left holding evidence that the debt is growing. So the local-variable
+// workaround is GONE (T-60 put `art.Kind ==` back inline) and the mis-fires are
+// listed in nonCallerKindPredicates below, each with the reason it is not an
+// identity read. THE LENGTH OF THAT MAP IS THE MIS-FIRE COUNT, and its growth
+// is the pressure to pay the debt off — no one has to remember to notice.
+//
+// The debt itself is unchanged and it has a ticket: teach the scan the TYPE
+// (resolve the selector's receiver so a member row and an artifact row stop
+// looking alike), which means giving this file type information it does not
+// have today — go/types over a loaded package instead of a bare go/parser walk.
+// That is an owner-approved cost, and the evidence that buys the approval is
+// nonCallerKindPredicates getting longer.
+//
+// What a mis-fire must NOT become is an entry in authzOutsideRouteTable. That
+// map self-describes as the list of CALLER-CLASSIFICATION decisions; putting a
+// non-authz predicate in it makes the list start lying about what it contains,
+// and the next governance re-grade reads it as decisions to audit. The two maps
+// are separate for that one reason.
+//
 // So the value of these lists is NOT that they cannot be padded — they can.
 // It is that PADDING MUST SHOW UP IN THE DIFF: adding a decision outside the
 // route table now requires editing this file, in the same commit, where a
@@ -93,7 +125,7 @@ var authzIdents = map[string]bool{
 	"principalOwner": true, "principalAdminAgent": true,
 	"principalAgent": true, "principalMachine": true,
 	"adminRoleKey": true, "machineKind": true,
-	"KindAssistant": true, "KindOutsource": true,
+	"KindStaff": true, "KindOutsource": true,
 	"KindWarden": true, "KindHuman": true,
 	// comparing an id against the owner's wire id IS a privilege test.
 	"wireOwnerID": true,
@@ -371,8 +403,8 @@ var authzOutsideRouteTable = map[string]string{
 	// ── the hire self-promotion seam (root CLAUDE.md §4, owner ruling) ────────
 	"api_members.go :: HandleHireMemberApiMembersPost :: principalAtLeast(s.principalOfRequest(r), principalAdminAgent)": "" +
 		"§4 閉環: hiring is at the machine floor, but hiring WITH kind/role_key is " +
-		"privilege-bearing (an agent could otherwise hire itself an 'assistant' and " +
-		"walk up the ladder). The floor cannot express 'this FIELD needs admin', so the " +
+		"privilege-bearing (an agent could otherwise hire itself a 'staff' colleague " +
+		"and walk up the ladder). The floor cannot express 'this FIELD needs admin', so the " +
 		"choke is necessarily in the handler. See the machine-floor ruling for " +
 		"POST /api/members below — the two halves are one decision.",
 	"api_members.go :: HandleHireMemberApiMembersPost :: trimmedOrEmpty(body.Kind) != \"\"": "" +
@@ -401,6 +433,14 @@ var authzOutsideRouteTable = map[string]string{
 		"must 404 as a machine, not soft-delete a colleague).",
 	"api_monitoring.go :: HandleGetMonitoringApiMonitoringGet :: m.Kind == machineKind": "" +
 		"monitoring splits member rows from machine rows by kind for rendering.",
+
+	"api_infra.go :: HandleResetCostApiMembersMemberIdCostResetPost :: m.Kind != KindOutsource": "" +
+		"T-53 成本歸零. The route table already makes the CALLER owner-only; this " +
+		"predicate picks which of the two accumulators the actor keeps its spend in, " +
+		"and it is deliberately the same test bankLiveCost makes for the same id — a " +
+		"staff member banks (and resets) on member.banked_cost, an outsource member " +
+		"through the worker row. It cannot be a Requires floor: the caller is owner on " +
+		"both arms, while the branch depends on the kind of the member named in the path.",
 
 	// ── personal-avatar target scoping (T-c826, owner 2026-07-27) ────────────
 	"api_members.go :: HandlePutMemberAvatarApiMembersMemberIdAvatarPut :: m.Kind == KindWarden": "" +
@@ -470,6 +510,33 @@ var authzOutsideRouteTable = map[string]string{
 		"caller-vs-resource comparison, not expressible as a route floor.",
 	"api_tasks.go :: callerMayDriveTask :: currentActor(r) == t.ExecutorID": "" +
 		"the self half of the same rule: the executor drives its own task.",
+	"api_tasks.go :: callerMayEditTaskText :: currentActor(r) == t.CreatorID": "" +
+		"T-52, owner 2026-09-02 card rc-1bb6e01c4bf7. While a task has NO executor at " +
+		"all (executor_id == ''), its CREATOR counts as the executor — at the " +
+		"text-only doors ONLY: update_task (title/description), the description and " +
+		"title routes, add/remove artifact, the two step-note write faces, and the " +
+		"task_description / task_title restores. A 發包票 is born unbound and stays " +
+		"unbound until the scheduler binds a worker, and for that whole window nobody " +
+		"awake can fix a typo in the brief the contractor will read on arrival. It " +
+		"cannot be a route floor: 'does this task have an executor yet' is a " +
+		"per-task, per-moment fact, not a principal class. 🔴 THE CONDITION IS " +
+		"executor_id == '' AND NOTHING ELSE, so the door SHUTS the instant a worker " +
+		"is bound — the creator is then a flat 403 again, exactly as before. Owner " +
+		"scoped this to 改文字類 and named the doors that stay shut (freeze/priority, " +
+		"terminate, reassign, claim, mark_duplicate, plan, step status, closeout, " +
+		"deps, linked reply cards); those keep callerMayDriveTask verbatim. Calling " +
+		"this predicate from another handler reverses that ruling rather than " +
+		"extending it.",
+	"api_tasks.go :: callerMayWriteHandover :: currentActor(r) == t.ReassignedFrom": "" +
+		"T-91, owner ruling: while a task sits under the `reassigning` lock, the " +
+		"stamped PREDECESSOR may still write the handover record (the step note the " +
+		"reassign notice orders it to write) — and nothing else. It cannot be a route " +
+		"floor: the subject is a per-task, per-moment fact (task.reassigned_from " +
+		"AND task.lock), not a principal class. 🔴 The owner was offered the WIDE " +
+		"version — both sides fully authorised during the handover — and refused it, " +
+		"so this predicate guards ONE door (the step-note write faces) and " +
+		"callerMayDriveTask still guards every other task write. Widening its call " +
+		"sites reverses that ruling; 全域脈絡 §3.4 is unchanged.",
 	"api_replycards.go :: callerMayExpireCard :: principalAtLeast(s.principalOfRequest(r), principalAdminAgent)": "" +
 		"T-1b88 (owner 2026-08-07, card rc-3ff94b116970) revised T-6020 for the expire " +
 		"row: admin+ may retire ANY reply card, and below that only the card's own " +
@@ -513,23 +580,47 @@ var authzOutsideRouteTable = map[string]string{
 	"api_chat.go :: HandlePostChatApiChatPost :: msg.Sender != wireOwnerID": "" +
 		"the other half of the same push condition: do not push the owner their own " +
 		"message back.",
-	// ── the by-id chat re-read's participation boundary (T-a828) ─────────────
+	// ── the by-id chat re-read's participation boundary (T-a828) is GONE ─────
 	//
-	// It CANNOT be a Requires value: the route floor answers "may this class of
-	// principal call get_chat at all", and every member may. The question here is
-	// per-ROW and per-CALLER — was THIS caller one of the two ends of THIS
-	// message — which no column on the row can express.
-	"api_chat.go :: chatMessageInvolvesCaller :: m.Sender == currentActor(r)": "" +
-		"T-a828: ?ids= hands back named messages IN FULL, so holding an id must not " +
-		"be the same thing as permission to read it. This half asks whether the " +
-		"verified caller SENT the message; a caller who is neither end gets 403.",
-	"api_chat.go :: chatMessageInvolvesCaller :: m.Recipient == currentActor(r)": "" +
-		"the other half of the same boundary: whether the verified caller RECEIVED " +
-		"it. Written as two comparisons against currentActor(r) rather than a " +
-		"hoisted local precisely so this gate can see the rule at all.",
+	// T-4e95 (owner ruling) removed it: it refused with 403 a message between two
+	// other members, while the ordinary listing already served that same message
+	// to the same caller via `with`. Two doors onto the same rows disagreeing
+	// about who may open them is not a boundary, it is a discrepancy — and the
+	// honest caller paid for it. Nothing is enumerated here now BECAUSE the
+	// predicate no longer exists; if a per-row chat read check ever returns, it
+	// belongs back in this map with its reason.
 	"api_tasks.go :: taskCallerOf :: classifyMember(m)": "" +
 		"the classification step of the task-caller resolver (the owner branch above " +
 		"returns before this line). Same primitive as the 發包 path, different entry.",
+}
+
+// nonCallerKindPredicates — THE MIS-FIRE REGISTRY, and deliberately not part of
+// authzOutsideRouteTable. Each key is a predicate the scanner flagged because it
+// reads a selector called `Kind` / `RoleKey`, and which is NOT a caller-identity
+// test at all: the scan has no type information, so it cannot tell a member
+// row's kind from some other row's discriminator (see the NAMED DEBT in this
+// file's header).
+//
+// Registering one is NOT an approval of the predicate — it is an admission that
+// this gate got it wrong, kept where the next reader can count them. The
+// alternative that was tried first, and rejected: reshape the production code
+// (read the field into a local) until the scanner cannot see it. That keeps the
+// count at zero while the gate goes blind, which is the worst of both.
+//
+// So: when this map grows, the scanner is getting further from the truth, and
+// the fix is the type-aware scan the header names — not a longer map. The
+// reason on each entry says WHAT the kind belongs to and why it is not identity.
+var nonCallerKindPredicates = map[string]string{
+	"api_tasks.go :: HandleReplaceTaskArtifactApiTasksTaskIdArtifactArtifactIdReplacePost :: kind != art.Kind": "" +
+		"a task ARTIFACT's content kind (file/image/link) versus the kind the replace " +
+		"body asked for — the immutability rule for a pinned deliverable. No principal " +
+		"is on either side of this comparison.",
+	"api_tasks.go :: HandleReplaceTaskArtifactApiTasksTaskIdArtifactArtifactIdReplacePost :: art.Kind == ArtifactKindLink": "" +
+		"the same artifact content kind, picking which content rules apply (a link " +
+		"carries a url, a file carries an attachment). Not a caller classification.",
+	"api_tasks.go :: HandleListTaskArtifactHistoryApiTasksTaskIdArtifactArtifactIdHistoryGet :: v.Kind != ArtifactKindLink": "" +
+		"a retained artifact VERSION's content kind, deciding whether the version has a " +
+		"blob to resolve a filename from. Same non-caller kind, read off the history row.",
 }
 
 func TestAuthzOutsideTheRouteTableIsEnumerated(t *testing.T) {
@@ -563,7 +654,9 @@ func TestAuthzOutsideTheRouteTableIsEnumerated(t *testing.T) {
 	var unlisted []string
 	for _, s := range sites {
 		found[s.key()] = true
-		if _, listed := authzOutsideRouteTable[s.key()]; !listed {
+		_, listed := authzOutsideRouteTable[s.key()]
+		_, registered := nonCallerKindPredicates[s.key()]
+		if !listed && !registered {
 			unlisted = append(unlisted, s.key())
 		}
 	}
@@ -578,7 +671,18 @@ func TestAuthzOutsideTheRouteTableIsEnumerated(t *testing.T) {
 			"  (b) if it genuinely cannot be a route floor (caller-vs-target rules, "+
 			"per-field privilege), add it to authzOutsideRouteTable with the reason and "+
 			"the ruling it came from.\n"+
-			"Do NOT delete it from the scan.", strings.Join(unlisted, "\n  "))
+			"Do NOT delete it from the scan.\n\n"+
+			"⚠️ If the predicate above is a `.Kind` that is NOT a caller's kind (an "+
+			"artifact's file/image/link, some other row's discriminator), this gate has "+
+			"MIS-FIRED: it matches the selector NAME and cannot see the type. Neither (a) "+
+			"nor (b) applies, and do NOT add it to authzOutsideRouteTable — that map is "+
+			"read as a list of authorization decisions.\n"+
+			"  (c) register it in nonCallerKindPredicates with a one-line reason saying "+
+			"whose kind it actually is. Do NOT instead reshape the code so the scan stops "+
+			"seeing it (a local variable): that drives the mis-fire count to zero while "+
+			"the gate goes blind. The registry's LENGTH is the evidence that buys the "+
+			"type-aware scan — see the NAMED DEBT paragraph in this file's header.",
+			strings.Join(unlisted, "\n  "))
 	}
 
 	// A STALE entry is a finding too: without this, the list can be padded with
@@ -601,8 +705,9 @@ func TestAuthzOutsideTheRouteTableIsEnumerated(t *testing.T) {
 }
 
 func TestAuthzInventoryReasonsAreRealReasons(t *testing.T) {
-	if len(authzOutsideRouteTable) == 0 {
-		t.Fatalf("empty inventory — nothing to judge")
+	if len(authzOutsideRouteTable) == 0 || len(nonCallerKindPredicates) == 0 {
+		t.Fatalf("empty inventory (%d listed / %d registered) — nothing to judge",
+			len(authzOutsideRouteTable), len(nonCallerKindPredicates))
 	}
 	for key, reason := range authzOutsideRouteTable {
 		if len(strings.TrimSpace(reason)) < 40 {
@@ -610,6 +715,66 @@ func TestAuthzInventoryReasonsAreRealReasons(t *testing.T) {
 				"governance re-grade why this decision is not on the route table; "+
 				"'legacy' or 'ok' does not do that.", key, len(strings.TrimSpace(reason)))
 		}
+	}
+	for key, reason := range nonCallerKindPredicates {
+		if len(strings.TrimSpace(reason)) < 40 {
+			t.Errorf("%s: the mis-fire reason is %d chars. It has to say WHOSE kind this "+
+				"is and why no principal is on either side; a shrug lets a real identity "+
+				"test be waved through as a false positive.", key, len(strings.TrimSpace(reason)))
+		}
+	}
+}
+
+// TestNonCallerKindRegistryEntriesStillExist is the registry's tooth.
+//
+// A mis-fire registry rots in one specific way: the predicate is rewritten or
+// deleted, the entry stays, and from then on the map's LENGTH — the whole point
+// of keeping it, since it is the evidence that buys the type-aware scan — counts
+// mis-fires that no longer happen. Nothing else in this file would notice: gate
+// (1) only fails on predicates it CANNOT find in a map, never on a map holding
+// keys it cannot find in the code.
+//
+// (authzOutsideRouteTable has the same check inline in gate (1); the registry
+// gets its own test so a stale registration names itself rather than arriving as
+// one more line under an authorization heading it does not belong to.)
+func TestNonCallerKindRegistryEntriesStillExist(t *testing.T) {
+	if len(nonCallerKindPredicates) == 0 {
+		t.Fatalf("the registry is empty — nothing to judge. If the type-aware scan " +
+			"finally landed, delete this test with it, in the same commit.")
+	}
+	sites, _, _ := scanAuthzSites(t)
+	if len(sites) < authzSiteFloor {
+		t.Fatalf("the scan found only %d predicates (floor %d) — the SCANNER is broken, "+
+			"and every key below would look stale for the wrong reason",
+			len(sites), authzSiteFloor)
+	}
+	found := make(map[string]bool, len(sites))
+	for _, s := range sites {
+		found[s.key()] = true
+	}
+	var stale, doubleListed []string
+	for key := range nonCallerKindPredicates {
+		if !found[key] {
+			stale = append(stale, key)
+		}
+		if _, alsoAuthz := authzOutsideRouteTable[key]; alsoAuthz {
+			doubleListed = append(doubleListed, key)
+		}
+	}
+	sort.Strings(stale)
+	sort.Strings(doubleListed)
+	if len(stale) > 0 {
+		t.Errorf("nonCallerKindPredicates registers mis-fire(s) that the scan no longer "+
+			"reports:\n  %s\nThe predicate was rewritten or removed — drop the entry (or "+
+			"re-key it). Left in place it inflates the mis-fire count, which is the exact "+
+			"number the type-aware scan is being argued for on.",
+			strings.Join(stale, "\n  "))
+	}
+	if len(doubleListed) > 0 {
+		t.Errorf("predicate(s) in BOTH authzOutsideRouteTable and "+
+			"nonCallerKindPredicates:\n  %s\nA predicate is either a caller "+
+			"classification or a mis-fire, not both, and the two maps mean opposite "+
+			"things to a governance re-grade.", strings.Join(doubleListed, "\n  "))
 	}
 }
 
@@ -634,6 +799,16 @@ var machineFloorWriteRulings = map[string]machineFloorRuling{
 			"with DELETE on the same {member_id} (admin_agent) is known and accepted. " +
 			"Full reasoning on the row in routes.go.",
 	},
+	"POST /api/outsource-workers/{id}/model": {
+		Ruling: "T-ed79 · owner 2026-08-21 · rc-376a41719e62",
+		Why: "brought DOWN two rungs to meet the staff face of the same act. The owner " +
+			"ruled 「如果原本正職可以改 model 外包就應該可以改…mira 是特殊的意義，他代替 " +
+			"owner 執行高權限動作」: the floor of 改 model is whatever PATCH " +
+			"/api/members/{member_id} carries (machine, T-5336), because it is the same " +
+			"housekeeping act on the other side of the roster, and admin_agent is " +
+			"reserved for acts delegated on the owner's behalf. The other four worker " +
+			"lifecycle rows were NOT moved. Full reasoning on the row in routes.go.",
+	},
 	"PATCH /api/accounts/{account_id}": {
 		Ruling: "T-5336 裁定 3 · owner 2026-07-27",
 		Why: "the account display-name overlay. The owner was asked in this very ticket " +
@@ -649,7 +824,7 @@ var machineFloorWriteRulings = map[string]machineFloorRuling{
 		Ruling: "root CLAUDE.md §4 閉環",
 		Why: "hiring is floor-level, but hiring WITH kind/role_key is admin-gated INSIDE " +
 			"the handler (see the HandleHireMember entries in authzOutsideRouteTable) — " +
-			"otherwise an agent hires itself an 'assistant' and walks up the ladder. The " +
+			"otherwise an agent hires itself a 'staff' colleague and walks up the ladder. The " +
 			"floor here is half of a two-part decision, not an unguarded route.",
 	},
 	"POST /api/machines/renew-credential": {

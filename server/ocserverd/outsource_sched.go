@@ -6,12 +6,19 @@ package main
 //   * outsourceDecide — the PURE admission core (the reconcileDecide twin):
 //     (queue snapshot, per-type manual specs, live worker counts, the global
 //     cap) → the ordered assignment list. All IO lives in runOutsourceTick.
-//   * the 30s cadence tick (startOutsourceCadence) + the event-driven single
-//     tick (outsourceTickNow — fired when create_task lands an outsource
-//     task, so an assignment never waits a full period).
-//   * --no-outsource (serve flag) disables the producer WHOLESALE — cadence
-//     AND the event-driven tick — the --no-reconcile mirror: a shadow server
-//     must never mint workers against the production queue.
+//   * runOutsourceTick — the OUTSOURCE HALF of the 30s cadence tick. Since
+//     T-14 item 5 there is one cadence loop for both populations
+//     (startLifecycleCadence, lifecycle_tick.go); this function is what it
+//     calls second, after the reconcile half has finished and dropped its
+//     lock. It is also the event-driven single tick's body (outsourceTickNow —
+//     fired when create_task lands an outsource task, so an assignment never
+//     waits a full period).
+//   * --no-outsource (serve flag) disables the producer WHOLESALE — its half of
+//     the cadence AND the event-driven tick — the --no-reconcile mirror: a
+//     shadow server must never mint workers against the production queue.
+//     🔴 The flag is read at the CALL SITE (runLifecycleTick) and in
+//     outsourceTickNow, never inside runOutsourceTick — see the ruling in
+//     lifecycle_tick.go and the pins in lifecycle_tick_test.go.
 //
 // Admission (contract §B.4, owner rulings ③/H6/H7):
 //   * candidates: status='not_started' ∧ executor_kind='outsource' ∧
@@ -41,12 +48,7 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"time"
 )
-
-// outsourceCadenceSecs is the scheduler tick period — sized like the
-// reconcile cadence (§B.4: 30s scan + event-driven immediate tick).
-const outsourceCadenceSecs = 30.0
 
 // ── pure decision core (the reconcileDecide twin) ────────────────────────────
 
@@ -342,10 +344,37 @@ func (s *apiServer) runOutsourceTick(now float64) {
 		outsourceLog("tick: task read failed: %v", err)
 		return
 	}
-	workers, err := s.dal.ListOutsourceWorkers()
+	all, err := s.dal.ListOutsourceWorkers()
 	if err != nil {
 		outsourceLog("tick: worker read failed: %v", err)
 		return
+	}
+	var workers []OutsourceWorker
+	for _, w := range all {
+		// WHICH HALF drives this row (lifecycle_roster.go) — the twin of the
+		// guard at the head of runReconcileTick's candidate loop, asked here for
+		// the same reason and in the SAME POSITION AS THAT ONE: at the head of
+		// this producer, on the raw roster read, before ANY pass or decision has
+		// looked at the row. It did not start out here — it sat below
+		// runWorkerLifecyclePasses, which had already run the entry filter, every
+		// shared formality and the four-field fold-back on rows this half might
+		// not own. That is harmless only while the guard is a no-op, and the whole
+		// reason this guard exists is the day it stops being one.
+		//
+		// A NO-OP TODAY, deliberately: ListOutsourceWorkers returns kind='outsource'
+		// rows only and the driver hands every one of them to this half. It is here
+		// so BOTH halves state their claim BY NAME, which is what lets the parity
+		// test assert the two claims never overlap and never both abstain — an
+		// invariant that today rests entirely on a SQL WHERE clause and would rest
+		// on nothing once that clause is merged.
+		//
+		// Filtering here rather than at the FSM loop also means the live-count /
+		// codename fold below counts only rows this half owns: a row driven by the
+		// other half must not consume this half's parallel cap.
+		if lifecycleTickDriverFor(memberFromWorker(w)) != driverOutsource {
+			continue
+		}
+		workers = append(workers, w)
 	}
 	manuals, err := s.dal.ListTaskManuals()
 	if err != nil {
@@ -381,11 +410,81 @@ func (s *apiServer) runOutsourceTick(now float64) {
 	//     report arrived) is force-reclaimed after workerReclaimGraceSecs —
 	//     the grace exists so a released worker can finish its §6.3 close-out
 	//     duties before the session is taken.
+	// ── the pre-decide formalities, from the SAME list staff use (T-72dd,
+	//    T-170e stage 3) ─────────────────────────────────────────────────────
+	//
+	// 🔴 THIS REPLACES autoHandoverWorker's own threshold arm, and replacing it
+	// is the whole point of the ticket: the ruling about WHEN a session is wound
+	// down for context pressure was written TWICE — once in
+	// stampContextHighRecycle for staff, once in autoHandoverWorker for workers
+	// — and T-ed79 only updated the staff copy. Staff got two thresholds
+	// (notice_pct → a clockless 停止, handover_pct → 加速停止) plus the promotion
+	// between them; the worker copy still had one threshold and no promotion.
+	// Feeding the worker projection into the staff pass deletes the second copy
+	// rather than teaching it the same lesson again.
+	//
+	// The projection is legitimate because the row IS a member row
+	// (memberFromWorker), and step 1 of this ticket measured the write half:
+	// putMember(memberFromWorker(w)) lands on the row that GetOutsourceWorker
+	// reads back. stampContextHighRecycle mutates in-slice so the SAME tick sees
+	// the marker, so the four epoch fields are folded straight back onto the
+	// worker rows below — otherwise this tick's FSM pass would still be reading
+	// the pre-stamp row and the collect would always be one tick late.
+	//
+	// Only ACTIVE, not-held-down workers are offered: an assigned worker has no
+	// session to wind down yet, and a desired-offline one is the owner's 停止,
+	// which autoHandoverWorker arm (0) still owns.
+	//
+	// 🔴 T-170e: THREE staff passes ride this projection now, not one, and the
+	// reason the other two were missing is structural rather than an oversight
+	// anybody could have spotted by reading them. Every shared wind-down pass is
+	// reached from runReconcileTick, which never offers a worker to any of them —
+	// then because ListMembers was `WHERE kind != 'outsource'` (dal.go), now
+	// because that half's driver guard drops the row (T-14 項目 6 deleted the
+	// clause). Either way a worker is NEVER offered to any of them. A pass that guards staff and a pass
+	// that does not exist look identical from the worker's side, which is exactly
+	// how a worker ended up with no token-expiry lead and no survived-stop sweep
+	// while the code implementing both sat in the same package.
+	//
+	// The ORDER is the reconcile tick's order, and it is load-bearing there for a
+	// reason that holds here identically: both stamp passes skip a row that
+	// already carries refocus_since, so whichever runs first owns the epoch —
+	// and only the context pair can escalate itself to 加速停止.
+	//
+	// 🔴 T-170e stage 3: that order — and WHICH passes run at all — is no longer
+	// re-typed here. Both were, until the list, hand-maintained twice, and the
+	// only thing keeping the copies in step was that somebody remembered. The
+	// projection, the entry filter and the four-field fold-back are all inside
+	// runWorkerLifecyclePasses now (lifecycle_roster.go), which is also what the
+	// TESTS drive — the helper that used to hand-copy this block had already
+	// drifted a whole stage behind it.
+	s.runWorkerLifecyclePasses(workers, now)
+
 	for _, w := range workers {
+		// `workers` is already the driver-filtered set (see the head of this
+		// function): every row here was claimed by driverOutsource before any
+		// formality ran, so there is no second driver question to ask at this
+		// point.
+		//
+		// 🔴 ABOVE THE SWITCH, AND THAT POSITION IS THE WHOLE POINT (T-65 包②).
+		// The queued 起來 an owner presses during a wind-down is spent here, at the
+		// converged-offline edge. Its staff twin lives inside reconcileOne, so the
+		// symmetric home would be reconcileWorkerLiveness — and that home is
+		// UNREACHABLE for the only population this can ever fire on: the assigned
+		// branch below `continue`s on `DesiredState == offline`, and the active
+		// branch gates its FSM call on `fresh.DesiredState != offline`. A stopped
+		// worker never reaches the FSM at all. Putting the consume behind either
+		// filter would leave the owner pressing a button that answers 200 and does
+		// nothing forever — which is the SAME shape as the bug this feature
+		// removes, one layer down.
+		//
+		// It mutates `w` in place, so the switch below sees desired_state=online on
+		// this very pass and dispatches the start now rather than a tick later.
+		s.consumeWorkerRestartAfterStop(&w, now)
 		// A refused live-worker kill (owner 停止/relocate toward a warden that
 		// dropped offline) is parked, never lost — re-fire it FIRST, before any
 		// branch below can re-spawn onto the same machine (P5a rework).
-		s.retryPendingWorkerStop(w.ID)
+		s.retryPendingWorkerStop(w.ID, now)
 		switch w.Status {
 		case WorkerStatusAssigned:
 			// Owner-explicit stop dominates every auto-revival (desired_state
@@ -410,14 +509,41 @@ func (s *apiServer) runOutsourceTick(now float64) {
 			// here too — no separate guard needed (that would only mask the
 			// internal one).
 			s.autoHandoverWorker(w, now)
-			// A案 P6: an ACTIVE worker whose session DIED (claimed once, SSE gone
-			// — the old spawn_state=stuck latch) is rescued by the same FSM:
-			// respawn with backoff, zombie-takeover on a clobbered START. Masked
-			// while a handover is in flight (refocus owns the respawn there) and
-			// while owner-stopped (held down).
-			if w.DesiredState != DesiredStateOffline && w.RefocusSince == 0.0 &&
-				!s.hub.IsOnline(w.ID) {
-				s.reconcileWorkerLiveness(w, now)
+			// A案 P6: the shared member FSM owns this worker's whole liveness
+			// story — respawn with backoff, zombie-takeover on a clobbered
+			// START, and (T-72dd) the RECYCLE 收口 of a wind-down epoch.
+			//
+			// 🔴 TWO GUARDS WERE REMOVED HERE, and they were the blindfold's
+			// last two straps:
+			//
+			//   * `RefocusSince == 0` masked the FSM for exactly the state the
+			//     收口 lives in. It was correct while autoHandoverWorker owned
+			//     the collect ("refocus owns the respawn there"); now that the
+			//     FSM is the ONLY collector, keeping it would mean nothing
+			//     collects an ACTIVE worker's handover at all.
+			//   * `!hub.IsOnline` masked every ONLINE worker, and decideUp's
+			//     recycle arm requires obs.Online — so the collect was
+			//     unreachable through this call site twice over.
+			//
+			// A healthy online worker with no epoch is not endangered by
+			// running: decideUp answers "online: converged" and dispatches
+			// nothing (measured cell-by-cell in
+			// worker_obs_unblind_t72dd_test.go).
+			//
+			// 🔴 RE-READ FIRST. autoHandoverWorker's loop-break may have just
+			// cleared this row's epoch (respawn landed), and `w` is a snapshot
+			// taken before that write. Handing the stale copy to the FSM would
+			// show it refocus_since > 0 ∧ stopped_since > 0 on a worker whose
+			// handover is ALREADY finished — decideUp's recycle arm would then
+			// robust-STOP the session that just came up. Re-reading is what keeps
+			// "the epoch is over" and "collect the epoch" from being decided off
+			// two different versions of one row.
+			fresh, ferr := s.dal.GetOutsourceWorker(w.ID)
+			if ferr != nil || fresh == nil || fresh.Status == WorkerStatusReleased {
+				continue
+			}
+			if fresh.DesiredState != DesiredStateOffline {
+				s.reconcileWorkerLiveness(*fresh, now)
 			}
 		case WorkerStatusReleased:
 			if w.ReleasedTS > 0 && now-w.ReleasedTS >= workerReclaimGraceSecs &&
@@ -605,17 +731,11 @@ func (s *apiServer) runOutsourceTick(now float64) {
 
 // ── the cadence + the event-driven seam ──────────────────────────────────────
 
-// startOutsourceCadence mounts the 30s scheduler loop (sleep-then-tick, the
-// startReconcileCadence twin). Never called when --no-outsource is set.
-func (s *apiServer) startOutsourceCadence(period time.Duration) {
-	go func() {
-		for {
-			time.Sleep(period)
-			s.runOutsourceTick(nowSecs())
-		}
-	}()
-	outsourceLog("cadence started (period=%gs)", period.Seconds())
-}
+// The scheduler's own 30s goroutine (startOutsourceCadence) is gone: T-14
+// item 5 folded it into startLifecycleCadence (lifecycle_tick.go), the one
+// producer loop, which calls this tick after the reconcile half and skips it
+// when --no-outsource is set. The flag is deliberately NOT read inside this
+// function — see the ruling in lifecycle_tick.go.
 
 // outsourceTickNow is the EVENT-DRIVEN immediate tick — the create_task seam
 // (an outsource task just landed unassigned; assign it now rather than up to

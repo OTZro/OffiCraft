@@ -55,7 +55,12 @@ for (const width of [320, 375, 390, 1040]) {
     // token is the whole reason this fixture exists, so measuring before it
     // lands would measure an empty card — a guard that finds nothing to check
     // must not read as a guard that found nothing wrong.
-    await expect(cmp.locator(".doc-md")).toContainText("abcdef0123456789");
+    // ⚠️ `.doc-card__body > .doc-md`, not `.doc-md` — a boot-context document
+    // renders a SECOND one for its read-only head (T-3201), and a bare `.doc-md`
+    // is a strict-mode violation rather than a looser assertion.
+    await expect(cmp.locator(".doc-card__body > .doc-md")).toContainText(
+      "abcdef0123456789"
+    );
 
     // (2) Nothing spills: not the card head, not the card, not the scrollable
     // settings surface, not the page. The surface is measured as well as the

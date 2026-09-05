@@ -90,6 +90,32 @@ after a merge to `main`, which appear on a pull request with a conclusion of
 **no** conclusion at all is not a pass: it means that check never ran, which on
 screen looks exactly like a check that did not go red.
 
+### If your change adds a database migration
+
+Adding a migration touches `server/ocserverd/migration.lock`, a generated file
+whose whole job is to stop two such branches from landing on top of each other.
+When your branch already carries the lock, that shows up as a **conflict** on
+that file whenever another migration lands before yours — **including when the
+two version numbers do not actually collide**. That is the designed cost, not a
+bug.
+
+**But a conflict is not the only way it stops you, and the quiet case is the one
+to watch.** If your branch is older than the lock file, git takes the lock as a
+plain *added* file when you merge — clean, no conflict, nothing asking you to
+look. Your migration is then in the tree but not in the list, and CI fails with
+`[lock:missing]` instead. So treat **"run `./bin/gen-migration-lock` after
+merging main"** as unconditional; do not wait for a conflict to remind you.
+
+Do not hand-merge that file. Renumber your own migration *file* if the numbers
+really did collide, then run `./bin/gen-migration-lock`, which rewrites the
+whole thing from the tree. The `roll sha256:` header line is computed; never
+edit it by hand. Then read the diff: your new migration must appear as lines
+**appended at the end**. A changed line in the middle means an already-released
+migration was edited or removed — stop and look, do not commit past it.
+
+Note also that a conflicted pull request gets **no checks at all**, and an
+absent conclusion is not a pass — see the paragraph above.
+
 ### Green can go stale
 
 A green tick on your pull request proves that *the workflow as it existed when

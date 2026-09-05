@@ -234,11 +234,37 @@ func supersededDispatchClue(m Member) string {
 		m.LastOpAt, m.LastOpReason)
 }
 
+// stringOf / boolPtrOf are the two type assertions the receipt reads use, named
+// once so the pre-routing peek at rpc/ok/reason cannot drift from the per-fold
+// reads further down (they must agree — the peek decides whether the folds'
+// own isStopNoopReceipt verdict is about to fire).
+func stringOf(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
+func boolPtrOf(v any) *bool {
+	b, isBool := v.(bool)
+	if !isBool {
+		return nil
+	}
+	return &b
+}
+
 // foldCommandResult folds ONE warden command_result receipt onto the
 // addressed member's last_op* fields (handlers._fold_command_result).
 // Fail-safe: a missing/blank member_id or an unknown member is ignored; any
 // storage fault is logged and swallowed (an observation fold must never 500).
-func (s *apiServer) foldCommandResult(commandResult map[string]any, trigger string) {
+//
+// reporter is the MACHINE that sent this receipt (receiptReporterMachine — the
+// verified token, never the payload; "" when it could not be resolved). It is
+// distinct from trigger, which is the SSE attribution string and happens to
+// carry the same text for a warden: conflating the two is how the fact sat
+// unused here for so long. Two consumers below need it as a FACT rather than a
+// label — the receipt deadline and the worker-stop retry, both of which have
+// always recorded which machine they were waiting on and never had anything to
+// compare it against.
+func (s *apiServer) foldCommandResult(commandResult map[string]any, trigger, reporter string) {
 	// T-9ccf: a worker receipt keys on worker_id (a worker has no roster member) —
 	// route it to the worker fold FIRST. The warden sends exactly one id per
 	// receipt (command.go), so worker_id present ⇒ this is a worker receipt.
@@ -249,8 +275,22 @@ func (s *apiServer) foldCommandResult(commandResult map[string]any, trigger stri
 	// the fold then declines to write it (a no-op stop receipt, an unknown
 	// member). Disarming only on a successful fold would stamp receipt_missing
 	// on rows whose receipt was received and read.
-	s.noteReceiptArrived(strings.TrimSpace(workerIDRaw))
-	s.noteReceiptArrived(strings.TrimSpace(memberIDRawOf(commandResult)))
+	s.noteReceiptArrived(strings.TrimSpace(workerIDRaw), reporter)
+	s.noteReceiptArrived(strings.TrimSpace(memberIDRawOf(commandResult)), reporter)
+	// AND, before the routing can return early for the very receipt class this
+	// cares about: a no_such_session stop is dropped by BOTH folds below
+	// (isStopNoopReceipt — it is not last_op evidence and must not forge one),
+	// but for the worker-stop RETRY it is the strongest evidence there is.
+	// "not worth writing down" and "not worth reading" were never the same
+	// claim; the fold conflated them, and the retry paid for it in re-dispatches.
+	if isStopNoopReceipt(
+		stringOf(commandResult["rpc"]), boolPtrOf(commandResult["ok"]),
+		stringOf(commandResult["reason"]),
+	) {
+		s.noteWorkerStopNoSuchSession(strings.TrimSpace(workerIDRaw), reporter)
+		s.noteWorkerStopNoSuchSession(
+			strings.TrimSpace(memberIDRawOf(commandResult)), reporter)
+	}
 	if workerID := strings.TrimSpace(workerIDRaw); workerID != "" {
 		s.foldWorkerCommandResult(workerID, commandResult, trigger)
 		return
@@ -336,10 +376,29 @@ func (s *apiServer) foldCommandResult(commandResult map[string]any, trigger stri
 	m.LastOpAt = commandResultAtEpoch(commandResult["at"])
 	// UNINSTALL CONVERGENCE: an ok uninstall receipt folds the machine
 	// lifecycle intent back to offline (record kept — re-installable).
+	//
+	// 🔴 THIS IS THE ONLY ARM THAT STILL NEEDS THE WHOLE-ROW WRITE (T-55): the
+	// receipt columns left PutMember's SET list, but desired_state has not, so
+	// the ordinary fold below is now a single-column write and this rare arm is
+	// two writes.
+	//
+	// ⚠️ THE ORDER HERE IS NOT A §2.1 CONVERGENCE ARGUMENT, and must not be read
+	// as one. §2.1 picks the order whose failure a RETRY can still see — but a
+	// warden command_result is pushed once and never re-sent, so no retry exists
+	// to see anything. What is chosen instead is the LESS BAD RESIDUE: intent
+	// first, receipt second, so a failure between them leaves the machine
+	// correctly converged with its explanation missing. The other way round
+	// leaves the cockpit stating an uninstall that the lifecycle intent still
+	// contradicts, which is a screen that lies rather than one that is quiet.
 	if m.LastOp == "uninstall" && m.LastOpOK != nil && *m.LastOpOK {
 		m.DesiredState = DesiredStateOffline
+		if err := s.putMember(*m, trigger); err != nil {
+			fmt.Fprintf(os.Stderr,
+				"[monitoring] uninstall convergence failed for member %q: %v\n", memberID, err)
+			return
+		}
 	}
-	if err := s.putMember(*m, trigger); err != nil {
+	if err := s.persistMemberOpReceipt(*m, trigger); err != nil {
 		fmt.Fprintf(os.Stderr,
 			"[monitoring] command_result fold failed for member %q: %v\n", memberID, err)
 	}
@@ -406,7 +465,12 @@ func (s *apiServer) foldWorkerCommandResult(workerID string, commandResult map[s
 	w.LastOpLog = logText
 	w.LastOpReason = reason
 	w.LastOpAt = commandResultAtEpoch(commandResult["at"])
-	if err := s.dal.PutOutsourceWorker(*w); err != nil {
+	// Single write (T-55): this fold mutates the five receipt columns and nothing
+	// else, so the whole-row write it used to end on carried every other column
+	// as freight — and this handler holds outsourceMu while a reconcile tick may
+	// be writing the same row through its own re-read.
+	if err := s.dal.SetMemberOpReceipt(w.ID, w.LastOp, w.LastOpOK, w.LastOpLog,
+		w.LastOpReason, w.LastOpAt); err != nil {
 		fmt.Fprintf(os.Stderr,
 			"[monitoring] worker command_result fold failed for %q: %v\n", workerID, err)
 		return
@@ -684,6 +748,12 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 	// fail-closed rules that keep the pairing true across the whole sequence of
 	// reports, not just the happy path.
 	applyAccountReport(entry, body.Account, body.AccountLabel, runtime)
+	// The account's own accumulator is fed HERE and nowhere else, because this
+	// is the one moment new spend becomes visible (T-53, owner ruling
+	// rc-5c5d7c7c6dcd). It runs AFTER applyAccountReport so the increase is
+	// credited to the account this report actually proved, never to a pairing
+	// the report has just retired.
+	s.accrueAccountSpend(entry)
 	entry["ts"] = nowSecs()
 	s.telemetry.Set(agentID, entry)
 	s.stampReportedLaunchFacts(agentID,
@@ -692,7 +762,7 @@ func (s *apiServer) HandleIngestTelemetryApiMonitoringTelemetryPost(w http.Respo
 	s.hub.Publish("monitoring", "signal", "monitoring", agentID, nil, audienceOwnerOnly(), requestTrigger(r))
 
 	if commandResult != nil {
-		s.foldCommandResult(commandResult, requestTrigger(r))
+		s.foldCommandResult(commandResult, requestTrigger(r), receiptReporterMachine(r))
 	}
 
 	writeJSON(w, http.StatusOK, agentTelemetryDTO{
@@ -958,9 +1028,12 @@ type monitoringActor struct {
 //
 //	host     — observedWorkerHost, the restart-proof fold (a worker has no
 //	           desired_machine_id fallback the way observedHost gives a member).
-//	presence — workerPresence, which anchors "waking" on the spawn dispatch;
-//	           PresenceState would read a just-dispatched worker as offline
-//	           because a worker row carries no waking_since.
+//	presence — workerPresence, which is PresenceState behind a released-row
+//	           guard (T-14): a released worker is off-panel and has no presence
+//	           word. The projection itself is the member's, on the member's
+//	           durable waking_since — the spawn dispatch stamps it, so a
+//	           just-dispatched worker reads waking here for the same reason a
+//	           just-started staff member does.
 //
 // `model` is deliberately NOT among them any more. It used to be, because the
 // two kinds genuinely disagreed: a worker served its self-reported ActualModel
@@ -986,6 +1059,23 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 	}
 	var members []Member
 	for _, m := range all {
+		// 🔴 WHOSE ROW IS THIS. Asked with the SAME named predicate the two
+		// lifecycle halves ask (lifecycle_roster.go), not with a hand-written
+		// `m.Kind != KindOutsource`: identical today, but a second hand-written
+		// copy re-splits the definition PR ① just unified, and asking by name is
+		// what puts this handler under the parity test's coverage.
+		//
+		// It is NOT redundant with the worker loop further down. `all` is now the
+		// WHOLE member table (T-14 項目 6 deleted ListMembers'
+		// `WHERE kind != 'outsource'`), and every live contractor ALSO arrives
+		// off ListOutsourceWorkers below. Without this `continue` each one enters
+		// `actors` and `sources` twice, on the same host key — the machine card
+		// reads one agent too many and the sessions list carries two rows under
+		// one id. Pinned by
+		// TestGetMonitoring_LiveContractorCountsAsOneAgentNotTwo.
+		if lifecycleTickDriverFor(m) != driverReconcile {
+			continue
+		}
 		if m.RosterStatus != RosterStatusRemoved {
 			members = append(members, m)
 		}
@@ -1030,8 +1120,9 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 
 	// actors = members ∪ LIVE outsource workers. The three VALUE folds below
 	// (machine attribution / rate-limit windows / cost) run over THIS list, not
-	// over `members` alone — `dal.ListMembers()` is `WHERE kind != 'outsource'`,
-	// so a member-only fold cannot see a single outsource session.
+	// over `members` alone — `members` is the DRIVER-FILTERED roster read (see
+	// the guard at the top of this handler), so a member-only fold cannot see a
+	// single outsource session.
 	//
 	// That was the owner-reported bug (T-fc2f): the accounts overview HAPPILY
 	// grew a row for an outsource-held key — the raw-key loop further down scans
@@ -1045,9 +1136,19 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 	// (T-69bc / 2eb6590 — an account must never be borrowed from an older
 	// runtime). This only fixes WHICH actors get asked.
 	//
-	// Members and workers are disjoint by construction (kind != 'outsource' vs
-	// kind = 'outsource'), so each actor — and each actor's banked_cost —
-	// contributes exactly once.
+	// 🔴 MEMBERS AND WORKERS ARE DISJOINT BECAUSE OF THE GUARD AT THE TOP OF THIS
+	// HANDLER, AND NOTHING ELSE. This used to be true "by construction": the
+	// roster read itself was `WHERE kind != 'outsource'`, so the two sets could
+	// not overlap however this fold was written. T-14 項目 6 deleted that clause,
+	// and `members` is now disjoint from `workers` only because the loop that
+	// builds it drops every row lifecycleTickDriverFor sends to the outsource
+	// half. Remove that `continue` and each LIVE contractor enters `actors`
+	// TWICE — once off its member row, once off its worker row, both resolving
+	// to the SAME host expression — which lands as `agents: N+1` on the machine
+	// card for a box that gained no agent, and as a duplicate `sessions` row
+	// under one id. (Neither doubles MONEY: acctCost comes from
+	// ListAccountSpend() below, not from a per-actor sum.) Pinned by
+	// TestGetMonitoring_LiveContractorCountsAsOneAgentNotTwo.
 	// ⚠️ KNOWN, DELIBERATELY NOT ADDRESSED HERE (registered as separate scope).
 	// `actors` grows MONOTONICALLY with every task this station has ever run.
 	// Two facts combine: ListOutsourceWorkers returns every kind='outsource'
@@ -1081,9 +1182,16 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 	// actually controls this growth is which workers enter `actors`, and that
 	// lever is deliberately set to "all of them" for the reasons above.
 	//
-	// What I checked: the arithmetic stays CORRECT — acctCost is a sum, and each
-	// row contributes its own live+banked exactly once, so no total drifts as
-	// the set grows. What I did NOT check: whether this handler's per-request
+	// What I checked, and WHEN: on the revision where acctCost really was a
+	// per-actor sum, each row contributed its own live+banked exactly once, so no
+	// total drifted as the set grew. ⚠️ THAT IS NO LONGER WHERE acctCost COMES
+	// FROM. Since T-53 it is read whole from ListAccountSpend() (a durable
+	// per-account accumulator, further down this function) and the actor loop
+	// does not add to it at all — so this paragraph is a note about a fold that
+	// no longer exists, kept only so nobody reads its "checked" as covering
+	// today's cost path. It does not, and it is not evidence that any other
+	// per-actor quantity (agents, sessions) is exactly-once; those have their own
+	// guard, named above. What I did NOT check: whether this handler's per-request
 	// cost (it is O(actors) on every GET /api/monitoring, with a DB read of the
 	// full worker table) stays acceptable after months of traffic, nor whether
 	// anything downstream assumes the actor set or the machines list is bounded.
@@ -1177,7 +1285,6 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		if wk.Status == WorkerStatusReleased {
 			continue
 		}
-		_, spawnAt := s.workerSpawnObs(wk.ID)
 		sources = append(sources, monitoringSessionSource{
 			// memberFromWorker carries ActualModel across, so the model cell is
 			// served by the shared line below — one expression for both kinds.
@@ -1186,7 +1293,7 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 			// in this very response, so the session's machine cell and the
 			// machines row can never name different boxes for one worker.
 			host:     s.observedWorkerHost(wk.ID, telemetry[wk.ID]),
-			presence: workerPresence(wk, now, s.hub.IsOnline(wk.ID), spawnAt),
+			presence: workerPresence(wk, now, s.hub.IsOnline(wk.ID)),
 		})
 	}
 
@@ -1546,21 +1653,34 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 				}
 			}
 		}
-		if cost, isNum := entry["cost"].(float64); isNum {
-			acctCost[account] += cost
-			acctHasCost[account] = true
-		}
-		// One banked balance per ACTOR. Members and workers are disjoint at the
-		// SQL level — ListMembers is `WHERE kind != 'outsource'`, ListOutsourceWorkers
-		// is `WHERE kind = 'outsource'`, over the SAME member table — so no row
-		// can project into `actors` twice and no balance can be added twice.
-		// A key held by both a member and a worker therefore sums two DISTINCT
-		// balances. Do not take this paragraph's word for it: the arithmetic is
-		// pinned end-to-end by
-		// TestGetMonitoring_SharedAccountSumsMemberAndWorkerExactlyOnce, which
-		// goes red on both a missing worker and a double-counted one.
-		if a.banked != 0 {
-			acctCost[account] += a.banked
+	}
+	// 🔴 THE ACCOUNT FIGURE IS NO LONGER A FOLD OVER THESE ACTORS (T-53, owner
+	// ruling rc-5c5d7c7c6dcd, 2026-09-02「分開：帳號卡自己一份數字，清它不動成員」).
+	// It is the account's OWN accumulator, fed at ingest by the increase each
+	// report brings and zeroed only by POST /api/accounts/cost/reset.
+	//
+	// The loop above therefore no longer adds live+banked per actor. That sum
+	// was what made the two figures inseparable: the owner asked to clear the
+	// account card without clearing the members it happened to contain, and a
+	// derived number cannot be cleared without clearing what it derives from.
+	//
+	// Two consequences that are DELIBERATE, not drift:
+	//   · the account card no longer equals the sum of the members shown under
+	//     it — the owner ruled with that sentence in front of him;
+	//   · an actor leaving (a member hard-deleted, a per-actor reset) does NOT
+	//     pull the account figure down. Money already spent is a historical
+	//     fact, the same reasoning that keeps a released worker's spend on the
+	//     card. It is also what makes the accumulator immune to the silent
+	//     under-reporting a cleared-watermark design would have had (see
+	//     migration 00069).
+	accountSpend, err := s.dal.ListAccountSpend()
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	for account, spent := range accountSpend {
+		if spent > 0 {
+			acctCost[account] = spent
 			acctHasCost[account] = true
 		}
 	}
@@ -1576,6 +1696,13 @@ func (s *apiServer) HandleGetMonitoringApiMonitoringGet(w http.ResponseWriter, r
 		accountKeys[account] = true
 	}
 	for account := range acctCost {
+		accountKeys[account] = true
+	}
+	// A known account keeps its card after being zeroed, even when nothing is
+	// reporting under it right now: the row exists because spend was once
+	// reported there, and dropping the card would read as "that account is
+	// gone" rather than "it is back to zero".
+	for account := range accountSpend {
 		accountKeys[account] = true
 	}
 	// The account overview is global owner observability, not a member-account

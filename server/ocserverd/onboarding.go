@@ -38,6 +38,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -63,6 +64,34 @@ const (
 	onboardingStateRunning = "running"
 	onboardingStateOK      = "ok"
 	onboardingStateFailed  = "failed"
+)
+
+// Onboarding failure CODES — the closed machine vocabulary of onboardingStepDTO
+// (T-0648). Every failing step carries one.
+//
+// WHY THEY EXIST. The banner is the one place a fresh install says why its
+// assistant never woke, and every other word on it is in the reader's language
+// — but the sentence that says WHAT BROKE arrived as `Reason`, which is English
+// engineer-facing prose composed here. A server-side string cannot be
+// translated by a cockpit, and a server-side wording change should not be able
+// to silently rewrite the UI. So the cause travels as a CODE and the cockpit
+// owns the sentence — the same split backup health already uses (backup_health
+// .go's `code` ↔ frontend/src/lib/backupHealth.ts).
+//
+// `Reason` stays exactly as it was and is still the FALLBACK: a cockpit that
+// does not know a code renders it verbatim, so adding a code here can never
+// make an older cockpit go silent, and the codes that embed a Go error string
+// keep saying what that error was.
+const (
+	onboardingCodeInstallFailed       = "install_failed"       // ocwarden install exited non-zero
+	onboardingCodeInstallerUnrunnable = "installer_unrunnable" // the installer could not be run at all
+	onboardingCodeUninstallIntent     = "uninstall_intent"     // a residual uninstall intent could not be cleared
+	onboardingCodeRosterMissing       = "roster_missing"       // this server's machine row is not in the roster
+	onboardingCodeAssistantMissing    = "assistant_missing"    // the seeded assistant is not in the roster
+	onboardingCodeWakeNotRecorded     = "wake_not_recorded"    // the wake intent could not be persisted
+	onboardingCodeWakeUndispatched    = "wake_undispatched"    // intent persisted, but no START went out
+	onboardingCodeInterrupted         = "interrupted"          // the server restarted mid-run
+	onboardingCodeFaulted             = "faulted"              // the run panicked
 )
 
 // wardenOnlineWait bounds step 2. A freshly bootstrapped warden connects in
@@ -252,6 +281,7 @@ func (s *apiServer) kickFirstRunOnboardingWith(run onboardingRunner) {
 				onboardingLog("FAULT: %v", r)
 				s.finishOnboarding(running, []onboardingStepDTO{{
 					Name:   onboardingStepInstallWarden,
+					Code:   onboardingCodeFaulted,
 					Reason: "onboarding faulted — see the server log",
 				}})
 			}
@@ -290,6 +320,7 @@ func (s *apiServer) runFirstRunOnboarding(run onboardingRunner, report onboardin
 	if err != nil || machine == nil {
 		steps = append(steps, onboardingStepDTO{
 			Name: onboardingStepInstallWarden,
+			Code: onboardingCodeRosterMissing,
 			Reason: "this server's machine row is missing from the roster — the " +
 				"out-of-box seed did not run; restart the server and try again",
 		})
@@ -300,6 +331,7 @@ func (s *apiServer) runFirstRunOnboarding(run onboardingRunner, report onboardin
 	if err := s.clearResidualUninstall(machine, triggerServer); err != nil {
 		steps = append(steps, onboardingStepDTO{
 			Name:   onboardingStepInstallWarden,
+			Code:   onboardingCodeUninstallIntent,
 			Reason: "could not clear a residual uninstall intent on this machine: " + err.Error(),
 		})
 		return s.finishOnboarding(report, steps)
@@ -319,6 +351,7 @@ func (s *apiServer) runFirstRunOnboarding(run onboardingRunner, report onboardin
 	if err != nil {
 		steps = append(steps, onboardingStepDTO{
 			Name:   onboardingStepInstallWarden,
+			Code:   onboardingCodeInstallerUnrunnable,
 			Reason: "could not run the warden installer on this host: " + err.Error(),
 		})
 		return s.finishOnboarding(report, steps)
@@ -328,6 +361,7 @@ func (s *apiServer) runFirstRunOnboarding(run onboardingRunner, report onboardin
 		// the actual cause (claude_bin_unresolved, a launchd refusal, …).
 		steps = append(steps, onboardingStepDTO{
 			Name: onboardingStepInstallWarden,
+			Code: onboardingCodeInstallFailed,
 			Reason: "installing this machine's warden failed (exit " +
 				strconv.Itoa(res.ExitCode) + ") — the assistant was NOT woken, because a " +
 				"wake with no warden to run it would just sit grey with no reason",
@@ -365,6 +399,7 @@ func (s *apiServer) wakeAssistantStep(
 	if err != nil || mira == nil {
 		steps = append(steps, onboardingStepDTO{
 			Name: onboardingStepWakeAssistant,
+			Code: onboardingCodeAssistantMissing,
 			Reason: "the seeded assistant is missing from the roster — the " +
 				"out-of-box seed did not run; restart the server and try again",
 		})
@@ -373,9 +408,18 @@ func (s *apiServer) wakeAssistantStep(
 	mira.StoppingSince = 0.0
 	mira.WakingSince = 0.0
 	mira.DesiredState = DesiredStateOnline
+	if err := s.persistMemberWindDownAnchors(*mira); err != nil {
+		steps = append(steps, onboardingStepDTO{
+			Name:   onboardingStepWakeAssistant,
+			Code:   onboardingCodeWakeNotRecorded,
+			Reason: "could not record the assistant's wind-down anchors: " + err.Error(),
+		})
+		return s.finishOnboarding(report, steps)
+	}
 	if err := s.putMember(*mira, triggerServer); err != nil {
 		steps = append(steps, onboardingStepDTO{
 			Name:   onboardingStepWakeAssistant,
+			Code:   onboardingCodeWakeNotRecorded,
 			Reason: "could not record the wake intent for the assistant: " + err.Error(),
 		})
 		return s.finishOnboarding(report, steps)
@@ -399,11 +443,12 @@ func (s *apiServer) wakeAssistantStep(
 		// so is the difference between "starting up" and "quietly nothing".
 		steps = append(steps, onboardingStepDTO{
 			Name: onboardingStepWakeAssistant,
+			Code: onboardingCodeWakeUndispatched,
 			Reason: "the assistant is set to come online, but no start command has " +
 				"been dispatched yet (" + dec.Reason + ") — most often this " +
 				"machine's warden has not connected back to the server. The server " +
 				"keeps retrying; if she stays offline, check the warden log " +
-				"(ocwarden.err.log)",
+				"(ocwarden.out.log)",
 		})
 		return s.finishOnboarding(report, steps)
 	}
@@ -463,17 +508,81 @@ func (s *apiServer) recoverStaleOnboarding() {
 	}
 	report.Steps = append(report.Steps, onboardingStepDTO{
 		Name: onboardingStepInstallWarden,
+		Code: onboardingCodeInterrupted,
 		Reason: "automatic first-run setup was interrupted (the server restarted " +
 			"while it was still running), so it did not finish. Install this " +
 			"machine from 監控 › 機器 › 「安裝」, then bring the assistant online.",
 	})
 	report.State = onboardingStateFailed
 	report.FinishedAt = nowSecs()
+	// The stamp describes who closed THIS report, so it does not survive into the
+	// one being written here. This is the only path that edits the old blob rather
+	// than writing a fresh DTO, so it is the only path where "a new report speaks"
+	// is not automatic — and a recovery that inherited a stamp would publish a
+	// FAILED report already closed, silencing a warning nobody ever saw.
+	report.DismissedAt = 0
 	if err := s.putOnboardingReport(*report); err != nil {
 		onboardingLog("could not close out the stale onboarding report: %v", err)
 		return
 	}
 	onboardingLog("closed out a stale `running` report from a previous process (interrupted run)")
+}
+
+// errNoOnboardingBanner refuses a 「不再顯示」 that has no banner to close: no report
+// at all, or a report whose state is not `failed`. It is reported as 409, never
+// as a silent 200 — see setOnboardingDismissed for why a quiet no-op here would
+// be the dangerous answer.
+var errNoOnboardingBanner = errors.New(
+	"no onboarding banner is up to dismiss — the first-run report is absent or not in a failed state")
+
+// setOnboardingDismissed stamps (or clears) the owner's 「不再顯示」 on the ONE stored
+// onboarding report (T-0648).
+//
+// 🔴 ONLY A `failed` REPORT CAN BE DISMISSED, AND THAT GUARD IS THE WHOLE POINT.
+// The banner draws for exactly one state, so a stamp laid on any other state
+// closes nothing anyone could be looking at. On its own that would be merely
+// pointless — a stamp laid on a `running` report cannot even survive to a
+// terminal state, because both paths that reach one rewrite the row with the
+// stamp back at 0. What makes the guard load-bearing is the WRITE it refuses.
+// PATCH /api/settings floors at principalAdminAgent, so an admin assistant can
+// send this during the ~30s the first run is still `running`, and without the
+// guard two things follow, both permanent:
+//
+//   - recoverStaleOnboarding is the ONE path that builds a new report by editing
+//     the old blob rather than writing a fresh DTO, so it is where an inherited
+//     stamp would publish a FAILED report born already-dismissed, silencing the
+//     banner on this install for good. It now clears the stamp itself, so this
+//     guard and that clearing pin the same property from both ends.
+//   - this read-modify-write is unlocked and is the only concurrent writer of
+//     the row. kick, the run's finish and recoverStale are THREE different
+//     goroutines that never run in parallel: recoverStale runs at boot before
+//     the listener binds (server.go), kick runs inside the set-password request
+//     — which holds settingsMu and admits only the first caller — and finish
+//     runs in the goroutine that request spawns. One happens-before chain.
+//     Interleaved with finishOnboarding it writes back its pre-verdict copy:
+//     the failure is erased, the report is stranded in `running` —
+//     non-terminal, so no banner — and kickFirstRunOnboarding never re-runs
+//     because a report exists.
+//
+// Refusing on any non-failed state closes both without a lock: there is nothing
+// to inherit and nothing to write back. The only writers left that can race are
+// two dismissals of the same failed report, which write the same stamp.
+//
+// 🔴 THE STAMP RIDES ON THE REPORT ROW, AND THAT IS DELIBERATE. The row is
+// rewritten WHOLESALE by putOnboardingReport, so a newly written report — the
+// shape any future re-detection would take — carries dismissed_at=0 and the
+// banner speaks again with nobody having to remember to clear anything. Moving
+// this to a row of its own would silently delete that property.
+func (s *apiServer) setOnboardingDismissed(dismissed bool) error {
+	report := s.onboardingReport()
+	if report == nil || report.State != onboardingStateFailed {
+		return errNoOnboardingBanner
+	}
+	report.DismissedAt = 0
+	if dismissed {
+		report.DismissedAt = nowSecs()
+	}
+	return s.putOnboardingReport(*report)
 }
 
 func (s *apiServer) putOnboardingReport(report onboardingReportDTO) error {

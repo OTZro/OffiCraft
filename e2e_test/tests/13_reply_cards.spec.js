@@ -6,11 +6,55 @@
 //   agent opens (POST /api/reply-cards, agent token) → cockpit badge +1,
 //   等我回覆 page lists it (longest-waiting first), the SAME ask renders as an
 //   inline card in the chat thread → the owner answers on EITHER surface
-//   (option chip on the page / typed text in the chat — a counter-question
-//   included) → both surfaces converge, badge −1 live, and the agent reads the
-//   answer back over the API WITH the original option wording → 重新決定
-//   replaces the answer (status STAYS answered; cancel keeps it) → 跳到原訊息
-//   lands in the room, located + highlighted.
+//   (ONE TAP on a chip on the page / typed text in the chat — a
+//   counter-question included) → both surfaces converge, badge −1 live, and the
+//   agent reads the answer back over the API WITH the original option wording →
+//   重新決定 replaces the answer (status STAYS answered; cancel keeps it) →
+//   跳到原訊息 lands in the room, located + highlighted.
+//
+// 🔴 T-40 — THE TWO SHAPES THIS FILE EXISTS TO HOLD DOWN, both of which used to
+// be written the OTHER way here and would be re-broken silently:
+//
+//   (1) THE AI PICK IS A FLAG, NOT A POSITION. An option is
+//       `{"text": …, "ai_pick": true|false}` and `ai_pick` is the ONLY carrier
+//       of "this is what the AI recommends"; `options[0]` means nothing. So
+//       every card below deliberately puts its ai_pick somewhere OTHER than
+//       index 0, and the assertions name that index — a spec whose pick sat at
+//       0 would keep passing against a UI that had gone back to tagging the
+//       first chip. The option TEXT never contains the words "AI 建議" either,
+//       for the same reason: the tag has to come from the tag.
+//
+//   (2) THE TWO CARD KINDS ANSWER DIFFERENTLY, and each half is written from
+//       the OWNER's side of the screen — what he does, and whether the ask is
+//       dealt with afterwards:
+//
+//         • SINGLE — ONE TAP ON AN OPTION ANSWERS THE CARD. No send button is
+//           pressed anywhere on this path, and the assertion that follows a tap
+//           is that the ask has LEFT 待回覆 and is standing answered. Written
+//           the other way — "the answer POST fired" — it would stay green the
+//           day someone puts a second step back in, which is exactly how a
+//           previous round shipped a card the owner could not answer
+//           (「也沒人知道有這個改變，只以為是壞掉」, owner; the fix is card
+//           rc-06bc715358c2: 「單選卡點一下就送出，多選卡才要按送出」).
+//
+//         • MULTI — ticking STAGES. The card has ONE send button
+//           (ReplyComposer) and the answer it fires carries the ticked options
+//           AND the typed text as a single POST
+//           — `{"option_idxs": [...], "text": …}`, which a one-click answer
+//           cannot express. So the multi leg ticks, ASSERTS THE CARD IS STILL
+//           WAITING, and only then sends.
+//
+//   (3) THE CHIP'S LEADING MARK IS THE CARD KIND, WORDLESSLY. A multi card's
+//       options carry TICK BOXES (owner: 「那個1, 2, 3, 4直接變成打勾的嗎」);
+//       a single card's keep the 1/2/3/4 ORDINAL. ⚠️ This paragraph used to say
+//       the ordinal was gone and that a single card carried radios — owner
+//       reverted that on 2026-08-31 (「單選可以跟之前一樣顯示 1, 2, 3, 4 就好嘛?」,
+//       see ReplyCardBody's note: the radio's selected ring was a state a
+//       one-tap card can never be seen in), and this file's own assertions
+//       (「a single-select card numbers its options again」 / 「and no ordinals」)
+//       have pinned it ever since. A line above the
+//       options says what a press will DO — the only thing standing between
+//       "I tapped to see" and an answer that is one-shot.
 //
 // ⚠ HISTORY (found while writing this spec; FIXED since): the http adapter's
 // subscribeEvents() used to open its OWN EventSource per subscriber — App
@@ -43,12 +87,31 @@ const {
   uniqueName,
 } = require('../lib/fixtures');
 
+// Build the wire `options` array. `aiPickAt` is the index that carries the
+// recommendation — the caller ALWAYS passes one that is not 0, on purpose (see
+// the header); pass -1 for a card that recommends nothing.
+function options(texts, aiPickAt) {
+  return texts.map((text, i) => ({ text, ai_pick: i === aiPickAt }));
+}
+
 // Open a reply card AS the agent token (the initiator is always the verified
 // JWT sub — the server mints id / timestamps / the companion chat message).
+//
+// linked_task: null is DECLARED, not defaulted-into. Since T-18 the field is
+// required and omitting it is a 400 — the server no longer infers a binding,
+// because an inference that missed used to open a card with no 等我回覆 hold
+// and say nothing. null is the honest answer HERE: this spec opens no task and
+// plans no step anywhere, so there is no step for these asks to hold. Every
+// card below is a plain chat 請示, which is exactly the circuit this file
+// tests (badge → 等我回覆 page → inline chat card → answer → 重新決定 → jump).
+//
+// ⚠️ It is spread FIRST so a caller can override it. A future case that opens a
+// card ABOUT a task must pass its own linked_task {task_id, step_id} — do not
+// let it inherit this null, or that case will silently stop testing the hold.
 async function createReplyCardAs(request, agentToken, card) {
   const res = await request.post(`${BASE}/api/reply-cards`, {
     headers: authHeaders(agentToken),
-    data: card,
+    data: { linked_task: null, ...card },
   });
   expect(res.status(), 'creating a reply card must succeed').toBe(200);
   return res.json();
@@ -94,8 +157,45 @@ function chatCardOf(page, card) {
   );
 }
 
+// One option chip of `scope` (a card face, or its 當初選項 block).
+function chip(scope, idx) {
+  return scope.locator(`[data-testid="reply-option"][data-option-idx="${idx}"]`);
+}
+
+// MULTI cards only. Tick a chip and prove the tick did NOT answer anything: the
+// chip lights up STAGED and the card is still sitting there waiting for the
+// send.
+async function stage(scope, idx) {
+  await chip(scope, idx).click();
+  await expect(
+    chip(scope, idx),
+    `chip ${idx} must light up as STAGED, not fire an answer`,
+  ).toHaveAttribute('data-selected', 'true');
+}
+
+// SINGLE cards. ONE tap and the ask is dealt with — `answered` is what the
+// caller then asserts has appeared. Deliberately does NOT press send and does
+// not look at any POST: the owner's question is 「我點了一下，事情有沒有成？」.
+async function tapOption(scope, idx) {
+  await chip(scope, idx).click();
+}
+
+// CHAT SURFACE ONLY. Since owner c-6f054c1cb481 (2026-09-04) every card in a
+// chat thread mounts COLLAPSED — one row, no options, no composer — so the
+// reader opens it before there is anything to press. The 請示 page and the
+// task-page embed did NOT change; do not call this on those.
+async function expandChatCard(chatCard) {
+  await chatCard.getByTestId('chat-reply-card-expand').click();
+}
+
+// The card's ONE send button (ReplyComposer). `scope` must already be narrowed
+// to the card face — the chat thread has a composer of its own.
+function sendButton(scope) {
+  return scope.locator('.reply-composer .chat__send');
+}
+
 test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => {
-  test('open → badge/page/chat · answer via page chip + chat typing · live SSE sync · agent readback · 重新決定 · 跳到原訊息', async ({
+  test('open → badge/page/chat · ONE TAP answers the single card on the page · typed answer in chat · live SSE sync · agent readback · 重新決定 · 跳到原訊息', async ({
     page,
   }) => {
     const request = page.request;
@@ -112,20 +212,29 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
     const baseWaiting = await waitingCount(request, token);
 
     // ── agents open TWO cards (A first → A has waited longest) ──
+    // A is SINGLE-select and its AI pick is the THIRD option: index 2. Nothing
+    // about the wording says so — the flag does.
     const summaryA = uniqueName('要幫你寄出這封信嗎');
-    const optionsA = ['寄出(AI 建議)', '先不要寄', '改寄給別人'];
+    const textsA = ['先不要寄', '改寄給別人', '寄出'];
+    const AI_A = 2;
     const cardA = await createReplyCardAs(request, tokM1, {
       kind: 'decision',
       summary: summaryA,
       body: '信件草稿已完成,收件人與附件都備妥。',
-      options: optionsA,
+      options: options(textsA, AI_A),
     });
     // Wire contract: waiting, initiator stamped from the token, the companion
-    // chat message minted, options echoed verbatim, no answer yet.
+    // chat message minted, options echoed verbatim (each with its own ai_pick),
+    // select_mode defaulting to single, no answer yet.
     expect(cardA.status).toBe('waiting');
     expect(cardA.from).toBe(M1.id);
     expect(cardA.chat_message_id).toBeTruthy();
-    expect(cardA.options).toEqual(optionsA);
+    expect(cardA.options).toEqual(options(textsA, AI_A));
+    expect(
+      cardA.options.findIndex((o) => o.ai_pick),
+      'the recommendation must ride the flag on the THIRD option, not position 0',
+    ).toBe(AI_A);
+    expect(cardA.select_mode, 'select_mode defaults to single').toBe('single');
     expect(cardA.answer).toBeNull();
     expect(cardA.answered_ts).toBeNull();
 
@@ -133,7 +242,7 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
     const cardB = await createReplyCardAs(request, tokM1, {
       kind: 'action',
       summary: summaryB,
-      options: ['我做完了,請繼續'],
+      options: options(['我做完了,請繼續'], 0),
     });
 
     // ── cockpit: badge +2, 等我回覆 page lists both, longest-waiting first ──
@@ -169,16 +278,49 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
       'display order is newest-opened first (B created after A sorts first)',
     ).toBeGreaterThan(order.b);
 
-    // ── answer A on the 等我回覆 page (option chip, NOT the AI pick) ──
+    // ── the AI 建議 tag follows the FLAG, and the flag is not on chip 0 ──
     await expect(
-      waitingA.locator('.reply-option').first(),
-      'options[0] must carry the AI 建議 tag',
+      chip(waitingA, AI_A),
+      'the AI 建議 tag must sit on the option whose ai_pick is set',
     ).toContainText('AI 建議');
-    await waitingA.locator('.reply-option').nth(1).click();
+    await expect(
+      chip(waitingA, 0),
+      'the FIRST option must carry no AI 建議 tag — position stopped meaning it',
+    ).not.toContainText('AI 建議');
+    await expect(
+      waitingA.locator('.reply-tag--ai'),
+      'exactly one option is the recommendation',
+    ).toHaveCount(1);
+    // A single-select card writes no 已選 N 項 row (the lit chip already says it).
+    await expect(waitingA.getByTestId('reply-selected-count')).toHaveCount(0);
+
+    // A single card leads its chips with the 1/2/3/4 ordinal (owner
+    // 2026-08-31) and wears no tick box: it answers on the tap, so it has no
+    // ticked-but-unsent state a box could report.
+    await expect(
+      waitingA.locator('.reply-option__num'),
+      'a single-select card numbers its options again',
+    ).toHaveText(textsA.map((_, i) => String(i + 1)));
+    await expect(
+      waitingA.locator('.reply-option__mark'),
+      'and no tick boxes — that shape means "as many as you like"',
+    ).toHaveCount(0);
+    await expect(chip(waitingA, 0)).toHaveText(`1${textsA[0]}`);
+
+    // ── answer A on the 請示 page: ONE TAP, and the ask is dealt with ──
+    // No send button is pressed here. If a second step ever comes back, this
+    // leg goes red at the very next line rather than quietly adapting.
+    await tapOption(waitingA, 1);
+    // UOC_ASSERT id=UOC-RC-SINGLE-TAP screen=replies-page name=single_option_tap_answers_on_replies_page
     await expect(
       waitingA,
-      'an answered card must leave the 待回覆 pane',
+      'ONE tap on an option must answer a single-select card outright — it leaves 待回覆',
     ).toHaveCount(0);
+    await expect
+      .poll(() => waitingCount(request, token), {
+        message: 'the tap alone must have answered it server-side',
+      })
+      .toBe(baseWaiting + 1);
     // 近期已處理 collapses by default and loads lazily — expand it first.
     await page.getByTestId('answered-toggle').click();
     const answeredA = page
@@ -187,40 +329,51 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
     await expect(answeredA).toBeVisible();
     const finalA = answeredA.getByTestId('final-answer');
     await expect(finalA).toContainText('你選的');
-    await expect(finalA).toContainText(optionsA[1]);
+    await expect(finalA).toContainText(textsA[1]);
+    await expect(
+      finalA,
+      'the answer is NOT the AI pick — no AI 建議 tag on the final row',
+    ).not.toContainText('AI 建議');
     // …badge −1 live (SSE, no reload).
     await expectBadge(page, baseWaiting + 1);
 
     // ── agent readback: the answer rides WITH the original option wording ──
     const readA = await getReplyCardAs(request, tokM1, cardA.id);
     expect(readA.status).toBe('answered');
-    expect(readA.answer.option_idx).toBe(1);
-    expect(readA.options[readA.answer.option_idx]).toBe(optionsA[1]);
+    expect(readA.answer.option_idxs).toEqual([1]);
+    expect(readA.options[readA.answer.option_idxs[0]].text).toBe(textsA[1]);
     expect(readA.answered_ts).not.toBeNull();
 
     // ── 重新決定 on answered card A: cancel keeps, re-pick replaces ──
     await answeredA.locator('.reply-card__toggle').click(); // 查看當初選項
+    const pastA = answeredA.locator('.reply-card__past');
     await expect(
-      answeredA.locator('.reply-card__past .reply-option'),
+      pastA.getByTestId('reply-option'),
       'the original options must be reviewable in full',
-    ).toHaveCount(optionsA.length);
+    ).toHaveCount(textsA.length);
     await answeredA.locator('.reply-card__redecide').click();
     await answeredA.locator('.reply-card__cancel').click(); // 取消 → no change
     const afterCancel = await getReplyCardAs(request, tokM1, cardA.id);
     expect(
-      afterCancel.answer.option_idx,
+      afterCancel.answer.option_idxs,
       'cancelling 重新決定 must keep the original answer',
-    ).toBe(1);
+    ).toEqual([1]);
 
+    // Re-pick the option that IS the AI pick — the third one.
     await answeredA.locator('.reply-card__redecide').click();
-    await answeredA.locator('.reply-card__past .reply-option').first().click();
-    await expect(finalA).toContainText(optionsA[0]);
+    // 重新決定 on a single card lands on the tap too — the same one-step rule,
+    // on the same card kind.
+    await tapOption(pastA, AI_A);
+    await expect(finalA).toContainText(textsA[AI_A]);
     await expect(
       finalA,
-      'a re-pick of options[0] must carry BOTH 你選的 and AI 建議 tags',
+      'a re-pick of the ai_pick option must carry BOTH 你選的 and AI 建議 tags',
     ).toContainText('AI 建議');
     const revisedA = await getReplyCardAs(request, tokM1, cardA.id);
-    expect(revisedA.answer.option_idx, 'the agent must read the NEW decision').toBe(0);
+    expect(
+      revisedA.answer.option_idxs,
+      'the agent must read the NEW decision',
+    ).toEqual([AI_A]);
     expect(revisedA.status, '重新決定 must never reopen the card').toBe('answered');
     expect(
       await waitingCount(request, token),
@@ -249,7 +402,7 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
     // A mounts ALREADY-answered → collapsed lazy stub (owner 已回覆卡預設
     // 收合); expand to fetch + render the full card body.
     await chatCardA.getByTestId('chat-reply-card-expand').click();
-    await expect(chatCardA.getByTestId('final-answer')).toContainText(optionsA[0]);
+    await expect(chatCardA.getByTestId('final-answer')).toContainText(textsA[AI_A]);
 
     // ── card B: waiting inline in the SAME room — chatCardA (answered) and
     // chatCardB (waiting) are mounted TOGETHER, plus the badge/members/
@@ -258,10 +411,9 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
     const chatCardB = chatCardOf(page, cardB);
     await expect(chatCardB).toBeVisible();
     await expect(chatCardB).toContainText(summaryB);
-    await expect(chatCardB.locator('.reply-option')).toHaveCount(1);
-    await expect(chatCardB.locator('.reply-option').first()).toContainText(
-      'AI 建議',
-    );
+    await expandChatCard(chatCardB);
+    await expect(chatCardB.getByTestId('reply-option')).toHaveCount(1);
+    await expect(chip(chatCardB, 0)).toContainText('AI 建議');
     const counterQuestion = '哪一台伺服器?先給我主機名稱。';
     await chatCardB.locator('.chat__input').fill(counterQuestion);
     await chatCardB.locator('.chat__input').press('Enter');
@@ -272,7 +424,10 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
     await expectBadge(page, baseWaiting); // closed from the CHAT surface too
     const readB = await getReplyCardAs(request, tokM1, cardB.id);
     expect(readB.status).toBe('answered');
-    expect(readB.answer.option_idx).toBeNull();
+    expect(
+      readB.answer.option_idxs,
+      'a text-only answer circles nothing — null, not []',
+    ).toBeNull();
     expect(readB.answer.text).toBe(counterQuestion);
 
     // ── LIVE cross-surface sync (SSE, no navigation): with M2's room on
@@ -281,20 +436,25 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
     // another window fires) flips the visible chat card in place.
     await page.locator('.member-card', { hasText: M2.name }).click();
     const summaryC = uniqueName('要現在部署嗎');
+    const textsC = ['先不要', '部署'];
+    const AI_C = 1;
     const cardC = await createReplyCardAs(request, tokM2, {
       kind: 'decision',
       summary: summaryC,
-      options: ['部署(AI 建議)', '先不要'],
+      options: options(textsC, AI_C),
     });
     const chatCardC = chatCardOf(page, cardC);
     await expect(
       chatCardC,
       'a card opened mid-conversation must appear inline live (SSE)',
     ).toBeVisible({ timeout: 15_000 });
+    // Opened BEFORE the answer POST below, on purpose: the flip this leg pins
+    // has to happen on a card the owner is already looking at.
+    await expandChatCard(chatCardC);
     await expectBadge(page, baseWaiting + 1); // the badge follows live too
     const answerRes = await request.post(
       `${BASE}/api/reply-cards/${cardC.id}/answer`,
-      { headers: authHeaders(token), data: { option_idx: 0 } },
+      { headers: authHeaders(token), data: { option_idxs: [AI_C] } },
     );
     expect(answerRes.status(), 'the owner answer POST must succeed').toBe(200);
     await expect(
@@ -303,7 +463,7 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
     ).toBeVisible({ timeout: 15_000 });
     await expect(
       chatCardC.getByTestId('final-answer'),
-      'options[0] picked → both 你選的 and AI 建議 tags',
+      'the ai_pick option picked → both 你選的 and AI 建議 tags',
     ).toContainText('AI 建議');
     await expectBadge(page, baseWaiting);
 
@@ -320,6 +480,115 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
     if (baseWaiting === 0) {
       await expect(page.getByTestId('replies-empty')).toBeVisible();
     }
+  });
+
+  test('多選卡 — 勾兩個 + 打一段字, 一顆送出鍵送成同一份答覆', async ({
+    page,
+  }) => {
+    // select_mode: "multi" is the shape a single number could never express.
+    // The whole point of the staged-selection interaction lives here: TWO chips
+    // AND free text leave the browser as ONE answer POST, and the readback
+    // carries both halves.
+    const request = page.request;
+    const token = await ownerToken(request);
+    const M = await hireMember(request, token, uniqueName('MultiPick M'));
+    const tokM = await mintMemberToken(request, token, M.id, 1);
+    const baseWaiting = await waitingCount(request, token);
+
+    const summary = uniqueName('這批要一起帶哪幾項');
+    const texts = ['補測試', '更新文件', '重跑效能', '先只發版'];
+    const AI = 2; // NOT the first option — a multi card marks its pick the same way
+    const card = await createReplyCardAs(request, tokM, {
+      kind: 'decision',
+      summary,
+      select_mode: 'multi',
+      options: options(texts, AI),
+    });
+    expect(card.select_mode).toBe('multi');
+
+    await bootAuthedSpa(page, token);
+    await repliesTab(page).click();
+    const waiting = page.getByTestId('waiting-card').filter({ hasText: summary });
+    await expect(waiting).toBeVisible();
+
+    await expect(
+      chip(waiting, AI),
+      'a multi card tags its recommendation by flag too',
+    ).toContainText('AI 建議');
+    await expect(chip(waiting, 0)).not.toContainText('AI 建議');
+    // …and its leading box says, wordlessly, that it takes more than one
+    // answer.
+    await expect(
+      waiting.locator('.reply-option__mark'),
+      'a multi-select card wears tick boxes, one per option',
+    ).toHaveCount(texts.length);
+    await expect(
+      waiting.locator('.reply-option__num'),
+      'and no ordinals — the box is what a multi card leads with',
+    ).toHaveCount(0);
+
+    // It OPENS with the AI pick already ticked (owner 2026-08-31: 「多選的時候，
+    // UI 應該要預設就先把我勾好 AI 建議的」) — and the pick is NOT the first
+    // option, so a default that keyed off position would light the wrong chip.
+    const count = waiting.getByTestId('reply-selected-count');
+    await expect(
+      chip(waiting, AI),
+      'the recommendation opens ticked',
+    ).toHaveAttribute('data-selected', 'true');
+    await expect(chip(waiting, 0)).toHaveAttribute('data-selected', 'false');
+    await expect(count).toContainText('1');
+
+    // …and it is only a TICK, not an answer: the card is still waiting.
+    expect(
+      await waitingCount(request, token),
+      'a pre-ticked recommendation must not have answered anything',
+    ).toBe(baseWaiting + 1);
+
+    // A multi card writes out how many are ticked — "none" and "all" differ by
+    // nothing else.
+    await stage(waiting, 0);
+    await expect(
+      count,
+      'a multi card keeps BOTH ticks — it does not replace',
+    ).toContainText('2');
+    await expect(chip(waiting, 0)).toHaveAttribute('data-selected', 'true');
+    expect(
+      await waitingCount(request, token),
+      'two ticks and no send is still an UNANSWERED card',
+    ).toBe(baseWaiting + 1);
+
+    // …and the typed text rides the SAME send.
+    const note = '效能那項等我拿到基準線再說。';
+    await waiting.locator('.chat__input').fill(note);
+    await sendButton(waiting).click();
+    await expect(waiting).toHaveCount(0);
+
+    const read = await getReplyCardAs(request, tokM, card.id);
+    expect(read.status).toBe('answered');
+    expect(
+      read.answer.option_idxs,
+      'both circled options must land, deduped and ascending',
+    ).toEqual([0, AI]);
+    expect(
+      read.answer.text,
+      'the free text must ride the SAME answer as the options',
+    ).toBe(note);
+
+    // Both circled options render on the final row — showing only the first
+    // would silently drop half the decision.
+    await page.getByTestId('answered-toggle').click();
+    const answered = page
+      .getByTestId('answered-card')
+      .filter({ hasText: summary });
+    const final = answered.getByTestId('final-answer');
+    await expect(final.getByTestId('reply-answer-option')).toHaveCount(2);
+    await expect(final).toContainText(texts[0]);
+    await expect(final).toContainText(texts[AI]);
+    await expect(final).toContainText(note);
+    await expect(
+      final,
+      'one of the circled options IS the AI pick → the row carries the tag',
+    ).toContainText('AI 建議');
   });
 
   test('雙卡同房 — ≥2 inline cards + every other live hook share ONE SSE connection; the reply POST never hangs', async ({
@@ -343,12 +612,12 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
     const card1 = await createReplyCardAs(request, tokM, {
       kind: 'decision',
       summary: summary1,
-      options: ['跑(AI 建議)', '跳過'],
+      options: options(['跳過', '跑'], 1),
     });
     const card2 = await createReplyCardAs(request, tokM, {
       kind: 'decision',
       summary: summary2,
-      options: ['升級(AI 建議)', '先不要'],
+      options: options(['先不要', '升級'], 1),
     });
 
     // Count every SSE downlink the SPA opens (register BEFORE boot).
@@ -365,12 +634,17 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
     const chatCard2 = chatCardOf(page, card2);
     await expect(chatCard1, 'card 1 must mount inline').toBeVisible();
     await expect(chatCard2, 'card 2 must mount inline ALONGSIDE card 1').toBeVisible();
+    // BOTH opened before either is answered — the pool bug this guards needs
+    // two live card subscribers mounted at the same time.
+    await expandChatCard(chatCard1);
+    await expandChatCard(chatCard2);
 
-    // Answer card 1 via its option chip — the POST must complete, not hang.
-    await chatCard1.locator('.reply-option').nth(1).click();
+    // Answer card 1 with ONE tap on a chip — the POST must complete, not hang.
+    await tapOption(chatCard1, 0);
+    // UOC_ASSERT id=UOC-RC-SINGLE-TAP screen=chat-page name=single_option_tap_answers_in_chat
     await expect(
       chatCard1.getByTestId('final-answer'),
-      'the chip answer POST must complete with two cards mounted',
+      'the one-tap answer POST must complete with two cards mounted',
     ).toBeVisible({ timeout: 15_000 });
 
     // Answer card 2 by TYPING in its composer — the second POST too.
@@ -387,7 +661,7 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
     // Agent readback: both answers landed server-side.
     const read1 = await getReplyCardAs(request, tokM, card1.id);
     expect(read1.status).toBe('answered');
-    expect(read1.answer.option_idx).toBe(1);
+    expect(read1.answer.option_idxs).toEqual([0]);
     const read2 = await getReplyCardAs(request, tokM, card2.id);
     expect(read2.status).toBe('answered');
     expect(read2.answer.text).toBe(typed);
@@ -411,7 +685,7 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
     await createReplyCardAs(request, tokM, {
       kind: 'decision',
       summary,
-      options: ['刪(AI 建議)', '先保留'],
+      options: options(['先保留', '刪'], 1),
     });
     // The ask rides an ordinary chat message → exactly one unread for M.
     expect(await unreadCountOf(request, token, M.id)).toBe(1);
@@ -426,7 +700,7 @@ test.describe('B13 · reply cards — SPEC full loop over real UI + API', () => 
     // Answer from the 等我回覆 page WITHOUT ever entering M's conversation.
     await repliesTab(page).click();
     const waiting = page.getByTestId('waiting-card').filter({ hasText: summary });
-    await waiting.locator('.reply-option').first().click();
+    await tapOption(waiting, 0);
     await expect(waiting).toHaveCount(0);
     // 近期已處理 collapses by default and loads lazily — expand it first.
     await page.getByTestId('answered-toggle').click();

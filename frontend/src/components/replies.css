@@ -239,15 +239,14 @@
 .reply-option:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--color-accent) 45%, transparent);
 }
-/* The AI pick (options[0]) — accent-tinted so the recommendation reads first. */
-.reply-option--ai {
-  border-color: color-mix(in srgb, var(--color-accent) 35%, transparent);
-  background: var(--color-accent-cta-bg);
-  color: var(--color-accent);
-}
-.reply-option--ai:hover:not(:disabled) {
-  background: var(--color-accent-cta-bg-hover);
-}
+/* The AI pick carries NO colour of its own — owner 2026-08-31: 「AI建議的都不要
+   特別標顏色好了，右邊已經有label了，現在的顏色就只用在使用者選的時候」. It used
+   to paint the SAME `--color-accent-cta-bg` background as `--selected`, so the
+   chip the AI recommends and the chip the owner ticked were near-identical
+   (「現在AI建議的，跟我選的，根本看不出來」). The 「AI 建議」 tag on the right is
+   now the only carrier of the recommendation, and accent paint means one thing
+   only: what YOU chose. Deliberately no `.reply-option--ai` rule at all — an
+   empty one would invite a colour back. */
 /* 當初選項 review mode: chips render but are not pickable (no dead-click
  * affordance) until 重新決定 re-arms them. */
 .reply-option--static {
@@ -259,6 +258,56 @@
   opacity: 1;
   border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
 }
+/* STAGED but not yet sent: what the owner has ticked while composing the
+   answer. Deliberately heavier than --current (which marks the answer that is
+   already standing) — this is the set the send button is about to submit. */
+.reply-option--selected {
+  border-color: var(--color-accent);
+  background: var(--color-accent-cta-bg);
+}
+/* The MULTI card's tick box, in the seat the 1/2/3/4 ordinal occupies on a
+   single card. It is the only place a mark is still earned: a multi card has a
+   STAGED state (ticked, not yet sent) for it to report, and its square shape is
+   also what tells the two card kinds apart on screen. A single card sends on
+   the click, so its chips wear the ordinal again — owner 2026-08-31:
+   「單選可以跟之前一樣顯示 1, 2, 3, 4 就好嘛？」
+   Same 22px box as the ordinal, so no chip changes height. */
+.reply-option__mark {
+  flex: none;
+  position: relative;
+  box-sizing: border-box;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1.5px solid color-mix(in srgb, var(--color-overlay) 22%, transparent);
+  background: transparent;
+}
+/* ON = ticked (a pickable chip) or standing (a static review of the answer). */
+.reply-option__mark--on {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+}
+/* The tick: two borders of a rotated box. Drawn in the chip's own background
+   colour so it reads on the filled mark in every theme. 🔴 This glyph is the
+   whole non-colour signal for "did my tap take?" — accent paint means only
+   「你選的」 since the AI tint went, so a colour-blind reader has nothing else. */
+.reply-option__mark--check.reply-option__mark--on::after {
+  content: "";
+  position: absolute;
+  left: 6.5px;
+  top: 3px;
+  width: 5px;
+  height: 10px;
+  border: solid var(--color-bg);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+/* A REVIEW-mode mark states a fact about a decision already taken; it must not
+   read as a control someone could still press. */
+.reply-option__mark--static {
+  opacity: 0.85;
+}
+/* The SINGLE card's 1/2/3/4 ordinal. */
 .reply-option__num {
   flex: none;
   display: flex;
@@ -272,7 +321,14 @@
   font-weight: 700;
   color: var(--color-text-muted);
 }
-.reply-option--ai .reply-option__num,
+/* Only --current, and deliberately NOT --selected: an ordinal appears on SINGLE
+   cards only, and a single card never carries `.reply-option--selected` — its
+   click answers instead of staging (useChipPick takes the send path, the waiting
+   body opens with an empty set, and 重新決定 seeds single as empty). A
+   `--selected .reply-option__num` rule would be dead CSS that also tells the
+   next reader a single card has a ticked state. `--current` DOES reach here:
+   it marks 「當初圈的是哪個」 on an answered card's static review.
+   Never keyed off --ai either: accent means one thing, what YOU chose. */
 .reply-option--current .reply-option__num {
   border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
   color: var(--color-accent);
@@ -287,6 +343,14 @@
      This surface renders no markdown, so it cannot inherit the `.doc-md` base
      fix — it needs its own break opportunity. */
   overflow-wrap: anywhere;
+}
+
+/* The staged-selection count on a multi-select card: on a multi card
+   「什麼都沒勾」 and 「全都要」 differ only by which chips are lit, so the
+   number is written out above the send row. */
+.reply-card__selcount {
+  font-size: 12px;
+  color: var(--color-text-muted);
 }
 
 /* ── tags (AI 建議 / 你選的 / 目前) ── */
@@ -317,6 +381,15 @@
 .reply-tag--answered {
   color: var(--color-answered);
   border: 1px solid color-mix(in srgb, var(--color-answered) 45%, transparent);
+  flex-shrink: 0;
+}
+/* 待回覆 on a collapsed chat stub (T-48, owner 2026-09-04 — every card starts
+ * collapsed now, so a card still waiting needs a tag of its own). It reuses the
+ * SAME token the waiting_owner task badge uses (--color-dot-waking): "this one
+ * is on you" already has a colour in this app and a second one would drift. */
+.reply-tag--waiting {
+  color: var(--color-dot-waking);
+  border: 1px solid color-mix(in srgb, var(--color-dot-waking) 45%, transparent);
   flex-shrink: 0;
 }
 /* The expired terminal (T-1aa4): a grey tag — deliberately NOT green (an

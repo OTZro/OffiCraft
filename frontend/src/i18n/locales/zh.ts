@@ -25,8 +25,28 @@ export const zh = {
     // 「不摺疊」要說出來：這個介面以前會把離變更較遠的未變更內容摺起來，
     // 記得舊行為的人需要被告知它現在整份顯示。
     wholeDocNote: "整份顯示（不摺疊）",
+    // 標題可以點的時候用的說明。owner 2026-09-03 c-944088dceab0：「兩份應該
+    // 都要是連結」——存的一直是兩個指標，但畫面上點不進去，這一句是那個入口。
+    openSide: (label: string) => `單獨打開「${label}」`,
     tooLargeLead: "內容太長，無法逐行比對（",
     tooLargeTail: " 行）。",
+    // 這份比較的對外連結（server 簽章，沒有帳號的人也打得開）。owner 2026-09-03
+    // 定調「1. 用圖示」，所以這三句就是這個控制項的全部名字；失敗那句一定要
+    // 有——沒複製成功的畫面不可以長得跟複製成功一樣。
+    copyShareLink: "複製對外連結",
+    shareLinkCopied: "已複製對外連結",
+    shareLinkCopyFailed: "複製連結失敗",
+  },
+  // ── 即時連線中斷提示（components/ConnectionBanner）──
+  // 這條橫幅存在的理由只有一個:連線死掉的畫面跟「沒有新消息」的畫面長得一模
+  // 一樣。使用者不會知道自己正在看一份凍結的快照(owner 2026-08-21 轉來的回報:
+  // 「要 refresh page 才會更新」)。所以斷線這件事一定要說出來,而且要說出後果
+  //(畫面可能不是最新的),不是只說「連線中」。
+  connection: {
+    lostTitle: "即時更新已中斷",
+    lostBody: "正在自動重新連線，畫面上的內容可能不是最新的。",
+    reload: "重新整理",
+    ariaLabel: "即時連線狀態",
   },
   nav: {
     office: "辦公室",
@@ -89,7 +109,7 @@ export const zh = {
     outsource: "外包",
     unassigned: "未指派",
     adhoc: "自由代辦",
-    // 卡頭 label column(T-705e):欄名等寬對齊,值以 chip 呈現。☑ #T-xxxx
+    // 卡頭 label column(T-705e):欄名等寬對齊,值以 chip 呈現。☑ #任務編號
     // 徽章移居徽章列(v2),不再帶欄名。
     typeLabel: "任務類型",
     assigneeLabel: "負責人",
@@ -99,7 +119,7 @@ export const zh = {
     creatorUnknown: "—",
     // 任務類型列(齒輪)點了跳該類型的設定頁
     typeSettingsLink: "開啟任務類型設定",
-    // 負責人／建立者列點了開對應聊天視窗、輸入框帶 [T-xxxx] 前綴
+    // 負責人／建立者列點了開對應聊天視窗、輸入框帶 [任務編號] 前綴
     messageAssignee: "傳訊息給負責人",
     messageCreator: "傳訊息給建立者",
     // 前任列(T-ba04 轉派交接)：轉派後任務卡顯示「前任」給接手人交接對話
@@ -185,7 +205,14 @@ export const zh = {
     // 收起時的字面留著「備註」兩字是刻意的 —— 有備註的步驟與沒備註的步驟,
     // 在收起狀態下就靠這顆按鈕在不在分辨。
     stepNoteExpand: "展開備註",
-    // deps:「等 T-xxxx」chip 可多筆(mockup 樣式,owner 2026-07-13)
+    // T-66:備註全文改成「點開才抓」(owner rc-4c8065fb30a5:「座艙改成點開才抓」)。
+    // 卡片上只有大小(note_size_chars),全文要打一次 get_task_step —— 所以按下去
+    // 到文字出現之間有一段真實的空窗,而且它會失敗。這兩句就是那兩個狀態:
+    // 沒有它們,抓失敗的 overlay 會是一片空白,讀起來像「這一步的備註是空的」,
+    // 而那正是卡片上的入口已經否定過的事(入口只在有備註時才畫)。
+    stepNoteLoading: "讀取備註中…",
+    stepNoteFailed: "讀取備註失敗,請關閉後再試一次。",
+    // deps:「等 <任務編號>」chip 可多筆(mockup 樣式,owner 2026-07-13)
     blockedByLabel: "等",
     // T-1d82:dep 指向的任務查不到(已刪 / 壞 id)。保留原始 id(那是僅剩的線索),
     // 但明說「查無此任務」,免得這列被讀成「連結壞了」。
@@ -256,8 +283,9 @@ export const zh = {
     // 審批持久標記:曾經開過卡/標過 gate 的 step,做完後仍看得出(owner
     // 2026-07-14:不消失的標記)
     gateMark: "審批",
-    // 已回覆卡收合成一行摘要(可展開)
+    // 卡片一律收合成一行摘要(可展開),標籤說明它現在的狀態
     replyAnsweredTag: "已回覆",
+    replyWaitingTag: "待回覆",
     expandReply: "展開回覆卡",
     collapseReply: "收合回覆卡",
     // 產物集(T-3dc5):任務卡上釘的交付物(檔案/圖片/連結)。徽章「產物 N」
@@ -273,9 +301,34 @@ export const zh = {
       empty: "還沒有產物",
       close: "關閉產物",
       remove: "移除產物",
-      removeConfirm: "從任務卡移除這個產物?(不會刪除檔案本身)",
+      removeConfirm:
+        "從任務卡移除這個產物？目前指向的檔案會保留，但這個產物若曾被取代，保留下來的每個舊版本都會連同檔案一起永久刪除。",
+      loading: "載入產物中…",
+      loadFailed: "產物讀取失敗,請關掉再打開試試",
       downloadHint: "下載",
       openLinkHint: "開啟連結",
+      // ── T-60: a pinned deliverable can be REPLACED, keeping its id. The row
+      // gets a versions entry only when there is more than one version to look
+      // at; the reader behind it is read-only (there is no restore verb).
+      versionsEntry: "查看版本",
+      versionsCountTail: "版",
+      versionsTitle: "產物版本",
+      versionsClose: "關閉版本",
+      versionsPaneLabel: "檢視",
+      versionsPaneContent: "內容",
+      versionsPaneDiff: "差異",
+      versionsCurrent: "目前版本",
+      versionsVersionLabel: "版本",
+      versionsByLabel: "修改者",
+      versionsEmpty: "沒有更早的版本",
+      versionsLoading: "載入中…",
+      versionsLoadError: "讀不到版本紀錄",
+      versionsContentError: "讀不到這個版本的內容",
+      versionsContentGone: "這個版本沒有指向任何內容",
+      versionsUnnamed: "未命名",
+      versionsUnpinned: "這個產物已經不在任務上了",
+      versionsOpaqueLead: "這不是文字檔(",
+      versionsOpaqueTail: "),只能切換前後各看一次。",
     },
   },
   // ── 請示頁(M2 回覆卡 B2)──
@@ -306,8 +359,19 @@ export const zh = {
     expireError: "標為過期失敗，請稍後重試",
     expiredTag: "已過期",
     expiredNote: "未被回答、已標為過期;若問題還在,成員會重新開卡",
-    // 快捷選項第 1 個一律是 AI 的首選
+    // 帶 ai_pick 的那個選項才是 AI 的建議;位置不再有任何意義。
     aiPick: "AI 建議",
+    // 多選卡的暫存計數:勾了幾項在送出前就寫出來——多選卡上「什麼都沒勾」與
+    // 「全都要」在畫面上只差哪幾顆亮著,所以把數字寫出來。
+    // 選項上方的一行:同時說出卡的種類,以及「按下去會發生什麼」。後者是真正
+    // 護著人的那半 —— 單選卡點一下就送出,而請示卡是一次性的、送出去收不回來,
+    // 所以「以為是多選、點來試試看」必須在點之前就被擋住。勾/圓鈕已經說了種類,
+    // 這行說的是後果。
+    selectedCountLead: "已選",
+    // zh does not inflect for number, so both forms are the same word — the
+    // split exists for the locales that do (see interAgentExpandOne/Many).
+    selectedCountTailOne: "項",
+    selectedCountTailMany: "項",
     yourPick: "你選的",
     jumpToChat: "跳到原訊息",
     inputPlaceholder: "輸入回覆…",
@@ -488,7 +552,18 @@ export const zh = {
       spawn: "喚醒",
       cancel: "取消",
       stop: "停止",
+      // 升級路徑的中間段（owner 2026-08-21「停止 → 加速停止 → 強制停止」）：
+      // 給已經開始的收尾上一段時鐘，並且把那個時刻告訴他。不是殺，所以不做二次確認。
+      // 🔴 owner 2026-08-22：這三個詞是同一顆按鈕在三個階段的字，不是三顆並排的
+      // 按鈕（「他應該體感上像是同一個按鈕 升級的概念」）。字沒變、鍵沒變，變的是
+      // 同一格會依階段換成哪一個。
+      "accelerated-stop": "加速停止",
       "force-stop": "強制停止",
+    },
+    // 那一格只有兩種「畫得出來但按不下」的情況，而且都要說明原因。
+    reason: {
+      alreadyStopping: "已經在收尾中了；等收尾上了時鐘，這顆會自己升級成加速停止",
+      justAppeared: "剛剛升級成這一段；先停一下，免得連按兩下替你再升一級",
     },
     message: {
       // 先關收尾:收尾中 → 壓縮中(dump)
@@ -506,6 +581,26 @@ export const zh = {
     submit: "登入",
     submitting: "登入中…",
     error: "密碼錯誤，請再試一次",
+    // 刻意同時點出兩個欄位:server 對「密碼錯」與「驗證碼錯」回同一個 401,
+    // 因為指名是哪一半錯,等於向只猜對一半的人確認密碼是對的。
+    // 所以登入牆也無從得知 — 不該假裝知道。
+    errorWithCode: "密碼或驗證碼錯誤，請再試一次",
+    codePlaceholder: "6 位數驗證碼",
+    codeHint: "來自你的驗證器 App",
+    // 429 + Retry-After:同時驗證中的名額額滿,不是密碼錯,也不是嘗試次數 ——
+    // 那個計數器已經不存在了。
+    //
+    // 用 lead/tail 靜態葉子、由 i18n/compose.ts 組裝 —— 不在 dictionary 直接放
+    // interpolation function。theming-and-i18n.md 禁止後者,理由不是美觀而是
+    // 「看不見」:message key 白名單只收 string leaf,所以 template function 裡
+    // 的每一個字都無法被主題的 wording 覆寫、也不會出現在生成的 key 清單裡,
+    // 於是 drift 閘門一路綠燈,而那句話其實永遠改不動。
+    throttledLead: "目前同時處理的登入太多，請於",
+    throttledTail: "秒後再試。",
+    // 當一次被拒的登入其實是「少了驗證碼」而不是「密碼錯」時顯示 —— 也就是這面
+    // 牆本來是過期的、剛剛才長出驗證碼欄位。必須解釋欄位為什麼突然出現，否則
+    // owner 會讀成密碼錯了。
+    codeNowRequired: "這台 server 現在需要驗證碼，請輸入驗證器 App 顯示的那一組。",
   },
   // 首設密碼(全新安裝第一次打開座艙;啟用碼 = server 啟動訊息印出的一次性
   // claim token,證明你是這台機器的主人)。
@@ -532,9 +627,33 @@ export const zh = {
     intro: "設完密碼之後,系統會自動幫你裝好這台機器、喚醒助理。這次有一步沒過:",
     stepInstallWarden: "安裝這台機器",
     stepWakeAssistant: "喚醒助理",
+    // ── 失敗原因(T-0648)────────────────────────────────────────────────
+    // 這幾句取代 server 送來的 reason。server 那一份是寫給工程師看的英文,橫幅
+    // 其他每一個字都是讀的人的語言,只有那一句不是——而一句 server 端組出來的
+    // 字串,座艙翻不動。鍵名就是 server 的 code(closed vocabulary)。
+    //
+    // 🔴 這裡只翻「整句都是固定文字」的那幾個 code。server 另外四個 code
+    // (installer_unrunnable / uninstall_intent / wake_not_recorded /
+    // wake_undispatched)的句子裡嵌著一段 Go 的錯誤字串,那段字就是診斷本身,
+    // 翻成中文會把它弄丟——所以刻意不列在這裡,由座艙原樣顯示 server 的
+    // reason。少一句中文,好過少一段診斷。
+    //
+    // ⚠️ 譯文是寫給使用者看的:exit code、launchd label 這種東西不進來(它們
+    //    在下面的「詳細記錄」裡,那一區維持原文,那是給工程師的)。
+    reasons: {
+      install_failed:
+        "這台機器沒有安裝成功,所以助理沒有被喚醒——喚醒一台沒裝好的機器,只會留下一個沒有原因的灰色成員。下面的詳細記錄是安裝當下的完整輸出。",
+      roster_missing:
+        "這台伺服器自己的機器紀錄不在名冊裡,出廠設定沒有跑完。把伺服器重開再試一次。",
+      assistant_missing:
+        "出廠附的那位助理不在名冊裡,出廠設定沒有跑完。把伺服器重開再試一次。",
+      interrupted:
+        "自動設定跑到一半被打斷了(伺服器在那當下重開),所以沒有做完。請到 監控 › 機器 › 「安裝」 自己裝這台機器,再把助理叫上線。",
+      faulted: "自動設定中途出錯停住了。伺服器的記錄裡有當下的細節。",
+    },
     detailShow: "顯示詳細記錄",
     detailHide: "收起詳細記錄",
-    dismiss: "知道了",
+    dismiss: "不再顯示",
   },
   // ── 派送失敗告示（T-7fa1）──────────────────────────────────────────────
   // 「按了喚醒卻什麼都沒發生」的唯一出口：server 回 activation_pending 時，這
@@ -553,6 +672,10 @@ export const zh = {
   // 出來卻沒寫上 socket，receipt 會改寫成「指令從來沒送到那台機器、別去看那
   // 台機器的 claude」——在「真的沒送到」的情況下反而和這段文案一致。這裡的
   // 推理不變：這段字知道的仍然比 last_op_reason 少，還是要把人指回那一行。
+  //
+  // T-b3d0 後續再補一種：目標機器**回報過**自己沒有 Claude Code、而 codex 是
+  // 好的時候，receipt 會改寫成「把這位成員的執行環境改成 Codex」，不再叫人去
+  // 看那台機器上根本不存在的 claude。結論一樣：last_op_reason 比這段字準。
   dispatchAlert: {
     wakeTitle: "這次沒有送出喚醒指令",
     wakeBody:
@@ -621,7 +744,7 @@ export const zh = {
     themeImportLinkWorking: "抓取中…",
     themeImportLinkFailed: "抓不到那條連結",
     themeImportLinkShareNote:
-      "分享連結沒有身分、永久有效、撤不回來——連得到這台站又拿到連結的人都讀得到這套主題,包含裡面的私人圖片。",
+      "分享連結沒有身分、也不會過期——連得到這台站又拿到連結的人都讀得到這套主題,包含裡面的私人圖片。單一條連結收不回來;要作廢只有一個很粗的辦法:到〈設定 › 簽章金鑰〉移除當初簽它的那把金鑰,那會讓同一把金鑰簽過的所有連結一起失效。",
     themeImportDup: "已有相同 id 的自訂主題",
     themeImportReadFailed: "讀取檔案失敗",
     themeLimitReached: "自訂主題數量已達上限",
@@ -651,6 +774,55 @@ export const zh = {
     pwdErrorCurrent: "目前密碼不對",
     pwdErrorTooShort: "新密碼至少要 8 個字",
     pwdErrorMismatch: "兩次輸入的新密碼不一樣",
+    // 共用「同時驗證中」名額額滿回的 429,不是失敗次數——那個計數器已經不存在,
+    // 所以登入打錯幾次不可能觸發這個。少了這個分支會顯示成「目前密碼不對」,
+    // 於是 owner 會被告知他正確的密碼是錯的。要等的是一下下,不是幾分鐘。
+    pwdErrorThrottled: "目前同時處理的驗證太多 — 請稍候再試",
+    // ── 第二因子(TOTP) ──
+    mfa: "兩步驟驗證",
+    mfaSubOff: "未開啟 — 你的密碼是唯一的鑰匙",
+    // 出貨旗標。獨立一句,因為「這台 server 沒開放這個功能」跟「你還沒去設定」
+    // 是兩件事;混在一起會讓人去找一個刻意不存在的按鈕。
+    mfaSubUnavailable: "這台 server 未啟用此功能",
+    mfaOfferIntro:
+      "這台 server 尚未開放兩步驟驗證。開放之後才能設定——這只是讓選項出現，不會替任何人開啟。",
+    mfaOfferOn: "為這台 server 開放兩步驟驗證",
+    mfaOfferOff: "關閉這台 server 的此功能",
+    // 明講,因為這正是這個旗標的安全性重點。
+    mfaOfferOffHint:
+      "這只會把設定入口收起來。已經開啟的第二因子仍然會在登入時被要求，也仍然可以從上面關掉。",
+    mfaErrorOffer: "無法變更這個設定",
+    mfaSubOn: "已開啟 — 登入時需要驗證器的驗證碼",
+    mfaIntro:
+      "每次登入都要再輸入一次手機驗證器 App 的驗證碼。如果這台 server 可以從外部連進來，建議開啟。",
+    mfaEnrollStart: "設定兩步驟驗證",
+    mfaEnrollStarting: "準備中…",
+    mfaScanQrHint: "用驗證器 App 掃描，或手動輸入下面的設定金鑰。",
+    mfaQrAlt: "兩步驟驗證的設定 QR code",
+    mfaScanHint: "把這組金鑰加進驗證器 App，然後輸入它顯示的驗證碼來確認。",
+    mfaSecretLabel: "設定金鑰",
+    mfaOpenInApp: "用驗證器 App 開啟",
+    mfaCodePlaceholder: "6 位數驗證碼",
+    // 啟用時要重新驗密碼:裝上一個因子和移除它一樣具破壞性,被偷的 session
+    // 不該做得到。
+    mfaActivateHint: "請輸入密碼與驗證器顯示的驗證碼來確認。",
+    mfaErrorActivate: "密碼或驗證碼錯誤",
+    // 這種 401 其實是 session 死了、不是憑證錯。這些表單刻意不在 401 時彈回
+    // 登入牆(憑證錯必須留在原地當 inline error),所以過期要明講。
+    mfaErrorSession: "登入階段已過期，請重新登入",
+    mfaActivate: "確認並開啟",
+    mfaActivating: "確認中…",
+    mfaActivated: "兩步驟驗證已開啟",
+    mfaDisable: "關閉兩步驟驗證",
+    mfaDisableHint:
+      "需要密碼和目前的驗證碼。如果驗證器已經遺失，請改在這台機器上執行 `ocserverd mfa-disable`。",
+    mfaDisabling: "關閉中…",
+    mfaDisabled: "兩步驟驗證已關閉",
+    mfaErrorDisable: "密碼或驗證碼錯誤",
+    // 與「驗證碼錯」是不同的失敗:這裡是根本讀不到目前狀態,所以不知道該給
+    // 什麼選項。用「驗證碼錯誤」會指涉一組 owner 根本沒送出的驗證碼。
+    mfaErrorLoad: "讀不到兩步驟驗證的狀態",
+    mfaRetry: "重試",
   },
   chat: {
     offlineTitleSuffix: "目前離線",
@@ -663,6 +835,7 @@ export const zh = {
     wakeButton: "喚醒",
     wakePending: "喚醒中…",
     emptyRange: "這個範圍還沒有訊息",
+    threadLoading: "正在載入對話…",
     inputPlaceholder: (name: string) => `回覆 ${name}…`,
     // M2-4 composer lock: shown IN PLACE OF the reply input while the member
     // is not online (offline / stopped / waking / stopping).
@@ -682,13 +855,31 @@ export const zh = {
     removeAttachmentLabel: "移除附件",
     downloadAttachment: "下載",
     read: "已讀",
-    // M2 批次 19 未讀跳轉:往上滾時收到新訊息 → 視窗下方浮出的提示 chip;
-    // 帶未讀進房時,第一則未讀訊息上方的細分隔線。
-    newMessages: "有新訊息",
+    // T-48:最新一則不在視窗內時右下角浮出的圓形箭頭;以及取代它的新訊息
+    // 預覽列上的關閉鈕。(舊的「有新訊息」藥丸連同它的固定句子一起退場——
+    // 預覽列直接寫出寄件者與那一行內容。)
+    jumpToLatest: "回到最新訊息",
+    newMsgPreviewDismiss: "關閉新訊息預覽",
+    // M2 批次 19 未讀跳轉:帶未讀進房時,第一則未讀訊息上方的細分隔線。
     unreadBelow: "以下為尚未閱讀的訊息",
     // T-bf82 往上捲載入更多:歷史撈完(hasMore=false)時,訊息串頂端的
     // 「已到最早訊息」標記。
     historyStart: "已到最早訊息",
+    // 🔴 T-b0bb:重抓回來的最新一頁接不上本地已有的最新一則,而往回補頁
+    // 也沒能接上(超過上限或補頁請求失敗)⇒ 這條對話的中間少了幾則,
+    // 少幾則、少哪幾則都不知道。這一句存在的唯一理由是:server 已經把那
+    // 幾則標成已讀了,所以未讀數不會透露、畫面也不會有任何異狀 ——
+    // 不說出來就等於沒發生。
+    gapSuspected: "這條對話可能缺了一段訊息(沒能補齊)",
+    // 🔴 T-48:跳到原訊息(或別人留著的連結)指向的那一則,server 說沒有這
+    // 一則(開窗請求 404,不是空白頁)。畫面會退回底部 —— 光是這樣就正好是
+    // 這張票剛拿掉的那個安靜的謊:跟跳成功長得一模一樣。所以要在畫面上說
+    // 出來。
+    jumpTargetMissing: "找不到那則訊息,可能已經被清掉了",
+    jumpTargetInterrupted: "定位被較新的訊息打斷了,那則訊息還在",
+    jumpTargetUnreachable: "現在讀不到那則訊息,連線好像卡了一下",
+    jumpTargetRetry: "再試一次",
+    jumpTargetMissingDismiss: "關閉這則提示",
     // 訊息流的 LINE 式日期分隔線(跨日處置中 pill;捲動時 sticky 浮在頂端)。
     // weekday 0=週日 … 6=週六;非今年才帶年份(LINE 慣例)。
     dateToday: "今天",
@@ -714,14 +905,26 @@ export const zh = {
     galleryTabFiles: "檔案",
     galleryEmptyImages: "還沒有圖片",
     galleryEmptyFiles: "還沒有檔案",
-    // M2 批次 18:上傳者篩選 chip 列(選項由實際附件的寄件者動態生成,
-    // 與圖片/檔案分頁疊加生效)。
+    // M2 批次 18:上傳者篩選(選項由實際附件的寄件者動態生成,與圖片/檔案分頁
+    // 疊加生效)。T-51 ② 把它從 chip 列改成下面那個勾選下拉。
     gallerySenderFilterLabel: "依上傳者篩選",
     gallerySenderAll: "全部",
+    // T-51 ②:chip 列改成 Jira 式的勾選下拉(owner 逐字:「或是像 jira 一樣,
+    // 你可以打開時,展開一個下拉式選單做勾選就好」)。收起時只有一行;**刻意沒有
+    // 搜尋框** —— 早期版本放過一個,owner 2026-09-02 直接說「不需要有搜尋這功能」,
+    // 而這個控制項本來就是為了「我怎麼會知道有誰,沒辦法打字」而生的;名單按件數
+    // 排序,值得找的人已經在上面。
+    gallerySenderSelected: (n: number) => `已選 ${n} 位`,
+    gallerySenderClear: "清除選取",
+    // 有篩選在的空狀態。刻意跟 galleryEmptyImages／galleryEmptyFiles 分開:那兩句
+    // 講的是這個圖庫,這一句講的是這個篩選;篩選在的時候說前者,等於告訴使用者他的
+    // 檔案不見了。
+    galleryEmptyFiltered: "選取的上傳者在這個分頁沒有檔案",
     galleryClose: "關閉檔案庫",
     galleryPreviewHint: "開新分頁預覽",
     galleryDownloadHint: "下載",
-    // 檔案級永久分享連結(?sig= HMAC)— 複製到剪貼簿。
+    // 檔案級分享連結(?sig= HMAC)— 複製到剪貼簿。不會過期,但不是永久:
+    // 它跟著簽章金鑰環走,移除當初簽它的那把金鑰就會讓它失效(T-62)。
     copyShareLink: "複製分享連結",
     shareLinkCopied: "已複製連結",
     shareLinkCopyFailed: "複製連結失敗",
@@ -733,7 +936,34 @@ export const zh = {
       close: "關閉預覽",
       loading: "載入預覽中…",
       error: "無法載入預覽",
+      // T-59 —— 一側指向文件的比較。沒有自帶標題時兩欄的預設標題，以及
+      // 「這一側是活的」那個標記：同一條連結下個月點開會顯示不一樣的差異，
+      // 讀者必須從畫面上看得出來，而不是自己推。
+      diffSideCurrent: "目前存檔內容",
+      diffSideSeed: "初始版本",
+      diffSideRevision: (id: string) => `版本 #${id}`,
+      diffSideLive: (label: string, at: string) => `${label}（讀取於 ${at}，之後會不一樣）`,
+      // 比較畫不出來，因為**有一側已經不在了**：附件被回收，或版本已經被
+      // 修剪掉。直說，因為另一條路——只畫倖存的那一側——會把它每一行都標成
+      // 刪除，那不是「少了一半」，是一個很有自信的錯答案。
+      diffSideGone: "這個比較有一側已經不在了，畫不出來。",
+      // 單獨看某一側時顯示，帶讀者回到比較畫面而不是關掉整個視窗——他是從
+      // 比較裡面點進來的。
+      diffSideBack: "回到比較",
       unavailable: "此檔案無法預覽，請下載",
+      // T-36 — 同樣是「這裡畫不出來」，但當上面那顆「在新頁面顯示」在的時候，
+      // 就不該再叫他去下載：他這張票要的就是不用再複製去別的地方貼。
+      unavailableOpenInNewTab: "此檔案無法在這裡預覽，請用上方的「在新頁面顯示」開啟。",
+      // T-36 — 用一個獨立分頁打開這個附件（走分享連結），只出現在瀏覽器會直接
+      // 顯示、而不是下載的檔案上。旁邊那句話刻意講白話：說的是使用者「會看到
+      // 什麼」，不是背後的機制。
+      openInNewTab: "在新頁面顯示",
+      newTabStaticNote: "新頁面只會照原樣顯示，上面的按鈕和輸入格不會有反應。",
+      // T-51 ① — the two paging chevrons. They are the ONLY control for a
+      // zoomed image or a text file, where the arrow keys stay with the pan and
+      // the scroll, so the accessible name has to stand on its own.
+      previous: "上一個",
+      next: "下一個",
       zoomControls: "縮放圖片",
       zoomIn: "放大",
       zoomOut: "縮小",
@@ -742,6 +972,43 @@ export const zh = {
     // 對方訊息角落的「放大閱讀」小按鈕：把這則訊息本文丟進同一個
     // 全幅 overlay 讀（長回覆在對話欄裡很難讀）。自己發的訊息沒有。
     expandMessage: "放大閱讀",
+    // T-4e95「回覆這則」：每則訊息角落的回覆入口、輸入框上方的「正在回覆」
+    // 橫幅與它的 x，以及訊息上方那條指回原訊息的引用列。
+    // replyQuoteGone 是**訊息列**的落空文案，而且是固定的：被引用的那則訊息
+    // 已經不在了（被清掉、或發話的成員已經移除）。它不重試、不補撈、不會在
+    // 下一個事件來時自己變成別的樣子——因為 2026-08-21 起，引用內容是伺服器
+    // 每次讀取都現組後隨訊息一起送來的，前端沒有「還沒撈到」這個狀態。
+    replyAction: "回覆這則",
+    replyingTo: (name: string) => `正在回覆 ${name}`,
+    replyCancel: "取消回覆",
+    // 🔴 文案跟著行為改（owner 2026-08-21 裁定）。它以前叫「跳到原訊息」，因為
+    // 那時它真的會把對話捲到那一列。現在它不捲任何東西：它把那一則重新撈回來，
+    // 丟進放大閱讀的同一個覆蓋層。按鈕寫「跳到」卻跳出一個對話框，就是在每一條
+    // 回覆列上說一句小謊，所以字跟著機制一起換。
+    replyQuoteJump: "看原訊息",
+    replyQuoteGone: "這則訊息已不存在",
+    // replyQuoteJump 背後那次讀取失敗了。它**不是**在說原訊息在不在——那是
+    // replyQuoteGone 的工作，而且那句話長在引用列本身上。這句只說「這次沒拿
+    // 到」，而且只說一次，就說在剛剛被按的那顆按鈕旁邊。
+    replyQuoteOpenFailed: "拿不到這則訊息",
+    // 🔴 橫幅的落空文案跟訊息列的**不是同一句**，而且不可以互換。
+    // 訊息列問的是「伺服器這次讀取有沒有把被引訊息組出來」——組不出來就是真的
+    // 沒了，所以那裡有資格斷定「這則訊息已不存在」。
+    // 橫幅問的是完全另一件事：它只查得到**已載入視窗**裡的訊息（messageById），
+    // 而 owner 往上捲載入 scrollback、瞄準一則舊訊息、切走再切回來只載最新一頁
+    // 之後，那則訊息還在、照送也會成功（sent.reply_to 掛得對、讀回來的
+    // reply_to_chat 內容完整），橫幅卻查不到它。拿訊息列那句斷言來畫這個狀態，
+    // 就是對 owner 說一句可以被他自己證偽的假話。
+    // 所以橫幅講的是**與狀態無關的實話**：正在回覆的是較早的一則訊息。
+    replyingToEarlier: "正在回覆較早的一則訊息",
+    // 引用列自己的無障礙名稱。本 repo 沒有 sr-only／visually-hidden utility
+    // （見 MemberCard.presence-a11y.test.tsx），所以「這句是引用的，不是這個人
+    // 現在說的」這件事只能靠 aria-label 帶。少了它，一則回覆在無障礙樹上會被
+    // 攤平成「Mira。Mira。他說的。看原訊息。我說的」——這功能唯一要傳達的
+    // 資訊，螢幕閱讀器使用者剛好聽不到。replyQuoteRole 是原訊息已不存在、
+    // 沒有作者可標時用的，replyQuoteRoleWho 是標得出作者時用的。
+    replyQuoteRole: "引用",
+    replyQuoteRoleWho: (name: string) => `引用 ${name}`,
   },
   mp: {
     back: "返回",
@@ -797,6 +1064,7 @@ export const zh = {
     // that phrasing reads as history, and the owner needs to know the change
     // is being APPLIED right now.
     windDownForChangeLabel: "正在收尾以套用你的改動",
+    windDownDeadlineLabel: "正在收尾，已給死線",
     windDownByLabel: "最晚",
     windDownEffectSuffix: "生效",
     standby: "待命中",
@@ -819,6 +1087,13 @@ export const zh = {
     lastOpFail: "失敗",
     lastOpLogLabel: "查看記錄",
     estimatedCost: "估計$",
+    costReset: "歸零",
+    costResetHint: "把這個成員的累計估計花費歸零。按下去救不回來。",
+    costResetConfirm: "確定歸零",
+    costResetError: "歸零失敗，數字沒有被清掉。",
+    costResetConfirmBodyLead: "這會把目前累計的 ",
+    costResetConfirmBodyTail:
+      " 歸零，從 0 重新開始累積。這個數字沒有留在任何其他地方，清掉就回不來了。",
     terminal: "終端 · TMUX",
     copyCommand: "複製指令",
     copied: "已複製",
@@ -1016,6 +1291,9 @@ export const zh = {
       tasksEmpty: "尚無進行中任務",
       // 這是 server 給的指標，不是完成標記；owner 的回覆可能要求改做。
       answeredCardSteps: "卡在已回答卡上的步驟（請先讀卡，不代表已完成）",
+      // T-91 — 開機快照任務列新增的反向相依標籤。轉派中那一格刻意不另開 key：
+      // 座艙已經有 tasks.lockReassigning，這裡直接沿用，不要造一個會跟它走岔的同義詞。
+      blockingLabel: "正在等這張的票：",
       // 抬頭:這份快照是什麼時候拍的。它是把底下每一個 ts_display 讀成
       // 「多久以前」的唯一錨點——讀的人(不論是 agent 還是 owner)沒有
       // 一個可信的時鐘可以拿來對。
@@ -1105,6 +1383,15 @@ export const zh = {
     renameError: "改名失敗",
     // §1 account cards
     accountsEmpty: "尚無帳號用量資料",
+    // 帳號歸零 (T-53, owner ruling rc-5c5d7c7c6dcd) — the ACCOUNT's own figure,
+    // cleared without touching any member's.
+    costReset: "歸零",
+    costResetHint: "把這個帳號的累計花費歸零。不會動到底下任何成員的數字。按下去救不回來。",
+    costResetConfirm: "確定歸零",
+    costResetError: "歸零失敗，數字沒有被清掉。",
+    costResetConfirmBodyLead: "這會把這個帳號累計的 ",
+    costResetConfirmBodyTail:
+      " 歸零，從 0 重新開始累積。底下成員各自的數字不會被動到。這個數字沒有留在任何其他地方，清掉就回不來了。",
     estimate: "估計",
     fiveHour: "5 小時窗",
     sevenDay: "7 天窗",
@@ -1297,6 +1584,32 @@ export const zh = {
   // 兩個面共用這一組字:topbar 常駐指示燈與監控頁的備份卡。**主要句子一律由
   // `code` 推導**(下面的 reason*),伺服器的 `detail` 只當次要診斷字串顯示——
   // 它是英文、給工程師看的,不是使用者面的那句話。
+  // 簽章金鑰輪替 (T-62)
+  signingKeys: {
+    title: "簽章金鑰",
+    intro:
+      "伺服器用簽章金鑰簽發登入憑證。可以同時存在多把：只有一把在簽，其餘的仍然驗得過 —— 這是換金鑰的過渡期。",
+    loading: "讀取中…",
+    signingBadge: "正在簽",
+    retiredBadge: "只驗不簽",
+    createdLabel: "產生於",
+    createdUnknown: "此站啟用以來（時間未記錄）",
+    countLabel: (n: number) => `目前有 ${n} 把金鑰`,
+    rotateButton: "產生新金鑰",
+    rotateHint:
+      "產生一把新的並讓它接手簽章。既有的登入不會被踢掉：舊金鑰留著繼續驗，只是不再簽新的。立刻生效，不必重啟。",
+    removeButton: "移除",
+    // 🔴 這兩句是這張卡最重要的文字。移除沒有復原，而它的射程比人直覺的大。
+    removeConfirmTitle: "移除這把金鑰？",
+    removeConfirmBody:
+      "這把金鑰簽過的東西會當場全部失效，沒有緩衝期，也不會通知任何人：用它簽的登入憑證會被拒絕，用它產生的分享連結（檔案的、比較的）也會一起壞掉。",
+    removeConfirmWarden:
+      "⚠️ 機器（warden）的憑證沒有到期時間，不會自己過期。要判斷現在能不能移除，看的是「每一台機器都已經換到新金鑰了嗎」，不是「等了幾天」，也不是「都重新連過了」——重新連上、但手上還是舊金鑰簽的憑證，一樣會在你按下去的當下失聯。離線的機器要等它自己上線才換得掉。",
+    removeConfirmCancel: "取消",
+    removeConfirmOk: "確定移除",
+    actionFailed: "這個動作沒有成功，伺服器沒有說明原因。",
+    emptyState: "讀不到金鑰。",
+  },
   backupHealth: {
     title: "備份健康",
     // 三個 status 的短標。unknown 不是比較安靜的 healthy:它是「判斷不出來」,
@@ -1325,6 +1638,9 @@ export const zh = {
     title: "設定",
     // landing entries
     software: "系統更新與備份",
+    // 全域情境 (T-a241) — 事件程序文件那一區從「角色誌」抽出來，成為〈設定〉底下
+    // 自己一塊，排在「系統更新與備份」與「角色誌」之間。角色誌只剩角色定義。
+    globalContext: "全域情境",
     roles: "角色誌",
     params: "參數調整",
     // ── 主題管理 (T-16a1 P3b): moved here from the profile dropdown ──
@@ -1411,10 +1727,13 @@ export const zh = {
     upgrade: "升級到最新版",
     catalogHash: "MCP 目錄雜湊",
     // ── 角色誌 ──
-    // 全域情境 = boot context 的區塊，依組裝順序：系統互動 → 使用者自訂 →
-    // 啟動程序。T-791e 起**四列**、而且**全部可編輯**——啟動程序是 claude 與
-    // codex 兩份不同的文件，各佔一列。UI 不露檔名。
-    globalSection: "全域情境（GLOBAL CONTEXT）",
+    // 十份文件依 owner 的讀法分三組（定稿 2026-08-24）：上線 → 下線 → 任務事件。
+    // 「只顯示不給改」那一組不見了——分組是版面上的分群，不是「能不能改」的
+    // 真相來源（那是 server 的答案）。上線這組依 boot context 的組裝順序排：
+    // 系統互動 → 使用者自訂 → 啟動步驟（啟動步驟那一列開的是 claude / codex
+    // 兩份文件的索引）。
+    // UI 不露檔名。
+    globalSection: "上線（BOOT）",
     systemName: "系統互動",
     systemSub: "系統運作說明，注入給每個 agent · 可編輯",
     customName: "使用者自訂",
@@ -1425,37 +1744,70 @@ export const zh = {
     // The ONE list row. The runtime-specific names below still title the PAGE
     // and its history list — the row no longer names a runtime because you
     // pick one after you are inside.
-    bootName: "啟動程序",
+    bootName: "啟動步驟",
     bootSub: "AI 開機時照著做的步驟 · 兩種執行環境各一份 · 可編輯",
     bootRuntimeClaude: "一般",
     bootRuntimeCodex: "Codex",
-    bootClaudeName: "啟動程序（Claude Code）",
+    bootClaudeName: "啟動步驟（Claude Code）",
     bootClaudeSub: "Claude Code 執行環境的開機 SOP · 可編輯",
-    bootCodexName: "啟動程序（Codex CLI）",
+    bootCodexName: "啟動步驟（Codex CLI）",
     bootCodexSub: "Codex App Server 執行環境的開機 SOP · 可編輯",
-    // 下線程序（T-c9c0）——不進開機情境，是 server 要收掉這個 session 時
-    // 夾帶給 agent 的收尾指示，所以在清單上自成一列，排在啟動程序之後。
-    offboardName: "下線程序",
+    // 〈停止〉（T-c9c0）——不進開機情境，是 server 要收掉這個 session 時
+    // 夾帶給 agent 的收尾指示，所以在清單上自成一列，排在啟動步驟之後。
+    offboardName: "停止",
     offboardSub: "server 要收掉這個 session 時夾帶給 agent 的收尾指示 · 可編輯",
+    // ── T-3201：其餘六份生命週期文件 ──
+    // 分組標題。上線那組沿用既有的 globalSection；下線、任務是另外兩組。
+    stopSection: "下線（STOP）",
+    taskEventSection: "任務事件（TASK）",
+    acceleratedStopName: "加速停止",
+    acceleratedStopSub: "被要求提前收工時給 agent 的指示 · 有截止時間 · 可編輯",
+    taskCloseoutName: "任務結案",
+    taskCloseoutSub: "任務被判定結束時給 agent 的收尾指示 · 可編輯",
+    taskReassignPredecessorName: "任務轉派 · 給前任",
+    taskReassignPredecessorSub: "手上的任務被轉給別人時給 agent 的交接指示 · 可編輯",
+    taskTakeoverWithPredecessorName: "任務轉派 · 給接手人",
+    taskTakeoverWithPredecessorSub: "接手別人做過的任務時給 agent 的指示 · 可編輯",
+    taskTakeoverFreshName: "新任務",
+    taskTakeoverFreshSub: "第一次被指派這個任務時給 agent 的指示 · 可編輯",
+    taskUnblockedName: "擋著你手上任務的票解開了",
+    taskUnblockedSub: "依賴的任務放行時給 agent 的通知 · 可編輯",
+    // 唯讀文件的說明：說「這份是什麼」，不說「你沒有權限」——沒有任何人可以改，
+    // 講權限會讓人去找一個根本不存在的角色來授權。
+    bootDocReadOnlyNote:
+      "這份文件顯示在這裡，是為了讓你看得到 agent 到底被告知了什麼；它不給任何人編輯，也沒有出廠版以外的版本。",
+    bootDocSaveConfirmAcceleratedStop:
+      "要儲存這份加速停止程序嗎？之後每一個被要求提前收工的 agent 都會讀到這份內容，而且是在只剩下一小段時間的情況下讀——寫得完才算數。",
+    bootDocSaveConfirmTaskEvent:
+      "要儲存這份任務事件程序嗎？之後每一次這個事件發生，被通知的 agent 都會讀到這份內容。",
     // ── 開機情境區塊：可編輯面（T-791e）──
     bootDocNoteHistoryLead: "版本紀錄只保留最近 ",
     bootDocNoteHistoryTail:
       " 版，而且是以「存檔次數」計、不是以時間計——連按幾次小修就會把較舊的版本沖掉。「還原出廠版」不受影響，永遠在。",
     bootDocSaveConfirmBoot:
-      "要儲存這份啟動程序嗎？啟動程序改壞會讓之後開機的 agent 掛不上 SSE、因此永遠不會上線，而且不會有任何錯誤訊息——到時候也沒有人在線上可以救。存檔前請確認你看過預覽；真的出事就按「還原出廠版」。",
+      "要儲存這份啟動步驟嗎？啟動步驟改壞會讓之後開機的 agent 掛不上 SSE、因此永遠不會上線，而且不會有任何錯誤訊息——到時候也沒有人在線上可以救。存檔前請確認你看過預覽；真的出事就按「還原出廠版」。",
     bootDocSaveConfirmSystem:
       "要儲存這份系統互動說明嗎？之後開機的每一個 agent 都會讀到這份內容。",
     bootDocSaveConfirmOffboard:
-      "要儲存這份下線程序嗎？之後每一個被收掉的 session 都會讀到這份內容，而且讀到的時候沒有人在線上可以問——換手那條還有幾分鐘的窗，下線那條則是一直等你，兩種都寫得完才算數。",
+      "要儲存這份〈停止〉嗎？之後每一個被收掉的 session 都會讀到這份內容，而且讀到的時候沒有人在線上可以問——而且這條路上沒有任何時鐘：一般停止、Refocus、改機器或換 model、token 快到期、context 的第一段門檻，全都是送出去之後等它自己回報。會倒數的那一種讀的是另一份〈加速停止〉，不是這份。所以這份要在「沒有人替它計時」的前提下寫得完才算數。",
     bootDocSaveConfirmAction: "確認儲存",
-    // 堆疊呈現的文件，點標題才展開（T-6278）。兩份啟動程序都預設收疊，讓一個
+    // 堆疊呈現的文件，點標題才展開（T-6278）。兩份啟動步驟都預設收疊，讓一個
     // 畫面看得到兩份；標籤寫的是「按下去會怎樣」，不是目前狀態。
     docExpand: "展開這份文件",
     docCollapse: "收合這份文件",
     historyBootSystemTitle: "系統互動的版本紀錄",
-    historyBootClaudeTitle: "啟動程序（Claude Code）的版本紀錄",
-    historyBootCodexTitle: "啟動程序（Codex CLI）的版本紀錄",
-    historyBootOffboardTitle: "下線程序的版本紀錄",
+    historyBootClaudeTitle: "啟動步驟（Claude Code）的版本紀錄",
+    historyBootCodexTitle: "啟動步驟（Codex CLI）的版本紀錄",
+    historyBootOffboardTitle: "停止的版本紀錄",
+    historyAcceleratedStopTitle: "加速停止的版本紀錄",
+    historyTaskCloseoutTitle: "任務結案的版本紀錄",
+    historyTaskReassignPredecessorTitle: "任務轉派 · 給前任的版本紀錄",
+    historyTaskTakeoverWithPredecessorTitle: "任務轉派 · 給接手人的版本紀錄",
+    // T-6f44：這兩份**不再是唯讀的**（owner 的決定 2），所以它們跟其他八份
+    // 一樣真的會有版本紀錄。上一版這裡寫著「唯讀、永遠不會有第二個版本」，
+    // 那句話跟著決定 2 一起過期了。
+    historyTaskTakeoverFreshTitle: "新任務的版本紀錄",
+    historyTaskUnblockedTitle: "擋著你手上任務的票解開了的版本紀錄",
     // seed vs owner-edited
     defaultBadge: "預設",
     // ── detail: view / edit ──
@@ -1466,8 +1818,14 @@ export const zh = {
     editorPlaceholder: "以 Markdown 撰寫…",
     // 「儲存＝整份取代」的提示（T-c33e）。開機情境那三塊的編輯器從逐段改成
     // 單一編輯框，原本由段落列隱含說出的事就必須明講：按下去送出的是整份文件。
+    // T-3201 起，「整份」指的是可編輯的那一半：唯讀區不在編輯框裡，也沒有任何
+    // 方式可以送出，所以能被這一次儲存蓋掉的只有下半。
     docReplaceNote:
-      "儲存會用編輯框裡的內容「整份取代」這份文件——沒有逐段合併，沒被貼進來的段落就不會留下。",
+      "儲存會用編輯框裡的內容「整份取代」這份文件可編輯的那一半——沒有逐段合併，沒被貼進來的段落就不會留下；上方的唯讀區不受影響，也改不動。",
+    // 唯讀區那一塊的標籤（T-3201）。owner 的裁定是他必須看得見改不動的那一半
+    //（「以前 global context 是固定內容 我們也是會顯示 只是不給改」），所以它
+    // 被畫出來但沒有編輯框；標籤要說清楚它為什麼不是壞掉的輸入框。
+    docReadOnlyHead: "唯讀區（程式產生，改不動）",
     // 存檔失敗但伺服器沒有給任何可引用的理由時的墊底文案（T-c33e）。
     docActionFailed: "動作失敗，請稍後重試",
     // 超過字數上限的紅字，兩個數字都要在螢幕上（T-791e，T-c33e 起共用）。
@@ -1591,16 +1949,20 @@ export const zh = {
     ttl7d: "7 天",
     ttl30d: "30 天",
     notice: "Claude 第一次通知",
-    noticeSub: "記憶用到這個比例，就把下線程序送給它，請它收乾淨後自己換手（要比下面的最後通牒小）",
+    noticeSub: "記憶用到這個比例，就把〈停止〉送給它，請它收乾淨後自己換手（要比下面的最後通牒小）",
     handover: "Claude 最後通牒",
-    handoverSub: "到這個比例送最後通牒並自動換手，之後 120 秒強制回收（40–90%）",
+    handoverSub: "到這個比例送最後通牒並自動換手，之後依「加速停止秒數」強制回收（40–90%）",
     codexNotice: "Codex 第一次通知",
-    codexNoticeSub: "第幾輪 context compaction 後把下線程序送給它（要比下面的回合數小）",
+    codexNoticeSub: "第幾輪 context compaction 後把〈停止〉送給它（要比下面的回合數小）",
     codexHandover: "Codex 最後通牒回合",
     codexHandoverSub: "完成這麼多次 context compaction 後自動重新聚焦；不依 context 百分比判斷",
     monitoringRefresh: "監控刷新間隔",
     monitoringRefreshSub: "收到連續事件時，最多每隔幾秒刷新一次（1–60）",
     seconds: "秒",
+    acceleratedGrace: "加速停止秒數",
+    acceleratedGraceSub:
+      "按下加速停止之後，成員還有多少秒可以收尾；記憶第二段門檻自動換手也走同一個時鐘。這個時刻會原文告訴成員（10–3600）",
+    rounds: "次",
     // T-ae38 起(T-30f1 又拆過一次):上限不再是一個。這些文件被刪掉的成本差很多
     // ——角色定義是常設說明、學習經驗是逐次累積的環境問答——所以不再共用同一把尺。
     docCapDuty: "角色定義字數上限",
@@ -1620,6 +1982,13 @@ export const zh = {
       "任務手冊的學習經驗的字數上限，與上面的 SOP 那格各自獨立。下限就是出廠預設，上限 100000，所以只能調高。",
     // T-c9b4:喚醒快照的聊天區塊預算。刻意不跟上面那幾格共用一段說明——那幾格
     // 的下限就是出廠預設(只能調高),這一格兩個方向都能調。
+    // T-8:備份保留份數 N。說明文字必須把整數本身講不出來的兩件事講明——
+    // 「是份數不是天數」與「是每一池不是每個資料夾」——因為需要知道的是轉這個
+    // 旋鈕的人。
+    backupRetain: "備份保留份數",
+    backupRetainSub:
+      "資料庫備份要保留幾份。超過這個數字的，會在下一次備份時直接從磁碟上刪掉——不是移到別的資料夾，刪掉就救不回來。有兩件事這個數字並不代表。它算的是「份數」，不是「天數」：它數的是檔案，所以能回溯多久完全看那幾天實際備份了幾次——忙的那幾天可能不到三天就用完，閒的時候可以撐超過一週。它也是「每一池」而不是「每個資料夾」：日常備份（定時＋手動）與升級前備份各自有各自的額度，所以這裡填 5，磁碟上最多會有十份，不是五份。範圍 1～20；上限是磁碟預算——佔用空間大約是這個數字的兩倍再乘上一份備份的大小。",
+    backupRetainUnit: "份／池",
     chatBudget: "喚醒聊天字數預算",
     chatBudgetSub:
       "喚醒快照(resume_summary)裡聊天區塊的字數預算,含訊息、摺疊卡片、快照表頭與截斷提示;peek 回報的大小算的是同一個數字。範圍 1000~13000,可調高也可調低——聊天區塊每次都是重新裝箱的,調低只是下次帶回比較少則,被留下的部分照樣由「更早的訊息已省略」交代。",

@@ -42,7 +42,8 @@ function mkCard(over: Partial<ReplyCard> = {}): ReplyCard {
     kind: "decision",
     summary: "要幫你寄出這封信嗎？",
     body: "細節",
-    options: ["寄出", "先不要"],
+    options: [{ text: "寄出", aiPick: true }, { text: "先不要", aiPick: false }],
+    selectMode: "single",
     status: "waiting",
     attachments: [],
     task: null,
@@ -80,8 +81,10 @@ describe("ChatReplyCard — one owner action costs one card refetch", () => {
     __injectMockReplyCard(mkCard());
 
     const { container } = renderCard("rc-inline");
-    // Wait for the eager mount load, so the count below is the cost of the
-    // answer alone.
+    // EVERY card mounts collapsed now (owner 2026-09-04), waiting included —
+    // expanding is what loads it. Wait for that load, so the count below is the
+    // cost of the answer alone.
+    fireEvent.click(container.querySelector(".reply-card__collapsed-row")!);
     await waitFor(() =>
       expect(container.querySelector(".reply-option")).toBeTruthy(),
     );
@@ -110,7 +113,7 @@ describe("ChatReplyCard — one owner action costs one card refetch", () => {
       mkCard({
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdx: 1, text: "", attachments: [] },
+        answer: { optionIdxs: [1], text: "", attachments: [] },
       }),
     );
 
@@ -149,7 +152,7 @@ describe("ChatReplyCard — one owner action costs one card refetch", () => {
         id: "rc-settled",
         status: "answered",
         answeredTs: Date.now() / 1000 - 60,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
       }),
     );
     __injectMockReplyCard(mkCard({ id: "rc-other" }));
@@ -163,7 +166,7 @@ describe("ChatReplyCard — one owner action costs one card refetch", () => {
     const spy = vi.spyOn(api, "getReplyCard");
     // Somebody answers a DIFFERENT card — one reply_card delta, fanned to every
     // mounted card.
-    await api.answerReplyCard("rc-other", { optionIdx: 0 });
+    await api.answerReplyCard("rc-other", { optionIdxs: [0] });
     await waitFor(() => expect(spy.mock.calls.length).toBeGreaterThanOrEqual(0));
 
     expect(spy.mock.calls.filter((c) => c[0] === "rc-settled")).toHaveLength(0);

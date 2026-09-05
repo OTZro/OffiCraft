@@ -96,12 +96,39 @@ func (st *machineClaimStore) take(code string, now time.Time) (string, bool) {
 
 // requestBaseURL rebuilds the request base ("scheme://host", no trailing
 // slash) — the Python str(request.base_url).rstrip("/").
+//
+// 🔴 THE SCHEME COMES FROM THE HOST, NOT FROM r.TLS (T-78, owner ruling
+// 2026-09-04: 「localhost / 127.0.0.1 就是 http。其餘都是 https，不用額外的
+// 設定來判定」).
+//
+// WHY r.TLS IS THE WRONG QUESTION HERE. r.TLS answers "was THIS hop
+// encrypted", and this deployment terminates TLS at Cloudflare — so the
+// request that reaches this process is plaintext ALWAYS, and the old code
+// answered "http" for every caller including the browser that typed https.
+// That is not a rare edge: it was 100% of production traffic. The value goes
+// on to be BAKED INTO an installed machine (buildInstallScript →
+// OC_BASE=… → the launchd plist), so one wrong answer here pins a machine to
+// a plaintext base for the rest of its life — the warden binary download, the
+// one-time-code→token exchange and every later call.
+//
+// X-Forwarded-Proto is the other obvious answer and is deliberately NOT used:
+// it is attacker-suppliable, so trusting it correctly means also carrying a
+// list of proxies you trust — a second thing to configure and get wrong. The
+// host is not attacker-CHOSEN in the same way (it is what the operator typed,
+// and a forged Host already misdirects the install regardless of scheme), and
+// it needs no configuration at all.
+//
+// ⚠️ WHAT THIS STILL DOES NOT FIX, so nobody reads more into it: r.Host itself
+// is still whatever the caller sent. A machine already installed keeps the
+// base it was given at install time — nothing re-derives it later — so this
+// only corrects what is handed out FROM NOW ON.
 func requestBaseURL(r *http.Request) string {
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	return scheme + "://" + r.Host
+	return baseURLForHost(r.Host)
+}
+
+// baseURLForHost applies the T-78 rule (base_scheme_t78.go) to a Host header.
+func baseURLForHost(host string) string {
+	return schemeForHost(host) + "://" + host
 }
 
 // buildBootCommand is the copy-paste one-liner an EMPTY machine runs
@@ -506,6 +533,28 @@ func (s *apiServer) machineSupportsRuntime(machineID, runtime string) bool {
 	return capability.LoggedIn == nil || *capability.LoggedIn
 }
 
+// machineTokenKey projects the T-80 observation onto the wire: WHICH signing key
+// this station last verified that machine's credential with, and whether that is
+// the key signing right now.
+//
+// Both answers are nil together — "" in the column means this station has never
+// verified a credential of that machine's, and there is no true-or-false to give
+// for a machine nobody has seen. Collapsing that into `false` would put a
+// machine that has never checked in and a machine that is genuinely still on the
+// old key in the same bucket, and they need opposite actions from the owner.
+//
+// The comparison reads the LIVE ring per call (keyring.activeKeyID) rather than
+// a value captured anywhere: a rotation must move every row's verdict on the
+// very next request, which is the same property the gate itself relies on.
+func (s *apiServer) machineTokenKey(m Member) (*string, *bool) {
+	if m.TokenKeyID == "" {
+		return nil, nil
+	}
+	id := m.TokenKeyID
+	current := s.keys != nil && s.keys.activeKeyID() == id
+	return &id, &current
+}
+
 // GET /api/machines — one row per ACTIVE warden member; display name folds
 // the machine-alias overlay over the member name; server-self always FIRST.
 func (s *apiServer) HandleListMachinesApiMachinesGet(w http.ResponseWriter, r *http.Request) {
@@ -529,6 +578,7 @@ func (s *apiServer) HandleListMachinesApiMachinesGet(w http.ResponseWriter, r *h
 			display = m.Name
 		}
 		claudeVersion, claudeCredSource, claudeSubReadable := s.machineClaudeInfo(m.ID)
+		tokenKeyID, tokenKeyCurrent := s.machineTokenKey(m)
 		rows = append(rows, machineDTO{
 			MachineID:           m.ID,
 			DisplayName:         display,
@@ -541,6 +591,8 @@ func (s *apiServer) HandleListMachinesApiMachinesGet(w http.ResponseWriter, r *h
 			RuntimeCapabilities: s.machineRuntimeCapabilities(m.ID),
 			WardenShape:         s.machineWardenShape(m.ID),
 			CutoverEffect:       s.machineCutoverEffect(m.ID),
+			TokenKeyID:          tokenKeyID,
+			TokenKeyCurrent:     tokenKeyCurrent,
 		})
 	}
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].IsSelf && !rows[j].IsSelf })
@@ -1273,7 +1325,11 @@ func (s *apiServer) HandleUpgradeMachineApiMachinesMemberIdUpgradePost(w http.Re
 // right now → 409; a machine whose agents are all offline deletes directly
 // (a desired_machine_id binding alone never blocks).
 func (s *apiServer) HandleDeleteMachineApiMachinesMemberIdDelete(w http.ResponseWriter, r *http.Request, memberId string) {
-	m, err := s.resolveMember(memberId)
+	// The open resolver on purpose: the REAL guard is the kind check three lines
+	// down, which refuses anything that is not a warden. Asking for the staff
+	// resolver here would add a second, weaker refusal that only changes which
+	// error an ow- id gets (404 instead of the honest 409 "not a warden").
+	m, err := s.resolveMember(memberId, anyMember)
 	if err != nil {
 		writeResolveError(w, err, "member", memberId)
 		return

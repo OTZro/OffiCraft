@@ -76,7 +76,8 @@ function mkCard(over: Partial<ReplyCard>): ReplyCard {
     kind: "decision",
     summary: "要現在同步到 Jira 嗎？",
     body: "",
-    options: ["核可，直接同步上去", "先不要"],
+    options: [{ text: "核可，直接同步上去", aiPick: true }, { text: "先不要", aiPick: false }],
+    selectMode: "single",
     status: "waiting",
     attachments: [],
     createdTs: Date.now() / 1000 - 600,
@@ -154,7 +155,7 @@ describe("TaskCard 卡綁 step", () => {
             startedTs: 100,
             finishedTs: 200,
           }),
-          // A finished plain step an ask was auto-bound to: marker stays too.
+          // A finished plain step an ask was bound to: marker stays too.
           mkStep({
             name: "asked-done",
             status: "done",
@@ -190,7 +191,7 @@ describe("TaskCard 卡綁 step", () => {
         id: "rc-ans",
         status: "answered",
         answeredTs: Date.now() / 1000 - 120,
-        answer: { optionIdx: 1, text: "", attachments: [] },
+        answer: { optionIdxs: [1], text: "", attachments: [] },
       })
     );
     __injectMockTask(
@@ -252,7 +253,7 @@ describe("TaskCard 卡綁 step", () => {
         id: "rc-b-ans",
         status: "answered",
         answeredTs: Date.now() / 1000 - 120,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
       })
     );
     __injectMockReplyCard(

@@ -25,22 +25,66 @@ func newReconcileTestServer(t *testing.T) *apiServer {
 	if err := seedOutOfBox(dal); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	return newAPIServer(dal, NewHub(), []byte("reconcile-test-secret"), 3600, "../..")
+	return newAPIServer(dal, NewHub(), singleKeyring([]byte("reconcile-test-secret")), 3600, "../..")
 }
 
 func testAgent(id string) Member {
 	return Member{
-		ID: id, Name: id, Kind: KindAssistant, Effort: "medium",
+		ID: id, Name: id, Kind: KindStaff, Effort: "medium",
 		DesiredState:     DesiredStateOnline,
 		DesiredMachineID: ServerSelfHost,
 		RosterStatus:     RosterStatusActive,
 	}
 }
 
+// putTestMember seeds a member row so that the ROW ENDS UP LOOKING LIKE `m` —
+// which is what every caller has always meant by it.
+//
+// 🔴 THE SECOND WRITE IS NOT REDUNDANT (T-55). The four wind-down anchors left
+// PutMember's DO UPDATE SET, so on a row that ALREADY EXISTS the upsert above
+// silently drops stopping_since / stopped_since / refocus_since / refocus_op.
+// (An earlier version of this sentence said the upsert "carries 31 columns".
+// That was the INSERT list minus four; the DO UPDATE SET list is shorter still,
+// because every other migrated column is missing from it too. The count is not
+// restated here — singleColumnOwnedFields is the enforced answer.) Fixtures that re-seed a row to open or close a
+// wind-down — and there are dozens — would then be asserting against anchors
+// they never actually planted, and the tests would go GREEN while testing
+// nothing. Planting them through their sole writer is what keeps the helper's
+// contract true. Production callers must NOT do this: there the dropped columns
+// are the whole point, because their snapshot is stale.
 func putTestMember(t *testing.T, s *apiServer, m Member) {
 	t.Helper()
 	if err := s.dal.PutMember(m); err != nil {
 		t.Fatalf("put member %s: %v", m.ID, err)
+	}
+	if err := s.dal.SetMemberWindDownAnchors(m.ID, m.StoppingSince, m.StoppedSince,
+		m.RefocusSince, m.RefocusOp); err != nil {
+		t.Fatalf("seed wind-down anchors for %s: %v", m.ID, err)
+	}
+}
+
+// seedMemberAnchors / seedWorkerAnchors plant the four wind-down anchors on a row
+// that ALREADY EXISTS, through their sole writer (T-55).
+//
+// A fixture that reads a row, sets stopping_since / stopped_since /
+// refocus_since / refocus_op on the snapshot and writes it back whole no longer
+// moves those four columns — they left PutMember's DO UPDATE SET. The write
+// still succeeds, so the fixture reads exactly as it always did while planting
+// nothing, and the test that depends on it goes green having exercised the
+// wrong state. Call one of these next to the whole-row fixture write.
+func seedMemberAnchors(t *testing.T, s *apiServer, m Member) {
+	t.Helper()
+	if err := s.dal.SetMemberWindDownAnchors(m.ID, m.StoppingSince, m.StoppedSince,
+		m.RefocusSince, m.RefocusOp); err != nil {
+		t.Fatalf("seed wind-down anchors for %s: %v", m.ID, err)
+	}
+}
+
+func seedWorkerAnchors(t *testing.T, s *apiServer, w OutsourceWorker) {
+	t.Helper()
+	if err := s.dal.SetMemberWindDownAnchors(w.ID, w.StoppingSince, w.StoppedSince,
+		w.RefocusSince, w.RefocusOp); err != nil {
+		t.Fatalf("seed wind-down anchors for %s: %v", w.ID, err)
 	}
 }
 
@@ -133,6 +177,21 @@ func TestParseDesired(t *testing.T) {
 		if got := parseDesired(raw); got != want {
 			t.Errorf("parseDesired(%q) = %q, want %q", raw, got, want)
 		}
+	}
+}
+
+// TestDefaultReconcileConfigUsesWakingTTLSecs pins the owner-approved value and
+// the derived config fields independently.
+func TestDefaultReconcileConfigUsesWakingTTLSecs(t *testing.T) {
+	if WakingTTLSecs != 120.0 {
+		t.Fatalf("WakingTTLSecs = %v, want 120.0 (owner ruling 2026-08-27)", WakingTTLSecs)
+	}
+	cfg := defaultReconcileConfig()
+	if cfg.StartTimeout != WakingTTLSecs {
+		t.Fatalf("StartTimeout = %v, want WakingTTLSecs (%v)", cfg.StartTimeout, WakingTTLSecs)
+	}
+	if cfg.ZombieConfirmGrace != 2*WakingTTLSecs {
+		t.Fatalf("ZombieConfirmGrace = %v, want 2*WakingTTLSecs (%v)", cfg.ZombieConfirmGrace, 2*WakingTTLSecs)
 	}
 }
 
@@ -315,9 +374,14 @@ func TestReconcileDecide(t *testing.T) {
 		}
 	})
 
+	// The stuck-dump force-stop belongs to the ONE cause that runs a clock —
+	// 加速停止, the second context threshold (T-ed79). The op is named here
+	// because it is what the grace is read from; an unnamed op is a 停止 and is
+	// collected by the agent's own stopped report, asserted above.
 	t.Run("recycle grace elapsed force-stops a stuck dump", func(t *testing.T) {
 		obs := obsOf("m", DesiredStateOnline, true)
 		obs.RefocusSince = 1000
+		obs.RefocusOp = refocusOpContextHigh
 		d := reconcileDecide(obs, newReconcileState(), cfg, 1000+cfg.RecycleGrace)
 		if d.Command != reconcileCmdStop {
 			t.Fatalf("grace elapsed must force-stop: %+v", d)
@@ -326,7 +390,37 @@ func TestReconcileDecide(t *testing.T) {
 
 	// ── relocation: owner re-pinned a LIVE member's desired_machine (kyle-62b2) ──
 
-	t.Run("online with a machine mismatch robust-stops toward the RUNNING machine", func(t *testing.T) {
+	// T-14 #4: the mismatch is now answered in TWO ways, and which one depends on
+	// obs.HandoverArmable — "would a wind-down epoch actually be stamped on this
+	// row?". The armable case is the normal one and it WAITS; the non-armable case
+	// is the fallback and it is what the arm used to do unconditionally.
+	t.Run("online with a machine mismatch opens a wind-down instead of killing", func(t *testing.T) {
+		obs := obsRelocate("m", "mach-old", "mach-new")
+		obs.HandoverArmable = true
+		d := reconcileDecide(obs, newReconcileState(), cfg, 1000)
+		if d.Command != reconcileCmdNone {
+			t.Fatalf("a member that CAN hand over must not be killed on sight: %+v", d)
+		}
+		if d.ArmHandoverOp != memberOpRelocate {
+			t.Fatalf("the decision must ask for a relocate wind-down, got ArmHandoverOp=%q", d.ArmHandoverOp)
+		}
+		// st.LastCommand is deliberately NOT advanced: the collection belongs to
+		// the refocus arm, whose first-dispatch bookkeeping must start clean.
+		if d.State.LastCommand == reconcileCmdStop {
+			t.Fatalf("the wind-down arm must not claim a STOP it did not dispatch: %+v", d.State)
+		}
+	})
+
+	// The name is load-bearing: this is the BACKSTOP-OF-THE-BACKSTOP, not the
+	// ordinary relocation. It used to be the ONLY behaviour of this arm and the
+	// subtest was named "…robust-stops toward the RUNNING machine" with no
+	// qualifier, which stopped being true for the ordinary case in T-14 #4. The
+	// assertions below are byte-for-byte the ones that stood then — they are still
+	// right, about a NARROWER input: a member for which no wind-down can be opened
+	// (a warden row, or one already on the 強制停止 rung) has no hand-off to wait
+	// for, and waiting for one that cannot happen is not gentler than killing, it
+	// is just never converging.
+	t.Run("online with a machine mismatch and NOTHING to hand over robust-stops toward the RUNNING machine", func(t *testing.T) {
 		d := reconcileDecide(obsRelocate("m", "mach-old", "mach-new"), newReconcileState(), cfg, 1000)
 		if d.Command != reconcileCmdStop || d.State.Phase != reconcilePhaseStopping ||
 			d.State.LastCommand != reconcileCmdStop || d.State.LastCommandAt != 1000 {
@@ -802,17 +896,24 @@ func TestRunReconcileTick(t *testing.T) {
 		connectOnline(t, s, ServerSelfHost)
 		connectOnline(t, s, m.ID)
 		now := 10000.0
+		// 99% with two compactions is the notice ROUND, not the ceiling: a codex
+		// session hands over on compaction count, so the percentage must not put
+		// it on the accelerated stop. T-ed79: the notice round DOES open the
+		// plain 停止 (it is the first threshold on the codex axis).
 		s.gauge.Set(m.ID, map[string]any{"context_pct": 99.0, "context_pct_ts": now - 10, "boot_ts": now - 500, "compaction_count": 2})
 		s.runReconcileTick(now)
 		got, _ := s.dal.GetMember(m.ID)
-		if got.RefocusSince != 0 {
-			t.Fatalf("Codex must ignore percent-only handover, got %+v", got)
+		if got.RefocusOp != refocusOpContextNotice {
+			t.Fatalf("Codex must ignore percent-only handover (want the notice "+
+				"round's 停止, %q), got %+v", refocusOpContextNotice, got)
 		}
 		s.gauge.Set(m.ID, map[string]any{"context_pct": 20.0, "context_pct_ts": now - 5, "boot_ts": now - 500, "compaction_count": 3})
 		s.runReconcileTick(now + 1)
 		got, _ = s.dal.GetMember(m.ID)
-		if got.RefocusSince != now+1 {
-			t.Fatalf("third Codex compaction must trigger refocus, got %+v", got)
+		if got.RefocusSince != now+1 || got.RefocusOp != refocusOpContextHigh {
+			t.Fatalf("the third Codex compaction must promote to %q and RE-STAMP "+
+				"refocus_since (a deadline measured from the notice round is "+
+				"already in the past), got %+v", refocusOpContextHigh, got)
 		}
 	})
 
@@ -828,7 +929,28 @@ func TestRunReconcileTick(t *testing.T) {
 		connectOnline(t, s, "mach-new")                               // new warden reachable (START target)
 		moverConn := connectOnlineMachine(t, s, "m-move", "mach-old") // running on the OLD machine
 
+		// T-14 #4: the first tick opens a wind-down and dispatches NOTHING. It is
+		// asserted rather than skipped past, because "no frame yet" is the whole
+		// behaviour change and a tick that quietly dispatched here would be the
+		// regression. What this subtest exists for — the ROUTING of the STOP and
+		// of the respawn START — is unchanged and asserted below, one hand-off
+		// later.
 		s.runReconcileTick(1000)
+		if f := drainFrames(t, s, "mach-old"); len(f) != 0 {
+			t.Fatalf("the first tick must open a wind-down, not kill: %+v", f)
+		}
+		if f := drainFrames(t, s, "mach-new"); len(f) != 0 {
+			t.Fatalf("the first tick must dispatch nothing at all: %+v", f)
+		}
+		armed, _ := s.dal.GetMember("m-move")
+		if armed.RefocusSince <= 0 || armed.RefocusOp != memberOpRelocate {
+			t.Fatalf("the first tick must stamp a relocate wind-down: %+v", armed)
+		}
+		// The agent files its stopped report (POST /api/self/stopped) — the 收口.
+		armed.StoppedSince = 1001
+		putTestMember(t, s, *armed)
+
+		s.runReconcileTick(1002)
 		// The STOP must land on the OLD machine's warden FIFO — never the new one.
 		oldFrames := drainFrames(t, s, "mach-old")
 		if len(oldFrames) != 1 || oldFrames[0].RPC != "stop" || oldFrames[0].Args["member_id"] != "m-move" {
@@ -841,7 +963,7 @@ func TestRunReconcileTick(t *testing.T) {
 		// the NEW machine (a fresh boot token minted with desired_machine=mach-new,
 		// routed to the new machine's warden).
 		s.hub.Disconnect(moverConn)
-		s.runReconcileTick(1000 + s.reconcileCfg.StopRetry)
+		s.runReconcileTick(1002 + s.reconcileCfg.StopRetry)
 		newFrames := drainFrames(t, s, "mach-new")
 		if len(newFrames) != 1 || newFrames[0].RPC != "start" || newFrames[0].Args["member_id"] != "m-move" {
 			t.Fatalf("after the kill the START must route to the new machine: %+v", newFrames)
@@ -950,10 +1072,12 @@ func TestStampMemberPlacementBlockedReReadsTheRow(t *testing.T) {
 	stale.DesiredMachineID = "mach-ghost-a"
 	putTestMember(t, s, stale)
 
-	// A relocate lands after the tick took its snapshot.
-	moved := stale
-	moved.DesiredMachineID = "mach-ghost-b"
-	putTestMember(t, s, moved)
+	// A relocate lands after the tick took its snapshot. It moves the pin the
+	// way the relocate face does since T-55 — through the column's sole writer,
+	// not a whole-row write, which since that change would persist nothing.
+	if err := s.dal.SetMemberDesiredMachineID("m-moved", "mach-ghost-b"); err != nil {
+		t.Fatalf("relocate: %v", err)
+	}
 
 	now := 7000.0
 	s.reconcileMu.Lock()
@@ -975,8 +1099,15 @@ func TestStampMemberPlacementBlockedReReadsTheRow(t *testing.T) {
 	// back would resurrect it into the active roster.
 	removed := *got
 	removed.RosterStatus = RosterStatusRemoved
-	removed.LastOp, removed.LastOpReason, removed.LastOpAt = "", "", 0
 	putTestMember(t, s, removed)
+	// The receipt has to be cleared through its SOLE writer (T-55): zeroing the
+	// three fields on the snapshot above no longer does anything, because a
+	// whole-row write cannot move these columns any more. Left uncleared, the
+	// first stamp's receipt would still be on the row and the assertion below
+	// would be reading it instead of the second stamp's absence.
+	if err := s.dal.SetMemberOpReceipt("m-moved", "", nil, "", "", 0); err != nil {
+		t.Fatalf("clear receipt: %v", err)
+	}
 
 	s.reconcileMu.Lock()
 	s.reconcileTickMemberLocked(stale, now+30)
@@ -1070,16 +1201,29 @@ func TestStampContextHighRecycle(t *testing.T) {
 		}
 	})
 
-	t.Run("skips a below-handover gauge and an offline member", func(t *testing.T) {
+	t.Run("below the handover line opens a 停止, not the accelerated stop", func(t *testing.T) {
 		s, members := newHot(t)
 		connectOnline(t, s, "m-hot")
-		// One point below the handover line — including the region where the
-		// advance notice fires (T-c382). Being NOTIFIED must never recycle; only
-		// crossing the handover threshold does.
+		// One point below the handover line, and above the notice line. T-ed79:
+		// this region DOES open a wind-down now — the plain one, which nothing
+		// collects on a clock. What it must never do is open the accelerated
+		// stop, which is what crossing the handover threshold is for.
 		s.gauge.Set("m-hot", freshGauge(now, float64(s.ctxhigh.HandoverPct-1)))
 		s.stampContextHighRecycle(members, now)
+		if members[0].RefocusOp != refocusOpContextNotice {
+			t.Fatalf("one point below the handover line: refocus_op = %q, want %q",
+				members[0].RefocusOp, refocusOpContextNotice)
+		}
+	})
+
+	t.Run("skips a below-notice gauge and an offline member", func(t *testing.T) {
+		s, members := newHot(t)
+		connectOnline(t, s, "m-hot")
+		s.gauge.Set("m-hot", freshGauge(now, float64(s.ctxhigh.NoticePct-1)))
+		s.stampContextHighRecycle(members, now)
 		if members[0].RefocusSince != 0 {
-			t.Fatal("below the handover line must not recycle")
+			t.Fatalf("below the FIRST threshold nothing may be opened, got op=%q",
+				members[0].RefocusOp)
 		}
 
 		s2, members2 := newHot(t) // no SSE connection → offline

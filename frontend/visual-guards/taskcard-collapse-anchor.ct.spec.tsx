@@ -48,7 +48,7 @@ const CASES = [
 ];
 
 /** The 5th card of 12 — cards above it AND enough below to keep a scroll range. */
-const TARGET = "t-c5";
+const TARGET = "t-c5ab5291a01";
 
 type Snap = {
   scrollTop: number;
@@ -310,7 +310,7 @@ for (const c of CASES) {
     // be brought to the fold — there is nothing left below to scroll. What must
     // still hold is the owner's actual ask: you end up looking at that task.
     await mountList(mount, page, c, 3);
-    const LAST = "t-c3";
+    const LAST = "t-c3ab5291a01";
     await expandAndVerify(page, LAST);
     await page.evaluate((tid: string) => {
       const sc = document.querySelector(".tasks") as HTMLElement;

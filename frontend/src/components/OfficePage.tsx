@@ -9,6 +9,7 @@ import { useOutsourceWorkers } from "../hooks/useOutsourceWorkers";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { joinSessionRuntime, findSessionFor } from "../lib/runtime";
 import { useHashRoute } from "../lib/hashRoute";
+import { openChatAttachErrorScope } from "../lib/chatDraftStore";
 import { updateCachedWorkerAvatar } from "../hooks/useWorkerCodenames";
 import { MemberCard } from "./MemberCard";
 import { ChatArea } from "./ChatArea";
@@ -86,16 +87,36 @@ export function OfficePage({
   // (releasedPeer) instead; a stale detailId/workerId still self-heals to the
   // roster below (there is no conversation to preserve there).
   const [route, setRoute] = useHashRoute();
+  // 🔴 THE STAGING REFUSAL IS THIS PAGE'S, THE DRAFT IS NOT (T-48, R14-2.1).
+  // 「圖片太大」/「最多 10 個檔案」 lives in the same module-level table as the
+  // draft so that a read finishing while the owner is in another room can still
+  // put its sentence where they will see it. That table outlives this page too,
+  // which is one lifetime too many: leave for 任務, come back ten minutes later
+  // and the red line is still describing a drop from ten minutes ago. It was
+  // component state before the table existed, so leaving took it with it. This
+  // is that lifetime, written down instead of inherited — and it clears the
+  // NOTICES only: the drafts and their staged files must survive the
+  // navigation, which is the whole reason they were moved out of the composer.
+  //
+  // 🔴 IT IS A SCOPE, NOT AN UNMOUNT CLEAR (R16 D-2). `<StrictMode>` runs this
+  // effect setup → cleanup → setup on the first mount, and the clear it used to
+  // call drops EVERY peer's notice — including one raised before this mount.
+  // That destroyed exactly the notice this table exists to carry (a `FileReader`
+  // refusal that finished while the owner was on 任務), in dev only, so dev and
+  // prod disagreed about something the owner can see. The store counts open
+  // scopes and defers the close past StrictMode's synchronous remount.
+  useEffect(() => openChatAttachErrorScope(), []);
   const selectedId = route.chatId ?? "";
   const detailId = route.detailId ?? null;
   const workerDetailId = route.workerId ?? null;
   // Live session telemetry — the SAME source the Monitor page reads — so the
   // member-detail panel's context/cost match the monitor row (never divergent).
-  // GATED (T-ec2c): only fetched/subscribed while a detail panel is open — the
-  // member panel (joinSessionRuntime) or the worker panel (findSessionFor,
-  // which reads that worker's own `ow-` session row). With no panel open,
-  // merely being on the office page makes zero monitoring requests — no
-  // per-heartbeat refetch of the large fold.
+  // GATED (T-ec2c): only fetched/subscribed while a detail panel is open. The
+  // only reader left is the member panel (joinSessionRuntime): since T-14 item 2
+  // the worker panel derives model/effort from the worker DTO alone and consumes
+  // nothing from monitoring, so a worker detail still subscribes the whole fold
+  // for no reader. With no panel open, merely being on the office page makes
+  // zero monitoring requests — no per-heartbeat refetch of the large fold.
   const { monitoring } = useMonitoring({
     enabled: detailId !== null || workerDetailId !== null,
   });
@@ -143,7 +164,7 @@ export function OfficePage({
   // "warden", the telemetry collector) belong to the monitoring/machine view,
   // never the office roster (Seth once mistook a warden row for an intruder).
   const roster = members
-    .filter((m) => m.kind === "assistant")
+    .filter((m) => m.kind === "staff")
     // 助理(seed assistant 角色)置頂;其餘接在後面。sort 穩定 → 各組內維持
     // ListMembers 已排好的字母序(不必再排一次名字)。
     .sort(
@@ -234,7 +255,9 @@ export function OfficePage({
         lifecycle: "online",
         model: workerPeer.model,
         avatarUrl: workerPeer.avatarUrl,
-        // ChatArea snapshots this before listChat marks the room read.  The
+        // ChatArea snapshots this before its own mark-read clears the room
+        // (T-48: the LISTING stopped writing a watermark; the clearer is
+        // ChatArea's explicit POST /api/chat/mark-read).  The
         // live worker's server-computed badge is therefore part of the same
         // entry contract as a regular member's unreadCount.
         unreadCount: workerPeer.unreadCount ?? 0,
@@ -274,7 +297,7 @@ export function OfficePage({
           isReleasedWorkerId
             ? t.office.outsource.releasedTitle
             : t.office.chatUnavailableTitle,
-          isReleasedWorkerId ? "outsource" : "assistant",
+          isReleasedWorkerId ? "outsource" : "staff",
         )
       : undefined;
   // A chat App reopened FROM MEMORY whose peer has since gone (fired member /
@@ -342,9 +365,9 @@ export function OfficePage({
     return (
       <WorkerDetailPanel
         worker={workerDetail}
-        // The worker's OWN telemetry row — the same `sessions` array the
-        // monitor rows join, so panel and row can never disagree about what it
-        // is running.
+        // The worker's OWN telemetry row. Still handed over, but since T-14
+        // item 2 nothing inside the panel reads it — the model/effort readout
+        // comes from the worker DTO's reported columns, not from this session.
         session={findSessionFor(workerDetail.id, monitoring?.sessions ?? [])}
         onBack={backFromWorkerDetail}
         onOpenTask={
@@ -362,8 +385,23 @@ export function OfficePage({
         onRefocus={async () => {
           await api.refocusWorker(workerDetail.id);
         }}
+        // 成本歸零 (T-53, owner-only + irreversible; the panel confirms first).
+        // Refetch is what returns the cell to the dash: the reset clears both
+        // halves server-side, so the next read has nothing to render.
+        onResetCost={async () => {
+          await api.resetMemberCost(workerDetail.id);
+        }}
+        // The escalation ladder, same three verbs and same order as 正職
+        // (T-ed79). 停止 no longer kills: it asks the worker to work its
+        // 〈停止〉 and waits for its own report_stopped.
         onStop={async () => {
           await api.stopWorker(workerDetail.id);
+        }}
+        onAcceleratedStop={async () => {
+          await api.acceleratedStopWorker(workerDetail.id);
+        }}
+        onForceStop={async () => {
+          await api.forceStopWorker(workerDetail.id);
         }}
         // 喚醒 (T-7526). The endpoint is still `restartWorker` → POST …/restart:
         // the frozen wire keeps its name, only the owner-facing word changed.
@@ -451,16 +489,26 @@ export function OfficePage({
           await api.deactivateMember(detail.id);
           await refetch();
         }}
-        // Force-stop (immediate kill): the offboard arm runs no clock, so this is
-        // the only server-side collection there is — the robust STOP goes to the
-        // warden now. Refetch
-        // and let server-driven presence surface stopped.
+        // Force-stop (immediate kill): the LAST rung — the robust STOP goes to
+        // the warden now. Refetch and let server-driven presence surface stopped.
+        // 加速停止 — the MIDDLE rung of 停止 → 加速停止 → 強制停止. Puts the
+        // wind-down that is already open on the server's clock and tells the
+        // member; it is NOT a kill, so the member can still finish early.
+        onAcceleratedStop={async () => {
+          await api.acceleratedStopMember(detail.id);
+          await refetch();
+        }}
         onForceStop={async () => {
           await api.forceStopMember(detail.id);
           await refetch();
         }}
         onRefocus={async () => {
           await api.refocusMember(detail.id);
+          await refetch();
+        }}
+        // 成本歸零 (T-53, owner-only + irreversible; the panel confirms first).
+        onResetCost={async () => {
+          await api.resetMemberCost(detail.id);
           await refetch();
         }}
         onRename={async (name) => {
@@ -549,7 +597,7 @@ export function OfficePage({
               selectedId={workerPeer?.id ?? ""}
               onOpenChat={(id) => setSelectedId(id)}
               onOpenDetail={(id) => setWorkerDetailId(id)}
-              // The row's T-xxxx chip jumps to the bound task's card — the same
+              // The row's task-id chip jumps to the bound task's card — the same
               // #tasks/<id> locate-anchor route the reply cards use.
               onOpenTask={(taskId) => setRoute({ page: "tasks", taskId })}
             />
@@ -584,6 +632,26 @@ export function OfficePage({
         </aside>
       )}
 
+      {/* 🔴 ONE MOUNTED ChatArea PER CONVERSATION, AND THE `key` IS THE WHOLE OF
+          IT (T-48, R13-5). All three branches below sit in the same position of
+          the same conditional expression, so without a key React reuses ONE
+          component instance and a conversation switch is just a prop change —
+          every piece of per-conversation state, every in-flight read and every
+          latch inside `ChatArea` and `useChat` then survives into a room it does
+          not belong to. Twelve reviews found twelve instances of that, and each
+          was answered by re-implementing `key` a little further inside: a visit
+          token, a keyed-state hook, a keyed-record hook, a machine-checked
+          census of everything that had to be keyed.
+
+          Keying the mount is the same statement, made once, by React. A switch
+          unmounts: the state goes, the DOM refs go, the setters land in a
+          discarded component, and nothing has to be enumerated. What survives on
+          purpose survives because it lives OUTSIDE the component — the draft and
+          its staged files, in `lib/chatDraftStore`, which is where a returning
+          composer reads them from anyway.
+
+          ⚠️ Removing a key here does not break a test that names it; it silently
+          reopens all twelve. `lint-chat-area-key` is what goes red instead. */}
       {showChat && (workerMember || releasedPeer || selected) && (
         <section className="office__chat">
           {isMobile && (
@@ -605,6 +673,7 @@ export function OfficePage({
             // NO onOpenDetail (there is no live detail to open → composer stays
             // the plain locked notice). jumpToMsgId still locates the ask.
             <ChatArea
+              key={releasedPeer.id}
               member={releasedPeer}
               members={members}
               workers={outsource.workers}
@@ -623,9 +692,9 @@ export function OfficePage({
             />
           ) : workerMember && workerPeer ? (
             // M3 §4.2 outsource chat: the SAME ChatArea as a member chat
-            // (打字/附檔/看回覆), keyed on the worker id as the chat peer.
+            // (打字/附檔/看回覆), mounted on the worker id as the chat peer.
             // Header title = 「外包 · 代號」; the subtitle is the SAME task
-            // line the rail's outsource row shows — [clickable T-xxxx chip →
+            // line the rail's outsource row shows — [clickable task-id chip →
             // task type], the shared OutsourceTaskLine (owner 2026-07-16:
             // 兩邊顯示一樣的東西; replaces the old 狀態 · 標題 pair) — instead
             // of a member presence badge. NO dot here: outsource presence
@@ -636,12 +705,13 @@ export function OfficePage({
             // #office/worker/<id>. The chip's stopPropagation keeps the task
             // jump from also opening that detail.
             <ChatArea
+              key={workerPeer.id}
               member={workerMember}
               members={members}
               workers={outsource.workers}
               onOpenDetail={() => setWorkerDetailId(workerPeer.id)}
               draftSeed={seedFor(workerPeer.id)}
-              // T-3451: the bound task's FULL title under the T-xxxx·type sub —
+              // T-3451: the bound task's FULL title under the 任務編號·type sub —
               // owner: 外包側 header 同樣顯示完整 title. Rides the wire echo.
               headerTaskTitle={workerPeer.taskTitle ?? ""}
               headerSub={
@@ -660,12 +730,18 @@ export function OfficePage({
           ) : (
             selected && (
               <ChatArea
+                key={selected.id}
                 member={selected}
                 // The full roster resolves an inter-agent message's sender id →
                 // name (the sender may be a THIRD agent, not the window's peer).
                 members={members}
-                // Outsource senders are never in `members` — the live worker
-                // list resolves their codename the same way the left rail does.
+                // The live worker list, so an ow- sender `members` did not
+                // resolve still gets the codename the left rail shows. Note
+                // `members` is the UNFILTERED roster (not `roster`, which is
+                // kind==='staff' only), and GET /api/members does carry
+                // kind='outsource' rows — so this list is a fallback, not the
+                // only outsource label source. Released workers are in
+                // neither; ChatArea's useWorkerCodenames covers those.
                 workers={outsource.workers}
                 // Reuse the existing detailId gate: the header opens the same
                 // MemberDetailPanel the left-rail MemberCard avatar opens.

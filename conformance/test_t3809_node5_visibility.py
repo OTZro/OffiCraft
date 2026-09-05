@@ -91,7 +91,7 @@ def subject(client: httpx.Client, owner_token: str):
 
     learning = f"LEARNING-{tag}: the widget build needs node 20."
     r = client.post(
-        f"/api/lessons/{role_key}/general",
+        f"/api/lessons/{role_key}",
         json={"text": learning},
         headers=_auth(owner_token),
     )
@@ -121,7 +121,7 @@ def test_other_role_agent_reads_duty(client, agent_b, subject):
 
 def test_other_role_agent_reads_learning(client, agent_b, subject):
     """PRE-EXISTING behaviour, pinned deliberately — see the module docstring."""
-    path = f"/api/lessons/{subject['role_key']}/general"
+    path = f"/api/lessons/{subject['role_key']}"
     r = client.get(path, headers=_auth(agent_b.token))
     _log("read-learning", "GET", path, "agent_other", r)
     assert r.status_code == 200, r.text
@@ -196,7 +196,7 @@ def test_duty_and_learning_untouched_by_insight_write(client, agent_b, subject):
     r = client.get(f"/api/roles/{subject['role_key']}", headers=_auth(agent_b.token))
     _log("read-duty-after", "GET", f"/api/roles/{subject['role_key']}", "agent_other", r)
     assert r.status_code == 200 and subject["duty"] in r.text
-    path = f"/api/lessons/{subject['role_key']}/general"
+    path = f"/api/lessons/{subject['role_key']}"
     r = client.get(path, headers=_auth(agent_b.token))
     _log("read-learning-after", "GET", path, "agent_other", r)
     assert r.status_code == 200 and subject["learning"] in r.json()["text"]

@@ -63,8 +63,8 @@ export interface Member {
   actualEffort?: string;
   model: string;
   effort: Effort;
-  // The member's kind (e.g. "assistant" | "warden"). The office roster shows
-  // ONLY real AI assistants; machine-layer kinds (warden) are filtered out.
+  // The member's kind (e.g. "staff" | "warden"). The office roster shows
+  // ONLY real AI colleagues; machine-layer kinds (warden) are filtered out.
   kind: string;
   // The machine this member is bound to run on (wire `desired_machine_id`). Direct
   // passthrough — used to resolve the warden member behind a monitoring machine row
@@ -101,12 +101,20 @@ export interface Member {
   refocusSince: number | null;
 
   /** Which operation opened the in-flight wind-down (wire `refocus_op`):
-   * "relocate" | "runtime/model" | "context_high" | "refocus" |
-   * "restart_self"; "" when none. */
+   * "relocate" | "runtime/model" | "context_notice" | "context_high" |
+   * "refocus" | "restart_self" | "token_expiry" | "accelerated_stop"; "" when
+   * none. The last three arrived with T-ed79 and the server sends all of them;
+   * they were missing from this list, which is the whole value of writing the
+   * set down. */
   refocusOp?: string;
   /** Epoch by which that wind-down is collected at the latest (wire
    * `refocus_deadline`), null when none is in flight. A CEILING, not a
-   * prediction — the collect fires as soon as the agent reports stopped. */
+   * prediction — the collect fires as soon as the agent reports stopped.
+   *
+   * 🔴 null ALSO means "in flight, but on no clock at all", which since T-ed79
+   * is every cause except the two 加速停止 arms, `context_high` and
+   * `accelerated_stop`. `refocusOp` is what tells the two apart; never read null
+   * as "nothing is happening". */
   refocusDeadline?: number | null;
   /** The DURABLE last-observed machine (wire `actual_machine`). `machine`
    * above blanks the moment the member stops running; this survives, so a
@@ -194,21 +202,18 @@ export interface MemberRelocateResult {
 export interface BootstrapView {
   role: string;
   name: string;
-  taskType: string;
   context: string;
 }
 
 /**
- * The folded PER-ROLE lessons doc for one `roleKey` + `task_type` (the single
- * fixed task_type key is "general"). Scoped to a role (per-role-learnings step1):
- * agents sharing a role share it, but a researcher's learnings no longer pollute
- * an assistant's. Kept minimal (like `BootstrapView` drops token): the UI needs
+ * The folded PER-ROLE lessons doc for one `roleKey` — the WHOLE address since
+ * T-2 removed the `task_type` axis. Agents sharing a role share it, but a
+ * researcher's learnings no longer pollute an assistant's. Kept minimal (like `BootstrapView` drops token): the UI needs
  * only the text + `isDefault`, so `owner_id` / `schema_version` are dropped BY
  * DESIGN. `isDefault` true → the text IS the file seed (dal/seeds/lessons.md).
  */
 export interface LessonsView {
   roleKey: string;
-  taskType: string;
   text: string;
   isDefault: boolean;
   /** Size of `text` in CHARACTERS (Unicode code points) — cap_chars' unit. */
@@ -225,7 +230,7 @@ export interface LessonsView {
 /**
  * The folded PER-ROLE insight doc for one `roleKey` (T-3809) — the role
  * journal's third block, beside Duty (the role definition) and Learning (the
- * lessons doc). No `task_type` axis: that belongs to lessons.
+ * lessons doc).
  *
  * ⚠️ UNLIKE `LessonsView` this DOES carry `sizeChars` / `capChars`, and that is
  * load-bearing rather than tidy. `capChars` is the live `doc.cap_chars.insight`
@@ -626,7 +631,7 @@ export interface ReleaseCheckView {
 }
 
 /**
- * The folded global-context doc (Settings › 角色誌 › 全域情境). `isDefault` true
+ * The folded global-context doc (Settings › 全域情境 › 使用者自訂). `isDefault` true
  * → the text IS the file seed (label "預設"); false → owner-edited.
  */
 export interface GlobalContextView {
@@ -639,7 +644,8 @@ export interface GlobalContextView {
 /**
  * Which editable long-form document a retained revision belongs to. The
  * companion `key` is "global" for global_context, the role key for
- * role_definition, "<role_key>::<task_type>" for lessons, the type_key for
+ * role_definition, the role key for lessons too (T-2 dropped the
+ * "<role_key>::<task_type>" composite), the type_key for
  * every task_manual kind, and the TASK id for task_description / task_title.
  *
  * `task_description` (T-e271) is the odd one out in what it keys on: every
@@ -659,9 +665,8 @@ export type DocumentKind =
   | "global_context"
   | "role_definition"
   | "lessons"
-  // T-3809: the role journal's third block. Its key is the BARE role_key — no
-  // task_type axis, so it is NOT the "<role_key>::<task_type>" composite lessons
-  // uses, and anything deriving one key format from the other is wrong for it.
+  // T-3809: the role journal's third block. Its key is the BARE role_key —
+  // which since T-2 is also what lessons uses.
   | "insight"
   | "task_manual"
   | "task_manual_sop"
@@ -678,15 +683,51 @@ export type DocumentKind =
   // third step means opposite things, so nothing may copy one over the other.
   | "system_interaction"
   | "boot_sequence"
-  // T-c9c0: the 下線程序 document. A SINGLETON keyed "global" like
+  // T-c9c0: the 〈停止〉 document. A SINGLETON keyed "global" like
   // system_interaction — being collected is the same procedure whatever
   // runtime an agent runs, so there is deliberately no runtime axis here.
-  | "offboard";
+  | "offboard"
+  // T-3201: the six lifecycle procedures that used to be Go string literals.
+  // All singletons keyed "global".
+  // ⚠️ T-6f44 (owner's decision 2): the last two are NO LONGER read-only. The
+  // reason they were locked was recorded as 「以前 global context 是固定內容 我們
+  // 也是會顯示 只是不給改」 — precedent, not a property of the text. Read-only is
+  // still a property of the DOCUMENT that arrives on its own read rather than a
+  // list the cockpit keeps; today no shipped document sets it.
+  | "accelerated_stop"
+  | "task_closeout"
+  | "task_reassign_predecessor"
+  | "task_takeover_with_predecessor"
+  | "task_takeover_fresh"
+  | "task_unblocked";
 
-/** The DocumentKinds that carry a seeded, owner-editable boot-context block
- * (T-791e). Narrower than DocumentKind on purpose: the adapter's three boot-doc
- * methods take THIS, so no caller can address `lessons` through them. */
-export type BootDocKind = "system_interaction" | "boot_sequence" | "offboard";
+/** The DocumentKinds that carry a seeded boot-context / lifecycle document
+ * (T-791e, widened by T-3201). Narrower than DocumentKind on purpose: the
+ * adapter's boot-doc methods take THIS, so no caller can address `lessons`
+ * through them.
+ *
+ * 🔴 THIS UNION IS ONE HALF OF A PAIR, AND THE WIRE HOLDS THE OTHER HALF. It
+ * must stay identical to the frozen spec's `BootDocKind` enum: `toBootDoc`
+ * assigns the generated wire type straight into this one, so a value added to
+ * the enum and not added here does not compile (T-3201, owner's ruling 「加上
+ * enum 並且前端自己寫死，我接受新增 enum 的人要去改前端的 code 找到他對應顯示的
+ * 位置」).
+ *
+ * Adding it here is then not enough either: the settings list's `BOOT_DOC_ROWS`
+ * (components/SettingsPage.tsx) is a `Record<BootDocKind, …>`, so the new kind
+ * has no place to be shown until somebody gives it one, and that is a compile
+ * error too. Two links, one chain — a document that ships and that the cockpit
+ * never shows is the failure it exists to make loud. */
+export type BootDocKind =
+  | "system_interaction"
+  | "boot_sequence"
+  | "offboard"
+  | "accelerated_stop"
+  | "task_closeout"
+  | "task_reassign_predecessor"
+  | "task_takeover_with_predecessor"
+  | "task_takeover_fresh"
+  | "task_unblocked";
 
 /**
  * One seeded boot-context block as the cockpit reads it (T-791e) — the folded
@@ -702,8 +743,22 @@ export type BootDocKind = "system_interaction" | "boot_sequence" | "offboard";
 export interface BootDocView {
   kind: BootDocKind;
   key: string;
+  /** The WHOLE stored document, marker line and all. What the version-history
+   * modal diffs against; NEVER what a save sends. */
   text: string;
-  /** Size of `text` in CHARACTERS (Unicode code points) — capChars' unit. */
+  /** The half the server fills in and refuses to take back (T-3201). `""` on a
+   * document that carries none. Shown, never edited — the owner's standing rule
+   * for these documents is 「以前 global context 是固定內容 我們也是會顯示 只是不
+   * 給改」 — and since the write face has no field for it, showing it is the only
+   * thing the cockpit can do with it. */
+  readOnlyHead: string;
+  /** The EDITABLE half, and byte for byte what `saveBootDoc` takes back. The
+   * editor holds this, not `text`: the cockpit never composes the two halves,
+   * never learns the marker, and cannot express an edit to the head. */
+  body: string;
+  /** Size of `text` — the WHOLE document — in CHARACTERS (Unicode code points),
+   * capChars' unit. It counts the head the owner cannot edit, because the cap
+   * is enforced on the document that gets stored. */
   sizeChars: number;
   /** The cap the SERVER enforces for this kind, in the same unit. The cockpit
    * blocks over-cap saves against this number rather than a local constant, so
@@ -711,6 +766,11 @@ export interface BootDocView {
   capChars: number;
   isDefault: boolean;
   hasSeed: boolean;
+  /** True when the server SHOWS this document but refuses every write to it
+   * (405). Read off the document itself (T-3201) — the cockpit never carries
+   * its own list of which documents are read-only, because that list would go
+   * stale silently the day one changes. */
+  readOnly: boolean;
 }
 
 /**
@@ -773,6 +833,44 @@ export interface DocumentHistoryView {
   createdTs: number;
   /** Who wrote the version that replaced this one (owner id / member id). */
   actorId: string;
+}
+
+/**
+ * ONE SIDE of a comparison, as `GET /api/diff` resolved it (T-59).
+ *
+ * `gone` is the load-bearing field and it is NOT the same as an empty text:
+ * an address that resolved to nothing (a reclaimed blob, a pruned revision, a
+ * field the document no longer carries) must be SAID, because the other way to
+ * draw it — the surviving side against "" — marks every one of its lines as
+ * added, which is a confident wrong answer to "what changed".
+ *
+ * `label` is the heading for that side's column WHEN THE LINK CARRIED ONE.
+ * Absent is the normal case for a document side, and deliberately so: 「目前存檔
+ * 內容」/「初始版本」/「版本 #12」 belong in the reader's own language, and a
+ * label written once at mint time would impose one language on everyone. The
+ * reader writes those from the address; a blob side with no label falls back to
+ * the diff's own 先前版本／目前內容 words.
+ */
+export interface DiffSideView {
+  /** The address this side was asked for, echoed back. The reader needs it to
+   * write a DOCUMENT side's own heading — see `label`. */
+  address: string;
+  text: string;
+  label?: string;
+  gone: boolean;
+  /** Which of those happened, in the server's words. Not drawn on screen — the
+   * reader is told one sentence, and "a pruned revision" and "a reclaimed blob"
+   * are the same fact to them — but it is what a console warning can say when
+   * someone asks why a comparison would not draw. */
+  goneReason?: string;
+}
+
+/** Both sides of one comparison, in the single answer the compare screen asks
+ * for. Held as ONE value so there is no state in which one side has arrived and
+ * the other has not — that renders as a diff against nothing. */
+export interface DiffPairView {
+  before: DiffSideView;
+  after: DiffSideView;
 }
 
 /**
@@ -840,6 +938,43 @@ export interface RoleDefView extends RoleSummaryView {
   definitionMd: string;
 }
 
+/** The PUBLIC pre-auth probe (`GET /api/auth/status`), both bits.
+ *
+ * `mfaRequired` is deliberately readable without a token: the login wall has to
+ * know how many fields to render before anyone is authenticated. The only
+ * alternative — letting /api/login answer differently for "password right, code
+ * missing" — would disclose strictly more, because it confirms a correct
+ * password. */
+export interface AuthStatusView {
+  passwordSet: boolean;
+  mfaRequired: boolean;
+}
+
+/** The one-time output of `POST /api/auth/mfa/enroll`.
+ *
+ * This is the ONLY moment a TOTP secret crosses the wire — an authenticator
+ * cannot be enrolled without it. The server never echoes an ACTIVE secret back,
+ * so this view has no "read my current secret" counterpart, and it must not be
+ * persisted anywhere by the cockpit. */
+/** The owner's second-factor state (`GET /api/auth/mfa`, owner-gated).
+ *
+ * `offered` is the ship-dark rollout flag — whether this server lets the factor
+ * be SET UP. It is NOT a second opinion on whether one is armed (`enrolled`),
+ * and it never affects whether login demands a code: withdrawing the feature
+ * leaves an armed factor fully enforced, or the flag would be a way for a stolen
+ * session to walk past it. */
+export interface MfaStateView {
+  offered: boolean;
+  enrolled: boolean;
+}
+
+export interface MfaEnrollView {
+  /** Base32 secret, for manual entry into an authenticator app. */
+  secret: string;
+  /** `otpauth://totp/…` URI — the QR / deep-link form of the same secret. */
+  otpauthUri: string;
+}
+
 /**
  * Whether the SCHEDULED database backup is still producing retreat points
  * (`GET /api/backup-health`, T-da06). Read by the 備份健康 block under
@@ -855,6 +990,24 @@ export interface RoleDefView extends RoleSummaryView {
  * sentence is derived from `code` via i18n; `detail` is the server's English
  * diagnostic string and is only ever shown as SECONDARY text.
  */
+/** ONE signing key as the cockpit may know it (T-62).
+ *
+ * 🔴 There is no field for key material, and there is not meant to be: the wire
+ * carries none (SigningKeyDTO), because on an install predating the key ring
+ * the signing key IS a SHA-256 of the owner password, so even a fingerprint of
+ * it would be an offline dictionary attack on that password. */
+export interface SigningKeyView {
+  keyId: string;
+  /** When this key was made (epoch seconds), or null for the key an install has
+   * been using since before the ring existed — its creation time was never
+   * recorded. The wire says that with a 0, which the mapper narrows to null so
+   * no component can render it as 1970. */
+  createdTs: number | null;
+  /** Exactly one key in a ring carries this: the one that SIGNS new tokens.
+   * Every other key still verifies until someone removes it. */
+  isSigning: boolean;
+}
+
 export interface BackupHealthView {
   status: BackupHealthStatus;
   code: BackupHealthCode;

@@ -69,8 +69,8 @@ func TestReassignRouteRowIsAgentGatedAndMCPExposed(t *testing.T) {
 // TestReassignMemberToMemberHandsOver.)
 func TestReassignPlainAgentMayNotHandToAnotherMember(t *testing.T) {
 	api := newTasksTestServer(t)
-	putActiveMember(t, api, "m-new", "Rei", KindAssistant)
-	putActiveMember(t, api, "m-exec", "Exec", KindAssistant) // a 一般正職 (no RoleKey)
+	putActiveMember(t, api, "m-new", "Rei", KindStaff)
+	putActiveMember(t, api, "m-exec", "Exec", KindStaff) // a 一般正職 (no RoleKey)
 	task := createAdHocTask(t, api, "m-exec")
 
 	// A DIFFERENT agent (not the executor) is forbidden by the executor guard.
@@ -102,7 +102,7 @@ func TestReassignPlainAgentMayNotHandToAnotherMember(t *testing.T) {
 func TestReassignToOutsourceByPlainExecutorAdmits(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
-	putActiveMember(t, api, "m-exec", "Exec", KindAssistant) // plain agent (no RoleKey)
+	putActiveMember(t, api, "m-exec", "Exec", KindStaff) // plain agent (no RoleKey)
 	task := createAdHocTask(t, api, "m-exec")
 
 	rec := reassign(t, api, task.ID, map[string]any{
@@ -135,7 +135,7 @@ func TestReassignToOutsourceByPlainExecutorAdmits(t *testing.T) {
 func TestReassignOutsourceCallerIsForbidden(t *testing.T) {
 	api := newTasksTestServer(t)
 	putActiveMember(t, api, "ow-exec", "S-exec", KindOutsource)
-	putActiveMember(t, api, "m-new", "Rei", KindAssistant)
+	putActiveMember(t, api, "m-new", "Rei", KindStaff)
 	now := nowSecs()
 	if err := api.dal.PutTask(Task{
 		ID: "t-owx", Title: "owned by outsource", Status: TaskStatusNotStarted,
@@ -160,8 +160,8 @@ func TestReassignOutsourceCallerIsForbidden(t *testing.T) {
 // TestReassignMemberToMemberHandsOver; this pins Mira.
 func TestReassignAdminAgentMayHandToAnyMember(t *testing.T) {
 	api := newTasksTestServer(t)
-	putMemberRow(t, api, "m-mira", KindAssistant, adminRoleKey)
-	putActiveMember(t, api, "m-new", "Rei", KindAssistant)
+	putMemberRow(t, api, "m-mira", KindStaff, adminRoleKey)
+	putActiveMember(t, api, "m-new", "Rei", KindStaff)
 	task := createAdHocTask(t, api, "m-old")
 	rec := reassign(t, api, task.ID, memberTarget("m-new"), "m-mira", "agent")
 	if rec.Code != http.StatusOK {
@@ -175,8 +175,8 @@ func TestReassignAdminAgentMayHandToAnyMember(t *testing.T) {
 
 func TestReassignMemberToMemberHandsOver(t *testing.T) {
 	api := newTasksTestServer(t)
-	putActiveMember(t, api, "m-old", "Ken", KindAssistant)
-	putActiveMember(t, api, "m-new", "Rei", KindAssistant)
+	putActiveMember(t, api, "m-old", "Ken", KindStaff)
+	putActiveMember(t, api, "m-new", "Rei", KindStaff)
 	task := createAdHocTask(t, api, "m-old")
 	view := submitPlan(t, api, task.ID, "m-old", []map[string]any{
 		{"name": "done step", "dod": "d"},
@@ -198,12 +198,13 @@ func TestReassignMemberToMemberHandsOver(t *testing.T) {
 		}
 	}
 	rec := httptest.NewRecorder()
-	api.HandleOpenTaskGateApiTasksTaskIdStepsStepIdGatePost(rec,
-		taskReq(t, "POST", "/x", map[string]any{
-			"kind": "decision", "summary": "go?", "options": []string{"a", "b"},
-		}, "m-old", "agent"), task.ID, view.Steps[2].ID)
+	api.HandleCreateReplyCardApiReplyCardsPost(rec,
+		taskReq(t, "POST", "/api/reply-cards", map[string]any{
+			"kind": "decision", "summary": "go?", "options": []map[string]any{{"text": "a"}, {"text": "b"}},
+			"linked_task": map[string]any{"task_id": task.ID, "step_id": view.Steps[2].ID},
+		}, "m-old", "agent"))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("open gate: %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("open bound card: %d %s", rec.Code, rec.Body.String())
 	}
 	card := decodeBody[replyCardDTO](t, rec)
 
@@ -265,16 +266,63 @@ func TestReassignMemberToMemberHandsOver(t *testing.T) {
 			toNew = &msgs[i]
 		}
 	}
-	if toOld == nil || !strings.Contains(toOld.Body, "已轉派給 Rei") ||
-		!strings.Contains(toOld.Body, "交接") {
-		t.Fatalf("old-executor handover message wrong: %+v", toOld)
+	// 🔴 THE WHOLE TEXT, not a keyword — the predecessor notice is the 轉派程序
+	// DOCUMENT now (T-3201), and the failure a keyword probe cannot see is the
+	// send site naming another event's kind: every one of these documents opens
+	// with a [任務編號] and reads as a coherent notice, so "mentions the
+	// successor and the word 交接" would pass on a document about something else
+	// entirely. Hand-written rather than re-rendered from the registry, so this
+	// stays a statement about what an agent receives.
+	// 🔴 THE SUCCESSOR IS NOT NAMED SINCE T-6f44 (owner 2026-08-24). The whole
+	// body is asserted, so the identity cannot creep back in anywhere in it.
+	wantOld := "[" + TaskNo(task.ID) + "] 此任務已轉派給新的接手人。" + "請停止推進，先把交接資訊寫到這張任務上：目前進度、進行中的事項、有哪些雷要注意。**這一步不能省，它是接手人唯一保證讀得到的東西** —— 接手人可能還沒被建出來，也可能你已經下線了才輪到他。\n\n寫完就算交出去了。如果接手人剛好在線上來找你，就順便當面補齊；沒有的話不用等，也不用去找他。"
+	if toOld == nil {
+		t.Fatalf("the predecessor received no handover message at all")
 	}
-	if toNew == nil || !strings.Contains(toNew.Body, "接手了任務") ||
-		!strings.Contains(toNew.Body, "claim_task") ||
-		strings.Contains(toNew.Body, "update_task_status") ||
-		!strings.Contains(toNew.Body, "你的前任是 Ken") ||
-		!strings.Contains(toNew.Body, "分支在 kyle-160e") {
-		t.Fatalf("new-executor handover message wrong (predecessor + note must ride): %+v", toNew)
+	if toOld.Body != wantOld {
+		t.Fatalf("old-executor handover message wrong:\n got %q\nwant %q", toOld.Body, wantOld)
+	}
+	// 🔴 NAMED SEPARATELY, because the whole-body compare above would also fail
+	// for a stray space and this is the rule that must not be quietly undone:
+	// the predecessor is told THAT the task moved, never to whom.
+	for _, leak := range []string{"Rei", "m-new"} {
+		if strings.Contains(toOld.Body, leak) {
+			t.Errorf("the predecessor notice names the successor (%q) — it must "+
+				"say only that the task moved; identity is looked up on the "+
+				"ticket:\n%s", leak, toOld.Body)
+		}
+	}
+	// The successor's notice is the 接手程序（有前任） DOCUMENT now (T-3201),
+	// compared whole for the same reason the predecessor's is.
+	//
+	// 🔴 THE HANDOVER NOTE IS NOT IN IT, BY RULING (owner rc-0c36d8739b8f:
+	// 「拿掉 —— 交接備註只留在任務上」). It used to be stapled under this notice
+	// while the same reassign also wrote it onto the task, so the successor was
+	// handed two copies of one sentence — and the copy down here is what made
+	// this document unsplittable, a {note} slot after the instructions leaving
+	// no prefix of facts to cut at. The task-side copy is asserted below, so
+	// "the note is gone" cannot pass on a build that lost it altogether.
+	// {title} dropped and the predecessor's two slots merged into one, same
+	// ruling: 「銀月（mira）」 rather than 「Ken（id `m-old`）」.
+	// T-91: the notice opens by demoting itself to a reminder — the same
+	// handover is on the ticket (lock + reassigned_from) and on the wake
+	// snapshot, so it is no longer the only path to the fact.
+	wantNew := "[" + TaskNo(task.ID) + "] 你接手了這張任務，你的前任是 Ken（m-old）。" +
+		"這則訊息只是提醒，不是唯一路徑——同一件事在票上讀得到（`lock` 是 " +
+		"`reassigning`、`reassigned_from` 是前任），開機盤點就會看到，" +
+		"漏收這則也不會漏掉這張票。" +
+		"請先跟他確認交接完成（直接 post_chat 給他，問清楚目前進度與進行中的事項），" +
+		"確認後再由你自己呼叫 claim_task（認領）解除轉派鎖——只有你這個新負責人動得了；" +
+		"任務狀態一律照步驟推導，不必也不能自己報。"
+	if toNew == nil {
+		t.Fatalf("the successor received no handover message at all")
+	}
+	if toNew.Body != wantNew {
+		t.Fatalf("new-executor handover message wrong:\n got %q\nwant %q", toNew.Body, wantNew)
+	}
+	if noted, err := api.dal.GetTask(task.ID); err != nil || noted == nil ||
+		noted.HandoverNote != "分支在 kyle-160e" || noted.HandoverNoteTS <= 0 {
+		t.Fatalf("the handover note must still reach the successor through the task: %+v %v", noted, err)
 	}
 	if toNew.Meta["task_id"] != task.ID {
 		t.Fatalf("handover meta must carry the task linkage: %+v", toNew.Meta)
@@ -318,7 +366,7 @@ func TestReassignMemberToMemberHandsOver(t *testing.T) {
 func TestReassignToOutsourceLandsUnassignedTarget(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true // hold the scheduler — assert the landing, then tick by hand
-	putActiveMember(t, api, "m-old", "Ken", KindAssistant)
+	putActiveMember(t, api, "m-old", "Ken", KindStaff)
 	task := createAdHocTask(t, api, "m-old")
 	seedMachine(t, api, "m-box")
 
@@ -387,7 +435,7 @@ func TestReassignToOutsourceLandsUnassignedTarget(t *testing.T) {
 func TestReassignInProgressTaskToOutsourceMintsSuccessorUnderReassigningLock(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true // hold the scheduler — reassign, then tick by hand
-	putActiveMember(t, api, "m-old", "Ken", KindAssistant)
+	putActiveMember(t, api, "m-old", "Ken", KindStaff)
 	task := createAdHocTask(t, api, "m-old")
 	view := submitPlan(t, api, task.ID, "m-old", []map[string]any{
 		{"name": "done step", "dod": "d"},
@@ -473,8 +521,8 @@ func bindOutsourceExecutor(t *testing.T, api *apiServer, taskID, workerID, coden
 // hand over with.
 func TestReassignDefersOutsourceSourceDismissUntilTakeover(t *testing.T) {
 	api := newTasksTestServer(t)
-	putActiveMember(t, api, "m-new", "Rei", KindAssistant)
-	putActiveMember(t, api, "m-old", "Ken", KindAssistant)
+	putActiveMember(t, api, "m-new", "Rei", KindStaff)
+	putActiveMember(t, api, "m-old", "Ken", KindStaff)
 	task := createAdHocTask(t, api, "m-old")
 	bindOutsourceExecutor(t, api, task.ID, "ow-live", "S-1")
 
@@ -518,7 +566,7 @@ func TestReassignDefersOutsourceSourceDismissUntilTakeover(t *testing.T) {
 func TestReassignOutsourceToOutsourceTakeoverSparesTheNewWorker(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true // mint the successor by an explicit tick
-	putActiveMember(t, api, "m-old", "Ken", KindAssistant)
+	putActiveMember(t, api, "m-old", "Ken", KindStaff)
 	task := createAdHocTask(t, api, "m-old")
 	bindOutsourceExecutor(t, api, task.ID, "ow-old", "S-1")
 
@@ -564,7 +612,7 @@ func TestReassignOutsourceToOutsourceTakeoverSparesTheNewWorker(t *testing.T) {
 func TestReassignToOutsourcePostsPredecessorHandoverNotice(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
-	putActiveMember(t, api, "m-old", "Ken", KindAssistant)
+	putActiveMember(t, api, "m-old", "Ken", KindStaff)
 	task := createAdHocTask(t, api, "m-old")
 
 	rec := reassign(t, api, task.ID, map[string]any{
@@ -597,8 +645,8 @@ func TestReassignToOutsourcePostsPredecessorHandoverNotice(t *testing.T) {
 
 func TestReassignTakeoverIsTheNewExecutorsAlone(t *testing.T) {
 	api := newTasksTestServer(t)
-	putActiveMember(t, api, "m-old", "Ken", KindAssistant)
-	putActiveMember(t, api, "m-new", "Rei", KindAssistant)
+	putActiveMember(t, api, "m-old", "Ken", KindStaff)
+	putActiveMember(t, api, "m-new", "Rei", KindStaff)
 	task := createAdHocTask(t, api, "m-old")
 	if rec := reassign(t, api, task.ID, memberTarget("m-new"),
 		"owner", "owner"); rec.Code != http.StatusOK {
@@ -642,7 +690,7 @@ func TestReassignTakeoverIsTheNewExecutorsAlone(t *testing.T) {
 func TestReassignOutsourceSuccessorClaimsOnWakingThenTakesOver(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
-	putActiveMember(t, api, "m-old", "Ken", KindAssistant)
+	putActiveMember(t, api, "m-old", "Ken", KindStaff)
 	task := createAdHocTask(t, api, "m-old")
 	note := strings.Repeat("交接", 1250)
 
@@ -703,8 +751,8 @@ func TestReassignOutsourceSuccessorClaimsOnWakingThenTakesOver(t *testing.T) {
 
 func TestReassignPreservesHandoverNoteWhenLaterReassignOmitsNote(t *testing.T) {
 	api := newTasksTestServer(t)
-	putActiveMember(t, api, "m-old", "Ken", KindAssistant)
-	putActiveMember(t, api, "m-new", "Rei", KindAssistant)
+	putActiveMember(t, api, "m-old", "Ken", KindStaff)
+	putActiveMember(t, api, "m-new", "Rei", KindStaff)
 	task := createAdHocTask(t, api, "m-old")
 
 	if rec := reassign(t, api, task.ID, map[string]any{
@@ -735,8 +783,8 @@ func TestReassignPreservesHandoverNoteWhenLaterReassignOmitsNote(t *testing.T) {
 
 func TestReassignRejectsHandoverNoteOverRuneLimit(t *testing.T) {
 	api := newTasksTestServer(t)
-	putActiveMember(t, api, "m-old", "Ken", KindAssistant)
-	putActiveMember(t, api, "m-new", "Rei", KindAssistant)
+	putActiveMember(t, api, "m-old", "Ken", KindStaff)
+	putActiveMember(t, api, "m-new", "Rei", KindStaff)
 	task := createAdHocTask(t, api, "m-old")
 
 	rec := reassign(t, api, task.ID, map[string]any{
@@ -754,8 +802,8 @@ func TestReassignRejectsHandoverNoteOverRuneLimit(t *testing.T) {
 
 func TestReassignClearsTheWaitingExternalReason(t *testing.T) {
 	api := newTasksTestServer(t)
-	putActiveMember(t, api, "m-old", "Ken", KindAssistant)
-	putActiveMember(t, api, "m-new", "Rei", KindAssistant)
+	putActiveMember(t, api, "m-old", "Ken", KindStaff)
+	putActiveMember(t, api, "m-new", "Rei", KindStaff)
 	task := createAdHocTask(t, api, "m-old")
 	view := submitPlan(t, api, task.ID, "m-old", []map[string]any{
 		{"name": "integrate", "dod": "d"},
@@ -785,8 +833,8 @@ func TestReassignClearsTheWaitingExternalReason(t *testing.T) {
 // same never-started reset; terminal rows keep their history untouched.
 func TestReassignResetsStepBirthmarksWithPending(t *testing.T) {
 	api := newTasksTestServer(t)
-	putActiveMember(t, api, "m-old", "Ken", KindAssistant)
-	putActiveMember(t, api, "m-new", "Rei", KindAssistant)
+	putActiveMember(t, api, "m-old", "Ken", KindStaff)
+	putActiveMember(t, api, "m-new", "Rei", KindStaff)
 	task := createAdHocTask(t, api, "m-old")
 	view := submitPlan(t, api, task.ID, "m-old", []map[string]any{
 		{"name": "done step", "dod": "d"},
@@ -871,7 +919,7 @@ func TestReassignResetsStepBirthmarksWithPending(t *testing.T) {
 // same "pending but started_ts>0" dirt.
 func TestSubmitPlanFreshStepsAreBornNeverStarted(t *testing.T) {
 	api := newTasksTestServer(t)
-	putActiveMember(t, api, "m-exec", "Ken", KindAssistant)
+	putActiveMember(t, api, "m-exec", "Ken", KindStaff)
 	task := createAdHocTask(t, api, "m-exec")
 	view := submitPlan(t, api, task.ID, "m-exec", []map[string]any{
 		{"name": "old step", "dod": "d"},
@@ -907,7 +955,7 @@ func TestSubmitPlanFreshStepsAreBornNeverStarted(t *testing.T) {
 func TestReassignOutsourceTargetMachineMustResolve(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
-	putActiveMember(t, api, "m-old", "Ken", KindAssistant)
+	putActiveMember(t, api, "m-old", "Ken", KindStaff)
 	seedMachine(t, api, "m-real")
 	task := createAdHocTask(t, api, "m-old")
 
@@ -936,12 +984,12 @@ func TestReassignOutsourceTargetMachineMustResolve(t *testing.T) {
 
 func TestReassignGuards(t *testing.T) {
 	api := newTasksTestServer(t)
-	putActiveMember(t, api, "m-old", "Ken", KindAssistant)
-	putActiveMember(t, api, "m-new", "Rei", KindAssistant)
+	putActiveMember(t, api, "m-old", "Ken", KindStaff)
+	putActiveMember(t, api, "m-new", "Rei", KindStaff)
 	putActiveMember(t, api, "m-warden", "box", KindWarden)
-	putActiveMember(t, api, "m-gone", "Gone", KindAssistant)
+	putActiveMember(t, api, "m-gone", "Gone", KindStaff)
 	if err := api.dal.PutMember(Member{
-		ID: "m-gone", Name: "Gone", Kind: KindAssistant, Effort: "medium",
+		ID: "m-gone", Name: "Gone", Kind: KindStaff, Effort: "medium",
 		RosterStatus: RosterStatusRemoved,
 	}); err != nil {
 		t.Fatalf("dismiss m-gone: %v", err)

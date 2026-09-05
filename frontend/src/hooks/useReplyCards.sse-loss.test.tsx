@@ -74,7 +74,8 @@ function mkCard(over: Partial<ReplyCard> = {}): ReplyCard {
     kind: "decision",
     summary: "要不要切到新的排程器?",
     body: "細節",
-    options: ["切過去", "先不要"],
+    options: [{ text: "切過去", aiPick: true }, { text: "先不要", aiPick: false }],
+    selectMode: "single",
     status: "waiting",
     attachments: [],
     task: null,
@@ -325,6 +326,9 @@ describe("reply-card writes reconcile without any event stream", () => {
         />
       </I18nProvider>
     );
+    // Every inline card mounts collapsed (owner 2026-09-04); open it so there
+    // are chips for the stale read to try to put back.
+    fireEvent.click(container.querySelector(".reply-card__collapsed-row")!);
     await waitFor(() =>
       expect(container.querySelector(".reply-option")).toBeTruthy()
     );
@@ -409,7 +413,7 @@ describe("reply-card writes reconcile without any event stream", () => {
         summary: "早先答過的",
         status: "answered",
         answeredTs: Date.now() / 1000 - 3600,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
       })
     );
 
@@ -446,14 +450,14 @@ describe("reply-card writes reconcile without any event stream", () => {
         id: "rc-old",
         status: "answered",
         answeredTs: Date.now() / 1000 - 3600,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
       }),
       mkCard({
         id: "rc-peer",
         summary: "別人答的",
         status: "answered",
         answeredTs: Date.now() / 1000 - 120,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
       }),
     ]);
 
@@ -481,11 +485,12 @@ describe("reply-card writes reconcile without any event stream", () => {
     const answeredFixture = (over: Partial<ReplyCard> = {}): ReplyCard =>
       mkCard({
         id: "rc-A",
-        options: ["OPT-ZERO", "OPT-ONE"],
+        options: [{ text: "OPT-ZERO", aiPick: true }, { text: "OPT-ONE", aiPick: false }],
+        selectMode: "single",
         status: "answered",
         createdTs: now - 3600,
         answeredTs: now - 600,
-        answer: { optionIdx: 0, text: "", attachments: [] },
+        answer: { optionIdxs: [0], text: "", attachments: [] },
         ...over,
       });
     __injectMockReplyCard(answeredFixture());
@@ -549,6 +554,8 @@ describe("reply-card writes reconcile without any event stream", () => {
         />
       </I18nProvider>
     );
+    // Every inline card mounts collapsed (owner 2026-09-04); open it.
+    fireEvent.click(container.querySelector(".reply-card__collapsed-row")!);
     await waitFor(() =>
       expect(container.querySelector(".reply-option")).toBeTruthy()
     );

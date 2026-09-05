@@ -513,7 +513,7 @@ func realHeartbeat(t *testing.T) map[string]any {
 		}
 		return ""
 	}
-	runtimes := collectRuntimeCapabilities(env, fakeRunner{out: probes}, claude)
+	runtimes := collectRuntimeCapabilities(env, fakeRunner{out: probes}, claude, nil)
 
 	// The shape verdict comes from the REAL collector too. The package-default
 	// cutover seam is blocked inside the test binary, so its `ps` fails and the
@@ -562,7 +562,7 @@ func realHeartbeat(t *testing.T) map[string]any {
 // one, and until then a check that cannot fail. A check that cannot fail is worth
 // exactly nothing as evidence, so the walker is exercised HERE against the one frozen
 // request schema that does declare required keys (ReplyCardCreateDTO: kind, summary,
-// options). If the walker is ever broken, this is what goes red.
+// options, linked_task — T-18 added the fourth). If the walker is ever broken, this is what goes red.
 func TestMissingRequiredKeysActuallyNamesAMissingKey(t *testing.T) {
 	declared := frozenRequestSchema(t, "post", "/api/reply-cards")
 	if len(declared.Required) == 0 {
@@ -726,15 +726,31 @@ func TestWardenTelemetryPayloadsMatchFrozenSchema(t *testing.T) {
 	for _, name := range []string{"claude", "codex"} {
 		capability, _ := runtimes[name].(map[string]any)
 		// version is omitted when the runtime is not installed, and for claude it
-		// is transcribed from the claude probe (covered above); installed and
-		// logged_in are what machineSupportsRuntime gates placement on.
-		for _, key := range []string{"installed", "logged_in"} {
-			if _, present := capability[key]; !present {
-				t.Errorf("heartbeat runtimes.%s carries no %s — placement fail-closes "+
-					"without it and the machine silently stops accepting that "+
-					"runtime; capability = %v", name, key, capability)
-			}
+		// is transcribed from the claude probe (covered above).
+		if _, present := capability["installed"]; !present {
+			t.Errorf("heartbeat runtimes.%s carries no installed — placement "+
+				"fail-closes without it and the machine silently stops accepting "+
+				"that runtime; capability = %v", name, capability)
 		}
+	}
+	// logged_in is NOT emitted the same way by the two arms, and the difference
+	// is the ruling in T-b3d0. Codex runs `codex login status`, so it always has
+	// a verdict and must always carry the key — that is the entry
+	// machineSupportsRuntime gates codex placement on. Claude has no login probe,
+	// only presence checks, so it emits the key ONLY when a credential was
+	// actually found; "no evidence" is reported as absent (= unknown), never as
+	// false. This fixture stages a readable credential file, so the honest answer
+	// here is a present true — asserting that keeps the key covered against a
+	// rename without re-freezing the always-emit behaviour the ruling removed.
+	if capability, _ := runtimes["codex"].(map[string]any); capability["logged_in"] == nil {
+		t.Errorf("heartbeat runtimes.codex carries no logged_in — placement "+
+			"fail-closes without it; capability = %v", capability)
+	}
+	if capability, _ := runtimes["claude"].(map[string]any); capability["logged_in"] != true {
+		t.Errorf("heartbeat runtimes.claude logged_in = %v, want true: the fixture "+
+			"stages a credential the prober can read, so the collector has "+
+			"evidence and must report it; capability = %v",
+			capability["logged_in"], capability)
 	}
 	if capability, _ := runtimes["codex"].(map[string]any); capability["version"] == nil {
 		t.Errorf("heartbeat runtimes.codex carries no version; capability = %v", capability)

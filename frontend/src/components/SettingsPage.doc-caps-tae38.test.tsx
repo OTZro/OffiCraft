@@ -91,7 +91,7 @@ describe("T-ae38 — the three journal blocks each show their OWN budget", () =>
     await setCaps();
     // Multi-byte on purpose: the server counts RUNES, and `String.length` would
     // agree with a rune count on ASCII. "環境筆記" is 4 runes / 12 bytes.
-    await mockApi.saveLessons("assistant", "general", "環境筆記");
+    await mockApi.saveLessons("assistant", "環境筆記");
 
     const utils = await openRolePage(zh.office.role.assistant);
     const card = cardWithTitle(utils, mp.lessons);
@@ -149,7 +149,7 @@ describe("T-ae38 — the three journal blocks each show their OWN budget", () =>
         <SettingsPage />
       </I18nProvider>
     );
-    fireEvent.click(utils.getByText(s.roles));
+    fireEvent.click(utils.getByText(s.globalContext));
     fireEvent.click(await utils.findByText(s.customName));
     await utils.findAllByText(s.edit);
     expect(utils.queryByTestId("doc-card-usage")).toBeNull();
@@ -269,6 +269,7 @@ describe("T-ae38 — capForKind routes each document kind to its own cap", () =>
       systemInteraction: 6,
       bootSequence: 7,
       offboard: 8,
+      taskEvent: 9,
     };
     expect(capForKind("role_definition", caps)).toBe(1);
     expect(capForKind("insight", caps)).toBe(2);
@@ -281,8 +282,17 @@ describe("T-ae38 — capForKind routes each document kind to its own cap", () =>
     // the system block's default is four times the boot sequence's.
     expect(capForKind("system_interaction", caps)).toBe(6);
     expect(capForKind("boot_sequence", caps)).toBe(7);
-    // T-c9c0: the 下線程序 document has its own knob too.
+    // T-c9c0: the 〈停止〉 document has its own knob too.
     expect(capForKind("offboard", caps)).toBe(8);
+    // T-3201: 加速停止 shares 〈停止〉's knob — the server's registry row calls
+    // `offboardCap()` for both — while the four task-event procedures answer to
+    // the one task-event ceiling.
+    expect(capForKind("accelerated_stop", caps)).toBe(8);
+    expect(capForKind("task_closeout", caps)).toBe(9);
+    expect(capForKind("task_reassign_predecessor", caps)).toBe(9);
+    expect(capForKind("task_takeover_with_predecessor", caps)).toBe(9);
+    expect(capForKind("task_takeover_fresh", caps)).toBe(9);
+    expect(capForKind("task_unblocked", caps)).toBe(9);
     // The retired bundle kind covers both documents and has no restore path
     // left; it takes the learnings cap, as the deprecated wire field does.
     expect(capForKind("task_manual", caps)).toBe(5);

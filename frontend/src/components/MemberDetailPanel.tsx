@@ -23,6 +23,7 @@ import {
   slot,
 } from "./AgentDetailPanel";
 import { pendingChangeHint, reportedMachine } from "../lib/pendingChange";
+import { buildAgentDetailVm, machineOptions } from "../lib/agentDetailVm";
 import { AvatarEditor } from "./AvatarEditor";
 import { Avatar } from "./Avatar";
 import { avatarKindForMember } from "../lib/avatarKind";
@@ -34,7 +35,7 @@ import { ModelEffortEditor } from "./ModelEffortEditor";
 import { presenceVisual } from "./LifecycleDot";
 import type { LifecycleVisualStatus } from "./LifecycleDot";
 import { PresenceBadge } from "./PresenceBadge";
-import { MemberActionButtons } from "./MemberActionButtons";
+import { MemberActionButtons, stopLadderStageOf } from "./MemberActionButtons";
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -46,11 +47,14 @@ import {
 } from "./icons";
 import { DispatchAlert } from "./DispatchAlert";
 // 🔴 This panel renders its settings dialog with the .machine-picker* classes,
-// so it must import their stylesheet ITSELF (T-7526). Both panels used to
-// free-ride on WorkerDetailPanel → useRelocateMachine → MachinePicker →
-// machine-picker.css; when the worker panel stopped driving that hook, the
-// last production importer went with it and BOTH dialogs rendered unstyled.
-// Style ownership follows the class names, not a transitive accident.
+// so it must import their stylesheet ITSELF (T-7526). Both panels used to reach
+// that sheet only through a chain of OTHER modules' imports; one link in the
+// chain stopped being driven, the last production importer went with it, and
+// BOTH dialogs rendered unstyled. Those chain modules have since been deleted
+// outright, so this direct import is now the only thing keeping the dialog
+// styled — deleting it breaks the dialog immediately, and no type error or
+// jsdom test will say so. Style ownership follows the class names, not a
+// transitive accident; pinned by styleOwnership.test.ts.
 import "./machine-picker.css";
 import "./member-detail.css";
 
@@ -83,6 +87,12 @@ interface MemberDetailPanelProps {
   /** Graceful stop / cancel-wake → deactivateMember (desired_state=offline). Backs the
    * Stop (online) and Cancel (waking) actions. */
   onDeactivate?: () => void;
+  /** 加速停止 (the MIDDLE rung) → acceleratedStopMember. Puts the wind-down that
+   * is already open on the server's clock and tells the member. Offered only
+   * where the server will accept it (a member already *stopping*), and NOT gated
+   * behind a confirm: it is not a kill, the member still gets the grace and can
+   * still finish early. */
+  onAcceleratedStop?: () => void | Promise<void>;
   /** Force-stop (immediate kill) → forceStopMember. Backs the "Force stop" action
    * shown once the member is already *stopping*; the panel gates it behind a
    * confirm. May be async so the confirm can surface an in-flight state. */
@@ -90,6 +100,8 @@ interface MemberDetailPanelProps {
   /** Manual wake (online) / refocus context → refocusMember. May be async so
    * the panel can surface an in-flight / done / error state. */
   onRefocus?: () => void | Promise<void>;
+  /** 成本歸零 (owner-only, irreversible). Absent ⇒ no button. */
+  onResetCost?: () => void | Promise<void>;
   /** Commit a rename → patchMember({ name }). */
   onRename?: (name: string) => void;
   onUpdateAvatar?: (file: File) => Promise<void>;
@@ -102,8 +114,10 @@ export function MemberDetailPanel({
   onActivate,
   onRelocate,
   onDeactivate,
+  onAcceleratedStop,
   onForceStop,
   onRefocus,
+  onResetCost,
   onRename,
   onUpdateAvatar,
   onRemoveAvatar,
@@ -124,6 +138,22 @@ export function MemberDetailPanel({
   // IMMEDIATE kill, so it opens this confirm before firing the force-stop endpoint.
   const [forceStopConfirm, setForceStopConfirm] = useState(false);
   const [forceStopBusy, setForceStopBusy] = useState(false);
+  // In-flight guard for the two rungs that fire on a single click, the worker
+  // panel's guard verbatim (WorkerDetailPanel's stopBusy). Without it a double
+  // click on 停止 sends deactivateMember twice, and the two rungs are a single
+  // escalation on a single row — one flag, so two of them can never look live
+  // at once. Force-stop keeps its own flag because it fires from the confirm
+  // dialog, not from the row.
+  const [stopBusy, setStopBusy] = useState(false);
+  async function runStopRung(fire?: () => void | Promise<void>) {
+    if (!fire || stopBusy) return;
+    setStopBusy(true);
+    try {
+      await fire();
+    } finally {
+      setStopBusy(false);
+    }
+  }
   async function confirmForceStop() {
     if (!onForceStop) return;
     setForceStopBusy(true);
@@ -173,8 +203,9 @@ export function MemberDetailPanel({
     // caller passes a `key`, so an open dialog survives the switch holding the
     // PREVIOUS member's runtime/model/effort/machine — one confirm and those
     // values are written to someone else. Closing it is the honest reset: the
-    // owner reopens against whoever is on screen now. (useRelocateMachine does
-    // the same for its picker; this hand-written twin had dropped that line.)
+    // owner reopens against whoever is on screen now. (The shared relocate hook
+    // this block replaced did the same for its picker; the first hand-written
+    // cut here had dropped that line.)
     setSettingsOpen(false);
     setSettingsError("");
   }, [member.id]);
@@ -209,39 +240,18 @@ export function MemberDetailPanel({
   const { machines } = useMachines();
   const onlineMachines = machines.filter((m) => m.online);
   const firstOnlineMachineId = onlineMachines[0]?.machineId;
-  // What the machine <select> may offer: every online machine, PLUS the member's
-  // own pin when that machine is not online right now — labelled 離線, exactly as
-  // MachinePicker does it. Without that entry the select's value would match no
-  // option (blank row, pin still submitted), and dropping the pin instead would
-  // move a member the owner deliberately parked. Both are "displayed ≠
-  // submitted"; this is the only shape that is neither.
   // Whether the 模型 row upstairs is currently showing a reported value at all
   // (same condition the tag uses): awake, and something was reported.
   const reportedModelOnScreen = awake && (member.actualModel ?? "") !== "";
-  const pinnedOfflineMachine =
-    member.desiredMachineId &&
-    !onlineMachines.some((m) => m.machineId === member.desiredMachineId)
-      ? (machines.find((m) => m.machineId === member.desiredMachineId) ?? {
-          machineId: member.desiredMachineId,
-          displayName: member.desiredMachineId,
-        })
-      : undefined;
-  const settingsMachineOptions = [
-    ...onlineMachines.map((m) => ({
-      machineId: m.machineId,
-      label: m.displayName,
-      offline: false,
-    })),
-    ...(pinnedOfflineMachine
-      ? [
-          {
-            machineId: pinnedOfflineMachine.machineId,
-            label: msg.machineOfflineOption(pinnedOfflineMachine.displayName),
-            offline: true,
-          },
-        ]
-      : []),
-  ];
+  // What the machine <select> may offer — the SHARED rule (lib/agentDetailVm),
+  // not a second copy of it. It used to be written out here and again in
+  // WorkerDetailPanel, and the parity doc pointed at the pair as the way to
+  // audit it; the owner retired that on `rc-fc9ab61ad057`.
+  const settingsMachineOptions = machineOptions(
+    machines,
+    member.desiredMachineId,
+    msg.machineOfflineOption,
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsRuntime, setSettingsRuntime] = useState<"claude" | "codex">(
     member.runtime || "claude",
@@ -255,21 +265,56 @@ export function MemberDetailPanel({
   const [settingsError, setSettingsError] = useState("");
   const [relocateUndispatched, setRelocateUndispatched] = useState(false);
 
-  // ⚠️ NO LONGER A TWIN (T-7526). This block used to be the hand-written copy of
-  // `useRelocateMachine`'s notice hygiene, and the instruction here was "change
-  // both TOGETHER" — because the outsource panel still drove the hook. It does
-  // not any more: its relocate folded into the same 更改 dialog, so this is now
-  // the ONLY implementation and the hook has no production importer left.
-  // Do NOT go and edit `useRelocateMachine` to match a change made here — that
-  // file is dead code pending an owner ruling on deleting it (see
-  // docs/design/worker-panel-parity.md, 連帶後果). Kept because the reasoning
-  // below is load-bearing, not because a second copy exists.
+  // 🔴 T-ae8b. `settingsRuntime` is a DISPLAY value: a member whose runtime has
+  // never been chosen persists "" (unset — resolved against the host's measured
+  // capabilities at placement time), and the select cannot render nothing, so
+  // `member.runtime || "claude"` fills the control with claude. That fill is NOT
+  // an owner decision, and it must never leave this component as one.
   //
-  // 🔴 The relocate verdict's SELF-HEAL, carried over from useRelocateMachine
-  // (which the member panel no longer drives). The notice promises "the server
-  // keeps retrying in the background", so it needs a path back: without this it
-  // was cleared only by ANOTHER relocate, and a move the cadence did land left
-  // the panel insisting forever that it had not.
+  // The bug this closes was narrow and one-way: editing ONLY the model or the
+  // effort makes `launchChanged` true, and the PATCH body then carried
+  // `runtime: settingsRuntime` — the fill — alongside the edit the owner DID
+  // make. The server stores a supplied runtime verbatim, so one model tweak
+  // wrote a concrete `claude` over the unset value and permanently switched that
+  // member off the auto-resolution this ticket exists to give them. On a
+  // codex-only host that is the original failure, re-armed, from a dialog where
+  // the owner never touched the runtime control.
+  //
+  // The rule: `runtime` rides the PATCH only when the control actually MOVED off
+  // what it was showing. An unsupplied field leaves the stored value untouched
+  // (PATCH semantics, pinned in api/http.mutations.test.ts), and "" cannot be
+  // sent instead — ValidRuntime rejects it with a 422.
+  //
+  // ⚠️ THE COST, stated: an owner looking at an unset member sees `claude` and
+  // cannot pin that same claude deliberately, because re-choosing the value on
+  // screen is indistinguishable from not choosing at all. That trade is
+  // deliberate — the two readings are already indistinguishable to the owner, and
+  // only one of them can be honoured; honouring the silent one is what broke
+  // auto-resolution. An owner who wants claude nailed down can still pick codex
+  // and come back, and on any claude-capable host the resolution lands on claude
+  // anyway. Widening this (a dirty-flag on the control) would fire on a re-pick
+  // but NOT on a native select re-choosing its current option, so it would be a
+  // rule that only sometimes works — worse than a rule that always does.
+  const runtimeChanged = settingsRuntime !== (member.runtime || "claude");
+  const launchIntentPatch = () => ({
+    ...(runtimeChanged ? { runtime: settingsRuntime } : {}),
+    model: settingsModel.trim(),
+    effort: settingsEffort,
+  });
+
+  // ⚠️ NO LONGER A TWIN (T-7526). This block used to be the hand-written copy of
+  // a shared relocate hook's notice hygiene, and the instruction here was
+  // "change both TOGETHER" — because the outsource panel still drove that hook.
+  // It does not any more: its relocate folded into the same 更改 dialog, and the
+  // hook has since been deleted. This is the ONLY implementation of the notice
+  // hygiene; there is no second copy to keep in sync. Kept because the reasoning
+  // below is load-bearing, not because a twin exists.
+  //
+  // 🔴 The relocate verdict's SELF-HEAL, carried over from the shared relocate
+  // hook this panel replaced. The notice promises "the server keeps retrying in
+  // the background", so it needs a path back: without this it was cleared only
+  // by ANOTHER relocate, and a move the cadence did land left the panel
+  // insisting forever that it had not.
   //
   // `member.machine` is NOT a pure observation — the server's observedHost falls
   // back to desired_machine_id when nobody can see the member, which makes
@@ -312,8 +357,8 @@ export function MemberDetailPanel({
     // is merely asleep, so opening the dialog to edit a MODEL silently re-pinned
     // the member somewhere else. That is the same defect in the other direction,
     // and it lands hardest on "pin it to my sleeping laptop and save the model
-    // for later". MachinePicker's rule is the right one: keep the bound machine
-    // in the list, labelled offline, and never invent a different pin.
+    // for later". The rule is: keep the bound machine in the list, labelled
+    // offline, and never invent a different pin.
     setSettingsMachineId(
       member.desiredMachineId || onlineMachines[0]?.machineId || "",
     );
@@ -363,7 +408,7 @@ export function MemberDetailPanel({
   async function saveSettingsOnly() {
     if (!settingsMachineId || awake) return;
     const launchChanged =
-      settingsRuntime !== (member.runtime || "claude") ||
+      runtimeChanged ||
       settingsModel.trim() !== member.model ||
       settingsEffort !== member.effort;
     const machineChanged = settingsMachineId !== member.desiredMachineId;
@@ -375,11 +420,7 @@ export function MemberDetailPanel({
     setSettingsError("");
     try {
       if (launchChanged) {
-        await api.patchMember(member.id, {
-          runtime: settingsRuntime,
-          model: settingsModel.trim(),
-          effort: settingsEffort,
-        });
+        await api.patchMember(member.id, launchIntentPatch());
       }
       // Placement-only re-pin: the server's relocate never touches
       // desired_state, so for an offline member this is the whole honest effect
@@ -400,7 +441,7 @@ export function MemberDetailPanel({
   async function saveSettings() {
     if (!settingsMachineId) return;
     const launchChanged =
-      settingsRuntime !== (member.runtime || "claude") ||
+      runtimeChanged ||
       settingsModel.trim() !== member.model ||
       settingsEffort !== member.effort;
     const machineChanged = settingsMachineId !== member.desiredMachineId;
@@ -413,10 +454,22 @@ export function MemberDetailPanel({
     }
     setSettingsBusy(true);
     setSettingsError("");
-    // A fresh attempt drops the previous verdict (independent review r3): the
-    // wake path and useRelocateMachine both do this, and without it a relocate
-    // that FAILED and was then retried successfully leaves its "nothing was
-    // dispatched" alert on screen — a stale notice about an attempt that is over.
+    // A fresh attempt drops the previous verdict (independent review r3):
+    // without this a relocate that FAILED and was then retried successfully
+    // leaves its "nothing was dispatched" alert on screen — a stale notice about
+    // an attempt that is over. THE WAKE PATH DOES THIS TOO, deliberately: see
+    // setWakeUndispatched(false) in runActivate. The pair is the invariant, and
+    // BOTH halves are pinned, in
+    // MemberDetailPanel.dispatch-alert-hygiene.test.tsx:
+    //   wake — "a RETRY clears the previous verdict before the new one lands
+    //     (mutant ME)". That one IS in that file's header registry: a reviewer
+    //     injected it and it came back GREEN.
+    //   relocate — "drops the previous verdict when a fresh attempt is fired".
+    //     This one has NO mutant id and is NOT in that registry, so do not go
+    //     looking for one. It is behaviour the hand-written twin had simply
+    //     dropped, caught by reading in independent review r3.
+    // Delete either line and that file reddens on purpose: if you landed here
+    // from a red test, it is not overfitted — this is it working.
     setRelocateUndispatched(false);
     try {
       // 🔴 D: the PATCH goes FIRST. This is one owner edit of one settings
@@ -426,11 +479,7 @@ export function MemberDetailPanel({
       // owner's edit only takes effect one handover later. Reversing these two
       // lines is exactly that bug.
       if (launchChanged) {
-        await api.patchMember(member.id, {
-          runtime: settingsRuntime,
-          model: settingsModel.trim(),
-          effort: settingsEffort,
-        });
+        await api.patchMember(member.id, launchIntentPatch());
       }
       // Only a confirmed online session is gracefully relocated. A `waking`
       // member's Spawn action is the force-revive path and must reach activate.
@@ -779,12 +828,6 @@ export function MemberDetailPanel({
     member.actualEffort ?? "",
     msg.agentPendingChange,
   );
-  // 累計總花費 = 已 banked 的歷史成本 + 當前 live session 成本(dto 保證兩者分開不重疊)。
-  // honest:兩者皆無源(null)才顯 dash;任一有值則計入(缺的一方視為尚未產生成本=0)。
-  const totalCost =
-    member.estimatedCost == null && member.bankedCost == null
-      ? null
-      : (member.estimatedCost ?? 0) + (member.bankedCost ?? 0);
 
   const identityCard = (
     <>
@@ -858,21 +901,46 @@ export function MemberDetailPanel({
           )}
           <MemberActionButtons
             status={visual}
+            // 按了才出現 (owner 2026-08-21). The SAME reading 外包 uses, from the
+            // same function over the same wire fields — the two panels cannot
+            // disagree about which rung exists.
+            stage={stopLadderStageOf(member)}
             // Do not open a second settings flow while the first wake is in
             // flight. `waking` still renders Spawn as the recovery affordance,
             // but this local bridge keeps it honestly unavailable until the
             // activate result or server lifecycle settles.
             onSpawn={wakePendingActive || onlineMachines.length === 0 ? undefined : openSettings}
-            onCancel={onDeactivate}
-            onStop={onDeactivate}
+            onCancel={() => void runStopRung(onDeactivate)}
+            onStop={() => void runStopRung(onDeactivate)}
+            // The middle rung. No confirm: 加速停止 gives the member a deadline
+            // it is TOLD about and can still beat, so a second click costs
+            // nothing irreversible — unlike force-stop below.
+            onAcceleratedStop={
+              onAcceleratedStop
+                ? () => void runStopRung(onAcceleratedStop)
+                : undefined
+            }
             reasons={
               onlineMachines.length === 0
                 ? { spawn: t.machine.noOnlineMachine }
                 : undefined
             }
-            // In `stopping`, the Stop button IS force-stop → open the confirm first
-            // (an immediate kill; the offboard arm runs no clock, so this is the
-            // only escalation there is — see MemberActionButtons).
+            // The TOP rung. Since owner 2026-08-22 (「同一個按鈕 升級的概念」) it
+            // is reached by UPGRADING THIS SAME CELL, so it arrives under the
+            // finger that just pressed 加速停止 — the older claim that a second
+            // click "cannot reach it" was true of the side-by-side row and is FALSE
+            // here. What IS true, measured:
+            //   * from the first pressable 停止 it takes THREE clicks on this one
+            //     cell, each ≥LADDER_ARM_MS (350ms) after the upgrade — 349ms is
+            //     still inert — so 700ms minimum; ten instant clicks fire
+            //     force-stop ZERO times.
+            //   * this handler only OPENS the confirm below. The kill needs one
+            //     more click, in a different place.
+            // So the real mis-kill path is 3 clicks here + 700ms + 1 click in the
+            // dialog. That is the whole of it: the owner was offered a long-press
+            // top rung and a stronger confirm on rc-2afe8b557e9c and declined both,
+            // knowingly buying "two quick clicks on one cell can escalate". Do not
+            // call this a protection, and do not add one here that he turned down.
             onForceStop={
               onForceStop ? () => setForceStopConfirm(true) : undefined
             }
@@ -987,8 +1055,8 @@ export function MemberDetailPanel({
                   <option
                     key={machine.machineId}
                     value={machine.machineId}
-                    // MachinePicker's other half: the offline entry exists so the
-                    // owner's own pin stays visible and unchanged, NOT so a live
+                    // The offline entry's other half: it exists so the owner's
+                    // own pin stays visible and unchanged, NOT so a live
                     // member can be moved onto a machine whose warden is not
                     // there — that would wind the member down into nothing, and
                     // the deferred-move signal deliberately suppresses the alert.
@@ -1556,51 +1624,47 @@ export function MemberDetailPanel({
         extraExpandCards: slot(extraExpandCards),
         afterPromptCards: slot(resumeSummaryCard),
       }}
-      vm={{
+      // The vm is BUILT by the shared assembly (lib/agentDetailVm), not written
+      // out here: every rule both panels answer the same way lives there, and
+      // what stays below is only what this side genuinely reads differently —
+      // its own domain object, its own 機器 gate, its own i18n leaves.
+      vm={buildAgentDetailVm({
         testIdPrefix: "mp",
         online,
-        runtime: member.runtime || "claude",
-        // The READOUT is the reported runtime — honest dash until something
-        // reports one. The configured value above only labels the account row.
-        reportedRuntime: member.actualRuntime ?? "",
+        awake,
+        runtime: member.runtime,
+        actualRuntime: member.actualRuntime,
+        actualModel: member.actualModel,
+        actualEffort: member.actualEffort,
         pending: {
           runtime: pendingRuntime,
           model: pendingModel,
           effort: pendingEffort,
           machine: pendingMachine,
         },
-        // The details panel reports what is actually running. A configured
-        // launch model is intentionally kept out of this read-only surface.
-        model: awake ? (member.actualModel ?? "") : "",
-        modelIsReported: true,
-        // Same rule as 模型 one line up: the panel states what is RUNNING. The
-        // configured effort lives in the 設定 dialog below, which is the only
-        // place it may be shown or written.
-        effort: awake ? (member.actualEffort ?? "") : "",
         // Gate on `awake` (owner presence contract T-2860): 機器 + Claude
         // Account are runtime facts — not-awakened reads a bare dash, never a
-        // desired/stale residual.
+        // desired/stale residual. The worker panel answers this cell
+        // differently (「尚未分配」), which is why it stays a wrapper's answer.
         machineText: awake ? machineName : "",
         accountText: (awake && member.account) || "",
         contextPct: member.contextPct,
         compactionCount: member.compactionCount,
-        cost: totalCost,
-        onRefocus: onRefocus ? async () => void (await onRefocus()) : undefined,
+        liveCost: member.estimatedCost,
+        bankedCost: member.bankedCost,
+        onRefocus,
+        onResetCost,
         refocusSince: member.refocusSince,
         refocusOp: member.refocusOp,
         refocusDeadline: member.refocusDeadline,
         refocusSubmittedNote: t.mp.refocusSubmittedNote,
         refocusSinceLabel: msg.memberRefocusSince,
         lastOp: member.lastOp,
-        lastOpVerb:
-          member.lastOp === "start"
-            ? t.mp.lastOpStart
-            : member.lastOp === "stop"
-              ? t.mp.lastOpStop
-              : member.lastOp,
+        lastOpStartText: t.mp.lastOpStart,
+        lastOpStopText: t.mp.lastOpStop,
         lastOpOk: member.lastOpOk,
         lastOpLog: member.lastOpLog,
-        lastOpReason: member.lastOpReason ?? "",
+        lastOpReason: member.lastOpReason,
         lastOpAt: member.lastOpAt,
         tmuxSession: member.tmuxSession,
         terminalHint: t.mp.terminalHint,
@@ -1612,7 +1676,7 @@ export function MemberDetailPanel({
           cacheKey: member.role,
           hint: t.mp.expandableHint,
         },
-      }}
+      })}
     />
   );
 }

@@ -5,11 +5,14 @@
 //     unrelated conversation, resolves `from_name` server-side (owner = honest
 //     ""), orders newest→oldest, and 422s on a blank `with`.
 //   • API: the endpoint is READ-ONLY — it must NOT advance the read watermark
-//     (contrast: GET /api/chat?with= IS "list 即讀"). ⚠ the unread_count sample
-//     MUST be taken BEFORE anything lists A's thread — order is the assertion.
+//     (contrast: POST /api/chat/mark-read, the ONE door that does; since
+//     8cd4fff9 GET /api/chat?with= is a pure read too). ⚠ the unread_count
+//     sample MUST still be taken BEFORE anything reports A's thread read —
+//     order is the assertion.
 //   • browser: gallery panel opens from the chat header, 圖片/檔案 tabs split
-//     by is_image, sender chips (全部/我/per-sender) stack with the tabs, and
-//     an over-filtered view shows the honest empty state.
+//     by is_image, the uploader filter (全部 / a checkbox per sender, T-51 ②)
+//     stacks with the tabs. (The over-filtered empty state is NOT exercised
+//     here — see the note further down and the unit test it points at.)
 const { test, expect } = require('@playwright/test');
 const {
   BASE,
@@ -20,6 +23,7 @@ const {
   hireMember,
   mintMemberToken,
   postChatAs,
+  markChatRead,
   unreadCountOf,
   bootAuthedSpa,
   uniqueName,
@@ -29,8 +33,8 @@ const NAME_A = uniqueName('Gal Target');
 const NAME_B = uniqueName('Gal Peer');
 const NAME_C = uniqueName('Gal Outsider');
 
-test.describe('B8 · chat gallery — scope, sender labels, tabs + chips', () => {
-  test('gallery API scope/order/from_name/422 + READ-ONLY, then tabs & sender chips in the UI', async ({
+test.describe('B8 · chat gallery — scope, sender labels, tabs + uploader filter', () => {
+  test('gallery API scope/order/from_name/422 + READ-ONLY, then tabs & the uploader filter in the UI', async ({
     page,
   }) => {
     const request = page.request;
@@ -60,8 +64,8 @@ test.describe('B8 · chat gallery — scope, sender labels, tabs + chips', () =>
       { data_b64: PNG_1x1_B64, filename: 'c-pic.png', mime: 'image/png' },
     ]);
 
-    // ⚠ READ-ONLY watermark sample — taken BEFORE anything lists A's thread
-    // (GET /api/chat?with=A auto-marks read; order IS the assertion here).
+    // ⚠ READ-ONLY watermark sample — taken BEFORE anything reports A's thread
+    // read (the markChatRead below does; order IS the assertion here).
     const unreadBefore = await unreadCountOf(request, token, A.id);
     expect(
       unreadBefore,
@@ -105,16 +109,28 @@ test.describe('B8 · chat gallery — scope, sender labels, tabs + chips', () =>
       unreadAfterGallery,
       'opening the gallery must not mark the thread read (READ-ONLY endpoint)',
     ).toBe(unreadBefore);
-    // …while the thread list IS "list 即讀" (the contrast that proves the
-    // sample order above was meaningful, not a trivial 0 == 0).
+    // …and the contrast that proves the sample above was meaningful rather than
+    // a trivial 0 == 0: reporting the read explicitly DOES clear it.
+    //
+    // 🔴 THE CONTRAST USED TO BE THE THREAD LISTING ITSELF ("list 即讀"). Commit
+    // 8cd4fff9 removed that write from every path — `GET /api/chat?with=` is a
+    // pure read now, exactly like the gallery — so the listing can no longer
+    // play the "this one DOES mark read" half of the comparison. The endpoint
+    // the cockpit actually reports reading with can.
     const list = await request.get(`${BASE}/api/chat?with=${A.id}`, { headers: auth });
     expect(list.status()).toBe(200);
     expect(
       await unreadCountOf(request, token, A.id),
-      'listing the thread (GET /api/chat?with=) must clear the unread count',
+      'listing the thread must NOT clear the unread count either (8cd4fff9)',
+    ).toBe(unreadBefore);
+    const newest = (await list.json()).messages.at(-1);
+    await markChatRead(request, token, A.id, newest.ts);
+    expect(
+      await unreadCountOf(request, token, A.id),
+      'reporting the read must clear the unread count',
     ).toBe(0);
 
-    // ── browser: tabs + sender chips (stacking) + honest empty state ──
+    // ── browser: tabs + the uploader filter (stacking) + honest empty state ──
     await bootAuthedSpa(page, token);
     await page.locator('.member-card', { hasText: NAME_A }).click();
     await page.locator('.chat__gallery-toggle').click();
@@ -135,32 +151,81 @@ test.describe('B8 · chat gallery — scope, sender labels, tabs + chips', () =>
       'the raw internal member id must not render as the sender label',
     ).not.toContainText(B.id);
 
-    // Sender chips: 全部 + one per actual sender (row order: B, A, 我).
-    const chips = panel.locator('.chat__gallery-sender-chip');
-    await expect(chips, '全部 + 3 senders').toHaveCount(4);
-    await expect(chips.nth(0)).toHaveText('全部');
-    for (const label of [NAME_B, NAME_A, '我']) {
+    // ⚠️ WHERE ONE ASSERTION WENT (T-51 ②). This block used to end by ticking B
+    // on the 檔案 tab and asserting the honest empty state, because B had sent
+    // no files. That exact combination is gone: the options are cut from the
+    // current tab, so an uploader you can tick right now has at least one row
+    // there.
+    //
+    // 🔴 THAT IS NOT THE SAME AS "unreachable", and an earlier version of this
+    // note said so — wrongly, for three days. A tick outlives the rows it was
+    // made on: a refetch can take away a ticked uploader's images while their
+    // files remain, and the prune only drops uploaders absent from EVERY row.
+    // So the over-filtered view IS reachable, the panel carries a third
+    // sentence for it (`galleryEmptyFiltered`), and both cases are asserted at
+    // unit level in `frontend/src/components/ChatGalleryPanel.test.tsx` — "shows
+    // per-tab honest empty states once loaded" for the empty gallery, and "says
+    // the FILTER is empty, not the gallery" for this one. Neither is exercised
+    // here; that is a coverage choice, not a claim about what can happen.
+    //
+    // Uploader filter (T-51 ②): ONE line when closed, whatever the number of
+    // uploaders. The wrapping chip row it replaced grew a line per uploader.
+    const filter = panel.locator('.chat__gallery-senders');
+    const toggle = filter.locator('.chat__gallery-sender-toggle');
+    await expect(toggle, 'the closed filter is a single control').toHaveCount(1);
+    await expect(toggle, 'nothing ticked reads as 全部').toHaveText('全部');
+    await expect(
+      filter.locator('.chat__gallery-sender-menu'),
+      'the list is behind the toggle until it is opened',
+    ).toHaveCount(0);
+
+    // 🔴 THE OPTIONS FOLLOW THE TAB. They used to be built from every row in
+    // both tabs while the list applied the tab, so 圖片 offered uploaders who
+    // had only ever sent non-images and ticking one answered with an empty
+    // gallery. On 圖片 the options are exactly the senders who have an image:
+    // B and 我 — A sent only the zip and must NOT be offered here.
+    await toggle.click();
+    const options = filter.locator('.chat__gallery-sender-option');
+    await expect(options, 'the images tab offers only uploaders who have an image').toHaveCount(2);
+    for (const label of [NAME_B, '我']) {
       await expect(
-        chips.filter({ hasText: label }),
-        `the chip row must offer sender "${label}"`,
+        options.filter({ hasText: label }),
+        `the dropdown must offer uploader "${label}" on the images tab`,
       ).toHaveCount(1);
     }
-
-    // Chip filter stacks with the tab: B chip + 圖片 tab → only B's image.
-    await chips.filter({ hasText: NAME_B }).click();
-    await expect(items, "B's chip narrows the images tab to B's single image").toHaveCount(1);
-    await expect(items.first()).toContainText('b-pic.png');
-
-    // 檔案 tab + B chip → B sent no files → the honest empty state.
-    await panel.locator('.chat__gallery-tab', { hasText: '檔案' }).click();
     await expect(
-      panel.locator('.chat__gallery-empty'),
-      'an over-filtered view shows the honest empty state, never a fake row',
-    ).toBeVisible();
+      options.filter({ hasText: NAME_A }),
+      'an uploader with no image is not offered on the images tab',
+    ).toHaveCount(0);
 
-    // 檔案 tab + 全部 → the zip row.
-    await chips.filter({ hasText: '全部' }).click();
-    await expect(items, 'the files tab (unfiltered) shows the single zip').toHaveCount(1);
+    // Ticking stacks with the tab, and the closed control says how many.
+    await options.filter({ hasText: NAME_B }).locator('input').check();
+    await expect(items, "B's tick narrows the images tab to B's single image").toHaveCount(1);
+    await expect(items.first()).toContainText('b-pic.png');
+    await expect(toggle, 'the closed control names the count, not the people').toHaveText('已選 1 位');
+
+    // Multi-select: two ticks widen the result rather than replacing it.
+    await options.filter({ hasText: '我' }).locator('input').check();
+    await expect(items, 'two ticked uploaders show both their images').toHaveCount(2);
+    await expect(toggle).toHaveText('已選 2 位');
+
+    // Clearing returns to 全部.
+    await filter.locator('.chat__gallery-sender-clear').click();
+    await expect(toggle).toHaveText('全部');
+    await expect(items, 'clearing the ticks shows every image again').toHaveCount(2);
+
+    // 檔案 tab: the options are re-cut to the uploaders who have a file.
+    await panel.locator('.chat__gallery-tab', { hasText: '檔案' }).click();
+    await expect(items, 'the files tab shows the single zip').toHaveCount(1);
     await expect(items.first().locator('.chat__gallery-name')).toHaveText('a-notes.zip');
+    await toggle.click();
+    await expect(
+      options.filter({ hasText: NAME_A }),
+      'the files tab offers the uploader who sent the zip',
+    ).toHaveCount(1);
+    await expect(
+      options.filter({ hasText: NAME_B }),
+      'an uploader with no file is not offered on the files tab',
+    ).toHaveCount(0);
   });
 });

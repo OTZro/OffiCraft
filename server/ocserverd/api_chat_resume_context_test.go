@@ -15,6 +15,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -36,7 +37,7 @@ func resumeCtxServer(t *testing.T) *apiServer {
 		"m-quiet": "安靜",
 	} {
 		if err := api.dal.PutMember(Member{
-			ID: id, Name: name, Kind: "assistant", RosterStatus: RosterStatusActive,
+			ID: id, Name: name, Kind: "staff", RosterStatus: RosterStatusActive,
 		}); err != nil {
 			t.Fatalf("seed member %s: %v", id, err)
 		}
@@ -82,13 +83,12 @@ var displayTimeRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-
 func TestResumeChat_CardFoldsOntoTheMessageThatOpenedIt(t *testing.T) {
 	api := resumeCtxServer(t)
 
-	idx := 1
 	if err := api.dal.PutReplyCard(ReplyCard{
 		ID: "rc-fold", FromMember: "m-exec", Kind: "decision",
 		Summary: "ship or hold", Body: "which one",
-		Options: []string{"ship it", "hold for review"},
+		Options: []ReplyCardOption{{Text: "ship it"}, {Text: "hold for review"}},
 		Status:  replyCardStatusAnswered, CreatedTS: 100, AnsweredTS: 200,
-		ChatMessageID: "c-card", AnswerOptionIdx: &idx, AnswerText: "hold, we found a leak",
+		ChatMessageID: "c-card", AnswerOptionIdxs: []int{1}, AnswerText: "hold, we found a leak",
 	}); err != nil {
 		t.Fatalf("put card: %v", err)
 	}
@@ -102,11 +102,12 @@ func TestResumeChat_CardFoldsOntoTheMessageThatOpenedIt(t *testing.T) {
 	if carded.Card == nil {
 		t.Fatalf("the message that opened the card must carry it inline: %+v", carded)
 	}
-	if got := strings.Join(carded.Card.Options, "|"); got != "ship it|hold for review" {
-		t.Fatalf("inline card must carry the options as offered, got %q", got)
+	if !reflect.DeepEqual(carded.Card.Options,
+		[]ReplyCardOption{{Text: "ship it"}, {Text: "hold for review"}}) {
+		t.Fatalf("inline card must carry the options as offered, got %+v", carded.Card.Options)
 	}
-	if carded.Card.AnswerOptionIdx == nil || *carded.Card.AnswerOptionIdx != 1 {
-		t.Fatalf("inline card must carry which option was picked: %+v", carded.Card.AnswerOptionIdx)
+	if !reflect.DeepEqual(carded.Card.AnswerOptionIdxs, []int{1}) {
+		t.Fatalf("inline card must carry which options were circled: %+v", carded.Card.AnswerOptionIdxs)
 	}
 	if carded.Card.AnswerText != "hold, we found a leak" {
 		t.Fatalf("inline card must carry the free text, got %q", carded.Card.AnswerText)
@@ -149,7 +150,7 @@ func TestResumeChat_OnlyTheSubjectsOwnCardsAreFolded(t *testing.T) {
 
 	if err := api.dal.PutReplyCard(ReplyCard{
 		ID: "rc-theirs", FromMember: "m-peer", Kind: "decision",
-		Summary: "their ask", Options: []string{"yes", "no"},
+		Summary: "their ask", Options: []ReplyCardOption{{Text: "yes"}, {Text: "no"}},
 		Status: replyCardStatusWaiting, CreatedTS: 100, ChatMessageID: "c-theirs",
 	}); err != nil {
 		t.Fatalf("put card: %v", err)
@@ -658,11 +659,19 @@ func TestResumeChat_CutMarkerIsActionableAndDistinctFromCollapse(t *testing.T) {
 // TestResumeSummary_EstimateCountsEverythingTheChatBlockCarries re-derives
 // chat_chars from the WIRE VALUES, field by field, over a payload that exercises
 // every contribution at once: a collapsed body, a full body, names, rendered
-// timestamps, a folded card, and the header.
+// timestamps, a folded card, A QUOTE LINE, and the header.
 //
 // 🔴 It deliberately does NOT call resumeChatMessageChars — an assertion written
 // against the production accountant is true by construction and would survive
 // every mutant of it.
+//
+// The QUOTE LINE (T-4e95, 2026-08-21) is billed for the same reason everything
+// else here is: `reply_to_chat.content`, `.from_name` and `.to_name` are PROSE
+// the payload carries, so a snapshot full of replies costs runes the budget
+// must see. Its `id`, `from` and `to` are not billed, under this file's flat
+// "no id-shaped field" rule. This was added after a mutant run measured the
+// gap: deleting the quote terms from resumeChatMessageChars left the whole Go
+// package green.
 //
 // MUTANT: drop ANY one term from resumeChatMessageChars, or drop the
 // generated_at / cut-hint terms from the overview, → red here. The peek/full
@@ -670,18 +679,23 @@ func TestResumeChat_CutMarkerIsActionableAndDistinctFromCollapse(t *testing.T) {
 func TestResumeSummary_EstimateCountsEverythingTheChatBlockCarries(t *testing.T) {
 	api := resumeCtxServer(t)
 
-	idx := 0
 	if err := api.dal.PutReplyCard(ReplyCard{
 		ID: "rc-size", FromMember: "m-exec", Kind: "decision",
-		Summary: "s", Options: []string{"選項一", "選項二"},
+		Summary: "s", Options: []ReplyCardOption{{Text: "選項一"}, {Text: "選項二"}},
 		Status: replyCardStatusAnswered, CreatedTS: 100, AnsweredTS: 150,
-		ChatMessageID: "c-card", AnswerOptionIdx: &idx, AnswerText: "就這樣",
+		ChatMessageID: "c-card", AnswerOptionIdxs: []int{0}, AnswerText: "就這樣",
 	}); err != nil {
 		t.Fatalf("put card: %v", err)
 	}
 	putChat(t, api, "c-card", "m-exec", wireOwnerID, "請示", 100,
 		map[string]any{"reply_card_id": "rc-size"})
 	putChat(t, api, "c-long", "m-peer", "m-exec", strings.Repeat("長", 900), 101, nil)
+	// A REPLY, so the block carries a quote line whose content and from_name are
+	// prose the estimate has to cover. The target is c-card, already in the
+	// fixture — and the quote is built for it regardless of that, which is the
+	// server's own no-optimisation rule.
+	putChat(t, api, "c-reply", "m-exec", "m-peer", "那就先照這個做", 102,
+		map[string]any{chatReplyToMetaKey: "c-card"})
 
 	full := resumeSnapshot(t, api, "m-exec")
 	peek := peekResumeSize(t, api, "m-exec")
@@ -694,7 +708,7 @@ func TestResumeSummary_EstimateCountsEverythingTheChatBlockCarries(t *testing.T)
 	}
 
 	want := len([]rune(full.GeneratedAt)) + len([]rune(full.ChatEarlierOmitted.Hint))
-	sawCard, sawCollapse := false, false
+	sawCard, sawCollapse, sawQuote := false, false, false
 	for _, m := range full.Chat {
 		want += len([]rune(m.Body)) +
 			len([]rune(m.FromName)) + len([]rune(m.ToName)) +
@@ -703,22 +717,30 @@ func TestResumeSummary_EstimateCountsEverythingTheChatBlockCarries(t *testing.T)
 		if m.BodyOmittedChars > 0 {
 			sawCollapse = true
 		}
+		if m.ReplyToChat != nil {
+			sawQuote = true
+			// The quote's ID / from / to are deliberately NOT added — same flat
+			// rule as every other id-shaped field this estimate skips.
+			want += len([]rune(m.ReplyToChat.FromName)) +
+				len([]rune(m.ReplyToChat.ToName)) +
+				len([]rune(m.ReplyToChat.Content))
+		}
 		if m.Card != nil {
 			sawCard = true
 			for _, o := range m.Card.Options {
-				want += len([]rune(o))
+				want += len([]rune(o.Text))
 			}
 			want += len([]rune(m.Card.AnswerText)) + len([]rune(m.Card.AnsweredAtDisplay))
-			if m.Card.AnswerOptionIdx != nil {
-				want += len(strconv.Itoa(*m.Card.AnswerOptionIdx))
+			for _, idx := range m.Card.AnswerOptionIdxs {
+				want += len(strconv.Itoa(idx))
 			}
 		}
 	}
 	// Anti-vacuity: if the payload did not actually exercise a card and a
 	// collapse, this whole comparison proves much less than it looks like.
-	if !sawCard || !sawCollapse {
-		t.Fatalf("fixture must exercise a folded card AND a collapsed body (card=%v collapse=%v)",
-			sawCard, sawCollapse)
+	if !sawCard || !sawCollapse || !sawQuote {
+		t.Fatalf("fixture must exercise a folded card AND a collapsed body AND a "+
+			"quote line (card=%v collapse=%v quote=%v)", sawCard, sawCollapse, sawQuote)
 	}
 	if full.Overview.ChatChars != want {
 		t.Fatalf("chat_chars must count everything the block carries: want %d, got %d",
@@ -959,3 +981,59 @@ func delimiterColumns(line string) int {
 }
 
 var delimiterCell = regexp.MustCompile(`^:?-+:?$`)
+
+// ── ⑥ the reply link survives into the wake snapshot ─────────────────────────
+
+// TestResumeChat_CarriesTheReplyLink pins that a message which answers another
+// one still SAYS SO in the snapshot an agent wakes up holding.
+//
+// 🔴 WHY THIS WAS MISSING AND WHY IT MATTERS. r18 F5: the same field is guarded
+// on the REST read path (two tests go red there), and the wake path shares
+// newChatMessageDTO with it — so it LOOKED covered. It was not: a mutant that
+// blanks d.ReplyTo inside resumeChatMessageDTO (the projection this path and
+// only this path runs) left the entire Go suite green at 430 seconds. Without
+// the link the waking agent reads a flat list in which 「好，就這樣做」 has no
+// visible connection to the question it answers, and the only cue that a
+// conversation had structure is gone.
+//
+// BOTH DIRECTIONS ARE THE TEST. Asserting only that the reply carries the id is
+// satisfied by a projection that stamps every message with something; asserting
+// only that the quoted message is empty is satisfied by one that stamps nothing.
+// Neither half alone is a guard.
+//
+// MUTANT (run, r18): add `d.ReplyTo = ""` at the end of resumeChatMessageDTO —
+// this test is the only one in the package that goes red.
+func TestResumeChat_CarriesTheReplyLink(t *testing.T) {
+	api := resumeCtxServer(t)
+
+	// The quoted message, and the one answering it. The link lives in meta
+	// (chatReplyToMetaKey) exactly as the post handler stamps it — the DTO is
+	// what is under test, not the stamping.
+	putChat(t, api, "c-asked", "m-peer", "m-exec", "要出還是等？", 100, nil)
+	putChat(t, api, "c-answer", "m-exec", "m-peer", "等，我還在追一個 leak", 101,
+		map[string]any{chatReplyToMetaKey: "c-asked"})
+
+	snap := resumeSnapshot(t, api, "m-exec")
+
+	// ① the reply points at what it answers…
+	answer := chatByID(t, snap, "c-answer")
+	if answer.ReplyTo != "c-asked" {
+		t.Fatalf("the wake snapshot must carry the reply link, got reply_to=%q", answer.ReplyTo)
+	}
+	// ② …and the message it points AT claims nothing of its own. This is the
+	// half that stops "stamp everything" from passing: a projection that copied
+	// the id onto every row would satisfy ① and be nonsense.
+	asked := chatByID(t, snap, "c-asked")
+	if asked.ReplyTo != "" {
+		t.Fatalf("a message that replies to nothing must carry an empty reply_to, got %q",
+			asked.ReplyTo)
+	}
+
+	// And it is really on the WIRE under its documented name — a field renamed
+	// or dropped from the JSON would still satisfy both checks above, because
+	// they read a Go struct the test decodes itself.
+	raw := resumeSnapshotRaw(t, api, "m-exec")
+	if !strings.Contains(raw, `"reply_to":"c-asked"`) {
+		t.Fatalf("reply_to must be on the wire under that name: %s", raw)
+	}
+}

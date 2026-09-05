@@ -182,7 +182,7 @@ func TestGetDocumentSeed_404sExactlyWhereAResetDoes(t *testing.T) {
 		{"role_definition", created.Role.Key},
 		{"task_manual_sop", "weekly-report"},
 		{"task_manual_learnings", "weekly-report"},
-		{"lessons", created.Role.Key + "::general"},
+		{"lessons", created.Role.Key},
 	} {
 		got := getDocumentSeed(t, api, probe.kind, probe.key, "owner", "owner")
 		if got.Code != http.StatusNotFound {

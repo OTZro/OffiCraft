@@ -28,13 +28,14 @@ import (
 // write them; 下線 was the ONE offboard path that never showed the agent the
 // checklist. The collection is now the server's, on the session's own
 // report_stopped, which collects it immediately. There is no timer behind that:
-// the owner ruled the only other way out is his force-stop button, so a session
-// that never reports simply stays up, visible to him as 停止中, until he presses
-// it (the warden killpg ladder is unchanged underneath).
+// the owner ruled the other ways out are HIS buttons — 加速停止, which arms a
+// deadline the agent is told about (T-ed79), and 強制停止 — so a session that
+// never reports simply stays up, visible to him as 停止中, until he presses one
+// of them (the warden killpg ladder is unchanged underneath).
 //
 // RECYCLE (desired_state=online ∧ refocus_since>0 — handover: a NEW me respawns):
 // ocagent does NOT report phases and does NOT self-kill. It WAKES the interactive
-// Claude session by printing the server's 下線程序 document on stdout (the session's
+// Claude session by printing the server's 〈停止〉 document on stdout (the session's
 // Monitor tool holds this listener, so the wake lands in its transcript) and the
 // SESSION walks that checklist itself over MCP. The text is NOT this binary's:
 // the SERVER composes it and pushes it IN the member delta (owner 2026-08-16:
@@ -44,23 +45,38 @@ import (
 // refocus-marked, still-desired-online member fires an immediate event-driven
 // robust STOP (server api_members.go HandleReportStopped… → dispatchRobustStopNow
 // → warden killpg kills the tmux session, taking this listener with it) → the SSE
-// drop makes ¬online → the next tick's plain START respawns. A dead/unresponsive
-// session that never reports is covered by the server's recycle grace (120 s for
-// every cause except an owner-pressed 重新聚焦, which runs NO clock at all and is
-// collected only by the stopped report or the owner's 強制下線 —
-// recycleGraceFor): the reconcile tick dispatches the same
-// robust STOP once the grace elapses (spec/lifecycle.md §4.5) — so ocagent needs
-// NO local timeout and NO
-// self-kill; a client-side kill on a frozen-wire observable is impossible anyway
-// (the member DTO exposes no stopped_since, and `presence` still projects
-// "stopping" while this SSE is held).
+// drop makes ¬online → the next tick's plain START respawns.
+//
+// 🔴 A dead/unresponsive session that never reports is, for ALMOST EVERY
+// CAUSE, collected by NOBODY (owner 2026-08-21, T-ed79). The server's recycle
+// grace covers exactly two causes, and they are the two 加速停止 arms — the
+// SECOND context threshold (`context_high`) and the owner's own press
+// (`accelerated_stop`); 重新聚焦, 改機器, a model/runtime change, the agent's own
+// restart_self, the FIRST context threshold and token expiry all run NO clock at
+// all and are collected only by the stopped report or the owner's 強制停止
+// (recycleGraceFor → winddownKindFor). This comment used to state the opposite default — "120 s
+// for every cause except an owner-pressed 重新聚焦" — which was the
+// pre-T-ed79 rule, and this block is the ONLY written argument for why ocagent
+// carries no local timeout, so it has to be re-argued rather than deleted:
+//
+//   - WHERE A CLOCK EXISTS IT IS THE SERVER'S. The reconcile tick dispatches the
+//     same robust STOP once the grace elapses (spec/lifecycle.md §4.5), so a
+//     local timer would be a second, worse copy of a clock that already runs.
+//   - WHERE NO CLOCK EXISTS, THE OWNER RULED THAT NONE EXISTS. A local timeout
+//     would not be a backstop; it would be an unannounced deadline re-imposed by
+//     the client on exactly the causes he took it off — the agent cut off
+//     mid-hand-off, after the server's own notice promised it no deadline.
+//     Adding one is a change to the ruling, not a robustness fix.
+//   - AND IT IS NOT IMPLEMENTABLE ANYWAY. A client-side kill on a frozen-wire
+//     observable is impossible: the member DTO exposes no stopped_since, and
+//     `presence` still projects "stopping" while this SSE is held.
 //
 // All IO seams are injectable so tests drive the sequences with NO network and
 // NO tmux.
 
 // Nothing in this binary reports a presence phase any more. Both stop phases
 // are the SESSION's to report over MCP (report_stopping / report_stopped are
-// steps 1 and 6 of the 下線程序), which is the point of the change: a hook that
+// steps 1 and 6 of the 〈停止〉), which is the point of the change: a hook that
 // declared them on the session's behalf was declaring a close-out that had not
 // happened. The route and its wire body are unchanged and still served — this
 // binary simply is not one of its callers.
@@ -89,7 +105,7 @@ type windDownHook struct {
 	out     io.Writer
 	started bool // a repeated member delta carrying the SAME notice is silent
 	// lastNotice is the sentence already shown for this wind-down. The soft
-	// notice and the final call differ by the 120-second clause, so keying on
+	// notice and the final call differ by the deadline clause, so keying on
 	// the text is what lets the second one through without re-printing the
 	// first on every follow-up delta.
 	lastNotice string
@@ -162,7 +178,7 @@ func (h *windDownHook) maybeWindDown(frame map[string]any) bool {
 // it is not.
 func (h *windDownHook) wake(notice string) {
 	if strings.TrimSpace(notice) == "" {
-		h.say(offboardFallback)
+		h.say("offboard: " + offboardFallback)
 		return
 	}
 	for _, line := range strings.Split(notice, "\n") {
@@ -175,7 +191,7 @@ func (h *windDownHook) wake(notice string) {
 
 // ---------------------------------------------------------------------------
 // RecycleHook — desired_state=online ∧ refocus_since>0: wake the session with the
-// server's 下線程序 text (wake-only; the kill is server-orchestrated — see the header).
+// server's 〈停止〉 text (wake-only; the kill is server-orchestrated — see the header).
 // ---------------------------------------------------------------------------
 
 type recycleHook struct {
@@ -207,13 +223,35 @@ func newRecycleHook(client httpClient, cfg Config, out io.Writer) *recycleHook {
 func (h *recycleHook) say(msg string) { fmt.Fprintf(h.out, "[ocagent] %s\n", msg) }
 
 // offboardFallback is the ONLY hard-coded wake text left in this binary. The wake
-// message itself is the server's 下線程序 document (owner-editable, seed-backed),
+// message itself is the server's 〈停止〉 document (owner-editable, seed-backed),
 // PUSHED in the same member delta that says the agent is being collected — this
 // binary never fetches it. It is armed on `offboard_notice` being ABSENT OR BLANK:
 // a server too old to push one looks exactly like a notice that said nothing, and
 // neither case is worth telling apart from here — both mean the checklist did not
 // arrive. Losing the checklist is survivable; losing the notice is not.
-const offboardFallback = "recycle: server 要收你了，但這則通知沒有帶到下線程序 —— " +
+//
+// 🔴 IT CARRIES NO PREFIX, AND IT USED TO (T-6f44). The words 「recycle: 」 were
+// welded into this constant while BOTH hooks share it — so the wind-down hook,
+// which prefixes every line of a real notice with 「offboard: 」, announced its
+// fallback under the OTHER hook's name. Each hook now stamps its own, the same
+// way it already stamps the notice it did receive.
+//
+// Why that was worth fixing rather than tidying: the owner's rule is 「下線 →
+// 加速 → 強制。後者一旦發出我們就不該發出前者」, and 重新聚焦 is the FIRST stage.
+// A force-stopped agent — the LAST stage, where the server deliberately sends
+// nothing — was the case that reached this line most reliably, and what it saw
+// was a sentence badged as stage one. 「什麼都不送」 was true of the server and
+// false in front of the agent.
+//
+// ⚠️ AND IT WAS NEVER ONLY FORCE-STOP. Any wind-down delta that loses its
+// notice lands here, so every one of them was mis-badged; force-stop is simply
+// the arm that always loses it.
+// 🔴 這一段不是註解，是 **agent 真的會在 stdout 上讀到的那句話** —— 跟
+// seeds/*.md 同一類的出貨文字，不是內部散文。改動它就是改動下一個 agent
+// 開機／收尾時讀到的位元組，而沒有人會替它報錯。文件今天在畫面上叫〈停止〉
+// （T-6f44 的改名；卡 rc-e12733548e4b 裁定出貨文字一併跟上），所以這句話
+// 也叫它〈停止〉—— agent 要照著這句話去座艙上找得到那份文件。
+const offboardFallback = "server 要收你了，但這則通知沒有帶到〈停止〉 —— " +
 	"請立刻用 MCP get_offboard 拿完整收尾清單並照做，別空手停下。"
 
 // offboardNoticeIn digs the server-composed notice out of a member delta:
@@ -246,7 +284,7 @@ func offboardNoticeIn(frame map[string]any) string {
 // collected without knowing it is not.
 func (h *recycleHook) wakeForRecycle(notice string) {
 	if strings.TrimSpace(notice) == "" {
-		h.say(offboardFallback)
+		h.say("recycle: " + offboardFallback)
 		return
 	}
 	for _, line := range strings.Split(notice, "\n") {

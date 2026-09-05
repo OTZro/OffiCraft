@@ -59,7 +59,8 @@ function mkCard(over: Partial<ReplyCard>): ReplyCard {
     kind: "decision",
     summary: "要現在同步到 Jira 嗎？",
     body: "",
-    options: ["核可，直接同步上去", "先不要"],
+    options: [{ text: "核可，直接同步上去", aiPick: true }, { text: "先不要", aiPick: false }],
+    selectMode: "single",
     status: "waiting",
     attachments: [],
     createdTs: Date.now() / 1000 - 600,
@@ -180,6 +181,9 @@ describe("請示卡的任務資訊 (ChatReplyCard)", () => {
         <ChatReplyCard replyCardId="rc-chat" fallbackSummary="…" />
       </I18nProvider>
     );
+    // The inline card mounts collapsed (owner 2026-09-04); the shared task row
+    // is part of the open card.
+    fireEvent.click(await findByTestId("chat-reply-card-expand"));
     const ref = await findByTestId("reply-task-ref");
     // Both surfaces render the one shared row, so the chip's removal has to
     // hold here too — asserted on this surface rather than assumed from it.
@@ -207,6 +211,7 @@ describe("請示卡的任務資訊 (ChatReplyCard)", () => {
         <ChatReplyCard replyCardId="rc-chat-order" fallbackSummary="…" />
       </I18nProvider>
     );
+    fireEvent.click(await findByTestId("chat-reply-card-expand"));
     const ref = await findByTestId("reply-task-ref");
     const card = await findByTestId("chat-reply-card");
     const summary = card.querySelector(".reply-card__summary")!;

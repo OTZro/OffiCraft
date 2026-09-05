@@ -41,7 +41,8 @@ function mkCard(over: Partial<ReplyCard>): ReplyCard {
     kind: "decision",
     summary: "看一下這份設計文件，可以嗎？",
     body: "",
-    options: ["可以", "再調整"],
+    options: [{ text: "可以", aiPick: true }, { text: "再調整", aiPick: false }],
+    selectMode: "single",
     status: "waiting",
     attachments: [],
     createdTs: Date.now() / 1000 - 600,
@@ -128,8 +129,16 @@ describe("reply-card question attachments: .md preview (T-7bc2)", () => {
     expect(file).not.toBeNull();
     expect(container.querySelector("a.chat__msg-file")).toBeNull();
     fireEvent.click(file!);
+    // T-36 (B1) — a PDF still cannot be DRAWN in this panel, so the status line
+    // is still what the body shows. What changed is where that line sends the
+    // reader: the header now carries 「在新頁面顯示」 for a pdf (the browser
+    // displays it), so the line points at that button instead of back at 下載.
+    // Before the share link is minted there is no button yet and the original
+    // 請下載 line stands, which is why this waits for the settled text.
     await waitFor(() =>
-      expect(document.body.querySelector(".md-preview__status")?.textContent).toContain("此檔案無法預覽")
+      expect(document.body.querySelector(".md-preview__status")?.textContent).toBe(
+        "此檔案無法在這裡預覽，請用上方的「在新頁面顯示」開啟。",
+      )
     );
   });
 });
@@ -143,7 +152,7 @@ describe("reply-card ANSWER attachments: .md preview (T-7bc2)", () => {
     const card = mkCard({
       status: "answered",
       answer: {
-        optionIdx: null,
+        optionIdxs: null,
         text: "附上結果文件",
         attachments: [mdAtt("att-ans-md")],
       },

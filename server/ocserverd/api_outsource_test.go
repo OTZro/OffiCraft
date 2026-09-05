@@ -248,7 +248,9 @@ func TestGetWorkerBootContext(t *testing.T) {
 	// It is the real fold: the two shared slots a worker actually receives.
 	// Without this, every absence/invariance assertion below is satisfied by an
 	// empty string.
-	for _, want := range []string{"# Global Context", "# 啟動程序（Boot Sequence"} {
+	// 釘的是 seed 的 H1 逐字位元組；rc-e12733548e4b 之後是新名，與 seed 同一顆
+	// commit 換掉。
+	for _, want := range []string{"# Global Context", "# 啟動步驟（Boot Sequence"} {
 		if !strings.Contains(got.Context, want) {
 			t.Errorf("preview must contain the shared block %q", want)
 		}
@@ -631,13 +633,27 @@ func TestRelocateAssignedWorker_X46(t *testing.T) {
 	}
 }
 
-// TestRelocateStoppedWorker_SavesPinWithoutReviving (owner ruling: placement is not
-// a start): a worker the owner explicitly STOPPED keeps its 停止 across a 改機器.
-// The pin is saved, nothing is dispatched, desired_state is untouched, and the row
-// says WHY nothing started — the tick has always honoured this
-// (TestStoppedWorker_TickNeverRevives); relocate used to be the one verb that
-// quietly overturned it.
-func TestRelocateStoppedWorker_SavesPinWithoutReviving(t *testing.T) {
+// TestRelocateNeverStoppedWorker_SavesPinWithoutReviving (owner ruling: placement is
+// not a start): a worker that is desired-offline but that NOBODY EVER ASKED TO STOP
+// keeps that state across a 改機器. The pin is saved, nothing is dispatched,
+// desired_state is untouched, and the row says WHY nothing started — the tick has
+// always honoured this (TestStoppedWorker_TickNeverRevives); relocate used to be the
+// one verb that quietly overturned it.
+//
+// 🔴 READ THE NAME CAREFULLY — it was renamed in T-65 包② and the old one
+// (…RelocateStoppedWorker…) was a lie by then. Since 包②, a relocate on a worker whose
+// stop is IN FLIGHT OR HAS LANDED does the opposite of what this test asserts: it
+// queues the start and the worker comes back up. What keeps THIS fixture on the old
+// path is the thing the fixture never does — it sets desired_state directly and never
+// writes a stopping_since anchor, so aStopWasEverAskedFor is false and
+// queueWorkerRestartAfterStop refuses. See member_ownerop_winddown.go:554 and
+// outsource_restart_after_stop_t65_test.go:90.
+//
+// ⇒ THIS TEST IS BLIND TO 包②, deliberately, and that means it is NOT a signal in
+// either direction about the queued-start feature. If it ever DOES go red, the reading
+// is 「the aStopWasEverAskedFor gate was removed and a single edit now boots workers
+// that never started」 — a bug report, not a spec flip. Do not 'fix' it by widening it.
+func TestRelocateNeverStoppedWorker_SavesPinWithoutReviving(t *testing.T) {
 	api := newTasksTestServer(t)
 	api.noOutsource = true
 	workerID := assignOneWorker(t, api)
@@ -909,43 +925,64 @@ func TestRelocateToSameMachine(t *testing.T) {
 // distinct from lifecycle status so the cockpit can tell apart
 //   - "online"  : truly alive — holding a live SSE connection (the SAME
 //     hub.IsOnline presence authority the member roster reads);
-//   - "waking"  : not online with a fresh wake in flight (last start dispatch /
-//     row birth within WakingTTLSecs) — grey, not a false green;
+//   - "waking"  : not online with a fresh wake in flight (a landed start
+//     dispatch within WakingTTLSecs) — grey, not a false green;
 //   - "offline" : the wake window lapsed with no session, or the session died
 //     after the claim — the O-19 "綠燈但沒人" made honest in BOTH forms (the
 //     states the retired projection called "stuck").
 //
 // A released row projects "" (it is filtered off the panel anyway).
+//
+// T-14 moved the wake anchor: it is the row's DURABLE waking_since (stamped at
+// the start dispatch), not the in-memory spawn map with a CreatedTS fallback.
+// Two table rows carry that change — a row that was minted but never dispatched
+// no longer claims 「喚醒中」 off its own birth (nothing was ever asked to
+// start), and an anchor stamped before a re-exec still does.
 func TestNewOutsourceWorkerDTO_Presence(t *testing.T) {
 	const now = 1_000_000.0
 	cases := []struct {
-		name      string
-		status    string
-		createdTS float64
-		spawnAt   float64
-		online    bool
-		want      string
+		name         string
+		status       string
+		createdTS    float64
+		wakingSince  float64
+		desiredState string
+		online       bool
+		want         string
 	}{
-		{"active and online is online", WorkerStatusActive, now - 5, 0, true, "online"},
+		{"active and online is online", WorkerStatusActive, now - 5, 0, DesiredStateOnline, true, "online"},
 		// The anti-latch pin (DoD③): an 'active' worker whose SSE session died
 		// must NOT stay green. A mutant that latches on status==active turns
 		// this case red.
-		{"active but offline is offline", WorkerStatusActive, now - 500, 0, false, "offline"},
-		{"assigned fresh is waking", WorkerStatusAssigned, now - 10, 0, false, "waking"},
-		{"assigned online but unclaimed is online", WorkerStatusAssigned, now - 10, 0, true, "online"},
-		{"assigned just inside the wake window is waking", WorkerStatusAssigned, now - (WakingTTLSecs - 1), 0, false, "waking"},
-		{"assigned past the wake window is offline", WorkerStatusAssigned, now - (WakingTTLSecs + 1), 0, false, "offline"},
-		// A fresh re-dispatch (FSM respawn) re-arms the wake window off spawnAt
-		// even when the row itself is old.
-		{"stale row with a fresh dispatch is waking", WorkerStatusAssigned, now - 10_000, now - 5, false, "waking"},
-		{"released is blank", WorkerStatusReleased, now - 10000, 0, false, ""},
+		{"active but offline is offline", WorkerStatusActive, now - 500, 0, DesiredStateOnline, false, "offline"},
+		{"dispatched fresh is waking", WorkerStatusAssigned, now - 10, now - 10, DesiredStateOnline, false, "waking"},
+		{"dispatched but online is online", WorkerStatusAssigned, now - 10, now - 10, DesiredStateOnline, true, "online"},
+		{"just inside the wake window is waking", WorkerStatusAssigned, now - 10,
+			now - (WakingTTLSecs - 1), DesiredStateOnline, false, "waking"},
+		{"past the wake window is offline", WorkerStatusAssigned, now - 10,
+			now - (WakingTTLSecs + 1), DesiredStateOnline, false, "offline"},
+		// The re-exec pin (T-14): the anchor is durable, so a worker born long
+		// ago and dispatched just before the restart is still waking.
+		{"stale row with a fresh durable anchor is waking", WorkerStatusAssigned, now - 10_000,
+			now - 5, DesiredStateOnline, false, "waking"},
+		// …and the other half of that move: a minted row nobody has dispatched
+		// yet has no anchor, so it reads offline instead of borrowing its birth.
+		{"minted but never dispatched is offline", WorkerStatusAssigned, now - 10, 0,
+			DesiredStateOnline, false, "offline"},
+		// Owner intent gates the wake anchor (the staff T-7526 rule, now shared):
+		// a wake cancelled mid-flight must not paint green over an offline
+		// intent. The stop ANCHOR is what projects 「已停止」 (see
+		// TestWorkerPresence_StopIntent); intent alone just withholds the wake.
+		{"fresh wake anchor under an offline intent is offline", WorkerStatusAssigned, now - 10,
+			now - 5, DesiredStateOffline, false, "offline"},
+		{"released is blank", WorkerStatusReleased, now - 10000, now - 5, DesiredStateOnline, false, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			w := OutsourceWorker{ID: "ow-1", Codename: "O-7", Status: c.status,
-				TaskID: "t-1", CreatedTS: c.createdTS}
+				TaskID: "t-1", CreatedTS: c.createdTS, WakingSince: c.wakingSince,
+				DesiredState: c.desiredState}
 			dto := newOutsourceWorkerDTO(w, nil,
-				outsourceWorkerProjection{now: now, online: c.online, spawnAt: c.spawnAt})
+				outsourceWorkerProjection{now: now, online: c.online})
 			if dto.Presence != c.want {
 				t.Fatalf("presence = %q, want %q", dto.Presence, c.want)
 			}
@@ -1222,9 +1259,13 @@ func TestNewOutsourceWorkerDTO_GoldenWireShape(t *testing.T) {
 		LastOpAt:         1501.0,
 		DesiredMachineID: "mac-2",
 		RefocusSince:     1600.0,
-		RefocusOp:        memberOpRelocate,
-		DesiredState:     "online",
-		BankedCost:       3.25,
+		// The ACCELERATED cause on purpose: it is the one wind-down that still
+		// carries a deadline (T-ed79), so the golden keeps a NON-ZERO
+		// refocus_deadline on the wire. A 停止 cause here would pin 0 and stop
+		// telling the reader whether the field is derived at all.
+		RefocusOp:    refocusOpContextHigh,
+		DesiredState: "online",
+		BankedCost:   3.25,
 		// The reported twins are deliberately DIFFERENT from the configured
 		// values above: a golden where they matched would still pass if the
 		// builder served the configured field by mistake (T-7f28).
@@ -1265,15 +1306,17 @@ func TestNewOutsourceWorkerDTO_GoldenWireShape(t *testing.T) {
 		{
 			name: "every field populated",
 			w:    fullWorker, task: fullTask, p: fullProjection,
-			want: `{"id":"ow-1","avatar_url":"","codename":"O-7","runtime":"claude","model":"claude-sonnet-4-5","effort":"high","actual_model":"claude-opus-5","actual_runtime":"codex","actual_effort":"medium","status":"active","task_id":"t-1","task_title":"review 1","task_status":"in_progress","task_no":"T-1","task_created_ts":900,"task_type_key":"tm-review","task_type_name":"程式碼審查 (tm-review)","created_ts":1000,"unread_count":4,"presence":"online","machine":"Mac Studio (mac-1)","desired_machine_id":"mac-2","actual_machine":"mac-1","account":"alice@example.com","context_pct":42,"cost":1.5,"banked_cost":3.25,"last_op":"worker_start","last_op_ok":true,"last_op_log":"spawned ok","last_op_reason":"","last_op_at":1501,"creator_id":"m-9","delegated_by":"Bob","refocus_since":1600,"refocus_op":"relocate","refocus_deadline":1720,"desired_state":"online"}`,
+			want: `{"id":"ow-1","avatar_url":"","codename":"O-7","runtime":"claude","model":"claude-sonnet-4-5","effort":"high","actual_model":"claude-opus-5","actual_runtime":"codex","actual_effort":"medium","status":"active","task_id":"t-1","task_title":"review 1","task_status":"in_progress","task_no":"t-1","task_created_ts":900,"task_type_key":"tm-review","task_type_name":"程式碼審查 (tm-review)","created_ts":1000,"unread_count":4,"presence":"online","machine":"Mac Studio (mac-1)","desired_machine_id":"mac-2","actual_machine":"mac-1","account":"alice@example.com","context_pct":42,"cost":1.5,"banked_cost":3.25,"last_op":"worker_start","last_op_ok":true,"last_op_log":"spawned ok","last_op_reason":"","last_op_at":1501,"creator_id":"m-9","delegated_by":"Bob","refocus_since":1600,"refocus_op":"context_high","refocus_deadline":1720,"desired_state":"online"}`,
 		},
 		{
 			name: "bare row honest empties",
 			w: OutsourceWorker{ID: "ow-2", Codename: "O-8",
 				Model: "claude-haiku-4-5", TaskID: "t-2",
 				Status: WorkerStatusAssigned, CreatedTS: 1999.0},
+			// presence "offline", not "waking": T-14 retired the CreatedTS
+			// fallback — a row nobody has dispatched has no wake in flight.
 			task: nil, p: outsourceWorkerProjection{now: 2000.0},
-			want: `{"id":"ow-2","avatar_url":"","codename":"O-8","runtime":"claude","model":"claude-haiku-4-5","effort":"","actual_model":"","actual_runtime":"","actual_effort":"","status":"assigned","task_id":"t-2","task_title":"","task_status":"","task_no":"","task_created_ts":0,"task_type_key":"","task_type_name":"","created_ts":1999,"unread_count":0,"presence":"waking","machine":"","desired_machine_id":"","actual_machine":"","account":null,"context_pct":null,"cost":null,"banked_cost":null,"last_op":"","last_op_ok":null,"last_op_log":"","last_op_reason":"","last_op_at":0,"creator_id":"","delegated_by":"","refocus_since":0,"refocus_op":"","refocus_deadline":0,"desired_state":""}`,
+			want: `{"id":"ow-2","avatar_url":"","codename":"O-8","runtime":"claude","model":"claude-haiku-4-5","effort":"","actual_model":"","actual_runtime":"","actual_effort":"","status":"assigned","task_id":"t-2","task_title":"","task_status":"","task_no":"","task_created_ts":0,"task_type_key":"","task_type_name":"","created_ts":1999,"unread_count":0,"presence":"offline","machine":"","desired_machine_id":"","actual_machine":"","account":null,"context_pct":null,"cost":null,"banked_cost":null,"last_op":"","last_op_ok":null,"last_op_log":"","last_op_reason":"","last_op_at":0,"creator_id":"","delegated_by":"","refocus_since":0,"refocus_op":"","refocus_deadline":0,"desired_state":""}`,
 		},
 	}
 	for _, c := range cases {

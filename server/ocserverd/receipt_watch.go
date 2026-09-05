@@ -44,7 +44,7 @@ const receiptMissingReasonCode = "receipt_missing"
 // nothing), and inventing one from a single host would be worse than naming the
 // derivation. Worst honest round trip: claudeProbeBudget 20s + nudgeSettle 1s
 // (spawn) or the ~5s kill ladder (stop), + commandReportTimeout 5s for the POST
-// itself, + up to one reconcileCadenceSecs 30s of sweep granularity ≈ 56s. 90s
+// itself, + up to one lifecycleCadenceSecs 30s of sweep granularity ≈ 56s. 90s
 // leaves a full extra tick of slack on top, so a stamp means the receipt is
 // genuinely gone rather than merely slow. Erring long is the safe direction: a
 // late stamp costs nothing, a premature one would cry wolf on a healthy fleet.
@@ -93,12 +93,39 @@ func memberIDRawOf(commandResult map[string]any) string {
 // what disarms the deadline is the receipt CHANNEL working, which those prove
 // just as well as a folded one. Tying it to a successful fold instead would
 // stamp receipt_missing on members whose receipt arrived and was read.
-func (s *apiServer) noteReceiptArrived(targetID string) {
+//
+// 🔴 reporter IS THE MACHINE THAT SPOKE (receiptReporterMachine), and comparing
+// it is the whole point. The watch has recorded which machine it is waiting on
+// since it was written — pendingReceipt.Warden, right there in the struct — and
+// then matched on the TARGET ID ALONE, which is the id of the thing being
+// stopped, not of the machine that owes the answer. An identity sweep
+// broadcasts a stop to every warden in the fleet and every one of them answers,
+// so ANY healthy machine's polite receipt cancelled the deadline that was
+// waiting on a specific, possibly dark, one. The deadline asks "did THAT
+// machine's report channel work"; a different machine's report is not an answer
+// to it.
+//
+// Both "" cases stay permissive, deliberately:
+//   - p.Warden == "": the dispatch could not resolve a machine, so there is
+//     nobody to compare against and the watch never claimed to wait on anyone.
+//   - reporter == "": UNKNOWN speaker (see receiptReporterMachine). No evidence
+//     either way ⇒ keep the pre-existing behaviour rather than invent a
+//     receipt_missing stamp out of an identity we failed to resolve.
+//
+// Only a KNOWN mismatch — both sides named, and different — declines to disarm.
+func (s *apiServer) noteReceiptArrived(targetID, reporter string) {
 	if targetID == "" {
 		return
 	}
 	s.receiptMu.Lock()
 	defer s.receiptMu.Unlock()
+	p, armed := s.receiptPending[targetID]
+	if !armed {
+		return
+	}
+	if p.Warden != "" && reporter != "" && p.Warden != reporter {
+		return // someone else's machine answered; the one we wait on still owes us
+	}
 	delete(s.receiptPending, targetID)
 }
 
@@ -165,6 +192,15 @@ func (s *apiServer) sweepLapsedReceipts(now float64) {
 }
 
 // stampReceiptMissing writes ONE lapsed watch onto its target row.
+//
+// The two arms below differ ONLY in which row they load, log and persist. The
+// receipt itself — the five last_op* columns — was written out by hand twice in
+// this one function, once per arm, and is now stampOpReceipt's (reconcile.go)
+// on both. The op verb is p.RPC rather than a START: a lapsed watch names the
+// call it was waiting on, which is why that core takes the verb as a parameter.
+// Sentinels: TestStampReceiptMissing_MemberArmWritesTheFiveReceiptFields and
+// TestStampReceiptMissing_WorkerArmWritesTheFiveReceiptFields, one per arm and
+// both pinned to absolute values.
 func (s *apiServer) stampReceiptMissing(targetID string, p pendingReceipt, now float64) {
 	reason := receiptMissingReason(p)
 	m, err := s.dal.GetMember(targetID)
@@ -176,14 +212,15 @@ func (s *apiServer) stampReceiptMissing(targetID string, p pendingReceipt, now f
 		if m.RosterStatus != RosterStatusActive {
 			return
 		}
-		ok := false
-		m.LastOp = p.RPC
-		m.LastOpOK = &ok
-		m.LastOpLog = ""
-		m.LastOpReason = reason
-		m.LastOpAt = now
+		stampOpReceipt(&m.LastOp, &m.LastOpOK, &m.LastOpLog, &m.LastOpReason,
+			&m.LastOpAt, p.RPC, reason, now)
 		reconcileLog("%s: %s", targetID, reason)
-		if err := s.putMember(*m, triggerServer); err != nil {
+		// SINGLE WRITE (T-55). Both arms of this function mutate the five receipt
+		// columns and NOTHING else, so the whole-row write they used to end on
+		// carried a snapshot of ~30 other columns purely as freight. Replacing it
+		// with the sole writer removes the clobber AND leaves no two-write window
+		// to order (ticket 2.1a) — this arm never had a second step to lose.
+		if err := s.persistMemberOpReceipt(*m, triggerServer); err != nil {
 			reconcileLog("%s: receipt-missing stamp persist failed: %v", targetID, err)
 		}
 		return
@@ -192,14 +229,17 @@ func (s *apiServer) stampReceiptMissing(targetID string, p pendingReceipt, now f
 	if err != nil || w == nil || w.Status == WorkerStatusReleased {
 		return
 	}
-	ok := false
-	w.LastOp = p.RPC
-	w.LastOpOK = &ok
-	w.LastOpLog = ""
-	w.LastOpReason = reason
-	w.LastOpAt = now
+	stampOpReceipt(&w.LastOp, &w.LastOpOK, &w.LastOpLog, &w.LastOpReason,
+		&w.LastOpAt, p.RPC, reason, now)
 	outsourceLog("%s: %s", targetID, reason)
-	if err := s.dal.PutOutsourceWorker(*w); err != nil {
+	// Single write, same as the member arm — and this is the one call site in the
+	// package that reaches a worker row WITHOUT holding s.outsourceMu (the sweep
+	// runs in the reconcile half; lifecycle_tick.go says so in as many words).
+	// Narrowing it from a whole-row upsert to five columns strictly shrinks what
+	// an interleaved HTTP write can lose here: it was the widest unlocked writer
+	// on this table and is now the narrowest.
+	if err := s.dal.SetMemberOpReceipt(w.ID, w.LastOp, w.LastOpOK, w.LastOpLog,
+		w.LastOpReason, w.LastOpAt); err != nil {
 		outsourceLog("%s: receipt-missing stamp persist failed: %v", targetID, err)
 		return
 	}

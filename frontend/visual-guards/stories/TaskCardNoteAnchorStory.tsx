@@ -20,7 +20,7 @@
 import { useLayoutEffect } from "react";
 import { I18nProvider } from "../../src/i18n";
 import { TaskCard } from "../../src/components/TaskCard";
-import { mkTask, mkStep, MIRA, NOOP, WORKERS } from "./taskFixtures";
+import { mkTask, mkNoteStep, MIRA, NOOP, WORKERS } from "./taskFixtures";
 import { LIGHT_PACK } from "./ThemeContrastStory";
 
 const LONG_NOTE = (n: number) =>
@@ -42,23 +42,26 @@ const LONG_NOTE = (n: number) =>
 // to feed the reader a long body. Nothing in the guard varies it any more.
 const makeTask = (noteRepeat: number) =>
   mkTask({
-    id: "t-4e39",
-    taskNo: "T-4e39",
+    id: "t-4e395291a003",
+    taskNo: "t-4e395291a003",
     title: "步驟備註展開後畫面要停在你點開的那一則",
     status: "in_progress",
     description: "九個步驟,每一步都有一則夠長的備註。",
     progressDone: 3,
     progressTotal: 9,
     steps: Array.from({ length: 9 }, (_, i) =>
-      mkStep({
-        id: `s-${i + 1}`,
-        name: `節點 ${i + 1}`,
-        dod: `第 ${i + 1} 步的驗收標準。`,
-        status: i < 3 ? "done" : i === 3 ? "in_progress" : "pending",
-        note: Array.from({ length: noteRepeat }, () => LONG_NOTE(i + 1)).join(
-          "\n\n"
-        ),
-      })
+      // T-66: `mkNoteStep` sets the card's `noteSizeChars` AND registers the
+      // text for the per-step read the corner entry fires — a plain `note:`
+      // field is not on `TaskStepView` any more and draws no entry.
+      mkNoteStep(
+        {
+          id: `s-${i + 1}`,
+          name: `節點 ${i + 1}`,
+          dod: `第 ${i + 1} 步的驗收標準。`,
+          status: i < 3 ? "done" : i === 3 ? "in_progress" : "pending",
+        },
+        Array.from({ length: noteRepeat }, () => LONG_NOTE(i + 1)).join("\n\n")
+      )
     ),
   });
 

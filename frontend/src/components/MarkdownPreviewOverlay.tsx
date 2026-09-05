@@ -5,12 +5,12 @@
 // actions: the header keeps a 下載 button (the same authed blob URL with a
 // download attribute) alongside the render.
 //
-// Self-contained like Lightbox (click backdrop / × / Esc closes; a click on the
+// Self-contained (click backdrop / × / Esc closes; a click on the
 // panel does not dismiss): the caller holds the open state and passes the blob's
 // serve url + display title. Shared by the chat attachment strip AND the task
 // artifact popover — one preview surface, not two.
 //
-// THREE SOURCE MODES (one surface, still not three):
+// FOUR SOURCE MODES (one surface, still not four):
 //   - `url`      — a stored blob, fetched as text (or rendered as an image when
 //                  its mime says so). It carries a REQUIRED `attachmentId`, so
 //                  the header keeps both blob actions: the copyable share link
@@ -26,6 +26,14 @@
 //                  real file, so 下載 is honest — but it has no blob id yet, so
 //                  there is nothing for a share link to point at and none is
 //                  rendered.
+//   - `diffParams` — a COMPARISON, named by the two addresses a /diff url spells
+//                  (T-59). No blob, so no 下載 and no FILE-level share link —
+//                  there is no blob for one to point at. What it does carry is
+//                  the comparison's OWN external link, minted by
+//                  `GET /api/diff/share-link` and copied by the same icon
+//                  control the file uses (DiffShareLinkButton). The body is
+//                  `DiffScreen` — the same compare screen the standalone /diff
+//                  page draws.
 //
 // T-7e68 — ZOOM MUST AFFECT LAYOUT. A `transform: scale()` on the <img> paints
 // bigger pixels but leaves the layout box the original size, so the wrap's
@@ -57,15 +65,22 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { createPortal } from "react-dom";
 import { useI18n } from "../i18n";
 import { authedAttachmentUrl } from "../api/http";
-import { copyAttachmentShareLink } from "../lib/shareLink";
+import { attachmentShareLinkUrl, copyAttachmentShareLink } from "../lib/shareLink";
+import type { DiffParams } from "../lib/diffLink";
 import { useEscapeLayer } from "../lib/useEscapeLayer";
+import { DiffScreen } from "./DiffScreen";
+import { DiffShareLinkButton } from "./DiffShareLinkButton";
 import { Markdown } from "./Markdown";
 import "./md-preview.css";
 import {
+  AlertTriangleIcon,
   CheckIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   CloseIcon,
   CopyIcon,
   DownloadIcon,
+  ExternalLinkIcon,
   FileTextIcon,
 } from "./icons";
 
@@ -77,10 +92,40 @@ function clampZoom(value: number): number {
   return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value));
 }
 
+/** Paging across a list of previewable items the CALLER owns (T-51 ①).
+ *
+ * The overlay stays a single-item surface: it is handed the item to show
+ * through the union below, exactly as before, plus WHERE that item sits in the
+ * caller's list. It never holds the list, never filters it and never decides
+ * what "next" means — the gallery's own tab + uploader filters do, and the
+ * overlay would have to duplicate them to answer that question itself.
+ *
+ * OPTIONAL on purpose: every other place that opens this overlay shows ONE
+ * attachment with no list behind it, and must not be forced to invent one.
+ *
+ * ⚠️ DO NOT WRITE THE CALLERS DOWN AS A LIST HERE — an earlier draft did, and
+ * it was wrong on both ends: it named a file that imports this component but
+ * never renders it, and it missed one that does. The count drifts too (one file
+ * renders it three times). Ask the tree instead:
+ *   grep -rn "<MarkdownPreviewOverlay" frontend/src --include=*.tsx | grep -v test
+ */
+type PreviewPager = {
+  /** 0-based position of the item currently shown. */
+  index: number;
+  /** How many items the caller's current list holds. */
+  total: number;
+  /** Show the item at this index. The caller re-renders this overlay with the
+   * new item's title/url/mime — nothing here mutates. */
+  onGo: (index: number) => void;
+};
+
 type MarkdownPreviewOverlayProps = {
   /** Display name shown in the header (the blob's filename, or the sender of
    * the message being read). */
   title: string;
+  /** Absent = this overlay shows one item with nothing either side of it, and
+   * no paging control renders. */
+  pager?: PreviewPager;
   onClose: () => void;
 } & (
   | {
@@ -95,6 +140,7 @@ type MarkdownPreviewOverlayProps = {
       mime?: string;
       source?: never;
       imageSrc?: never;
+      diffParams?: never;
     }
   | {
       /** Markdown text the caller already holds — rendered as-is, no fetch. */
@@ -104,6 +150,7 @@ type MarkdownPreviewOverlayProps = {
       attachmentId?: never;
       mime?: never;
       imageSrc?: never;
+      diffParams?: never;
     }
   | {
       /** Image bytes the caller already holds (`data:` URI) — a staged composer
@@ -114,15 +161,32 @@ type MarkdownPreviewOverlayProps = {
       attachmentId?: never;
       mime?: never;
       source?: never;
+      diffParams?: never;
+    }
+  | {
+      /** A COMPARISON, addressed by the two sides the compare url named (T-59).
+       * There is no blob here at all — a comparison stopped being a file the
+       * day it became a url — so there is nothing to download and no
+       * FILE-level share link to mint. The comparison's own external link is
+       * a different thing and IS offered, by DiffShareLinkButton. The body is
+       * `DiffScreen`, the same compare screen the standalone page draws. */
+      diffParams: DiffParams;
+      url?: never;
+      attachmentId?: never;
+      mime?: never;
+      source?: never;
+      imageSrc?: never;
     }
 );
 
 export function MarkdownPreviewOverlay({
   title,
+  pager,
   url,
   attachmentId,
   mime,
   imageSrc,
+  diffParams,
   source: inlineSource,
   onClose,
 }: MarkdownPreviewOverlayProps) {
@@ -131,11 +195,46 @@ export function MarkdownPreviewOverlay({
   const [failed, setFailed] = useState(false);
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
+  // T-36 — the share link, resolved AHEAD of the click so the 「在新頁面顯示」
+  // control can be a real <a target="_blank">. It cannot be built here: the
+  // ?sig= credential is minted by the server, and the two ways to open a tab
+  // after an await are both worse — a popup blocker eats a late `window.open`,
+  // and the `window.open("", "_blank")`-then-navigate trick has to keep the
+  // opener handle, which is exactly what `rel="noopener"` is here to deny.
+  // null = no link to offer (not minted yet, or the mint failed): the anchor is
+  // then absent rather than pointing at a URL that would 404.
+  const [shareHref, setShareHref] = useState<string | null>(null);
   // The text to render. An inline source is authoritative and synchronous — it
   // never passes through the loading/error states, which only describe a fetch.
   const image = imageSrc !== undefined || (mime?.startsWith("image/") ?? false);
   const previewableText = isPreviewableTextAttachment(mime ?? "text/markdown", title);
+  // A comparison is not a stored blob at all — it carries no `url`, so none of
+  // the blob branches below (fetch, download, share link, "open in a tab") can
+  // fire for it, and it must not fall into `unavailable`, which is the "this
+  // overlay cannot draw these bytes" state.
+  const diff = diffParams !== undefined;
   const unavailable = url !== undefined && !image && !previewableText;
+  // T-36 — WHOSE CALL IS "opens in a tab"? THE SERVER'S. This mirrors
+  // api_chat.go's isPreviewableMime, which is what decides between
+  // `Content-Disposition: inline` and `attachment` on the serve route. Offering
+  // 「在新頁面顯示」 on anything else would be a lie: the browser would download
+  // the file instead of showing it, and the button would look broken.
+  // Deliberately WIDER than `previewableText` above (which gates what THIS
+  // overlay renders in-panel, and stays narrow on purpose) — a .html or a .pdf
+  // still cannot be drawn here, but the browser can show it perfectly well in a
+  // tab of its own, and that is the whole request.
+  const inlineInBrowser =
+    attachmentId !== undefined && isInlineDisplayableMime(mime ?? "text/markdown");
+  // T-36 (B2) — WHICH files deserve the plain-words note? ONLY the ones that
+  // look like they should answer a click. An .html page carries buttons and
+  // input boxes that will sit dead in the new tab, and the reader has to be
+  // told before they try one. A screenshot, a PDF or a .txt has no controls to
+  // be disappointed by, so the same sentence there says nothing true about what
+  // is on screen — and image preview is the HIGHEST-TRAFFIC use of this
+  // overlay, where the line would push every pasted screenshot down for
+  // nothing. The note therefore rides `looksInteractiveInNewTab`, NOT the
+  // button's own condition.
+  const interactiveLooking = looksInteractiveInNewTab(mime ?? "text/markdown", title);
   const plainText = previewableText && !isMarkdownAttachment(mime ?? "text/markdown", title);
   const source = inlineSource ?? fetched;
   const [zoom, setZoom] = useState(1);
@@ -236,9 +335,90 @@ export function MarkdownPreviewOverlay({
     return () => {
       alive = false;
     };
-  }, [url, image, unavailable]);
+  }, [url, image, unavailable, diff]);
 
+  // Mint the share link for the tab anchor. Only for an attachment the browser
+  // would actually DISPLAY — a downloadable one gets no anchor, so it needs no
+  // link either.
+  useEffect(() => {
+    if (attachmentId === undefined || !inlineInBrowser) {
+      setShareHref(null);
+      return;
+    }
+    let alive = true;
+    setShareHref(null);
+    attachmentShareLinkUrl(attachmentId)
+      .then((href) => {
+        if (alive) setShareHref(href);
+      })
+      .catch((e) => {
+        // No link, no anchor. Never a half-built href.
+        console.warn("MarkdownPreviewOverlay: share link for new tab failed", e);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [attachmentId, inlineInBrowser]);
+
+  // A new blob is a new image, so the zoom starts over. This predates paging and
+  // is exactly what paging needs: T-51 ① made the shown item change WITHOUT a
+  // remount, and a 300% carried over from a wide screenshot would open the next
+  // photo already scrolled into a corner. Nothing was added for it — the deps
+  // were already the right ones. (An earlier draft of ① added a second, verbatim
+  // copy of this effect above; the independent review caught it.)
   useEffect(() => setZoom(1), [url, imageSrc]);
+
+  // T-51 ① — PAGING KEYS ARE BOUND ON THE DOCUMENT, NOT ON THIS ROOT, and that
+  // is a correctness property rather than a style choice. Bound as a React
+  // `onKeyDown` on the portal root, paging worked only while focus was still
+  // inside the overlay — and the surest way to lose that focus is to USE the
+  // feature: stepping to the last item disables the very button under the
+  // pointer, and disabling a focused button blurs it to <body>. The keyboard
+  // then went dead until the reader reached for the mouse. This file already
+  // documents that trap one screen above (the T-4e95 note on the opener), which
+  // is exactly where the independent review found it re-introduced.
+  //
+  // 🔴 ON AN IMAGE THE ARROWS ALWAYS PAGE — INCLUDING WHILE IT IS ZOOMED, and
+  // that is the OWNER'S call, made against the first implementation
+  // (2026-09-02, `c-521c38a1de77`): 「左右鍵固定就改成切換圖片，現在不是應該可以
+  // 用滑鼠或手機滑到就可以左右移動了嗎？」
+  //
+  // The first version handed the arrows back to the pan whenever `zoom > 1`,
+  // because that is what T-7e68 built them for (「可以放大，但無法左右或上下移
+  // 動」). He overrode it knowing the reason: a zoomed image can still be moved
+  // by dragging it, by the wheel, by the scrollbar and by touch, so the arrows
+  // are not its only handle — while paging had no keyboard at all whenever a
+  // picture happened to be zoomed in.
+  // ⚠️ THE COST HE ACCEPTED, written down so nobody "fixes" it back: a reader
+  // who uses ONLY a keyboard can no longer pan a zoomed image. If that is ever
+  // reopened, it is a new decision, not a regression of this one.
+  //
+  // A TEXT body still keeps them: it scrolls with the arrow keys and this
+  // overlay has no second way to reach the bottom of a long file — no drag, no
+  // wheel-zoom, nothing. That carve-out is not part of the ruling above; the
+  // two chevrons page a text file.
+  useEffect(() => {
+    if (pager === undefined) return;
+    if (!image) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      // ⚠️ A DOCUMENT LISTENER HEARS EVERY KEY, INCLUDING ONE BEING TYPED. This
+      // overlay is deliberately not a focus trap, so Shift+Tab reaches the
+      // controls behind it, and an arrow pressed in a text field is a caret
+      // move, not a page. Measured in real Chromium before this guard: the
+      // caret stayed put and the pager stepped anyway.
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (el?.isContentEditable) return;
+      const next = e.key === "ArrowLeft" ? pager.index - 1 : pager.index + 1;
+      if (next < 0 || next >= pager.total) return;
+      e.preventDefault();
+      pager.onGo(next);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [pager, image]);
 
   // Back at 100% the stage fits the frame again, so any pan offset left over
   // from the zoomed view has to go with it — otherwise the recentred image
@@ -432,7 +612,50 @@ export function MarkdownPreviewOverlay({
   // layer for exactly its lifetime; whatever opened it (a popover, a gallery,
   // a chat thread) sits below and does not see the key.
   const rootRef = useRef<HTMLDivElement>(null);
+  /* A comparison reading ONE of its sides on its own answers Esc itself, with a
+   * layer NESTED inside this one (DiffScreen) — Esc there goes back to the
+   * comparison rather than out of the overlay, and this handler never sees the
+   * key while that pane is open. That is escapeLayers' whole job; neither side
+   * has to know about the other. */
   useEscapeLayer(onClose, rootRef);
+
+  // 🔴 A DIALOG THE KEYBOARD NEVER ENTERS IS NOT A DIALOG. Measured before this
+  // existed: open the overlay from any of its three entry points and
+  // `document.activeElement` was still the button that opened it, OUTSIDE the
+  // portal — so Tab walked the page behind the backdrop, the zoom controls and
+  // the close button were reachable only by tabbing through the whole cockpit
+  // first, and a screen reader was still reading the thread. `aria-modal="true"`
+  // is a promise to assistive tech, not a behaviour the browser implements.
+  //
+  // So: focus the root on mount (it takes `tabIndex={-1}` for exactly this — it
+  // is not in the tab order, it is a landing spot), and hand focus BACK to
+  // whatever had it when the overlay closes. The restore is the half people
+  // forget and the half a keyboard user notices: without it, closing drops focus
+  // onto <body> and the next Tab restarts from the top of the page instead of
+  // resuming beside the control that was pressed.
+  //
+  // Deliberately NOT a focus trap. This repo has no trap primitive, Esc is
+  // already handled as a layer, and a half-built trap that leaks on one edge is
+  // worse than none. What is promised here is "focus goes in, and comes back",
+  // and that is what the tests assert.
+  //
+  // ⚠️ THE OPENER IS WHATEVER HAD FOCUS AT MOUNT, so a caller that BLURS its own
+  // control before opening this hands over the wrong element and the restore
+  // lands on <body>. That is not hypothetical: T-4e95's quote-row button briefly
+  // carried `disabled` while its read was in flight, which blurs a focused
+  // button, and the restore was measured landing on BODY in a real Chromium
+  // every time. The fix was on the caller's side (the attribute is gone), and
+  // this note is here so the next caller does not rediscover it.
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    rootRef.current?.focus();
+    return () => {
+      // The opener can be gone (its row unmounted while the overlay was up), in
+      // which case there is nothing to restore to and focus falls to <body> —
+      // the same place it would have been anyway.
+      if (opener && opener.isConnected) opener.focus();
+    };
+  }, []);
 
   // T-76cd — PORTALLED TO `document.body`, and that is a correctness property,
   // not tidiness. `z-index: 1100` is only worth what its nearest stacking-context
@@ -457,6 +680,7 @@ export function MarkdownPreviewOverlay({
     <div
       ref={rootRef}
       className="md-preview"
+      tabIndex={-1}
       role="dialog"
       aria-modal="true"
       aria-label={title}
@@ -468,7 +692,40 @@ export function MarkdownPreviewOverlay({
             <FileTextIcon size={16} />
             {title}
           </span>
+          {/* Position within the caller's list. Digits only — nothing to
+            * translate, and it is the one thing the two chevrons cannot say:
+            * whether there are three more or three hundred.
+            *
+            * ⚠️ OUTSIDE the title span, not inside it: that span is the one
+            * that ellipsises, so a long filename would eat the counter before
+            * it eats itself. */}
+          {pager !== undefined && (
+            <span className="md-preview__pager-count">
+              {pager.index + 1} / {pager.total}
+            </span>
+          )}
           <div className="md-preview__actions">
+            {/* T-59 — the EXTERNAL link to this comparison, in the same slot
+             * and the same skin as the file-level share control below. The
+             * owner is looking at the comparison here and wants to hand it to
+             * someone outside the studio; until now that was a CLI action only.
+             *
+             * 🔴 A SESSION IS STRUCTURAL HERE. This overlay is only ever
+             * mounted with `diffParams` by DiffModalHost, and DiffModalHost is
+             * only mounted inside the studio, behind AuthGate. The standalone
+             * page (DiffPage) never mounts this overlay at all, so the
+             * unauthenticated reader of a ?sig= link cannot reach this button
+             * — no runtime gate can regress into offering it to them.
+             *
+             * The `sig` the clicked link may have carried rides along in
+             * `diffParams` and is dropped by the mint; the server signs the
+             * addresses and labels, never a signature. */}
+            {diffParams !== undefined && (
+              <DiffShareLinkButton
+                params={diffParams}
+                className="md-preview__download md-preview__share"
+              />
+            )}
             {/* Share needs a STORED blob id. Download only needs bytes, so it
              * also serves a staged `imageSrc`. An inline text source has
              * neither — nothing is fabricated for it. */}
@@ -492,13 +749,46 @@ export function MarkdownPreviewOverlay({
                 }
                 onClick={() => void onCopyShareLink()}
               >
-                {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
-                {copyFailed
-                  ? <span className="md-preview__action-label">{t.chat.shareLinkCopyFailed}</span>
-                  : copied
-                    ? <span className="md-preview__action-label">{t.chat.shareLinkCopied}</span>
-                    : <span className="md-preview__action-label">{t.chat.copyShareLink}</span>}
+                {/* ⚠️ THREE STATES, THREE ICONS. While the button carried its
+                  * label, a failed copy said so in words; icon-only, a failure
+                  * drawn as the idle icon is indistinguishable from "nothing
+                  * happened yet" — and a copy that silently did not happen is
+                  * the one outcome the reader must not have to guess at. The
+                  * accessible name says the same thing (it already switched on
+                  * these three states); this is the half a sighted reader gets. */}
+                {copied ? (
+                  <CheckIcon size={14} />
+                ) : copyFailed ? (
+                  <AlertTriangleIcon size={14} />
+                ) : (
+                  <CopyIcon size={14} />
+                )}
               </button>
+            )}
+            {/* T-36 — 「在新頁面顯示」: the owner's own words were 「html 應該要可以
+             * 點開以後 popup new window 顯示 不然我都要複製以後找新的頁面貼很
+             * 麻煩」. It opens the SHARE link (the ?sig= credential), not the
+             * ?token= authed URL the download uses — a whole owner session
+             * token has no business sitting in another tab's address bar.
+             * Present only when the browser would show the file rather than
+             * download it (see `inlineInBrowser`). */}
+            {shareHref !== null && (
+              <a
+                /* ⚠️ NOT `md-preview__download`. Four existing tests reach for
+                 * the download link as `querySelector("a.md-preview__download")`
+                 * — the FIRST match — so borrowing that class for its styling
+                 * silently handed them this anchor instead. The shared look is
+                 * shared in the stylesheet, not by wearing the other control's
+                 * name. */
+                className="md-preview__new-tab"
+                href={shareHref}
+                target="_blank"
+                rel="noopener"
+                aria-label={t.chat.mdPreview.openInNewTab}
+                title={t.chat.mdPreview.openInNewTab}
+              >
+                <ExternalLinkIcon size={14} />
+              </a>
             )}
             {/* Download — the SECOND action, distinct from preview: the authed
              * blob URL (or the staged data: URI) with a download attribute. */}
@@ -511,7 +801,6 @@ export function MarkdownPreviewOverlay({
                 title={t.chat.mdPreview.download}
               >
                 <DownloadIcon size={14} />
-                <span className="md-preview__action-label">{t.chat.mdPreview.download}</span>
               </a>
             )}
             <button
@@ -524,6 +813,58 @@ export function MarkdownPreviewOverlay({
             </button>
           </div>
         </div>
+        {/* 🔴 SAY IT IN PLAIN WORDS, and say it BEFORE the click, on the same
+          * screen as the button that causes it. What the new tab serves is
+          * locked down so nothing on it can run — good, and also the reason a
+          * design mockup opened there will not answer a single click. The owner
+          * asked for that to be said on screen rather than discovered
+          * (「需要 JS 的設計稿會不會動，我會在畫面上講一句」). The sentence names
+          * what the reader will SEE — buttons and boxes that do nothing — and
+          * never the mechanism behind it: this line is read by someone who does
+          * not write code.
+          *
+          * 🔴 It rides the button's condition AND `looksInteractiveInNewTab`.
+          * It used to ride the button's condition alone, and that put it on
+          * every screenshot and every PDF — a PNG has no buttons and no input
+          * boxes, so the sentence was untrue there and cost the most common
+          * preview in the cockpit a line of height. The sentence is only ever
+          * worth saying about a file that LOOKS like it should react. */}
+        {/* T-51 ① — the two chevrons ride the PANEL's edges rather than the
+          * header, for two reasons that are not taste: the header at 390px is
+          * already carrying a filename plus four controls, and an edge chevron
+          * is where a thumb goes. They are `disabled` at the ends instead of
+          * wrapping — a gallery has a first and a last item, and silently
+          * jumping from one end to the other is how a reader loses their place
+          * in a list of a thousand. */}
+        {pager !== undefined && (
+          <>
+            <button
+              type="button"
+              className="md-preview__pager md-preview__pager--prev"
+              aria-label={t.chat.mdPreview.previous}
+              title={t.chat.mdPreview.previous}
+              disabled={pager.index <= 0}
+              onClick={() => pager.onGo(pager.index - 1)}
+            >
+              <ChevronLeftIcon size={20} />
+            </button>
+            <button
+              type="button"
+              className="md-preview__pager md-preview__pager--next"
+              aria-label={t.chat.mdPreview.next}
+              title={t.chat.mdPreview.next}
+              disabled={pager.index >= pager.total - 1}
+              onClick={() => pager.onGo(pager.index + 1)}
+            >
+              <ChevronRightIcon size={20} />
+            </button>
+          </>
+        )}
+        {shareHref !== null && interactiveLooking && (
+          <div className="md-preview__new-tab-note">
+            {t.chat.mdPreview.newTabStaticNote}
+          </div>
+        )}
         <div className="md-preview__body">
           {image && imageBytes !== undefined ? (
             <div className="md-preview__image-viewport">
@@ -580,9 +921,31 @@ export function MarkdownPreviewOverlay({
               </div>
             </div>
           ) : unavailable ? (
-            <div className="md-preview__status">{t.chat.mdPreview.unavailable}</div>
+            /* 🔴 T-36 (B1) — DO NOT SEND HIM BACK TO THE THING HE COMPLAINED
+             * ABOUT. This overlay cannot DRAW an .html (that contract stays
+             * narrow on purpose), but there is now a button in the header that
+             * opens it, and the biggest, most central line on the screen must
+             * point AT that button rather than at 下載 — the owner's own words
+             * for this ticket were 「不然我都要複製以後找新的頁面貼很麻煩」.
+             * 「請下載」 survives only where there is genuinely no button: a
+             * file the browser would download anyway, or a mint that failed.
+             * The line follows the BUTTON, not the mime: while the share link
+             * is still being minted neither exists yet, and they appear
+             * together on the same state change. */
+            <div className="md-preview__status">
+              {shareHref !== null
+                ? t.chat.mdPreview.unavailableOpenInNewTab
+                : t.chat.mdPreview.unavailable}
+            </div>
           ) : failed ? (
             <div className="md-preview__status">{t.chat.mdPreview.error}</div>
+          ) : diff ? (
+            /* The compare screen is DiffScreen and only DiffScreen — the
+             * same one the standalone /diff page draws, which is in turn
+             * DiffView and only DiffView. A second compare renderer here would
+             * be a second authority on the owner's six 2026-07-31 rulings, and
+             * the two would start to drift. */
+            <DiffScreen params={diffParams} />
           ) : source === null ? (
             <div className="md-preview__status">{t.chat.mdPreview.loading}</div>
           ) : (
@@ -621,6 +984,42 @@ export function isMarkdownAttachment(mime: string, filename: string): boolean {
   if (mime === "text/markdown" || mime === "text/x-markdown") return true;
   const name = filename.toLowerCase();
   return name.endsWith(".md") || name.endsWith(".markdown");
+}
+
+/** Whether the BROWSER will display these bytes in a tab of its own instead of
+ * downloading them. This is a mirror of the server's `isPreviewableMime`
+ * (server/ocserverd/api_chat.go): that function is what picks
+ * `Content-Disposition: inline` over `attachment` on the serve route, so it —
+ * not this file — is the source of truth for the answer. Keep the two in step;
+ * a second, home-grown notion of "previewable" on this side would put the
+ * 「在新頁面顯示」 button on files that just download.
+ *
+ * ⚠️ NOT the same question as `isPreviewableTextAttachment` below, and the two
+ * must not be merged: that one asks what THIS overlay can render in-panel and
+ * is narrow on purpose. */
+export function isInlineDisplayableMime(mime: string): boolean {
+  return (
+    mime.startsWith("image/") || mime.startsWith("text/") || mime === "application/pdf"
+  );
+}
+
+/** T-36 (B2) — does this attachment LOOK interactive once it is opened in a
+ * tab of its own? Only then is the plain-words note worth saying.
+ *
+ * NARROWER than `isInlineDisplayableMime` on purpose, and it is not the same
+ * question. That one asks "will the browser show this rather than download
+ * it?" — the button's gate. This one asks "will the reader expect the thing on
+ * screen to answer a click?", which is true of an .html page (buttons, input
+ * boxes, a design mockup) and false of a screenshot, a PDF or a .txt. Saying
+ * 「上面的按鈕和輸入格不會有反應」 over a PNG describes controls that are not
+ * there, on the busiest preview surface in the cockpit. */
+export function looksInteractiveInNewTab(mime: string, filename: string): boolean {
+  const base = mime.split(";")[0]!.trim().toLowerCase();
+  return (
+    base === "text/html" ||
+    base === "application/xhtml+xml" ||
+    /\.(html?|xhtml)$/i.test(filename)
+  );
 }
 
 /** The stored text formats supported by the shared attachment modal. Keep this

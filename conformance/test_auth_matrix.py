@@ -1,4 +1,4 @@
-"""Auth matrix — every served route × {none, owner, admin_agent, warden, agents}.
+"""Auth matrix — every manifest row × {none, owner, admin_agent, warden, agents}.
 
 The first conformance batch: a TABLE-DRIVEN status assertion per (route,
 identity) cell, mechanically tied to the committed ``routes_manifest.json``
@@ -47,6 +47,7 @@ executes the host action).
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import uuid
 from dataclasses import dataclass, field
@@ -179,6 +180,52 @@ def _member_path(template: str):
     return build
 
 
+def _offer_mfa(ctx: Ctx) -> None:
+    """Turn the ship-dark feature flag ON — the precondition for enrol/activate.
+
+    Idempotent and inert: offering the factor arms nothing, so this cannot leave
+    a later login fixture needing a code.
+    """
+    ctx.client.post(
+        "/api/auth/mfa/offer",
+        json={"offered": True},
+        headers={"Authorization": f"Bearer {ctx.owner_token}"},
+    )
+
+
+def _mfa_enroll_path(ctx: Ctx, identity: str) -> str:
+    """The enroll row's path builder — it exists only to seed the feature flag
+    for the owner face, which would otherwise get a 403 instead of the 200 this
+    matrix pins."""
+    if identity == "owner":
+        _offer_mfa(ctx)
+    return "/api/auth/mfa/enroll"
+
+
+def _mfa_activate_body(ctx: Ctx, identity: str):
+    """Body for the mfa/activate row, with its own precondition.
+
+    The owner (only at-or-above-floor) face ENROLS first, so a pending secret is
+    guaranteed present and the wrong code below is refused as a wrong code (401)
+    rather than as "nothing pending" (409). Denied identities must stay
+    side-effect free, so they just get the body.
+
+    Enrolling is safe to repeat: it overwrites any earlier UNPROVEN pending
+    secret and arms nothing, so this cannot leave an active factor behind for a
+    later login fixture to trip over.
+    """
+    if identity == "owner":
+        _offer_mfa(ctx)
+        ctx.client.post(
+            "/api/auth/mfa/enroll",
+            headers={"Authorization": f"Bearer {ctx.owner_token}"},
+        )
+    # The REAL password with a WRONG code, so the 401 is earned by the code and
+    # not by a missing field (which would be a 422 and prove nothing about the
+    # authz gate this matrix exists to pin). activate demands both factors.
+    return {"password": os.environ["OC_OWNER_PASSWORD"], "code": "000000"}
+
+
 def _matrix_member_avatar_delete_path(ctx: Ctx, identity: str) -> str:
     """Seed the owner-positive DELETE face without relying on row order.
 
@@ -265,7 +312,7 @@ def _matrix_card(ctx: Ctx) -> str:
     r = ctx.client.post(
         "/api/reply-cards",
         json={"kind": "decision", "summary": "conf matrix scratch card",
-              "options": ["AI pick", "other"]},
+              "options": [{"text": "AI pick"}, {"text": "other"}], "linked_task": None},
         headers={"Authorization": f"Bearer {ctx.owner_token}"},
     )
     assert r.status_code == 200, f"scratch card failed: {r.status_code} {r.text}"
@@ -284,7 +331,7 @@ def _matrix_card_opened_by_agent_a(ctx: Ctx) -> str:
     r = ctx.client.post(
         "/api/reply-cards",
         json={"kind": "decision", "summary": "conf matrix agent-A card",
-              "options": ["AI pick", "other"]},
+              "options": [{"text": "AI pick"}, {"text": "other"}], "linked_task": None},
         headers={"Authorization": f"Bearer {ctx.agent_a.token}"},
     )
     assert r.status_code == 200, f"agent-A card failed: {r.status_code} {r.text}"
@@ -296,7 +343,7 @@ def _matrix_answered_card(ctx: Ctx) -> str:
     card_id = _matrix_card(ctx)
     r = ctx.client.post(
         f"/api/reply-cards/{card_id}/answer",
-        json={"option_idx": 0},
+        json={"option_idxs": [0]},
         headers={"Authorization": f"Bearer {ctx.owner_token}"},
     )
     assert r.status_code == 200, f"scratch answer failed: {r.status_code} {r.text}"
@@ -316,32 +363,26 @@ def _matrix_task(ctx: Ctx) -> str:
     return r.json()["task"]["id"]
 
 
-def _matrix_task_step(ctx: Ctx, gate: bool = False) -> tuple[str, str]:
-    """A fresh task with one planned (pending) step (optionally a gate);
-    returns (task_id, step_id). Task status is DERIVED from the steps now
-    (T-9ca5) — no task-level 'start' report exists any more."""
+def _matrix_task_step(ctx: Ctx) -> tuple[str, str]:
+    """A fresh task with one planned PENDING step; returns (task_id, step_id).
+
+    Task status is DERIVED from the steps (T-9ca5) — no task-level 'start'
+    report exists. The `gate=True` variant retired with the open_gate route
+    (T-18): its only caller was that route's matrix row, and a card is now
+    opened through POST /api/reply-cards with an explicit linked_task, which
+    has its own row and builds its own fixture."""
     h = {"Authorization": f"Bearer {ctx.owner_token}"}
     task_id = _matrix_task(ctx)
     r = ctx.client.post(
         f"/api/tasks/{task_id}/plan",
         json={"steps": [{"name": "conf step", "dod": "done when asserted",
-                         "is_gate": gate}]},
+                         "is_gate": False}]},
         headers=h,
     )
     assert r.status_code == 200, f"scratch plan failed: {r.status_code} {r.text}"
     # submit_plan answers with a bounded receipt (T-a98d) — the rows come from
     # the read face.
     step_id = ctx.client.get(f"/api/tasks/{task_id}", headers=h).json()["steps"][0]["id"]
-    if gate:
-        # A gate can arm only on an in_progress task — report the step
-        # in_progress (owner drives it via admin capability) so the task derives
-        # in_progress before the gate route fires. The step-status route case
-        # (gate=False) leaves the step pending for its own pending→in_progress.
-        r = ctx.client.post(
-            f"/api/tasks/{task_id}/steps/{step_id}/status",
-            json={"status": "in_progress"}, headers=h,
-        )
-        assert r.status_code == 200, f"scratch step start failed: {r.status_code} {r.text}"
     return task_id, step_id
 
 
@@ -408,6 +449,19 @@ def _matrix_reassigning_task(ctx: Ctx) -> str:
     return task_id
 
 
+# T-3201 — a boot document's write face takes the EDITABLE HALF and nothing
+# else; the server joins the read-only head back on. These rows are about the
+# AUTHZ FLOOR, and the body used to read the document first and re-send its head
+# under a new body so that a 400 for malformed content could not be mistaken for
+# a refusal about who may write. That whole dance is gone with the protocol it
+# served: there is no head to carry, so there is no way to carry it wrongly.
+def _boot_doc_body(text: str):
+    def build(ctx: "Ctx", identity: str) -> dict:
+        return {"body": text}
+
+    return build
+
+
 MATRIX: dict[str, Route] = {
     # ── infra seams ──────────────────────────────────────────────────────────
     "GET /api/events": Route(
@@ -432,6 +486,68 @@ MATRIX: dict[str, Route] = {
         requires="owner",
         overrides={"owner": 401},
         body={"current_password": "conf-wrong-current", "new_password": "conf-new-password"},
+    ),
+    # ── owner second factor (TOTP) ───────────────────────────────────────────
+    # All three are owner-floor. This matrix pins the AUTHZ CHOKE; the ceremony
+    # itself (replay floor, both-factors disable, pending survival) is pinned in
+    # api_auth_mfa_test.go, because arming a real factor here would make every
+    # later login fixture in the run need a TOTP code.
+    #
+    # 🔴 NO ROW BELOW EVER ARMS A FACTOR, and that is what keeps these three
+    # order-independent — the same discipline _matrix_member_avatar_delete_path
+    # states for its own row. enroll only ever writes an INERT pending secret
+    # (nothing is armed until a code proves it), so every cell here sees the
+    # same "no active factor" state no matter which ran first.
+    # The read is a plain owner-gated GET: no body, no state change.
+    "GET /api/auth/mfa": Route(requires="owner"),
+    # The ship-dark rollout flag. The owner face turns it ON, which is also the
+    # precondition the enroll row below needs — and leaving it on is harmless:
+    # offering the feature arms nothing, and every later login fixture in the run
+    # still needs no code because no factor is ever activated.
+    "POST /api/auth/mfa/offer": Route(
+        requires="owner",
+        body={"offered": True},
+    ),
+    "POST /api/auth/mfa/enroll": Route(
+        # Honest 200: a pending secret is inert. Nothing downstream is armed.
+        # The path builder seeds the feature flag for the owner face (403 without it).
+        requires="owner",
+        path=_mfa_enroll_path,
+    ),
+    "POST /api/auth/mfa/activate": Route(
+        # 401, and DETERMINISTICALLY so: the body callable enrols first for the
+        # owner face, so a pending secret is guaranteed to exist and the wrong
+        # code below is refused on its own merits. Expecting 409 here instead
+        # would silently depend on whether the enroll row happened to run first.
+        requires="owner",
+        overrides={"owner": 401},
+        body=lambda ctx, identity: _mfa_activate_body(ctx, identity),
+    ),
+    "POST /api/auth/mfa/disable": Route(
+        # 409 — nothing is armed, and (see above) nothing in this matrix ever
+        # arms anything, so this holds regardless of row order.
+        requires="owner",
+        overrides={"owner": 409},
+        body={"password": "conf-wrong-current", "code": "000000"},
+    ),
+    # ── Signing-key ring (T-62) ─────────────────────────────────────────────
+    # The read is a plain owner-gated GET: ids and timestamps, never key bytes.
+    "GET /api/auth/signing-keys": Route(requires="owner"),
+    # 🔑 The owner face here REALLY ROTATES, and that is safe rather than
+    # reckless: a rotation ADDS a key and moves the signing mark, leaving every
+    # existing key in the ring. Every credential this harness is holding was
+    # signed by a key that is still there, so every later row in the run keeps
+    # authenticating. (If this row ever starts poisoning the run, the thing that
+    # broke is the transition guarantee itself — which is the point of firing it
+    # for real instead of degrading it.)
+    "POST /api/auth/signing-keys/rotate": Route(requires="owner"),
+    # 404 by design — see DEGRADED. A real target would be a key in the ring,
+    # and removing one revokes every credential it signed, this harness's
+    # included.
+    "POST /api/auth/signing-keys/{key_id}/remove": Route(
+        requires="owner",
+        path="/api/auth/signing-keys/k-no-such-key-t62/remove",
+        overrides={"owner": 404},
     ),
     "GET /api/settings": Route(requires="admin_agent"),
     "GET /api/push/public-key": Route(requires="owner"),
@@ -564,6 +680,36 @@ MATRIX: dict[str, Route] = {
     "POST /api/members/{member_id}/force-stop": Route(
         requires="admin_agent",
         path=_member_path("/api/members/{member_id}/force-stop"),
+    ),
+    "POST /api/members/{member_id}/cost/reset": Route(
+        # OWNER floor, alone among the member action rows — the neighbours
+        # control a member, this one destroys the owner's own spend record with
+        # nothing else in the system holding a copy (T-53). The admin_agent cell
+        # is therefore a DERIVED 403 here while it is 200 for every row above,
+        # which is the whole point of pinning it.
+        requires="owner",
+        path=_member_path("/api/members/{member_id}/cost/reset"),
+    ),
+    "POST /api/accounts/cost/reset": Route(
+        # Same OWNER floor as the per-actor reset above. It clears the ACCOUNT's
+        # own figure and no member's (owner ruling rc-5c5d7c7c6dcd), but the
+        # floor is the same for the same reason: destroying the owner's spend
+        # record is not something an agent does on his behalf. The body names a
+        # tag nobody has reported under, so the positive faces clear nothing —
+        # this row pins WHO MAY PRESS IT, not what it clears (that is
+        # test_rest_happy's row and the Go tests).
+        requires="owner",
+        body={"account": "conf-authz-untouched-account"},
+    ),
+    "POST /api/members/{member_id}/accelerated-stop": Route(
+        # positive faces: 409 — the fresh target has no live session, and
+        # 加速停止 is an ESCALATION of a wind-down that is already open. That
+        # refusal IS the contract (it is what keeps the button from being a
+        # second, harsher stop), so the choke face past the admin guard is what
+        # this row pins.
+        requires="admin_agent",
+        overrides={"owner": 409, "admin_agent": 409},
+        path=_member_path("/api/members/{member_id}/accelerated-stop"),
     ),
     "POST /api/members/{member_id}/refocus": Route(
         # positive faces: 409 — the fresh target is OFFLINE and refocus is
@@ -730,6 +876,19 @@ MATRIX: dict[str, Route] = {
         requires="machine",
         overrides={i: 400 for i in _IDENTITY_RANK},
     ),
+    # Both comparison rows probe with a SAYABLE address that resolves to
+    # nothing, which is deliberately still a 200: the pair route answers a
+    # missing side with that side's `gone` marker, and the mint judges shape
+    # only. The sig SEMANTICS (credential-less read, tampered sig 401) are
+    # pinned in test_rest_happy.py, where the attachment fixture lives.
+    "GET /api/diff": Route(
+        requires="machine",
+        path="/api/diff?before=att-000000000000&after=att-000000000000",
+    ),
+    "GET /api/diff/share-link": Route(
+        requires="machine",
+        path="/api/diff/share-link?before=att-000000000000&after=att-000000000000",
+    ),
     "POST /api/chat/mark-read": Route(
         requires="machine",
         body={"peer": "owner", "last_read_ts": 1.0},
@@ -740,7 +899,7 @@ MATRIX: dict[str, Route] = {
     "POST /api/reply-cards": Route(
         requires="machine",
         body={"kind": "decision", "summary": "conf matrix card",
-              "options": ["AI pick", "other"]},
+              "options": [{"text": "AI pick"}, {"text": "other"}], "linked_task": None},
     ),
     "GET /api/reply-cards": Route(requires="machine"),
     "GET /api/reply-cards/count": Route(requires="machine"),
@@ -758,7 +917,7 @@ MATRIX: dict[str, Route] = {
             f"/api/reply-cards/"
             f"{_matrix_card(ctx) if i in _ADMIN_FACES else 'rc-conf-missing'}/answer"
         ),
-        body={"option_idx": 0},
+        body={"option_idxs": [0]},
     ),
     "PUT /api/reply-cards/{card_id}/answer": Route(
         requires="admin_agent",
@@ -929,7 +1088,7 @@ MATRIX: dict[str, Route] = {
     "GET /api/system-interaction": Route(requires="machine"),
     "POST /api/system-interaction": Route(
         requires="admin_agent",
-        body={"text": "conformance system-interaction block"},
+        body=_boot_doc_body("conformance system-interaction block"),
     ),
     "POST /api/system-interaction/reset": Route(requires="admin_agent"),
     "GET /api/boot-sequence/{runtime_key}": Route(
@@ -939,20 +1098,51 @@ MATRIX: dict[str, Route] = {
     "POST /api/boot-sequence/{runtime_key}": Route(
         requires="admin_agent",
         path="/api/boot-sequence/codex",
-        body={"text": "conformance boot sequence"},
+        body=_boot_doc_body("conformance boot sequence"),
     ),
     "POST /api/boot-sequence/{runtime_key}/reset": Route(
         requires="admin_agent",
         path="/api/boot-sequence/codex/reset",
     ),
-    # 下線程序 (T-c9c0) — same floors as the 系統互動 block: read at machine,
+    # 〈停止〉 (T-c9c0) — same floors as the 系統互動 block: read at machine,
     # write at admin_agent.
     "GET /api/offboard": Route(requires="machine"),
     "POST /api/offboard": Route(
         requires="admin_agent",
-        body={"text": "conformance offboard block"},
+        body=_boot_doc_body("conformance offboard block"),
     ),
     "POST /api/offboard/reset": Route(requires="admin_agent"),
+    # ── the GENERIC face of every one of those documents (T-3201) ───────────
+    # Six more of these shipped with the task-event procedures and they are
+    # reached by ONE route family instead of eighteen named ones. The floors are
+    # the named routes' floors verbatim, which is the whole reason the generic
+    # shape was allowed: read at machine, write at admin_agent, no per-document
+    # exception anywhere in the registry.
+    #
+    # THE PATHS AIM AT AN EDITABLE DOCUMENT ON PURPOSE. A read-only document
+    # refuses every caller with 405 — a floor table cannot express "nobody", and
+    # pointing a positive face at one would assert a semantic refusal in a row
+    # that exists to measure authz. The 405 is pinned where it belongs, in the
+    # Go tests for the write faces.
+    #
+    # ⚠️ T-6f44 (owner's decision 2): this used to open "Two of the ten are
+    # read-only". None are, today — so the choice of an editable path is no
+    # longer a dodge, it is the only kind there is. Kept as written because the
+    # rule survives the fact: the day a document ships read-only again, this
+    # table must still not point at it.
+    "GET /api/boot-docs/{kind}/{key}": Route(
+        requires="machine",
+        path="/api/boot-docs/accelerated_stop/global",
+    ),
+    "POST /api/boot-docs/{kind}/{key}": Route(
+        requires="admin_agent",
+        path="/api/boot-docs/accelerated_stop/global",
+        body=_boot_doc_body("conformance accelerated stop block"),
+    ),
+    "POST /api/boot-docs/{kind}/{key}/reset": Route(
+        requires="admin_agent",
+        path="/api/boot-docs/accelerated_stop/global/reset",
+    ),
     "GET /api/roles": Route(requires="machine"),
     "GET /api/doc-sizes": Route(requires="machine"),
     "POST /api/roles": Route(
@@ -979,11 +1169,11 @@ MATRIX: dict[str, Route] = {
             f"/api/roles/{ctx.fresh_role() if i in _ADMIN_FACES else 'assistant'}"
         ),
     ),
-    "GET /api/lessons/{role_key}/{task_type}": Route(
+    "GET /api/lessons/{role_key}": Route(
         requires="machine",
-        path="/api/lessons/assistant/general",
+        path="/api/lessons/assistant",
     ),
-    "POST /api/lessons/{role_key}/{task_type}": Route(
+    "POST /api/lessons/{role_key}": Route(
         # Per-role write authz ABOVE the declared floor (handler-level,
         # lessonsWriteAuthz): admin capability (owner / admin_agent) writes ANY
         # role; anyone else writes ONLY its OWN member's role_key.
@@ -1002,13 +1192,13 @@ MATRIX: dict[str, Route] = {
         requires="agent",
         overrides={"agent_other": 403},
         path=lambda ctx, i: (
-            f"/api/lessons/{ctx.agent_a.role_key}/general"
+            f"/api/lessons/{ctx.agent_a.role_key}"
             if i in ("agent_self", "admin_agent")
-            else "/api/lessons/assistant/general"
+            else "/api/lessons/assistant"
         ),
         body={"text": "conformance lessons doc"},
     ),
-    "POST /api/lessons/{role_key}/{task_type}/patch": Route(
+    "POST /api/lessons/{role_key}/patch": Route(
         # anchor-addressed patch (T-8327): SAME per-role write authz seam as
         # the whole-doc replace above (T-5336 floor + admin cross-role cell
         # included). Positive faces use an always-valid APPEND edit (empty old)
@@ -1016,9 +1206,9 @@ MATRIX: dict[str, Route] = {
         requires="agent",
         overrides={"agent_other": 403},
         path=lambda ctx, i: (
-            f"/api/lessons/{ctx.agent_a.role_key}/general/patch"
+            f"/api/lessons/{ctx.agent_a.role_key}/patch"
             if i in ("agent_self", "admin_agent")
-            else "/api/lessons/assistant/general/patch"
+            else "/api/lessons/assistant/patch"
         ),
         body={"edits": [{"old": "", "new": "conformance patch probe"}]},
     ),
@@ -1144,14 +1334,15 @@ MATRIX: dict[str, Route] = {
         path=lambda ctx, _i: f"/api/tasks/{_matrix_task(ctx)}",
     ),
     "POST /api/tasks/{task_id}/terminate": Route(
-        # requires=admin_agent since T-6020: below-floor identities choke 403
-        # BEFORE target resolution (missing-id probe, the reply-card posture),
-        # so a plain agent cannot terminate its way out of its own task.
-        requires="admin_agent",
-        path=lambda ctx, i: (
-            f"/api/tasks/{_matrix_task(ctx) if i in _ADMIN_FACES else 't-conf-missing'}"
-            "/terminate"
-        ),
+        # T-6020 put the floor at admin_agent; T-b56e (owner 2026-08-20, card
+        # rc-b896e3f641e7) opened it to the task's OWN executor, so the floor
+        # is now `agent` and the executor guard carries the refusal: agent A
+        # executes this task and passes, agent B is the guard's 403. The
+        # outsource-worker subtraction has no face on this matrix (it needs a
+        # worker row) and is pinned in api_tasks_terminate_tb56e_test.go.
+        requires="agent",
+        overrides={"agent_other": 403},
+        path=lambda ctx, _i: f"/api/tasks/{_matrix_task(ctx)}/terminate",
     ),
     "POST /api/tasks/{task_id}/priority": Route(
         # T-0786: the executor may retune their OWN task; a foreign agent is
@@ -1262,13 +1453,15 @@ MATRIX: dict[str, Route] = {
             *_matrix_task_step(ctx)),
         body={"edits": [{"old": "", "new": "conf matrix note patch"}]},
     ),
-    "POST /api/tasks/{task_id}/steps/{step_id}/gate": Route(
-        requires="agent",
-        overrides={"agent_other": 403},
-        path=lambda ctx, _i: "/api/tasks/{}/steps/{}/gate".format(
-            *_matrix_task_step(ctx, gate=True)),
-        body={"kind": "decision", "summary": "conf matrix gate",
-              "options": ["go", "hold"]},
+    "GET /api/tasks/{task_id}/steps/{step_id}": Route(
+        # T-66. A READ, so it carries GET /api/tasks/{task_id}'s floor and NOT
+        # the agent write gate the three POSTs on this same path segment carry:
+        # there is no executor guard, so no `agent_other` override — a second
+        # agent reading somebody else's step is a 200, exactly as it already is
+        # through get_task. If that is ever wrong it is wrong for both reads.
+        requires="machine",
+        path=lambda ctx, _i: "/api/tasks/{}/steps/{}".format(
+            *_matrix_task_step(ctx)),
     ),
     "POST /api/tasks/{task_id}/deps": Route(
         requires="agent",
@@ -1335,6 +1528,41 @@ MATRIX: dict[str, Route] = {
         path=lambda ctx, _i: "/api/tasks/{}/artifact/{}".format(
             *_matrix_task_artifact(ctx)),
     ),
+    "GET /api/tasks/{task_id}/artifacts": Route(
+        # T-66. A READ, so it carries GET /api/tasks/{task_id}'s floor and NOT
+        # the agent write gate the two artifact WRITES on the neighbouring path
+        # carry: there is no executor guard, so no `agent_other` override — a
+        # second agent reading somebody else's artifacts is a 200, exactly as it
+        # already was through get_task before this ticket moved the full rows
+        # here. No field this serves was behind a stricter door before, so a
+        # tighter floor here would close nothing.
+        requires="machine",
+        path=lambda ctx, _i: f"/api/tasks/{_matrix_task(ctx)}/artifacts",
+    ),
+    "POST /api/tasks/{task_id}/artifact/{artifact_id}/replace": Route(
+        # T-60: the third verb on the same set carries the same model as add and
+        # remove — the executing agent replaces its own task's deliverables
+        # (agent B on agent A's task → 403); admin capability drives any task.
+        # A link replacement needs no upload, so every at-floor face lands on a
+        # FRESH scratch artifact.
+        requires="agent",
+        overrides={"agent_other": 403},
+        path=lambda ctx, _i: "/api/tasks/{}/artifact/{}/replace".format(
+            *_matrix_task_artifact(ctx)),
+        body={"url": "https://example.com/pr/2", "label": "conf PR v2"},
+    ),
+    "GET /api/tasks/{task_id}/artifact/{artifact_id}/history": Route(
+        # T-60: the version list is cockpit-only (off MCP) and, unlike the three
+        # write verbs on the same set, carries NO executor guard — agent B reads
+        # agent A's version list (200). Owner ruling: GET /api/tasks/{task_id}
+        # makes no caller distinction at all and its response already carries the
+        # artifact set, so gating the history would leave one door refusing what
+        # the other hands over. The route floor (agent) is unchanged, so the
+        # below-floor cells are still the derived 403.
+        requires="agent",
+        path=lambda ctx, _i: "/api/tasks/{}/artifact/{}/history".format(
+            *_matrix_task_artifact(ctx)),
+    ),
     # ── outsource panel (M3) ────────────────────────────────────────────────
     "GET /api/outsource-workers": Route(requires="machine"),
     "GET /api/outsource-workers/{id}": Route(
@@ -1378,6 +1606,16 @@ MATRIX: dict[str, Route] = {
         path=lambda _ctx, _i: "/api/outsource-workers/ow-nope/refocus",
         overrides={"owner": 404, "admin_agent": 404},
     ),
+    "POST /api/outsource-workers/{id}/accelerated-stop": Route(
+        requires="admin_agent",
+        path=lambda _ctx, _i: "/api/outsource-workers/ow-nope/accelerated-stop",
+        overrides={"owner": 404, "admin_agent": 404},
+    ),
+    "POST /api/outsource-workers/{id}/force-stop": Route(
+        requires="admin_agent",
+        path=lambda _ctx, _i: "/api/outsource-workers/ow-nope/force-stop",
+        overrides={"owner": 404, "admin_agent": 404},
+    ),
     "POST /api/outsource-workers/{id}/stop": Route(
         requires="admin_agent",
         path=lambda _ctx, _i: "/api/outsource-workers/ow-nope/stop",
@@ -1388,11 +1626,22 @@ MATRIX: dict[str, Route] = {
         path=lambda _ctx, _i: "/api/outsource-workers/ow-nope/restart",
         overrides={"owner": 404, "admin_agent": 404},
     ),
+    # T-ed79, owner 2026-08-21 (rc-376a41719e62): 「如果原本正職可以改 model 外包就
+    # 應該可以改」— the machine floor of the STAFF face (PATCH /api/members/{id}),
+    # not the admin floor the other four worker lifecycle rows still carry.
     "POST /api/outsource-workers/{id}/model": Route(
-        requires="admin_agent",
+        requires="machine",
         path=lambda _ctx, _i: "/api/outsource-workers/ow-nope/model",
         body=lambda _ctx, _i: {"model": "claude-opus-4-8"},
-        overrides={"owner": 404, "admin_agent": 404},
+        # Every identity now clears the floor, so every identity reaches the
+        # route's own semantics — a 404 for the nonexistent ow-nope.
+        overrides={
+            "owner": 404,
+            "admin_agent": 404,
+            "agent_self": 404,
+            "agent_other": 404,
+            "warden": 404,
+        },
     ),
     # ── task manuals (M3) ───────────────────────────────────────────────────
     "GET /api/task-manuals": Route(requires="machine"),
@@ -1544,6 +1793,28 @@ DEGRADED: dict[str, str] = {
         "rotate the shared owner credential and revoke the session token fixture. "
         "The full change/revocation semantics are pinned in the server unit tests."
     ),
+    "POST /api/auth/mfa/activate": (
+        "owner face pinned at 401 (the real password with a wrong code, against a "
+        "freshly enrolled pending secret): proving a REAL code would ARM the second factor on the "
+        "shared install, after which every later login fixture would need a TOTP "
+        "code. The enrol/activate/disable ceremony, the replay floor and the "
+        "both-factors disable rule are pinned in the server unit tests "
+        "(api_auth_mfa_test.go)."
+    ),
+    "POST /api/auth/mfa/disable": (
+        "owner face pinned at 409 (nothing armed): the positive face needs an "
+        "armed factor plus a live code, which is the same shared-credential "
+        "poisoning. Pinned in the server unit tests instead."
+    ),
+    "POST /api/auth/signing-keys/{key_id}/remove": (
+        "owner face uses an UNKNOWN key id (expects 404): a real target would be "
+        "a key in the live ring, and removing one revokes every token signed by "
+        "it — including the credentials this harness authenticates with, which "
+        "would poison every row after it. The authz faces are fully asserted. "
+        "The removal's own semantics (its tokens refused at the live gate, the "
+        "signing key itself refused with 409) are pinned in the server unit "
+        "tests (keyring_rotation_t62_test.go, api_signing_keys_t62_test.go)."
+    ),
     "GET /api/docs/assets/{name}": (
         "probed with a missing asset name (404 across authenticated identities); "
         "the machine-floor authz face passes, the asset lookup 404s. The "
@@ -1556,6 +1827,10 @@ DEGRADED: dict[str, str] = {
 # ── plumbing ─────────────────────────────────────────────────────────────────
 
 
+# T-3201 — a boot document keeps a read-only head above one marker line; a write
+# has to return that head verbatim. These rows are about the AUTHZ FLOOR, so the
+# body reads the current document and re-sends its head with a new body: a 400
+# for malformed content would say nothing about who may write.
 def _resolve(value, ctx: Ctx, identity: str):
     return value(ctx, identity) if callable(value) else value
 
@@ -1640,8 +1915,10 @@ def test_matrix_requires_match_manifest(
 ) -> None:
     """Mechanical tie to the RBAC table: each matrix row's ``requires`` label —
     the value the whole expectation row is DERIVED from — must equal the
-    server's committed route-table requires. A server requires change reddens
-    this before any cell can silently pass on stale semantics."""
+    ``requires`` the manifest declares. Both sides are committed text, so this
+    catches a manifest edit the matrix did not follow; what catches a
+    ``requires`` change in routes.go is the live cells below, which fire real
+    requests."""
     declared = {
         f"{r['method']} {r['path']}": r["requires"] for r in routes_manifest
     }

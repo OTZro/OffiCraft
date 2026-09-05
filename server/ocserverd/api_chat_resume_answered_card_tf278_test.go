@@ -47,10 +47,10 @@ func TestResumeSnapshotNamesStepsSittingOnAnAnsweredCard(t *testing.T) {
 		{"name": "收尾", "dod": "文件補完"},
 	})
 	startFirstStep(t, api, answeredTask.ID, "m-exec")
-	card := openGateCard(t, api, answeredTask.ID, "m-exec",
+	card := openCardOnStep(t, api, answeredTask.ID, "m-exec",
 		answeredPlan.Steps[0].ID, "要走哪一條路？")
 	if rec := answerCard(t, api, card.ID,
-		map[string]any{"option_idx": 1}); rec.Code != http.StatusOK {
+		map[string]any{"option_idxs": []int{1}}); rec.Code != http.StatusOK {
 		t.Fatalf("answer: %d %s", rec.Code, rec.Body.String())
 	}
 
@@ -59,7 +59,7 @@ func TestResumeSnapshotNamesStepsSittingOnAnAnsweredCard(t *testing.T) {
 		{"name": "等 owner 回覆", "dod": "他回了"},
 	})
 	startFirstStep(t, api, waitingTask.ID, "m-exec")
-	openGateCard(t, api, waitingTask.ID, "m-exec", waitingPlan.Steps[0].ID, "還沒回的問題")
+	openCardOnStep(t, api, waitingTask.ID, "m-exec", waitingPlan.Steps[0].ID, "還沒回的問題")
 
 	workingTask := createAdHocTask(t, api, "m-exec")
 	submitPlan(t, api, workingTask.ID, "m-exec", []map[string]any{
@@ -82,7 +82,7 @@ func TestResumeSnapshotNamesStepsSittingOnAnAnsweredCard(t *testing.T) {
 		{"name": "後面還有", "dod": "做完"},
 	})
 	startFirstStep(t, api, expiredTask.ID, "m-exec")
-	expiredCard := openGateCard(t, api, expiredTask.ID, "m-exec",
+	expiredCard := openCardOnStep(t, api, expiredTask.ID, "m-exec",
 		expiredPlan.Steps[0].ID, "沒人回的問題")
 	if rec := expireCardReq(t, api, expiredCard.ID, "owner", "owner"); rec.Code != http.StatusOK {
 		t.Fatalf("expire: %d %s", rec.Code, rec.Body.String())
@@ -98,10 +98,10 @@ func TestResumeSnapshotNamesStepsSittingOnAnAnsweredCard(t *testing.T) {
 		{"name": "還沒開始的下一步", "dod": "做完"},
 	})
 	startFirstStep(t, api, pickedUpTask.ID, "m-exec")
-	pickedUpCard := openGateCard(t, api, pickedUpTask.ID, "m-exec",
+	pickedUpCard := openCardOnStep(t, api, pickedUpTask.ID, "m-exec",
 		pickedUpPlan.Steps[0].ID, "已經消化掉的問題")
 	if rec := answerCard(t, api, pickedUpCard.ID,
-		map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
+		map[string]any{"option_idxs": []int{0}}); rec.Code != http.StatusOK {
 		t.Fatalf("answer: %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := reportStepStatus(t, api, pickedUpTask.ID, pickedUpPlan.Steps[0].ID,
@@ -222,7 +222,7 @@ func TestResumeSnapshotSaysNothingWhenNoAnswerIsWaiting(t *testing.T) {
 		{"name": "問一下", "dod": "問到了"},
 	})
 	startFirstStep(t, api, task.ID, "m-exec")
-	openGateCard(t, api, task.ID, "m-exec", plan.Steps[1].ID, "順便問的問題")
+	openCardOnStep(t, api, task.ID, "m-exec", plan.Steps[1].ID, "順便問的問題")
 
 	snap := resumeSnapshot(t, api, "m-exec")
 	if len(snap.Tasks) != 1 {
@@ -287,8 +287,8 @@ func TestResumeProseNamesTheAnsweredCardSignal(t *testing.T) {
 
 // TestEveryFaceOfThePeekSumMatchesWhatTheServerActuallyAdds: the arithmetic
 // behind estimated_total_chars is written out in prose on seven hand-written
-// faces, and it has now been extended four separate times, each time missing
-// one of them.
+// faces, and it has been revised several separate times, each time missing one
+// of them.
 //
 // WHAT THIS COMPARES, and why the obvious two designs both failed here.
 //
@@ -312,11 +312,10 @@ func TestResumeProseNamesTheAnsweredCardSignal(t *testing.T) {
 //
 // KNOWN GAPS — measured green, do not read this guard as covering them:
 //
-//   - The NUMERAL is not checked. Every face also says "all six reported in
-//     overview" (five until T-6bd2 added doc_capacity_chars); editing that word
-//     to "five" while leaving the six names in place is exactly the original lie
-//     in a shorter form, and this guard is blind to it. Nothing else in the
-//     package reads that word either.
+//   - The NUMERAL is not checked. Every face also says "all five reported in
+//     overview"; editing that word while leaving the five names in place is
+//     exactly the original lie in a shorter form, and this guard is blind to it.
+//     Nothing else in the package reads that word either.
 //   - A decoy chain naming NO real addend is dropped, not compared. Writing
 //     "…all four reported in overview (chat_count + task_count + roster_count +
 //     machine_count)" beside a correct chain stays green. The filter is what

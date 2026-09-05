@@ -75,8 +75,9 @@ import (
 const quarantineDirName = "trash"
 
 // cleanRoot resolves the ONLY tree this command may touch: this agent's own
-// workdir. Same derivation as cursorPath / seenPath / stampPath (listen.go,
-// contextreport.go) — one expression for "where my files live", not four.
+// workdir. Same derivation as cursorPath / replyCardSeenPath /
+// reportStampPath (listen.go, contextreport.go) — one expression for "where my
+// files live", not five.
 //
 // An empty id is a REFUSAL, not a fallback. cursorPath degrades to "anon"
 // because losing a dedup cursor costs a refetch; here the same fallback would

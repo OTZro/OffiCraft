@@ -28,6 +28,9 @@ docs/         設計文件
 oc.toml.example  server 設定範本
 ```
 
+使用者操作契約清單（含畫面 scope 與具名瀏覽器斷言綁定）見
+[`docs/design/user-operation-contracts.md`](../design/user-operation-contracts.md)。
+
 runtime 落點統一在 `~/.officraft/`：`server/`（canonical 安裝）、`warden/`（token / 設定）、`agents/`（各 agent 工作區）。
 
 ## 怎麼跑
@@ -232,11 +235,21 @@ bin/release promote <tag>                       [--dry-run]
 ```
 
 - `publish` 從 `<sha>` 切一個**丟棄式 detached staging worktree**(不是「當前 tree 乾淨就好」——bytes 來自你指名的那個 commit),在裡面 build、打包、**上傳前先驗 artifact**(tarball member list、三顆 binary 的 arm64 mach-o、從 `go version -m` 讀 ocserverd 真正被 link 進去的 `appVersion`/`buildSHA`、`shasum -c`),然後**一次** `gh release create --prerelease --target <sha>` 帶齊三個 asset(所以不存在「release 已建立但 asset 只上傳一半」的視窗)。
-- 🔴 **`publish` 在 build 之前會先在那個 staging worktree 裡跑一次完整 `bin/ci.sh`,不綠就不發(T-b65e,owner 2026-08-02 明令)**。驗的是**即將出貨的那一棵樹**,不是「這台機器上碰巧有一份綠的紀錄」:rc 取自 `ci.sh` 自己、log **末行**必須精確等於 `[ci] all green`、跑完 tracked 檔不得有任何變動,證據落在 `dist/release/ci/<short>-<utc>-<pid>/ci.log`(per-run 唯一目錄,`mkdir` 非 `-p`,撞名硬錯)。任何一項不過 ⇒ 以非零退出中止,**不 build、不打包、不上傳、不打 tag**。為什麼要有這道閘:合併端已放寬(雲端門禁過就按),而 beta 會被站台的 auto_update 自己撿去上正式站 ⇒ **這是上線前唯一一道行為驗證**。⚠️ **沒有跳過開關,也不要加**(owner 卡 `rc-ffb4b06ad1d9` 拍板,與 CI 互斥鎖「刻意不留 bypass」同一立場)。`--dry-run` **照跑**這道閘——彩排不跑最可能擋下發版的那一步就不算彩排。
-  - **代價要知道**:staging worktree 是全新 checkout,所以那一輪 CI 沒有 `node_modules` 可重用——完整 `npm ci` + 四個 Go module 的 `-count=1` 測試 + Playwright CT + conformance,**估 10 分鐘以上**,而且需要網路、gitleaks、Playwright 瀏覽器快取。`--dry-run` 彩排現在一樣貴。證據目錄**不會自動清理**(每次 publish/彩排留一份完整 CI log 在 `dist/release/ci/`,gitignored,自己看著清)。
-  - `promote` **刻意不再驗一次**:它不重 build,出貨的 bytes 就是那顆 beta 已經被這道閘驗過的 bytes;再跑一輪只是換一棵樹重驗,不會更真。
-- 🔴 **出 GA 前的那一輪由人自己跑,不在 `promote` 裡**:`publish` 那道閘跑的是完整 `bin/ci.sh`,而那一輪**一支 playwright spec 都沒跑**(它只驗 `run_all.sh` 的 wiring 形狀)。要在出 GA 前真的把 spec 跑過一遍,跑 `bash bin/local-ci.sh`(改到 live-agent 行為時加 `--live-agent`,會花錢),見〈CI〉。**這刻意沒有被接進 `bin/release`**——那會讓每一顆 beta 都多付一輪 e2e,而自動發 beta 是無人值守的。
-- `promote` 把**既有且已驗過**的 prerelease 翻成正式版,**不重 build**——大家測的 bytes 就是出貨的 bytes。翻完回讀,若 asset 集合在翻的過程中變了(有人偷偷重傳)那是**失敗**,不是警告。
+- 🔴 **`publish` 在 build 之前會先讀「這顆 commit 自己那一輪 GitHub Actions 的判決」,不綠就不發(T-b65e 立閘;T-7e6c 換證據來源,owner 卡 `rc-56fecb4d5aa3`)**。它**不再自己重跑一輪 CI**,而是拿 `GITHUB_RUN_ID` 去問 Actions API 兩件事:
+  - **綁定**:`/actions/runs/<id>` 的 `head_sha` 必須**逐字等於** `--target` 那顆 sha(另一顆 commit 的全綠對這棵樹什麼都沒說),而且回來的 `id` 必須就是我們問的那一個;
+  - **判決**:`/actions/runs/<id>/jobs?per_page=100`(🔴 **不帶 `filter`**——預設 `filter=latest` 才會排除 re-run 的舊 attempt)裡,`auto-beta` 的那 **11 個 gate job 一個不少地出現**,且每一個的 `conclusion` **逐字 `== "success"`**。🔴 少一個 job **不會產生條目**(`paths-ignore`、拔掉 `needs`、改名),所以「看得到的都綠」對一個根本沒檢查的 round 也成立 ⇒ 點名比對是必要的;`!= "failure"` 也不行——實測最近 200 輪的 conclusion 是 success 168 / cancelled 23 / failure 7 / action_required 2,再加上前面紅了之後所有 gate 都是 `skipped`。
+  - 讀不到、非 200、parse 不動、`total_count` 大於這一頁 ⇒ **一律當紅**(fail closed)。證據(兩份 payload)落在 `dist/release/ci/<short>-<utc>-<pid>/{run,jobs}.json`(per-run 唯一目錄,`mkdir` 非 `-p`,撞名硬錯)。任何一項不過 ⇒ 非零退出中止,**不 build、不打包、不上傳、不打 tag**。`--dry-run` **照跑**這道閘。
+  - **憑證:有 token 就帶,沒有就匿名**。原本設計是**一律匿名**,理由是「repo 是 public,兩個 endpoint 匿名實測都 200」——但那是**在開發機上量的**,那台 IP 只有我們在用。GitHub 的**匿名配額是 60 req/hr per IP**,而 hosted runner 沒有自己的 IP;「匿名可以」對**唯一真的在發版的那個環境**從來沒被驗過。那裡失敗雖然是 fail closed(不會偽綠),但會**每一次發版都紅** = 上站通道整條斷。所以:讀得到 `GITHUB_TOKEN`／`GH_TOKEN` 就帶 `Authorization: Bearer`,兩個都沒有就走匿名(手動在筆電上跑仍然可用)。
+    - ⚠️ **`auto-beta` 的 `permissions:` 必須同時有 `contents: write` 與 `actions: read`**——job-level permissions 是**整組覆寫**,沒列到的 key 就是 `none`。少了 `actions: read`,token 會被拒、閘 fail closed、**一顆 beta 都發不出去**。`auto-beta-guard.sh` 的 **W3b** 逐字釘住這兩個 key(整個 map 精確比對)。
+    - 🔴 **兩條路的判定式完全一樣**(綁定、點名、逐字 `== "success"`);憑證只決定請求怎麼發,**不決定判準多嚴**(G8b2／G8b3 直接釘住這件事)。
+    - 🔴 **token 在但被拒(401／403)⇒ 照樣 fail closed,不退回匿名重試**。理由:那代表閘自己的接線壞了(workflow 就是為此才給 `actions: read`),誠實的答案是停下來;退回匿名會讓判決的**來源變得不確定**(同一次發版在不同日子用兩種方式驗,只能細讀 log 才分得出來),而來源可證正是這道閘存在的意義;而且它在「看起來最該保護」的那格根本沒用——匿名正是我們帶 token 要離開的那條路。代價是一次紅的 auto-beta(改 `permissions:` 幾分鐘可修),而靜默降級的代價是一個沒人說得出來源的判決。
+    - **token 不進 argv、不落地**:用 `curl --config -`(從 stdin 讀設定),所以 `ps` 看不到、也不會留在 per-run 證據目錄裡(那個目錄比那次執行活得久)。log 只說用了哪一種模式,從不印值。
+  - 🔴 **涵蓋範圍反而變大**:`bin/ci.sh` 的 29 個 target 裡**沒有 `macos-e2e`**(真瀏覽器 e2e),而那是全線唯一真正在驗行為的一項。舊的「自己重跑一輪」結構上**看不到它**,新的看得到。`bin/tests/release-guard.sh` 的 G2b 專門釘住「`macos-e2e` 必須在被檢查的清單內」,`bin/tests/auto-beta-guard.sh` 的 W1b 釘住那份清單與 workflow 的 gate set 不得漂移。
+  - 🔴 **手動發版沒有這道閘**(owner 卡 `rc-538d9ca1ad1d` 明示接受):不在 Actions 裡就沒有 `GITHUB_RUN_ID`,也就沒有「這一輪」可讀 ⇒ **印警告(逐字說 NO CI VERDICT WAS CHECKED)照發**。⚠️ 這不是跳過開關:**沒有任何 flag / env / 參數可以關掉這道閘**,自動那條路(auto-beta)永遠在一個 run 裡,永遠會硬擋。舊卡 `rc-ffb4b06ad1d9` 的「no exceptions」是在「閘=本地跑一輪 CI」的前提下拍的,已被上面兩張卡取代。
+  - **代價變了**:staging worktree 那一輪 10 分鐘以上的重跑**沒有了**,`--dry-run` 彩排也跟著變便宜。證據目錄仍**不會自動清理**(`dist/release/ci/`,gitignored,自己看著清)。
+  - `promote` **刻意不再驗一次**:它不重 build,出貨的 bytes 就是那顆 beta 已經被這道閘驗過的 bytes。
+- 🔴 **出 GA 前的那一輪由人自己跑,不在 `promote` 裡**:`publish` 那道閘讀的是雲端那一輪,裡面的 `e2e-isolation-guard` **一支 playwright spec 都沒跑**(它只驗 `run_all.sh` 的 wiring 形狀);真正跑瀏覽器的是 `macos-e2e`,但那也不等於 `bin/local-ci.sh` 的完整 pre-GA 輪。要在出 GA 前真的把 spec 跑過一遍,跑 `bash bin/local-ci.sh`(改到 live-agent 行為時加 `--live-agent`,會花錢),見〈CI〉。**這刻意沒有被接進 `bin/release`**——那會讓每一顆 beta 都多付一輪 e2e,而自動發 beta 是無人值守的。
+- `promote` 把**既有且已驗過**的 prerelease 翻成正式版,**不重 build**——大家測的 bytes 就是出貨的 bytes。翻的指令是 `gh release edit <tag> --prerelease=false --draft=false --latest=true`,翻完**回讀** GitHub 實際存的東西:若 asset 集合在翻的過程中變了(有人偷偷重傳)那是**失敗**,不是警告;🔴 **若 `--latest` 沒有真的落地(`GET /repos/<repo>/releases/latest` 的 `tag_name` 不是這顆 tag)也是失敗**,以 `[release] VERIFY-FAILED [release-latest]` 非零退出,並印出可執行的下一步(`gh release edit <tag> --repo <repo> --latest=true`)——**下指令不等於做到**,漏設 Latest 不能只靠人記得補。`gh release view --json` 沒有 `isLatest` 欄位(2026-08-28 對 gh 2.93.0 量過),回讀改問 `/repos/<repo>/releases/latest` 這個端點、比對 tag 名。 這個回讀是**短 retry-with-backoff**,跟第 8 步 `settle_station` 同一套形狀(`OC_RELEASE_LATEST_TRIES`/`OC_RELEASE_LATEST_SLEEP`,預設 3 次、間隔 2s)——理由是 GitHub 沒承諾 `--latest=true` 在 `gh release edit` 回來的當下就反映在 `/releases/latest` 上,單發回讀量到「還沒生效」會印一個**假失敗**(release 其實設好了,腳本卻說沒設),那會訓練人忽略這道新守衛。仍然 fail-closed:重試預算用完還是讀不到就照樣 `exit 6`。
 - `--dry-run`:build + 驗完就停,印出它本來會跑的上傳指令,**什麼都不上傳**。彩排用這個。
 - `--no-settle`:**不等站台升上來**(跳過第 8 步)。理由是 owner 2026-08-05 裁定一:OffiCraft 是大家自架的服務、不是這個 repo 在營運的 SaaS,所以「某台站有沒有升上去」不是發版的成功條件;而無人值守的 runner 根本連不到私人站台,不給旗標的話每一輪自動發版都會死在一個跟 artifact 無關的理由上。**只是明示的 per-invocation opt-out**:預設一個字都沒變(人工發版照樣等站台、等不到照樣紅),第 7 步的回讀與 build 前的 CI 閘都**不受影響**,而且開了旗標那一輪會印一行講明為什麼不驗、結尾成功訊息也**不會**宣稱站台已在那顆 commit 上。守衛在 `bin/tests/release-guard.sh`(E3/E3b/E3c/E3d):E3 是它的**陽性對照**——同一組假站台狀態(站在別的 commit),不帶旗標仍以 `station-settle` 失敗,帶了才回 0。
 
@@ -262,18 +275,40 @@ isDraft False | isPrerelease True | targetCommitish fb89a69aad8c
 **push 到 `main` 那一輪 check 全綠 ⇒ 自動發一顆 beta prerelease。** 沒有人要記得發版了。owner 2026-08-05 兩條裁定:
 
 1. **站台有沒有升上去不是成功條件**(自架服務,不是這個 repo 營運的 SaaS)⇒ 自動路徑帶 `--no-settle`。
-2. **GA 維持人工**:自動路徑**不碰** beta→final 的翻版子命令、不動 Latest 指向。owner 已知情接受「**他那台**會自動吃進每個 beta、而且沒有退版按鈕」⇒ **刻意不加任何保護、節流或確認閘**,要加就是在推翻一個已經做過的決定。
+2. **GA 不自動**:*自動*路徑(push 到 main 那一輪)**不碰** beta→final 的翻版子命令、不動 Latest 指向。owner 已知情接受「**他那台**會自動吃進每個 beta、而且沒有退版按鈕」⇒ **刻意不加任何保護、節流或確認閘**,要加就是在推翻一個已經做過的決定。
+   - 🔴 **2026-08-28(rc-f9d284c0aef7)owner 改了這條的後半**:原本是「`.github/` 底下連那個子命令的名字都不准出現」,現在 GA **可以**有一顆 GitHub UI 上的手動按鈕,但**只有這個 repo 的 collaborator(write／admin)可以按**——workflow 第一個 step 去問 GitHub 這個 actor 的權限,不在檔案裡寫名字。仍然沒變的是「**選哪一顆 tag 是人的決定**」——workflow 只吃輸入,不自己挑。見〈GA 手動按鈕〉。
 
 ⚠️ **不要把這件事讀成「合併就等於上線」。** 自動發出來的是 **prerelease**,而一個站要真的換過去,`updater.receive_beta`(**開**了才連 GitHub prerelease 一起吃;關著就只收正式 release)與 `updater.auto_update` **兩個都得開**。兩者的常數、struct 欄位與 `getBool` 讀取全在 `server/ocserverd/settings.go`,DB 沒有那一列時不寫 dst ⇒ 維持 bool 零值 **`false`**(`auto_update.go` 是跑迴圈的地方,不是預設值所在)。預設狀態的站兩個都是關的 ⇒ 對它來說「land ≠ 上站」完全沒變。owner 那台兩個都開著,所以會;別人的站要不要跟,是那個站主自己的設定。
 
 實作分三塊,`.github/workflows/ci.yml` 裡只有呼叫、沒有邏輯(照該檔檔頭「WHAT runs 一律住在 repo 的腳本裡」):
 
-- **`bin/next-beta-tag`** —— 唯讀算版號,`v<major>.<minor>.<patch+1>-beta.1`,基底是**現存最大 semver**。「現存」= **git tag ∪ GitHub release 的 tag** 兩者聯集(release 被刪掉會留下 git tag、手推的 tag 從來沒有 release,只讀一邊算出來的名字會撞);比較是 **semver 語意**不是字串排序(`beta.10` > `beta.9`,`v0.5.78` > `v0.5.9`);候選集合是空的就**硬失敗**,不會退回 `v0.0.1-beta.1`(空集合的現實原因是查詢壞了,而那個「貼心的」退路會在一個有上百個 release 的 repo 上重發史前版號)。任一邊查詢失敗一律致命。
+- **`bin/next-beta-tag`** —— 唯讀算版號,`v<major>.<minor>.<patch+1>`(不帶後綴 —— rc-d388651a4e2a option 0 定案:發出來那一刻就叫 vX.Y.Z,不分 beta/final 兩種名字),基底是**現存最大 semver**。「現存」= **git tag ∪ GitHub release 的 tag** 兩者聯集(release 被刪掉會留下 git tag、手推的 tag 從來沒有 release,只讀一邊算出來的名字會撞);比較是 **semver 語意**不是字串排序(`beta.10` > `beta.9`,`v0.5.78` > `v0.5.9`),這也涵蓋轉正前遺留的舊式 `-beta.1` tag(不重寫舊 tag,只是新算出來的名字不再帶後綴);候選集合是空的就**硬失敗**,不會退回 `v0.0.1`(空集合的現實原因是查詢壞了,而那個「貼心的」退路會在一個有上百個 release 的 repo 上重發史前版號)。任一邊查詢失敗一律致命。腳本名字和「next beta tag」這個說法還沒改 —— 它已經不算 beta 了,改名是另一個決定(見 PR)。
 - **`ci.yml` 的 `auto-beta` job** —— `needs` 是**全部** gate job(「主幹綠」必須是指全部檢查),`if` 同時限制 `event_name == 'push'` 與 `ref == 'refs/heads/main'`,`runs-on: macos-15`(`bin/release publish` 只跑 darwin/arm64,而且它會在 staging worktree 裡跑完整 `bin/ci.sh` 再 build),`permissions: contents: write` **只掛在這一個 job**、workflow 層維持 `read`、用內建 `GITHUB_TOKEN`(無 PAT、無 repo secret)。publish 那一步釘的是**觸發那一顆 commit**、不是 job 開跑時 `main` 指到哪,而值是**走 `env:` 進去的**(`OC_TARGET_SHA: ${{ github.sha }}`,`run:` 裡用加引號的 `"$OC_TARGET_SHA"`)——**不是把 `${{ }}` 直接插進 `run:` 腳本本體**。⚠️ 這一句以前寫的是插值形狀,而樹上早就是 `env:` 了;照舊文改回插值不會有任何東西紅(守衛只認語意、不認寫法,見下一條),所以這裡把實際形狀寫死。理由在 `ci.yml` 那段註解裡:插值是 shell 之前的文字替換,`env:` 不需要「值剛好安全」這種運氣。
-- **`bin/tests/auto-beta-guard.sh`** —— 由 `bin/tests/run.sh` 派出(即 `make test-bin-guards`)。⚠️ **這是全 repo 唯一會解析 `.github/workflows/*.yml` 的東西**:曾經有一次改動本機全綠、GitHub 直接 startup failure(零 job、什麼都沒跑,而畫面上跟「沒紅」一樣),所以第一條斷言就是「它 parse 得動」,而且**拿不到 parser 是 FAIL 不是 skip**。parser 用 **ruby + 內建 psych**——hosted macOS runner **沒有 PyYAML**,ruby 兩邊都有;另有一組**陽性對照**先確認那個 parser 是真的(餵一份確定無效的 YAML 必須被拒、餵一份最小合法 workflow 必須被接受),因為「解析器有解析到」是其餘每條斷言的前提,而審查者實測用一個假 `ruby` 讓一份壞掉的 ci.yml 拿到滿分。其餘擋:`needs` 與**已宣告的 gate job 集合**的**差集兩個方向都必須為空**(判準是計算式不是列舉表:少一個 gate 會叫,把非 gate 的 job 塞進 `needs` 也會叫)。⚠️ **差集的對象是 gate 集合、不是「全部 job 扣掉自己」**——T-5d3b 的 `notify-main-red` 只在失敗時跑,`auto-beta` 等它就永遠不會跑,而 `notify-main-red` 又必須 needs `auto-beta`,兩條加起來會是 `needs` 循環、GitHub 整份拒絕零個 job。**哪個 job 是 gate 由 job 自己在 `ci.yml` 裡用 `# oc-job-role:` 標記宣告,並且由守衛強制**:沒標記、標兩個、值讀不懂、或文字掃描與 YAML parser 對「有哪些 job」看法不一致,一律 **FAIL 並點名那幾行**(分類不出來絕不默默歸邊);標記還要被佐證——宣告非 gate 的 job 必須把 `if` 釘在 `refs/heads/main`,宣告 gate 的不准釘,所以「給一道真的閘加 `if` 讓它在 PR 上跳過」不能拿來把它移出必等集合。⚠️ **另有 W1x:宣告 not-a-gate 的 job 集合必須恰好是 `{notify-main-red, auto-beta}`**——老實標、`if` 也釘對的**第三個**非閘 job 一樣會紅並被點名行號。理由是「離開 auto-beta 的必等集合」是一個有 owner 裁定在背後的決定(見 `CLAUDE.md` §13 的豁免名單),這一格把那句散文變成會紅的機制:要加成員只能改這道守衛本身,而那就是裁定要求的有意識動作。其餘擋:`if` 兩個條件都在、`contents: write` 只在這個 job、`.github/workflows/` 內**不得出現** beta→final 那個子命令的名字、**也不得出現會搬動 Latest 指向或發佈 draft 的那組 `gh release edit` 旗標**、publish 呼叫必須帶 `--no-settle` 且 `--target`／`--beta` 的值**在語意上**綁到觸發 commit 的 SHA 與算出來的 tag(走 `env:` 或直接插值都算,守衛不寫死其中一種形狀)、publish step 必須被 staleness 那一關 gate 住、checkout 必須 `fetch-depth: 0` **且** `fetch-tags: true`、`.github/workflows/` 底下**只能有 `ci.yml`**。版號規則本身用假 tag 清單直接餵函式測(`beta.9` vs `beta.10`、只有正式版、清單為空、撞名拒絕),**候選集怎麼湊出來的另有一組(S 段)直接驅動 `nbt_collect_candidate_tags`**:兩源聯集真的是聯集、任一源非零退出致命、任一源 rc=0 但回空**也**致命。
-  - ⚠️ **兩個宣稱要讀窄**:①「GA 不可被自動化」實際保證的是「那個子命令的名字 + 那組旗標」這兩個形狀,workflow 仍可經由它呼叫的腳本、`gh api` 或 REST 繞過;②「主幹綠 = 全部檢查」實際作用域是 **ci.yml 這一個檔案內的 job**(GitHub 沒有跨檔 `needs`),所以守衛改成硬性要求「只有 ci.yml」——多一個 workflow 檔就紅,逼人當場決定,而不是靜靜放寬「綠」的含意。
+- **`bin/tests/auto-beta-guard.sh`** —— 由 `bin/tests/run.sh` 派出(即 `make test-bin-guards`)。⚠️ **這是全 repo 唯一會解析 `.github/workflows/*.yml` 的東西**:曾經有一次改動本機全綠、GitHub 直接 startup failure(零 job、什麼都沒跑,而畫面上跟「沒紅」一樣),所以第一條斷言就是「它 parse 得動」,而且**拿不到 parser 是 FAIL 不是 skip**。parser 用 **ruby + 內建 psych**——hosted macOS runner **沒有 PyYAML**,ruby 兩邊都有;另有一組**陽性對照**先確認那個 parser 是真的(餵一份確定無效的 YAML 必須被拒、餵一份最小合法 workflow 必須被接受),因為「解析器有解析到」是其餘每條斷言的前提,而審查者實測用一個假 `ruby` 讓一份壞掉的 ci.yml 拿到滿分。其餘擋:`needs` 與**已宣告的 gate job 集合**的**差集兩個方向都必須為空**(判準是計算式不是列舉表:少一個 gate 會叫,把非 gate 的 job 塞進 `needs` 也會叫)。⚠️ **差集的對象是 gate 集合、不是「全部 job 扣掉自己」**——T-5d3b 的 `notify-main-red` 只在失敗時跑,`auto-beta` 等它就永遠不會跑,而 `notify-main-red` 又必須 needs `auto-beta`,兩條加起來會是 `needs` 循環、GitHub 整份拒絕零個 job。**哪個 job 是 gate 由 job 自己在 `ci.yml` 裡用 `# oc-job-role:` 標記宣告,並且由守衛強制**:沒標記、標兩個、值讀不懂、或文字掃描與 YAML parser 對「有哪些 job」看法不一致,一律 **FAIL 並點名那幾行**(分類不出來絕不默默歸邊);標記還要被佐證——宣告非 gate 的 job 必須把 `if` 釘在 `refs/heads/main`,宣告 gate 的不准釘,所以「給一道真的閘加 `if` 讓它在 PR 上跳過」不能拿來把它移出必等集合。⚠️ **另有 W1x:宣告 not-a-gate 的 job 集合必須恰好是 `{notify-main-red, auto-beta}`**——老實標、`if` 也釘對的**第三個**非閘 job 一樣會紅並被點名行號。理由是「離開 auto-beta 的必等集合」是一個有 owner 裁定在背後的決定(見 `CLAUDE.md` §13 的豁免名單),這一格把那句散文變成會紅的機制:要加成員只能改這道守衛本身,而那就是裁定要求的有意識動作。其餘擋:`if` 兩個條件都在、`contents: write` 只在這個 job、`.github/` 底下**除了 `ga-promote.yml` 那一支之外不得出現** beta→final 那個子命令的名字、**也不得出現會搬動 Latest 指向或發佈 draft 的那組 `gh release edit` 旗標**(W4/W4b;而豁免的那一支要付代價,見 W4e)、publish 呼叫必須帶 `--no-settle` 且 `--target`／`--beta` 的值**在語意上**綁到觸發 commit 的 SHA 與算出來的 tag(走 `env:` 或直接插值都算,守衛不寫死其中一種形狀)、publish step 必須被 staleness 那一關 gate 住、checkout 必須 `fetch-depth: 0` **且** `fetch-tags: true`、`.github/workflows/` 底下**除 `ci.yml` 外只能有 `ga-promote.yml`,且後者必須是 `workflow_dispatch` 唯一觸發**(W4c/W4f)。版號規則本身用假 tag 清單直接餵函式測(`beta.9` vs `beta.10`、只有正式版、清單為空、撞名拒絕),**候選集怎麼湊出來的另有一組(S 段)直接驅動 `nbt_collect_candidate_tags`**:兩源聯集真的是聯集、任一源非零退出致命、任一源 rc=0 但回空**也**致命。
+  - ⚠️ **兩個宣稱要讀窄**:①「GA 只能由具名的人手動觸發」實際保證的是「那個子命令的名字 + 那組旗標」這兩個形狀**在 `ga-promote.yml` 以外**不出現,加上那一支**確實帶著會擋人的權限閘**(W4e/W4eD 把它的 `run:` body 抓出來**真的執行**——餵一支假 `gh`,逐格驗 admin／write 放行、read／none／triage 擋、以及查詢失敗一律擋——不是讀 wiring);workflow 仍可經由它呼叫的腳本、`gh api` 或 REST 繞過這兩個形狀。②「主幹綠 = 全部檢查」實際作用域是 **ci.yml 這一個檔案內的 job**(GitHub 沒有跨檔 `needs`)。守衛原本用「只能有 ci.yml」來釘這個前提,現在改釘**真正的前提**:「ci.yml 以外的 workflow 一律只能 `workflow_dispatch` 觸發」——手動觸發的檔案在 push/PR 上排 0 個 job,不會替主幹 commit 產生任何 check,W1 推理的集合因此仍然等於 GitHub 實際產生的集合。⚠️ **W1 本身沒有被放寬、也還是不能跨檔看**:要是哪天真需要一支帶 push/PR 觸發的第二個 workflow,那是要當場做的決定(併回 ci.yml,或把 W1 改成讀全部檔案),不是往白名單加一個 key。
 
 **這條路徑上仍然沒有任何跳過開關**:`publish` 在 build 前跑完整 `bin/ci.sh` 那道閘照跑,第 7 步回讀照跑。
+
+### GA 手動按鈕(`.github/workflows/ga-promote.yml`,T-39a5)
+
+owner 2026-08-28 於 rc-f9d284c0aef7 裁定:GA 可以在 GitHub UI 上有一顆手動 action,**但只有 seth / eva 可以跑**。那顆按鈕就是這支 workflow;「誰能跑」現在綁的是 repo 的 collaborator 權限,而非檔案裡的兩個帳號名。
+
+- **只吃一個輸入**:要 promote 的 tag。**它不會自己挑**(不去找「最新那顆 beta」)——「決定是我下的」,workflow 只是執行手段。
+- **做的事就是呼叫 `bin/release promote <tag>`**,沒有第二份發版邏輯:翻版(`--prerelease=false --draft=false --latest=true`)、回讀驗證、asset 指紋比對、fail-closed 全都在 `bin/release` 裡,見上面〈release〉那節。**不重 build**——出貨的 bytes 就是那顆 beta 被驗過的 bytes。
+- 🔴 **誰能按:本 repo 具 write／admin 的 collaborator,其餘一律擋。**
+  job 的**第一個 step** 拿 `github.actor` 去問 GitHub `GET /repos/{owner}/{repo}/collaborators/{actor}/permission`,回 `admin` 或 `write` 才放行。owner 的裁定是「只有 seth / eva」;2026-08-28 實測本 repo 的 collaborator 恰好就是 `pkyosx`(admin)與 `8thEdition`(push),所以這是同一條裁定——只是寫成它真正依據的那個權限,而不是兩個會過期的字串。
+  ⚠️ **GitHub 擋不住這件事**:`workflow_dispatch` 沒有「誰可以按」的設定,任何有 write 權限的帳號都能按,而 repo 隨時可能多出 read／triage 的 collaborator。所以閘在 job 裡自己擋,拒絕時紅、並印出被拒的帳號與 GitHub 回報的權限。**UI 權限不是替代品。**
+  ⚠️ **fail-closed**:API 出錯、`gh` 不在、body 解不出來、欄位缺席——**一律擋**,沒有「查不到就放行」這條路。`bin/tests/auto-beta-guard.sh` 的 W4eD 餵一支假 `gh` 把這個 step 的 `run:` body 真的跑一遍來釘住這件事,W4e1 另外禁止 gate body 裡再出現任何寫死的帳號名。
+  要改誰能按:**改 repo 的 collaborator 權限**,檔案裡沒有名單可編。
+- **按錯了怎麼回退**(完整版寫在 workflow 檔頭,那裡是權威):
+  1. **先止血**——`server/ocserverd/update_check.go` 挑的是「channel 收得下的、semver 最大的非 draft release」,它讀 `/releases` 並看 `prerelease` 旗標,**從來不讀 `/releases/latest`**。所以真正決定站台會不會吃到的是 **prerelease 旗標**,不是 Latest 指標:
+     `gh release edit <按錯的 tag> --repo pkyosx/OffiCraft --prerelease=true`
+  2. **再把 Latest 指標移回去**(給 GitHub UI 與讀 `/releases/latest` 的人看):
+     `gh release edit <上一顆正式版 tag> --repo pkyosx/OffiCraft --latest=true`
+  3. **兩件都要回讀確認**——下指令不等於做到:
+     `gh api repos/pkyosx/OffiCraft/releases/latest --jq .tag_name`
+     `gh release view <按錯的 tag> --repo pkyosx/OffiCraft --json isPrerelease`
+  ⚠️ **不要刪 release**。已經升上去的站不會因為刪掉就退回來(updater 沒有退版路徑),而那些 asset 正是有人現在跑著的東西。止血只是讓之後的 check 不再被 offer,**不是把已經出去的版收回來**。
 
 ### ⚠️ job 紅 ≠ 沒有 release(要人工清理的那一格)
 

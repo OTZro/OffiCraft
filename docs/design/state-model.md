@@ -19,6 +19,12 @@
 
 一刀切開所有狀態:
 
+- ⚠️ **`desired_state` 不再獨自表示「要不要在線上」**(T-14 項目 7,owner 2026-08-30
+  `rc-bc1b029a3aa2`)。它現在只表示「下線用多強」(停止 → 加速停止 → 強制停止,棘輪、只往上加);
+  「下線之後要不要起來」是另一欄 `restart_after_stop`,規則是**後蓋前**(最後一個動作說了算)。
+  下面把 `desired_state` 列為單一起停意圖的句子,要照這一段讀。**活化**仍是唯一直接取消下線的
+  動作(不是排隊,是取消),那是刻意的例外。
+
 - **intent(意圖 / 身分)= durable → 存 DB。** 人或系統「設定的意圖」與穩定身分:重啟後必須記得。例:`desired_state`(online/offline)、`desired_machine_id`(希望它在哪台)、`role_key`、`name`、`kind`、`model`、`effort`、`id`、`owner_id`、`banked_cost`(歷史累積)。(`core` 曾列於此;owner 2026-07-11 裁決該意圖已退役——全鏈路零讀者,seed 成員的保護實際 key 在 `role_key` 的 seed-role 判斷——migration 0028 已將欄位移除。)
 - **observed(當下實況)= volatile → 只活在記憶體、隨 SSE 生滅,絕不落 DB。** 「此刻的觀測值」,由即時來源重建、不需持久。例:**在不在線上**(`online`)、**實際在哪台機器**(以連線 token 的 machine claim 為準)、CPU / RAM 等 **telemetry**。
 - **為什麼 observed 不落 DB**:存一份到 DB 的唯一效果,是多一個「會跟即時真相不同步的副本」,除了製造 bug(讀到過期值當真相)沒有任何好處。observed 的真相**就是**即時來源本身(SSE 連線狀態 / telemetry push),不需要、也不該再存一份。
@@ -61,7 +67,7 @@
 **連線的 machine claim 不參與 handshake 判斷**。它用來標出 online 的位置、下架擋門,以及(後來新增的)**解析 kill 要送到哪一台 warden**、與 relocation backstop 臂的機器分歧判斷。
 
 🔴 **換機器現在有自動路徑了(T-b6d9),本段原本的「手動三步」推論已被推翻。**
-現況:owner 按一次「改機器」就是**一個動詞的自動換機**——handler 寫下新的 `desired_machine_id` 並開一個 refocus epoch,等 agent 收尾或寬限到期後把**舊機器上的** session robust STOP 掉;`desired_state` 全程維持 online,所以下一輪就在**新機器**上 START。`decideUp` 裡那條 relocation 臂已降級為 backstop,只處理「沒有人蓋 epoch 的 pin 分歧」。
+現況:owner 按一次「改機器」就是**一個動詞的自動換機**——handler 寫下新的 `desired_machine_id` 並開一個 refocus epoch,等 agent 自己回報收完（改機器**沒有時鐘**，T-ed79；owner 另外按加速停止才會有一條死線）後，把**舊機器上的** session robust STOP 掉;`desired_state` 全程維持 online,所以下一輪就在**新機器**上 START。`decideUp` 裡那條 relocation 臂已降級為 backstop,只處理「沒有人蓋 epoch 的 pin 分歧」(離線時被改機器、之後在舊機器上開機;或不是那個 handler 寫的 pin)。**T-14 #4 起,那條 backstop 的做法與正門一樣了**——它不再第一輪就送 robust STOP,而是自己開同一個 refocus epoch,交給上面那條 refocus 臂等 agent 自己回報收完(owner 2026-08-28/29「refocus 怎麼做的 這邊就怎麼做」「都是不急著下線,等它自然交接完」)。⚠️ **唯一還會第一輪就砍的,是「開不了 epoch」的那些 row**:warden 不跑 ocagent、已在強制停止那一階的 member 不得被走回下線階。那不是例外裝飾——沒有交接可等時再等下去不會比較溫柔,只是永遠不收斂。
 
 ⇒ 原文那三句話今天都不成立:①「沒有自動路徑」— 有,而且是 owner 面向的正式動作;②「A 上舊實例不會自己退」— 會,它會被收掉;③「手動三步」— 不是現行流程。
 
@@ -92,7 +98,8 @@
 
 **舊模型**:server 端 reconcile producer 每 30s tick 決定該起 / 停哪個 member(單純的 `desired_state → START/STOP` 決策),**並且**在 `observed_host ≠ desired_host` 時自動觸發 relocate(STOP 舊 host → START 新 host),為此在 DB 記 `current_machine_id` 並與 `desired_machine_id` 比對。
 
-本次**砍掉的是後者——自動 relocate 那套複雜機制 + 它賴以運作的 `current_machine_id` DB 副本**:它是三重死鎖的來源(phantom = START 記了但無 session、robust-stop 殺不掉 phantom、relocate 目標不可達),也是把 member online 跟 warden lifecycle 綁死、狀態來源不單一的元兇。**保留**前者——server 單純的 `desired_state → START/STOP` 決策迴圈(warden 仍是執行手)。member 換機器**目前是手動三步**(先下線→改機器→上線,見 §3);若日後要自動化,照原則 3 的 backlog 設計補 handshake 比對,不重建專門的 relocate routing。
+本次**砍掉的是後者——自動 relocate 那套複雜機制 + 它賴以運作的 `current_machine_id` DB 副本**:它是三重死鎖的來源(phantom = START 記了但無 session、robust-stop 殺不掉 phantom、relocate 目標不可達),也是把 member online 跟 warden lifecycle 綁死、狀態來源不單一的元兇。**保留**前者——server 單純的 `desired_state → START/STOP` 決策迴圈(warden 仍是執行手)。member 換機器**已經不是手動三步**(那句在 T-b6d9 就過期了,見 §「改機器」那段;T-14 項目 7 之後,
+下線進行中按改機器連「再上線」那一步也不用了);若日後要自動化,照原則 3 的 backlog 設計補 handshake 比對,不重建專門的 relocate routing。
 
 **code 對應(Go 實作,`server/ocserverd/`)**:
 - **online / 位置統一自證**:`hub.go`(SSE 連線註冊 = 判定 online 的依據,member 與 warden 同一套);member 無 `online` DB 欄,讀寫全走 hub 的連線狀態;實際位置從連線 listener 的 machine claim 推導,不落 DB。

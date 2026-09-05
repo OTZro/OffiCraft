@@ -38,13 +38,11 @@ var t6020Opened = map[[2]string]string{
 	{"POST", "/api/machines/{machine_id}/bootstrap-here"}:               "install_warden_on_server_host",
 	{"POST", "/api/machines/{machine_id}/teardown-here"}:                "uninstall_warden_on_server_host",
 	{"POST", "/api/machines/{member_id}/upgrade"}:                       "upgrade_warden",
-	{"POST", "/api/tasks/{task_id}/terminate"}:                          "terminate_task",
 	{"POST", "/api/tasks/{task_id}/message"}:                            "post_task_message",
 	{"GET", "/api/outsource-workers/{id}/boot-context"}:                 "get_outsource_worker_boot_context",
 	{"POST", "/api/outsource-workers/{id}/refocus"}:                     "refocus_outsource_worker",
 	{"POST", "/api/outsource-workers/{id}/stop"}:                        "stop_outsource_worker",
 	{"POST", "/api/outsource-workers/{id}/restart"}:                     "restart_outsource_worker",
-	{"POST", "/api/outsource-workers/{id}/model"}:                       "set_outsource_worker_model",
 	{"DELETE", "/api/task-manuals/{type_key}"}:                          "delete_task_manual",
 }
 
@@ -61,8 +59,8 @@ var t6020Opened = map[[2]string]string{
 // the diff. (The frozen manifest and the conformance auth matrix may or may not
 // catch it as well; that has NOT been verified, so it is not claimed here.)
 //
-// 🔴 ADDING A SECOND ROW HERE REQUIRES ITS OWN OWNER RULING, AND YOU MUST EDIT
-// THE `len(t6020Revised) == 1` GUARD BELOW IN THE SAME COMMIT. That guard is a
+// 🔴 ADDING A ROW HERE REQUIRES ITS OWN OWNER RULING, AND YOU MUST EDIT
+// THE `len(t6020Revised) == 2` GUARD BELOW IN THE SAME COMMIT. That guard is a
 // hard-coded count on purpose, exactly like the release-exemption roster in root
 // CLAUDE.md §13: without it this table is a back door — moving any row into it
 // would exempt that row from the admin-floor assertion, and the diff would look
@@ -76,6 +74,21 @@ var t6020Revised = map[[2]string]string{
 	// principal class can express. The two ANSWER rows were not revised: closing
 	// someone else's ask with an answer is still governance.
 	{"POST", "/api/reply-cards/{card_id}/expire"}: "expire_reply_card",
+	// owner 2026-08-20, card rc-b896e3f641e7 (T-b56e), option 0:「開給執行者（可
+	// 終止自己名下的票）」 — same verb, and again a per-task fact no principal
+	// class can express ("is this MY task"). The floor dropped to agent and the
+	// decision moved in-handler (callerMayTerminateTask), which also carries the
+	// one subtraction the ladder cannot state: an OUTSOURCE worker is refused on
+	// its own task, because a 正職 and a contractor both rank principalAgent.
+	{"POST", "/api/tasks/{task_id}/terminate"}: "terminate_task",
+	// owner 2026-08-21, card rc-376a41719e62 (T-ed79):「如果原本正職可以改 model
+	// 外包就應該可以改，如果只有 mira 可以改，那就不變，正職跟外包一樣，mira 是特殊
+	// 的意義，他代替 owner 執行高權限動作。」— the floor is decided by the STAFF
+	// face of the same act (PATCH /api/members/{member_id}, machine floor since
+	// T-5336), not by how the verb looks on its own. It dropped two rungs, to
+	// principalMachine, and it is the ONLY one of the four worker lifecycle rows
+	// the ruling moved.
+	{"POST", "/api/outsource-workers/{id}/model"}: "set_outsource_worker_model",
 }
 
 // t6020RevisedFloor is the floor each revised row must now declare. Pinned as a
@@ -83,6 +96,8 @@ var t6020Revised = map[[2]string]string{
 // one's answer.
 var t6020RevisedFloor = map[[2]string]string{
 	{"POST", "/api/reply-cards/{card_id}/expire"}: principalAgent,
+	{"POST", "/api/tasks/{task_id}/terminate"}:    principalAgent,
+	{"POST", "/api/outsource-workers/{id}/model"}: principalMachine,
 }
 
 // t6020AllOpenedRows is every row the 2026-07-26 ruling opened — those still at
@@ -108,14 +123,66 @@ func t6020AllOpenedRows() map[[2]string]string {
 // self-escalation, and the password / Web Push rows are the owner's own account
 // and own browser, not an office capability. T-c826 later added the owner's
 // explicit choice that personal member identity/presentation also stays here.
+//
+// The five /api/auth/mfa* rows join them on the SAME reasoning as
+// change-password, one step stronger: they decide how the OWNER authenticates.
+// An admin_agent that could reach them could weaken — or, via enroll+activate,
+// seize — the credential that governs it, so opening them would hand the office
+// a way to escalate past its own owner. Off the MCP surface entirely for the
+// same reason the password is: arming or disarming the owner's second factor is
+// never something an agent does on the owner's behalf.
+//
+// 成本歸零 (POST .../cost/reset) joins on its OWN ruling, not T-6020's:
+// rc-7dea0deefa63 (2026-09-02), where the owner chose the minimal irreversible
+// button. It destroys his accumulated spend figure — a number no ledger backs
+// and no route restores — so an admin_agent deciding that on his behalf is not
+// something he asked for, and an agent has nothing legitimate to do with it.
+//
+// 帳號整包歸零 (POST /api/accounts/cost/reset) is the SAME reasoning under a
+// SECOND ruling of its own, rc-efae958cef40 (2026-09-02): the owner asked for
+// one press that empties a whole account, released workers included, because
+// the per-actor button alone could never drive that card to absent. Everything
+// that makes the per-actor row owner-only holds here with a larger blast
+// radius, so it would have been strange for this one to sit lower.
+//
+// 簽章金鑰 (the three /api/auth/signing-keys* rows, T-62) sit here under a ruling
+// of their own: rc-498f5793fb7f (2026-09-03), where the owner was shown the
+// choice between owner-only and letting an admin_agent at least READ the ring,
+// and chose owner-only for all three. The reasoning put to him, which he
+// accepted, is the /api/auth/mfa* argument one step further along:
+// change-password and
+// the MFA rows decide how the owner authenticates; these decide how EVERYONE
+// does, the calling agent included. An admin_agent that could reach them could
+// rotate the key that signs its own credential, or remove the key that
+// credential is signed under — self-escalation and self-destruction from the
+// same door. Off the MCP surface for the reason the password is: governing the
+// key that authenticates the office is never something the office does on the
+// owner's behalf.
+//
+// ⚠️ This note said "DERIVED, not a new ruling of the owner's" for exactly one
+// commit — the window between the governance gate refusing the unexplained rows
+// and the owner answering. It is recorded because the distinction is the whole
+// point of this table: a derivation and a ruling look identical once written
+// down, and the only defence is that whoever writes the row says which it is at
+// the time.
 var t6020Withheld = [][2]string{
 	{"POST", "/api/mint"},
 	{"POST", "/api/auth/change-password"},
+	{"GET", "/api/auth/mfa"},
+	{"POST", "/api/auth/mfa/offer"},
+	{"POST", "/api/auth/mfa/enroll"},
+	{"POST", "/api/auth/mfa/activate"},
+	{"POST", "/api/auth/mfa/disable"},
 	{"GET", "/api/push/public-key"},
 	{"POST", "/api/push/subscription"},
 	{"DELETE", "/api/push/subscription"},
 	{"PUT", "/api/members/{member_id}/avatar"},
 	{"DELETE", "/api/members/{member_id}/avatar"},
+	{"POST", "/api/members/{member_id}/cost/reset"},
+	{"POST", "/api/accounts/cost/reset"},
+	{"GET", "/api/auth/signing-keys"},
+	{"POST", "/api/auth/signing-keys/rotate"},
+	{"POST", "/api/auth/signing-keys/{key_id}/remove"},
 }
 
 func t6020RouteIndex(t *testing.T) map[[2]string]RouteSpec {
@@ -132,7 +199,7 @@ func t6020RouteIndex(t *testing.T) map[[2]string]RouteSpec {
 }
 
 func TestT6020OpenedRoutesSitAtTheAdminAgentFloor(t *testing.T) {
-	// 18 still at the admin floor + 1 later revised = the 19 the ruling opened.
+	// 16 still at the admin floor + 3 later revised = the 19 the ruling opened.
 	// Split this way so a revision has to MOVE a row (visible in the diff) rather
 	// than delete one; the sum keeps the historical count honest.
 	if len(t6020Opened)+len(t6020Revised) != 19 {
@@ -172,12 +239,14 @@ func TestT6020OpenedRoutesSitAtTheAdminAgentFloor(t *testing.T) {
 }
 
 func TestT6020RevisedRoutesSitAtTheirRevisedFloor(t *testing.T) {
-	// 🔴 THE COUNT LOCK. One row has been revised. A second one needs its own
+	// 🔴 THE COUNT LOCK. Three rows have been revised (expire_reply_card, owner
+	// 2026-08-07; terminate_task, owner 2026-08-20; set_outsource_worker_model,
+	// owner 2026-08-21). A fourth one needs its own
 	// owner ruling, and whoever adds it must edit this line in the same commit —
 	// that is the point: this table exempts a row from the admin-floor assertion
 	// above, so growing it must be a deliberate, visible act, never a side effect.
-	if len(t6020Revised) != 1 {
-		t.Fatalf("t6020Revised lists %d rows, expected 1 — a second revision needs its "+
+	if len(t6020Revised) != 3 {
+		t.Fatalf("t6020Revised lists %d rows, expected 3 — a further revision needs its "+
 			"OWN owner ruling, and this guard must be edited in the same commit",
 			len(t6020Revised))
 	}
@@ -246,8 +315,22 @@ func TestT6020OpenedToolsAreInTheFrozenCatalog(t *testing.T) {
 }
 
 func TestT6020WithheldRoutesStayOwnerOnlyAndOffTheMCPSurface(t *testing.T) {
-	if len(t6020Withheld) != 7 {
-		t.Fatalf("the owner rulings withheld 7 routes, this table lists %d", len(t6020Withheld))
+	// 7 from the original rulings + the 5 second-factor rows (see the table's
+	// note) = 12, plus the per-actor 成本歸零 row (rc-7dea0deefa63) = 13, plus the
+	// account-wide one (rc-efae958cef40) = 14. The arithmetic is spelled out
+	// because it was WRONG here — "7 + the 3 second-factor rows" against a
+	// literal of 12, in the one file whose entire job is to make this count
+	// deliberate. The rows are GET /api/auth/mfa and POST
+	// offer/enroll/activate/disable: five, not three. The literal is kept so
+	// ADDING an owner-only row stays a deliberate act with a reason attached.
+	if len(t6020Withheld) != 17 {
+		t.Fatalf("this table must list 17 owner-only routes and lists %d — 7 from the "+
+			"owner rulings, plus the 5 /api/auth/mfa* rows added by the MFA change, "+
+			"plus 成本歸零 from rc-7dea0deefa63 and 帳號整包歸零 from rc-efae958cef40, "+
+			"plus the 3 /api/auth/signing-keys* rows from T-62 "+
+			"(see the note on the table). Do not read the 17 as one owner ruling: "+
+			"the T-6020 ruling covered 7.",
+			len(t6020Withheld))
 	}
 	index := t6020RouteIndex(t)
 	// Scan the tool index by ROUTE (not by name): a withheld row that grew a
@@ -359,10 +442,32 @@ func TestT6020OpenedToolsCarryTheirWholeParameterSet(t *testing.T) {
 	if len(rows) == 0 {
 		t.Fatalf("t6020AllOpenedRows() is empty — this test would pass vacuously")
 	}
-	if len(knownCatalogDrift)+len(openapiOverweight) == 0 {
-		t.Fatalf("both escape-hatch maps are empty — the lookups below would be " +
-			"vacuous. If that is genuinely correct, this test has stopped being " +
-			"able to catch anything and should be reconsidered, not silenced")
+	// ⚠️ INVERTED, NOT SILENCED (T-18). This used to Fatal when BOTH escape
+	// hatches were empty, on the premise that at least one is always populated so
+	// the lookups below run against real data. That premise expired:
+	// knownCatalogDrift was emptied by T-1ba2 (debt repaid) and openapiOverweight's
+	// only ever entry was open_gate.bind, which existed solely because
+	// ReplyCardCreateDTO was shared by two operations — T-18 removed open_gate, so
+	// the DTO has one operation and no field on it can be read by one face and
+	// ignored by another. Both maps empty is now the CORRECT state.
+	//
+	// 🔑 SO THE ASSERTION IS TURNED AROUND, and this is strictly stronger than
+	// either the old tripwire or a comment asking the next person to remember.
+	// The first draft of this fix relaxed the check and left a 🔴 note saying
+	// "restore a non-vacuity assertion if a hatch is ever repopulated" — but a
+	// rule someone has to remember and a check that cannot be forgotten are not
+	// the same strength of guarantee, which is the whole argument T-18 is built
+	// on. Applying it here: the correct state (both empty) is what gets PINNED,
+	// today, by something that is evaluated on every run.
+	//
+	// It also catches more than the loop below does. The loop only fires for the
+	// 19 T-6020 tools; this fires for ANY tool re-entering either hatch, and it
+	// makes "we re-derived why the maps are empty" a required step rather than an
+	// optional one.
+	if n := len(knownCatalogDrift) + len(openapiOverweight); n != 0 {
+		t.Fatalf("an escape hatch is populated again (%d entries) — the T-18 reasoning "+
+			"that both maps are correctly empty no longer holds; re-derive it or "+
+			"restore a per-tool non-vacuity check", n)
 	}
 	for key, tool := range t6020AllOpenedRows() {
 		if params, baselined := knownCatalogDrift[tool]; baselined {

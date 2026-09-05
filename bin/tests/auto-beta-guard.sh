@@ -545,6 +545,16 @@ elif what == "on-shape":
     else:
         print("ok")
 
+elif what == "job-permissions":
+    # The publishing job's OWN permissions block, whole and sorted. A job-level
+    # block REPLACES the set wholesale, so what matters is the complete map, not
+    # whether some key is present somewhere in it.
+    perms = ((jobs.get(os.environ["JOB"]) or {}).get("permissions")) or {}
+    if not isinstance(perms, dict):
+        print("not-a-mapping:%r" % (perms,))
+    else:
+        print(",".join("%s=%s" % (k, perms[k]) for k in sorted(perms)))
+
 elif what == "write-holders":
     # Every job whose own permissions grant contents: write, plus the workflow
     # default. The answer must be exactly this one job.
@@ -1208,6 +1218,36 @@ else
     "missing=- extra=-" "$(printf '%s\n' "$ROLES_OUT" | sed -n 's/^NEEDSDIFF://p')"
 fi
 
+# ── W1b: bin/release's required-job list equals the declared gate set ───────
+# T-7e6c moved the release gate off "run bin/ci.sh again on the runner" and onto
+# "read the conclusions of THIS commit's GitHub Actions round". That gives
+# bin/release a list of job names it requires, and a list of names is exactly the
+# kind of thing that rots: rename a job, add a gate, drop macos-e2e from `needs`,
+# and the release command goes on demanding — or silently stops demanding — a set
+# that no longer matches the workflow. Nothing else in the tree compares the two.
+#
+# THIS IS A DRIFT CHECK, NOT THE GATE'S BEHAVIOURAL COVER. What the release
+# command DOES with that list (refuse an absent job, refuse a non-"success"
+# conclusion, refuse a round bound to another commit) is asserted by driving the
+# real command in bin/tests/release-guard.sh section G. This case only pins that
+# the two declarations still name the same eleven jobs, in both directions.
+#
+# Read out of bin/release as text on purpose: it is a shell here-string of names,
+# and sourcing bin/release to read the variable would drag the whole script's
+# `set -euo pipefail` and dispatch guard into this guard for one string.
+REQ_JOBS="$(sed -n '/^REQUIRED_CI_JOBS="/,/"$/p' "$ROOT/bin/release" \
+  | sed -e 's/^REQUIRED_CI_JOBS="//' -e 's/"$//' | grep -c . || true)"
+RELEASE_JOBS="$(sed -n '/^REQUIRED_CI_JOBS="/,/"$/p' "$ROOT/bin/release" \
+  | sed -e 's/^REQUIRED_CI_JOBS="//' -e 's/"$//' | grep . | LC_ALL=C sort | tr '\n' ',' | sed 's/,$//')"
+if [[ -n "$ROLE_PROBLEMS" ]]; then
+  bad "W1b bin/release's REQUIRED_CI_JOBS equals the declared gate set — NOT CHECKED, because the job roles could not be established (see W1r). This is not a pass."
+elif [[ "$REQ_JOBS" == "0" ]]; then
+  bad "W1b could not read REQUIRED_CI_JOBS out of bin/release at all — the release gate's required-job list is then unpinned, and a rename or a dropped job would go unnoticed."
+else
+  check "W1b bin/release's REQUIRED_CI_JOBS is EXACTLY the declared gate set (drop macos-e2e from either side and this reddens)" \
+    "$(printf '%s\n' "$ROLES_OUT" | sed -n 's/^GATES://p')" "$RELEASE_JOBS"
+fi
+
 # ── W2: the trigger condition is EXACTLY the canonical one ─────────────────
 # Not "both halves are mentioned somewhere in it" — see the note in the `if-raw`
 # query for the mutant that walked through that. One authority, exact comparison,
@@ -1250,8 +1290,31 @@ check "W7 the workflow's pinned \`on:\` triggers are unchanged and no unlisted t
 check "W3 contents:write is held by $JOB ALONE and the workflow default stays read" \
   "jobs=$JOB default=read" "$(q write-holders)"
 
-# ── W4: GA is never automated ──────────────────────────────────────────────
-# Scanned as TEXT over every workflow file, comments included, rather than
+# ── W3b: the publishing job's permission set is EXACTLY these two ──────────
+# A job-level `permissions:` block REPLACES the set wholesale — every key not
+# listed is `none` for that job, whatever the workflow default says. So this is
+# an exact comparison of the whole map, not a "contains" test, and BOTH keys are
+# load-bearing in different directions:
+#
+#   • contents: write — the release cannot be created without it. Its blast
+#     radius is why W3 above pins that no OTHER job holds it.
+#   • actions:  read  — bin/release's CI gate reads THIS run's own job
+#     conclusions from /actions/runs/<id> and .../jobs, and authenticates that
+#     read with the job's token. Drop this key and the token is rejected, the
+#     gate fails CLOSED, and NO beta can be published at all. That failure is
+#     loud but total, and nothing else in the tree would have said a word: W3
+#     only ever looked at `contents`, so `actions: read` could be deleted with
+#     the whole suite staying green. This line is what makes that deletion red.
+#
+# Exact, and written out rather than derived: adding a third permission to the
+# one job that can write to this repo is a decision, and editing this line is the
+# review it should get.
+check "W3b $JOB's permission block is EXACTLY \`actions: read\` + \`contents: write\` (a job-level block replaces the set wholesale; dropping actions:read fails the release gate closed and publishes nothing)" \
+  "actions=read,contents=write" "$(q job-permissions)"
+
+# ── W4: GA is automated through ONE named, actor-gated workflow — and nowhere
+#        else ────────────────────────────────────────────────────────────────
+# Scanned as TEXT over every file under .github/, comments included, rather than
 # through the parser: a mention in a comment is one edit away from being a step.
 #
 # ⚠️ TWO RULES, because the first one alone was NOT what it looked like. Banning
@@ -1270,22 +1333,277 @@ check "W3 contents:write is held by $JOB ALONE and the workflow default stays re
 # action is not a workflow file, so all three rules below looked straight past it —
 # while the step ran inside the one job holding `contents: write`. The scope is
 # therefore the WHOLE of `.github/`, and W4d below refuses local actions outright.
+#
+# 🔴 THESE TWO RULES USED TO ADMIT NO EXCEPTION WHATSOEVER, on the ruling that the
+# beta→final flip is a human decision that may never be automated. THAT RULING WAS
+# OVERTURNED BY THE OWNER ON 2026-08-28 IN rc-f9d284c0aef7, with one condition:
+#
+#     "決定是我下的 然後我會讓你幫我執行 UI 上可以有這個 action
+#      但是只有 seth / eva 可以跑這個"
+#
+# GA may therefore be automated — through EXACTLY ONE file, and only while that
+# file keeps the condition he attached. What changed is the SHAPE of the rule, not
+# its strength:
+#   • before — "nothing under .github/ may name the flip": a location ban.
+#   • now    — "only $GA_ALLOWED_REL may name it, and it must be gated on a live
+#     read of the actor's repo permission": the same ban, plus a positive
+#     obligation (W4e).
+#
+# 🔴 THE EXEMPTION IS ONE PATH, NOT A CATEGORY. Every other file under .github/ —
+# a second promote workflow under any other name included — still reddens W4/W4b
+# exactly as it did before, and W4pcx below proves that with a planted example
+# rather than asserting it. W4e then makes the exempt file PAY for its exemption:
+# lose the actor gate, stop asking GitHub who the actor is, or let it fall open
+# when the answer does not arrive, and this guard goes red.
+#
+# ⚠️ DO NOT "TIDY THIS UP" BY DROPPING W4e AND KEEPING THE EXEMPTION. The two are
+# one rule written in two halves — the exemption on its own is just a hole, and it
+# is a hole in the exact place this pack exists to watch. If the workflow is ever
+# deleted, delete the exemption in the same commit (W4e reddens if you do not).
 GA_SCAN_DIR="$ROOT/.github"
-GA_HITS="$(grep -rilE 'promote' "$GA_SCAN_DIR" 2>/dev/null || true)"
+GA_ALLOWED_REL=".github/workflows/ga-promote.yml"
+GA_ALLOWED_ABS="$ROOT/$GA_ALLOWED_REL"
+# 🔴 THERE IS DELIBERATELY NO ROLL-CALL CONSTANT HERE ANY MORE.
+# This used to pin `pkyosx 8thEdition` verbatim and compare it to a matching string
+# in the workflow. Two copies of a list is two things to forget, and the list was
+# never the real rule — the owner's rule is "the people I trust with this repo",
+# which GitHub already knows. The workflow now ASKS GitHub
+# (repos/{owner}/{repo}/collaborators/{actor}/permission) and admits admin/write
+# only, so W4e below pins the MECHANISM — that the gate really queries, and that
+# every non-answer refuses — instead of pinning two usernames.
+# Excuse ONLY that exact path. -F -x so a near-miss name (ga-promote.yml.bak, or a
+# copy one directory over) is NOT excused by looking similar.
+ga_except() { grep -Fxv "$GA_ALLOWED_ABS" || true; }
+
+GA_HITS="$(grep -rilE 'promote' "$GA_SCAN_DIR" 2>/dev/null | ga_except)"
 if [[ -z "$GA_HITS" ]]; then
-  ok "W4 nothing under .github/ names the beta→final flip subcommand (workflows AND any composite action)"
+  ok "W4 no file under .github/ other than $GA_ALLOWED_REL names the beta→final flip subcommand"
 else
-  bad "W4 a file under .github/ names the beta→final flip subcommand — GA must never be automated: $(printf '%s ' $GA_HITS)"
+  bad "W4 a file under .github/ other than $GA_ALLOWED_REL names the beta→final flip subcommand — GA is automated through that ONE actor-gated workflow and nowhere else: $(printf '%s ' $GA_HITS)"
 fi
-# `gh release edit` is legitimate for nothing this workflow needs to do, so the
-# flags are matched rather than the command: --prerelease=false and --latest each
-# promote a beta to GA on their own, and --draft=false publishes a hidden one.
-GA_FLAG_RX='--prerelease=false|--latest([[:space:]]|$)|--draft=false'
-GA_FLAG_HITS="$(grep -rlE -- "$GA_FLAG_RX" "$GA_SCAN_DIR" 2>/dev/null || true)"
+# `gh release edit` is legitimate for nothing else under here, so the flags are
+# matched rather than the command: --prerelease=false and --latest each promote a
+# beta to GA on their own, and --draft=false publishes a hidden one.
+# ⚠️ `=` IS IN THE TRAILING CLASS ON PURPOSE. The previous spelling was
+# `--latest([[:space:]]|$)`, which does not match `--latest=true` — the exact form
+# bin/release itself uses and the form anyone copying it would write. That was a
+# live bypass: `gh release edit <tag> --latest=true` alone moved the pointer past
+# this rule. Found while writing $GA_ALLOWED_REL's roll-back instructions, which
+# is where that string had to be spelled out.
+GA_FLAG_RX='--prerelease=false|--latest([[:space:]=]|$)|--draft=false'
+GA_FLAG_HITS="$(grep -rlE -- "$GA_FLAG_RX" "$GA_SCAN_DIR" 2>/dev/null | ga_except)"
 if [[ -z "$GA_FLAG_HITS" ]]; then
-  ok "W4b nothing under .github/ carries a flag that moves the Latest pointer (--prerelease=false / --latest / --draft=false)"
+  ok "W4b no file under .github/ other than $GA_ALLOWED_REL carries a flag that moves the Latest pointer (--prerelease=false / --latest / --draft=false)"
 else
-  bad "W4b a file under .github/ carries a GA-promoting flag (--prerelease=false / --latest / --draft=false) — that flips a beta to GA without ever naming the subcommand: $(printf '%s ' $GA_FLAG_HITS)"
+  bad "W4b a file under .github/ other than $GA_ALLOWED_REL carries a GA-promoting flag (--prerelease=false / --latest / --draft=false) — that flips a beta to GA without ever naming the subcommand: $(printf '%s ' $GA_FLAG_HITS)"
+fi
+
+# ── W4pcx: the exemption is ONE PATH, and that is demonstrated, not asserted ──
+# W4/W4b now report "clean" while a file under .github/ DOES legitimately contain
+# both shapes, so "the scan found nothing" is a weaker statement than it used to
+# be — a broken `ga_except` that excused everything would look identical. Plant a
+# SECOND promote workflow beside the real one and require both rules to still
+# catch it. This is the assertion that separates "one file is excused" from "the
+# rule was taken out".
+GA_X_DIR="$WORK/ga-except/.github/workflows"
+mkdir -p "$GA_X_DIR"
+cp "$GA_ALLOWED_ABS" "$GA_X_DIR/ga-promote.yml" 2>/dev/null || true
+printf '%s\n' 'run: bin/release promote "$T"' 'run: gh release edit "$T" --latest=true' \
+  > "$GA_X_DIR/ga-promote-2.yml"
+GA_X_EXC="$ROOT/$GA_ALLOWED_REL"
+GA_X_A="$(grep -rilE 'promote' "$WORK/ga-except/.github" 2>/dev/null | grep -Fxv "$GA_X_EXC" | sed "s|^$WORK/ga-except/.github/workflows/||" | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
+GA_X_B="$(grep -rlE -- "$GA_FLAG_RX" "$WORK/ga-except/.github" 2>/dev/null | grep -Fxv "$GA_X_EXC" | sed "s|^$WORK/ga-except/.github/workflows/||" | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
+check "W4pcx a SECOND promote workflow planted beside the exempt one is still caught by BOTH rules (the exemption is one path, not a category)" \
+  "subcommand=ga-promote-2.yml ga-promote.yml flags=ga-promote-2.yml ga-promote.yml" \
+  "subcommand=$GA_X_A flags=$GA_X_B"
+
+# ── W4e: the exempt workflow PAYS for its exemption ──────────────────────────
+# The owner overturned "GA may never be automated" and replaced it with "only seth
+# / eva may run it". W4/W4b above implement the first half by standing down for one
+# path; this is the second half, and without it that path is simply unguarded.
+#
+# ⚠️ GITHUB DOES NOT ENFORCE THE CONDITION. There is no per-workflow dispatch ACL:
+# every account with write access can press Run workflow. The allowlist therefore
+# has to live INSIDE the job, and something has to stop it being quietly widened —
+# which is what this is.
+#
+# 🔴 THE VERDICTS BELOW ARE DRIVEN, NOT READ, for the reason W5c gives about the
+# freshness step: asserting that the YAML mentions `github.actor` is a statement
+# about WIRING, and wiring survives everything that matters (invert the comparison,
+# `exit 0` on no match, compare with `==` against a glob). So W4eD lifts the gate's
+# own `run:` body verbatim out of the workflow and EXECUTES it against a table of
+# actors. A gate that lets a stranger through fails here even if it reads perfectly.
+if [[ ! -f "$GA_ALLOWED_ABS" ]]; then
+  bad "W4e $GA_ALLOWED_REL is EXEMPTED by W4/W4b above but does not exist. Delete the exemption in the same commit as the workflow — an exemption with no file behind it is a pre-opened hole for the next file to be dropped into that path."
+else
+  GAP_JSON="$WORK/ga-promote.json"
+  if ! parse_yaml "$GA_ALLOWED_ABS" "$GAP_JSON"; then
+    bad "W4e $GA_ALLOWED_REL does not PARSE as YAML (GitHub would report a startup failure — and it is the one file here allowed to touch GA): $(tr '\n' ' ' < "$WORK/parse.err")"
+  else
+    cat > "$WORK/gap.py" <<'PY'
+import json, sys
+
+doc = json.load(open(sys.argv[1]))
+what = sys.argv[2]
+jobs = doc.get("jobs") or {}
+
+GATE_NAME = "authorize actor"
+
+def is_gate(s):
+    return isinstance(s, dict) and str(s.get("name", "")).strip() == GATE_NAME
+
+def gate_steps():
+    # The FIRST step of every job. A gate that runs second is not a gate: the step
+    # before it already ran with the job's `contents: write` token.
+    out = []
+    for name, j in sorted(jobs.items()):
+        steps = (j or {}).get("steps") or []
+        out.append((name, steps[0] if steps else {}))
+    return out
+
+if what == "gate-position":
+    # Every job in this file must open with the authorize step, and there must be
+    # at least one job. Reported per job so a red names which one.
+    if not jobs:
+        print("no-jobs")
+    else:
+        print(",".join(
+            "%s=%s" % (n, "authorize" if is_gate(s) else "NOT-THE-GATE")
+            for n, s in gate_steps()))
+
+elif what == "actor-source":
+    # The gate must read the REAL actor. Anything else (an input, a hardcoded
+    # string) makes the whole thing self-certifying.
+    vals = sorted({str((s.get("env") or {}).get("ACTOR", ""))
+                   for _, s in gate_steps() if isinstance(s, dict)})
+    print("|".join(vals) if vals else "-")
+
+elif what == "gate-body":
+    for _, s in gate_steps():
+        if is_gate(s):
+            sys.stdout.write(str(s.get("run", "")))
+            break
+
+elif what == "tag-is-an-input":
+    # "決定是我下的" — the workflow executes a decision, it never makes one. The
+    # tag must arrive as the dispatch input; a workflow that looks one up has
+    # taken the choice back off the human.
+    ins = ((doc.get(True) or doc.get("true") or doc.get("on") or {})
+           .get("workflow_dispatch") or {}).get("inputs") or {}
+    bodies = " ".join(str(st.get("run", ""))
+                      for j in jobs.values()
+                      for st in ((j or {}).get("steps") or []))
+    print("inputs=%s uses-input=%s" % (
+        ",".join(sorted(ins)) or "-",
+        "yes" if "inputs.tag" in bodies or "inputs.tag" in json.dumps(doc) else "no"))
+PY
+    gap() { python3 "$WORK/gap.py" "$GAP_JSON" "$@"; }
+
+    gap gate-body > "$WORK/gate.sh"
+
+    check "W4e2 the gate reads the REAL dispatcher (github.actor), not an input it could be told" \
+      '${{ github.actor }}' "$(gap actor-source)"
+    check "W4e3 the authorize gate is the FIRST step of every job (a gate that runs second has already let a step run with contents: write)" \
+      "ga-promote=authorize" "$(gap gate-position)"
+    check "W4e4 the tag is a dispatch INPUT and the workflow never picks one itself (the owner makes the call; this only executes it)" \
+      "inputs=tag uses-input=yes" "$(gap tag-is-an-input)"
+
+    if [[ ! -s "$WORK/gate.sh" ]]; then
+      bad "W4eD could not find the authorize gate's run body in $GA_ALLOWED_REL — the gate this pack claims to pin is not there to be driven, and W4e2/W4e3 above were reading an absent step. The gate is identified by its step name ('authorize actor'); renaming it without updating this guard is the same as deleting it."
+    else
+      # ── W4e/W4e1: the gate ASKS, and carries no list ─────────────────────────
+      # The owner's rule is "the people I trust with this repo". GitHub already
+      # holds that answer, so the gate must go and get it. A gate that instead
+      # carries usernames is the shape this change removed, and re-introducing one
+      # is how it would quietly come back.
+      if grep -qE 'collaborators/.*ACTOR.*/permission' "$WORK/gate.sh"; then
+        ok "W4e the gate ASKS GitHub for THIS actor's permission on this repo (collaborators/<actor>/permission) rather than carrying a name list"
+      else
+        bad "W4e the gate does not read collaborators/<actor>/permission — 'who may press' is supposed to BE the repo's collaborator list, asked at run time. Body: $(tr '\n' ' ' < "$WORK/gate.sh")"
+      fi
+      if grep -qEi 'pkyosx|8thEdition|ALLOWED_ACTORS' "$WORK/gate.sh"; then
+        bad "W4e1 the gate hardcodes an account name / allowlist again. That is what this rule replaced: a list in the file goes stale against the repo's real collaborators and has to be edited in two places. Change who has write access instead. Body: $(tr '\n' ' ' < "$WORK/gate.sh")"
+      else
+        ok "W4e1 the gate carries NO hardcoded account list (nothing to widen in a diff nobody reads)"
+      fi
+
+      # ── W4eD: the gate, EXECUTED against a stubbed GitHub ─────────────────────
+      # 🔴 DRIVEN, NOT READ, for the reason W5c gives about the freshness step:
+      # asserting the YAML mentions the endpoint is a statement about WIRING, and
+      # wiring survives everything that matters (invert the case, add `read` to the
+      # admitted set, fall open when the read fails). So the gate's own `run:` body
+      # is lifted verbatim and executed with a fake `gh` on PATH that returns a
+      # chosen permission and a chosen exit status. No network, no real repo.
+      #
+      # The actor used throughout is 'mallory' — a name on nobody's list. If the
+      # allow rows pass with that actor, the verdict really did come from the
+      # permission GitHub reported and not from who was asking.
+      GA_STUB_DIR="$WORK/ga-stub"
+      mkdir -p "$GA_STUB_DIR"
+      cat > "$GA_STUB_DIR/gh" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$*" >> "$OC_STUB_LOG"
+[ "${OC_STUB_RC:-0}" = 0 ] || exit "$OC_STUB_RC"
+[ -z "${OC_STUB_OUT:-}" ] || printf '%s\n' "$OC_STUB_OUT"
+exit 0
+STUB
+      chmod +x "$GA_STUB_DIR/gh"
+
+      GATE_OUT=""
+      # permission gh reports | gh exit status | expected verdict
+      while IFS='|' read -r PERM_IN RC_IN WANT; do
+        [[ -n "$PERM_IN$RC_IN$WANT" ]] || continue
+        : > "$WORK/stub.log"
+        if PATH="$GA_STUB_DIR:$PATH" OC_STUB_LOG="$WORK/stub.log" \
+             OC_STUB_RC="$RC_IN" OC_STUB_OUT="$PERM_IN" \
+             ACTOR="mallory" REPO="pkyosx/OffiCraft" \
+             bash "$WORK/gate.sh" >/dev/null 2>&1; then
+          GOT=allow
+        else
+          GOT=refuse
+        fi
+        GATE_OUT+="${PERM_IN:-<empty>}/rc$RC_IN=$GOT "
+      done <<'TABLE'
+admin|0|allow
+write|0|allow
+read|0|refuse
+none|0|refuse
+triage|0|refuse
+|0|refuse
+null|0|refuse
+admin|1|refuse
+admin|127|refuse
+not json at all|0|refuse
+TABLE
+      check "W4eD the gate's OWN run body, executed against a stubbed gh: admin/write proceed, read/none/triage refuse, and EVERY non-answer (empty, null, API error, gh missing, garbage) refuses — fail-closed" \
+        "admin/rc0=allow write/rc0=allow read/rc0=refuse none/rc0=refuse triage/rc0=refuse <empty>/rc0=refuse null/rc0=refuse admin/rc1=refuse admin/rc127=refuse not json at all/rc0=refuse " \
+        "$GATE_OUT"
+
+      # …and it has to have actually ASKED. A gate that admits admin/write from a
+      # variable it set itself would pass the table above without ever talking to
+      # GitHub; this is the row that separates "queried" from "decided locally".
+      : > "$WORK/stub.log"
+      PATH="$GA_STUB_DIR:$PATH" OC_STUB_LOG="$WORK/stub.log" OC_STUB_RC=0 OC_STUB_OUT="admin" \
+        ACTOR="mallory" REPO="pkyosx/OffiCraft" bash "$WORK/gate.sh" >/dev/null 2>&1 || true
+      if grep -q 'repos/pkyosx/OffiCraft/collaborators/mallory/permission' "$WORK/stub.log"; then
+        ok "W4eD3 the gate really CALLED the permission endpoint for the dispatching actor on the dispatching repo (both interpolated, neither hardcoded)"
+      else
+        bad "W4eD3 the gate allowed 'mallory' without asking GitHub for repos/pkyosx/OffiCraft/collaborators/mallory/permission — it decided locally. gh saw: $(tr '\n' ' ' < "$WORK/stub.log")"
+      fi
+
+      # …and the refusal has to SAY who was refused. A silent `exit 1` on the one
+      # path a human meets only when something is wrong is how a real refusal gets
+      # misread as an infra flake and re-run until someone widens the rule.
+      : > "$WORK/stub.log"
+      PATH="$GA_STUB_DIR:$PATH" OC_STUB_LOG="$WORK/stub.log" OC_STUB_RC=0 OC_STUB_OUT="read" \
+        ACTOR="mallory" REPO="pkyosx/OffiCraft" bash "$WORK/gate.sh" >"$WORK/gate.out" 2>&1 || true
+      if grep -q "mallory" "$WORK/gate.out"; then
+        ok "W4eD2 the refusal NAMES the actor it refused (a bare exit 1 reads as an infra flake)"
+      else
+        bad "W4eD2 the gate refused 'mallory' without naming it in its output: $(tr '\n' ' ' < "$WORK/gate.out")"
+      fi
+    fi
+  fi
 fi
 
 # ── W4pc: the two greps above are ALIVE ─────────────────────────────────────
@@ -1542,19 +1860,72 @@ USES_PC_TXT="$(grep -rlE -- "$USES_LOCAL_RX" "$WORK/uses-pc" 2>/dev/null | grep 
 check "W4dtpc the W4dt grep is alive (it finds the planted single-line local references)" \
   "2" "$USES_PC_TXT"
 
-# ── W4c: the job universe this guard reasons about is really the whole one ───
+# ── W4c/W4f: the job universe this guard reasons about is really the whole one ─
 # W1's difference is computed over the jobs in ci.yml, so "the trunk is green"
 # means "every job IN THIS FILE passed". A SECOND workflow file would carry checks
 # that auto-beta's `needs` cannot even name (GitHub has no cross-file `needs`), and
 # a reviewer proved the gap by dropping in a second workflow whose job just
-# `exit 1`s — this guard stayed green. Rather than pretend to cover it, pin the
-# precondition that makes W1's scope equal the real scope: ci.yml is the only
-# workflow. Adding a second one reddens here and forces the decision to be made
-# deliberately (either fold the job into ci.yml, or rework this guard) instead of
-# silently widening what "green" is allowed to leave out.
+# `exit 1`s — this guard stayed green. So this used to pin `ci.yml` as the ONLY
+# workflow file, full stop.
+#
+# 🔴 THAT PIN HAD TO MOVE when the owner's 2026-08-28 ruling (rc-f9d284c0aef7)
+# admitted a second workflow, and the interesting part is WHAT IT MOVED TO. The
+# reason above is not about GA at all — it is about the SET OF CHECKS A TRUNK
+# COMMIT PRODUCES. Re-read it with that in mind and the real precondition is
+# narrower than "one file":
+#
+#     a second workflow only widens the set auto-beta is failing to wait for if it
+#     RUNS on the events auto-beta's `needs` are evaluated against — push and
+#     pull_request.
+#
+# A workflow_dispatch-only file schedules ZERO jobs on a push and ZERO on a pull
+# request. It contributes no check run to any trunk commit, so the set W1 reasons
+# about and the set GitHub actually produces stay identical, and every W1 assertion
+# means exactly what it meant before. That — not the filename — is the precondition,
+# and W4f pins it directly.
+#
+# ⚠️ THE WEAKENING THIS DOES ACCEPT, stated rather than buried: `on:` is now the
+# only thing standing between a second file and W1's blind spot. Add `push:` to
+# ga-promote.yml and W4f reddens; that is the whole of the protection. W1 itself
+# was NOT widened to look across files, and it still cannot: a second workflow that
+# somehow ran on push would carry jobs no `needs` can name. If a future workflow
+# needs a push or pull_request trigger, this is a decision to take deliberately —
+# fold the job into ci.yml, or rework W1 to read every file — NOT a matter of
+# adding a key to the allowlist below.
 WF_FILES="$(cd "$WF_DIR" && ls -1 2>/dev/null | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
-check "W4c ci.yml is the ONLY workflow file (W1's job universe is one file wide)" \
-  "ci.yml" "$WF_FILES"
+check "W4c the workflow directory holds exactly ci.yml and the one actor-gated GA workflow" \
+  "ci.yml ga-promote.yml" "$WF_FILES"
+
+# W4f: …and everything that is NOT ci.yml fires on manual dispatch and nothing
+# else. Read from the PARSED document, per file, so a trigger written in any legal
+# spelling is seen; a file that cannot be parsed is reported, never skipped.
+WF_TRIGGERS=""
+for f in "$WF_DIR"/*; do
+  b="$(basename "$f")"
+  [[ "$b" == "ci.yml" ]] && continue
+  if parse_yaml "$f" "$WORK/wf-trig.json"; then
+    t="$(python3 - "$WORK/wf-trig.json" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+found = [k for k in ("true", "on") if k in doc]
+if len(found) != 1:
+    print("on-keys=%s" % (",".join(found) or "none")); raise SystemExit
+got = doc[found[0]]
+if isinstance(got, dict):
+    print(",".join(sorted(got)))
+elif isinstance(got, list):
+    print(",".join(sorted(str(x) for x in got)))
+else:
+    print(str(got))
+PY
+)"
+  else
+    t="PARSEFAIL"
+  fi
+  WF_TRIGGERS+="$b=$t "
+done
+check "W4f every workflow other than ci.yml is workflow_dispatch-ONLY (that is what keeps it out of every push/PR run, and therefore out of the job universe W1 reasons about)" \
+  "ga-promote.yml=workflow_dispatch " "$WF_TRIGGERS"
 
 # ── W5: the publish invocation's shape ─────────────────────────────────────
 check "W5 exactly one step invokes bin/release publish" "1" "$(q publish-call-count)"
@@ -1777,19 +2148,23 @@ nbt_next() { # nbt_next <tags> — sets RC, TAG (stdout only) and BASE
   BASE="$(sed -n 's/^\[next-beta-tag\] base: \([^ ]*\).*/\1/p' "$WORK/nbt.err")"
 }
 
-# N0 — the shape this repo actually uses, and the reason the rule is patch+1
-# rather than beta+1: the base is itself a -beta.1, and `-beta.N` sorts BELOW the
-# same X.Y.Z under semver, so anything that did not move the patch could not come
-# out greater than its own base. The trailing non-semver tag is what pins the
+# N0 — the TRANSITION shape this repo actually has on the tree right now: the
+# greatest existing tag is an OLD-STYLE `-beta.1` (246 releases exist, a batch of
+# them suffixed that way, and none of that history gets rewritten by this
+# ruling). The rule is patch+1 rather than an in-place suffix bump precisely
+# because `-beta.N` sorts BELOW the same X.Y.Z under semver, so anything that did
+# not move the patch could not come out greater than its own base — and that
+# still holds with the suffix gone from the OUTPUT: the computed tag has none,
+# but the base that decided it can. The trailing non-semver tag is what pins the
 # other half of the rule — such a tag must be IGNORED, not rejected: mutate the
 # filter into a refusal and these three checks are the only ones that go red.
 nbt_next "v0.5.77-beta.1
 v0.5.78-beta.1
 v0.5.9
 some-tag"
-check "N0 the repo's own shape: base is the greatest beta, next bumps the patch" "0" "$RC"
-check "N0 …base chosen"      "v0.5.78-beta.1" "$BASE"
-check "N0 …next tag"         "v0.5.79-beta.1" "$TAG"
+check "N0 the repo's own transition shape: base is the greatest OLD-STYLE beta, next bumps the patch with NO suffix" "0" "$RC"
+check "N0 …base chosen (still the suffixed tag — precedence reads it correctly)" "v0.5.78-beta.1" "$BASE"
+check "N0 …next tag has NO -beta.N suffix" "v0.5.79" "$TAG"
 
 # N1 — THE case that separates semver ordering from string ordering. As strings,
 # "v1.0.0-beta.9" > "v1.0.0-beta.10"; under semver, numeric prerelease identifiers
@@ -1799,7 +2174,7 @@ check "N0 …next tag"         "v0.5.79-beta.1" "$TAG"
 nbt_next "v1.0.0-beta.9
 v1.0.0-beta.10"
 check "N1 beta.10 outranks beta.9 (numeric, not lexical, prerelease compare)" "v1.0.0-beta.10" "$BASE"
-check "N1 …and the next tag is the patch bump off it" "v1.0.1-beta.1" "$TAG"
+check "N1 …and the next tag is the patch bump off it, no suffix" "v1.0.1" "$TAG"
 
 # N2 — a candidate set with NO prerelease at all. A release outranks any
 # prerelease of the same X.Y.Z, and the patch numbers must compare numerically:
@@ -1809,7 +2184,7 @@ v0.5.8
 v0.5.9
 v0.5.78"
 check "N2 releases only: greatest is by NUMERIC patch, not string order" "v0.5.78" "$BASE"
-check "N2 …and the next tag is a beta above it" "v0.5.79-beta.1" "$TAG"
+check "N2 …and the next tag is a release above it, no suffix" "v0.5.79" "$TAG"
 
 # N3 — an EMPTY candidate set is a hard failure, not "start from v0.0.1-beta.1".
 # The realistic cause is a query that broke, and the friendly fallback would
@@ -1843,6 +2218,43 @@ fi
 nbt "v0.5.78-beta.1
 v0.5.77-beta.1" nbt_assert_tag_absent v0.5.79-beta.1
 check "N4b sentinel — an unused tag passes the collision check" "0" "$RC"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# T — THE TRANSITION: this repo's 246 existing releases include a batch tagged
+# the OLD way (vX.Y.Z-beta.1), and the no-suffix ruling does not rewrite any of
+# them. The day the new rule ships, the GREATEST existing tag can still be one
+# of those old-style ones — auto-beta's very next run has to read it correctly
+# and still hand back a bare, unsuffixed tag. N0 above already pins this shape
+# once; T0/T1 pin it explicitly and separately so it cannot be dropped as
+# collateral damage of some other N-case edit.
+# ═══════════════════════════════════════════════════════════════════════════
+echo "── T: transition — old-style suffixed tags still on the tree"
+
+# T0 — the greatest existing tag is an old-style beta, nothing newer exists at
+# all (no plain release above it yet). The computed tag must still be bare.
+nbt_next "v0.5.78-beta.1
+v0.5.77
+v0.5.9"
+check "T0 greatest existing tag is old-style suffixed → still picked as base" "v0.5.78-beta.1" "$BASE"
+case "$TAG" in
+  *-beta*) bad "T0 next tag must carry NO suffix even though its base did (got: $TAG)" ;;
+  "v0.5.79") ok "T0 next tag is bare: v0.5.79" ;;
+  *) bad "T0 next tag wrong (got: $TAG, want: v0.5.79)" ;;
+esac
+
+# T1 — an old-style beta for the SAME X.Y.Z as a plain release that also exists.
+# Semver precedence must still rank the release above the prerelease (this was
+# already true before the ruling; the point here is that it stays true once the
+# OUTPUT stops carrying the suffix that used to make the ordering easy to eyeball).
+nbt_next "v2.1.4
+v2.1.4-beta.1
+v2.1.3"
+check "T1 a release outranks an old-style beta of the same X.Y.Z" "v2.1.4" "$BASE"
+case "$TAG" in
+  *-beta*) bad "T1 next tag must carry NO suffix (got: $TAG)" ;;
+  "v2.1.5") ok "T1 next tag is the bare patch bump: v2.1.5" ;;
+  *) bad "T1 next tag wrong (got: $TAG, want: v2.1.5)" ;;
+esac
 
 # ═══════════════════════════════════════════════════════════════════════════
 # S — WHO ASSEMBLED THE CANDIDATE SET. Everything above feeds a fabricated tag
@@ -1916,8 +2328,9 @@ v0.2.0" "$(printf '%s\n' "$OUT" | grep -v '^$')"
 FAKE_GH_RC=0 FAKE_GH_OUT="v9.9.0" collect "$SWORK" --next
 check "S1 a release tag that exists ONLY on the gh side decides the base" "0" "$RC"
 case "$OUT" in
-  *"base: v9.9.0"*"v9.9.1-beta.1"*) ok "S1 …base=v9.9.0 from the gh-only tag, next=v9.9.1-beta.1" ;;
-  *) bad "S1 …base=v9.9.0 from the gh-only tag, next=v9.9.1-beta.1 (out: $(printf '%s' "$OUT" | tr '\n' '|'))" ;;
+  *"base: v9.9.0"*"v9.9.1"*"-beta"*) bad "S1 …base=v9.9.0 from the gh-only tag, next must be v9.9.1 with NO suffix (out: $(printf '%s' "$OUT" | tr '\n' '|'))" ;;
+  *"base: v9.9.0"*"v9.9.1"*) ok "S1 …base=v9.9.0 from the gh-only tag, next=v9.9.1 (no suffix)" ;;
+  *) bad "S1 …base=v9.9.0 from the gh-only tag, next=v9.9.1 (out: $(printf '%s' "$OUT" | tr '\n' '|'))" ;;
 esac
 
 # S1b — and the mirror, so S1 is not just "gh wins always": a git-only tag that is

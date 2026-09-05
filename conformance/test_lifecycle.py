@@ -243,10 +243,26 @@ def _seed(name: str) -> str:
     return (SEEDS / name).read_text(encoding="utf-8").replace("{OWNER_ID}", "owner")
 
 
-def _expected_context(client, owner_token, role_key: str, task_type: str, user_text: str) -> str:
+DOC_BODY_MARKER = "<!-- ↑唯讀區（程式產生，改不動）｜↓本體（可編輯，零變數） -->"
+DOC_BODY_SEP = "\n\n" + DOC_BODY_MARKER + "\n\n"
+
+
+def _rendered(text: str, join: str = "\n\n") -> str:
+    """Drop the read-only/editable boundary line (T-3201).
+
+    A boot document stores a read-only head, one marker line, then the
+    owner-editable body. The marker is for the person editing it; what a READER
+    is served is the two halves joined. Stated here rather than imported so the
+    suite stays an independent reimplementation of the wire.
+    """
+    head, sep, body = text.partition(DOC_BODY_SEP)
+    return head + join + body if sep else text
+
+
+def _expected_context(client, owner_token, role_key: str, user_text: str) -> str:
     role = client.get(f"/api/roles/{role_key}", headers=_auth(owner_token)).json()
     lessons = client.get(
-        f"/api/lessons/{role_key}/{task_type}", headers=_auth(owner_token)
+        f"/api/lessons/{role_key}", headers=_auth(owner_token)
     ).json()
     insight = client.get(
         f"/api/insight/{role_key}", headers=_auth(owner_token)
@@ -261,13 +277,13 @@ def _expected_context(client, owner_token, role_key: str, task_type: str, user_t
     # one of them; if they disagree about FORMATTING, this file wins by design.
     #
     # Order (must match §2.2): 系統互動 → 使用者自訂 → 角色定義 → 判準 →
-    # 學習筆記 → 啟動程序.
+    # 學習筆記 → 啟動步驟.
     #
     # 使用者自訂 and 判準 are each dropped entirely when they fold blank. The
     # gate is the FOLDED TEXT — deliberately not is_default and not has_seed,
     # which answer different questions and would each drop or emit the section
     # for the wrong roles.
-    parts = [_seed("system_interaction.md").strip()]
+    parts = [_rendered(_seed("system_interaction.md")).strip()]
     if user_text.strip():
         parts.append(f"# 使用者自訂（Owner Additions）\n\n{user_text.strip()}")
     parts.append(
@@ -276,17 +292,24 @@ def _expected_context(client, owner_token, role_key: str, task_type: str, user_t
     if insight["text"].strip():
         parts.append(f"# Insight ({role_key})\n\n{insight['text'].strip()}")
     parts += [
-        f"# Lessons ({role_key} / {task_type})\n\n{lessons['text'].strip()}",
-        _seed("boot_sequence.md").strip(),
+        f"# Lessons ({role_key})\n\n{lessons['text'].strip()}",
+        _rendered(_seed("boot_sequence.md")).strip(),
     ]
     return "\n\n".join(parts) + "\n"
 
 
-def _bootstrap_context(client, owner_token) -> tuple[str, str, str]:
+def _bootstrap_context(client, owner_token) -> tuple[str, str]:
     r = client.post("/api/bootstrap", json={}, headers=_auth(owner_token))
     assert r.status_code == 200, r.text
     data = r.json()
-    return data["context"], data["role"], data["task_type"]
+    # T-2 removed task_type from BootstrapDTO along with the lessons axis it
+    # named. Asserted rather than merely not-read: an echo that came back would
+    # mean the field survived somewhere.
+    assert "task_type" not in data, (
+        "the bootstrap receipt still carries task_type — T-2 removed the lessons "
+        f"classification axis this field named: {sorted(data)}"
+    )
+    return data["context"], data["role"]
 
 
 def test_boot_fold_bytes_with_owner_additions(client, owner_token) -> None:
@@ -298,14 +321,14 @@ def test_boot_fold_bytes_with_owner_additions(client, owner_token) -> None:
         "/api/global-context", json={"text": marker}, headers=_auth(owner_token)
     )
     assert r.status_code == 200, r.text
-    context, role_key, task_type = _bootstrap_context(client, owner_token)
-    expected = _expected_context(client, owner_token, role_key, task_type, marker)
+    context, role_key = _bootstrap_context(client, owner_token)
+    expected = _expected_context(client, owner_token, role_key, marker)
     assert context == expected, (
         "boot context does not reproduce the §2.2 assembly byte-for-byte "
         f"(len served={len(context)} vs expected={len(expected)})"
     )
     # The recency-authoritative tail: the boot-sequence seed is LAST.
-    assert context.rstrip("\n").endswith(_seed("boot_sequence.md").strip())
+    assert context.rstrip("\n").endswith(_rendered(_seed("boot_sequence.md")).strip())
     assert context.endswith("\n") and not context.endswith("\n\n")
 
 
@@ -314,29 +337,29 @@ def test_boot_fold_bytes_blank_user_block_skipped(client, owner_token) -> None:
     header — and the fold is byte-identical to the form without it."""
     r = client.post("/api/global-context/reset", headers=_auth(owner_token))
     assert r.status_code == 200, r.text
-    context, role_key, task_type = _bootstrap_context(client, owner_token)
+    context, role_key = _bootstrap_context(client, owner_token)
     assert "# 使用者自訂（Owner Additions）" not in context, (
         "blank owner text must skip the user-custom header entirely"
     )
-    expected = _expected_context(client, owner_token, role_key, task_type, "")
+    expected = _expected_context(client, owner_token, role_key, "")
     assert context == expected
 
 
 def test_boot_fold_lessons_overlay_wins(client, owner_token) -> None:
     """§2.1: the lessons fold is overlay-wins — an API-written lessons doc for
-    (role, default task_type) must appear verbatim inside the boot context."""
-    _, role_key, task_type = _bootstrap_context(client, owner_token)
+    the role must appear verbatim inside the boot context."""
+    _, role_key = _bootstrap_context(client, owner_token)
     marker = f"conf lessons overlay {uuid.uuid4().hex[:8]}"
     r = client.post(
-        f"/api/lessons/{role_key}/{task_type}",
+        f"/api/lessons/{role_key}",
         json={"text": marker},
         headers=_auth(owner_token),
     )
     assert r.status_code == 200, r.text
-    context, role_key2, task_type2 = _bootstrap_context(client, owner_token)
-    assert (role_key2, task_type2) == (role_key, task_type)
-    assert f"# Lessons ({role_key} / {task_type})\n\n{marker}" in context
-    expected = _expected_context(client, owner_token, role_key, task_type, "")
+    context, role_key2 = _bootstrap_context(client, owner_token)
+    assert role_key2 == role_key
+    assert f"# Lessons ({role_key})\n\n{marker}" in context
+    expected = _expected_context(client, owner_token, role_key, "")
     assert context == expected
 
 
@@ -548,7 +571,7 @@ DEGRADED: dict[str, str] = {
         "has no black-box counterexample to fire."
     ),
     "lifecycle §4.4 reconcile timers/backoff/circuit": (
-        "start_timeout 90s / stop_grace 120s / backoff-circuit windows are "
+        "start_timeout (WakingTTLSecs) / stop_grace 120s / backoff-circuit windows are "
         "minutes-scale; timers are injectable only white-box. The decision "
         "surface is covered at its observable edges instead (event-driven "
         "START dispatch + target-reachability gate in test_sse.py; "

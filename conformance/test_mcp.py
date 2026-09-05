@@ -289,9 +289,12 @@ def test_call_get_route_query_split(client, owner_token, agent_a) -> None:
         client, owner_token, "get_chat", {"with": agent_a.member_id, "limit": None}
     )
     assert result["isError"] is False, result
-    messages = json.loads(_text(result))
-    assert isinstance(messages, list), messages
-    assert any(m.get("body") == marker for m in messages), (
+    page = json.loads(_text(result))
+    # get_chat answers the T-48 envelope, so the tool result is an OBJECT: the
+    # MCP loopback hands the route's body through untouched, and asserting the
+    # shape here is what proves it did not quietly reshape it.
+    assert isinstance(page, dict) and isinstance(page.get("messages"), list), page
+    assert any(m.get("body") == marker for m in page["messages"]), (
         "query param `with` was not honoured by the argument split"
     )
 
@@ -447,13 +450,11 @@ T6020_OPENED_TOOLS = {
     "install_warden_on_server_host": "POST /api/machines/{machine_id}/bootstrap-here",
     "uninstall_warden_on_server_host": "POST /api/machines/{machine_id}/teardown-here",
     "upgrade_warden": "POST /api/machines/{member_id}/upgrade",
-    "terminate_task": "POST /api/tasks/{task_id}/terminate",
     "post_task_message": "POST /api/tasks/{task_id}/message",
     "get_outsource_worker_boot_context": "GET /api/outsource-workers/{id}/boot-context",
     "refocus_outsource_worker": "POST /api/outsource-workers/{id}/refocus",
     "stop_outsource_worker": "POST /api/outsource-workers/{id}/stop",
     "restart_outsource_worker": "POST /api/outsource-workers/{id}/restart",
-    "set_outsource_worker_model": "POST /api/outsource-workers/{id}/model",
     "delete_task_manual": "DELETE /api/task-manuals/{type_key}",
 }
 
@@ -472,7 +473,7 @@ T6020_OPENED_TOOLS = {
 # twin is `t6020Revised` in
 # server/ocserverd/routes_t6020_governance_test.go.
 #
-# ADDING A SECOND ROW NEEDS ITS OWN OWNER RULING, AND THE len(...) == 1 GUARD
+# ADDING A ROW NEEDS ITS OWN OWNER RULING, AND THE len(...) == 3 GUARD
 # BELOW MUST BE EDITED IN THE SAME COMMIT: this table exempts a row from the
 # admin-floor assertion, so growing it has to be a deliberate, visible act rather
 # than a side effect of some other change.
@@ -484,6 +485,22 @@ T6020_REVISED_TOOLS = {
     # rows were NOT revised: closing someone else's ask with an answer is still
     # governance.
     "expire_reply_card": ("POST /api/reply-cards/{card_id}/expire", "agent"),
+    # owner 2026-08-20, card rc-b896e3f641e7 (T-b56e), option 0: 「開給執行者
+    # （可終止自己名下的票）」 — again a per-task fact no principal class can
+    # express ("is this MY task"). The floor dropped to `agent` and the decision
+    # moved in-handler (callerMayTerminateTask), which also carries the one
+    # subtraction the ladder cannot state: an OUTSOURCE worker is refused even on
+    # its own task, because a 正職 and a contractor both rank principalAgent.
+    "terminate_task": ("POST /api/tasks/{task_id}/terminate", "agent"),
+    # owner 2026-08-21, card rc-376a41719e62 (T-ed79):「如果原本正職可以改 model
+    # 外包就應該可以改，如果只有 mira 可以改，那就不變，正職跟外包一樣，mira 是
+    # 特殊的意義，他代替 owner 執行高權限動作。」— the floor is decided by the
+    # STAFF face of the same act (PATCH /api/members/{member_id}, machine floor
+    # since T-5336), not by how the verb looks on its own. It dropped two rungs,
+    # to `machine`, and it is the ONLY one of the four worker lifecycle rows the
+    # ruling moved.
+    "set_outsource_worker_model": (
+        "POST /api/outsource-workers/{id}/model", "machine"),
 }
 
 T6020_WITHHELD_ROUTES = (
@@ -503,7 +520,7 @@ def test_t6020_opened_routes_are_admin_floor_tools(client, owner_token) -> None:
     unreachability, not a cosmetic gap)."""
     listed = {t["name"] for t in _result(_rpc(client, owner_token, "tools/list"))["tools"]}
     by_op = {f"{r['method']} {r['path']}": r for r in MANIFEST}
-    # 18 still at the admin floor + 1 later revised = the 19 the ruling opened.
+    # 16 still at the admin floor + 3 later revised = the 19 the ruling opened.
     # Split so a revision MOVES a row (visible in the diff) instead of deleting one.
     assert len(T6020_OPENED_TOOLS) + len(T6020_REVISED_TOOLS) == 19, (
         "the 2026-07-26 ruling opened 19 routes; these tables account for "
@@ -534,9 +551,9 @@ def test_t6020_revised_routes_sit_at_their_revised_floor(client, owner_token) ->
     tool. This is the only place in this file that proves the floor actually
     moved — the handler-level Go tests drive the handler function directly and
     never pass through the RBAC choke, so their green says nothing about it."""
-    assert len(T6020_REVISED_TOOLS) == 1, (
-        f"T6020_REVISED_TOOLS lists {len(T6020_REVISED_TOOLS)} rows, expected 1 — a "
-        "second revision needs its OWN owner ruling, and this guard must be edited "
+    assert len(T6020_REVISED_TOOLS) == 3, (
+        f"T6020_REVISED_TOOLS lists {len(T6020_REVISED_TOOLS)} rows, expected 3 — a "
+        "further revision needs its OWN owner ruling, and this guard must be edited "
         "in the same commit"
     )
     listed = {t["name"] for t in _result(_rpc(client, owner_token, "tools/list"))["tools"]}
@@ -651,3 +668,79 @@ def test_t6020_opened_tool_is_refused_for_a_plain_agent(client, agent_a) -> None
         f"a plain agent must NOT reach get_settings: {r.text}"
     )
     assert '"forbidden"' in result["content"][0]["text"], result
+
+
+# ── the catalog descriptor ↔ live wire seam (T-40) ───────────────────────────
+#
+# 🔴 THIS IS THE UNGUARDED JOINT. The MCP tool schema an agent is handed comes
+# from x-mcp.legacy.descriptor — a hand-written JSON STRING in spec/openapi.json
+# that bin/gen-mcp-catalog copies through verbatim, checking only that its name
+# and description match the operation's. It is cross-checked against
+# components/schemas by NOTHING. The server, meanwhile, decodes tool arguments
+# with DisallowUnknownFields.
+#
+# So a schema change that misses the descriptor is silent at build time and
+# fatal at call time: every real MCP call carrying the new field is a 422, and
+# every agent that trusts the advertised schema is wrong. These two tests close
+# that joint the only way it can be closed from outside — by taking the LIVE
+# tools/list schema and actually CALLING the tool with what it advertises.
+
+
+def _tool_schema(client, token, name: str) -> dict[str, Any]:
+    tools = _result(_rpc(client, token, "tools/list"))["tools"]
+    for tool in tools:
+        if tool["name"] == name:
+            return tool["inputSchema"]
+    raise AssertionError(f"{name} is absent from tools/list")
+
+
+def test_create_reply_card_descriptor_matches_what_the_server_accepts(
+    client, owner_token, agent_a
+) -> None:
+    schema = _tool_schema(client, agent_a.token, "create_reply_card")
+    props = schema["properties"]
+
+    # What the descriptor ADVERTISES.
+    assert props["options"]["items"] == {"$ref": "#/$defs/ReplyCardOptionDTO"}, props
+    option_def = schema["$defs"]["ReplyCardOptionDTO"]
+    assert set(option_def["properties"]) == {"text", "ai_pick"}, option_def
+    assert option_def["required"] == ["text"], option_def
+    assert props["select_mode"]["enum"] == ["single", "multi"], props
+    assert props["select_mode"]["default"] == "single", props
+
+    # ...and that the server ACCEPTS exactly that, field for field. The server
+    # rejects unknown fields, so this call is what proves the two agree.
+    result = _call(client, agent_a.token, "create_reply_card", {
+        "kind": "decision",
+        "summary": "descriptor parity",
+        "options": [{"text": "甲", "ai_pick": True}, {"text": "乙", "ai_pick": False}],
+        "select_mode": "multi",
+        "linked_task": None,
+    })
+    assert result.get("isError") is not True, result
+    card = result["structuredContent"]
+    assert card["select_mode"] == "multi", card
+    assert card["options"] == [{"text": "甲", "ai_pick": True},
+                               {"text": "乙", "ai_pick": False}], card
+
+
+def test_answer_reply_card_descriptor_matches_what_the_server_accepts(
+    client, owner_token, agent_a
+) -> None:
+    schema = _tool_schema(client, owner_token, "answer_reply_card")
+    idxs = schema["properties"]["option_idxs"]
+    assert idxs["anyOf"] == [{"items": {"type": "integer"}, "type": "array"},
+                             {"type": "null"}], idxs
+    assert "option_idx" not in schema["properties"], schema["properties"]
+
+    opened = _call(client, agent_a.token, "create_reply_card", {
+        "kind": "decision", "summary": "descriptor parity: answer",
+        "options": [{"text": "甲"}, {"text": "乙"}, {"text": "丙"}],
+        "select_mode": "multi", "linked_task": None,
+    })["structuredContent"]
+
+    answered = _call(client, owner_token, "answer_reply_card", {
+        "card_id": opened["id"], "option_idxs": [2, 0],
+    })
+    assert answered.get("isError") is not True, answered
+    assert answered["structuredContent"]["answer"]["option_idxs"] == [0, 2], answered

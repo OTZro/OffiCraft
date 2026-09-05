@@ -11,10 +11,9 @@ package main
 //     it does not auto-advance a task FORWARD (in_progress → done is the
 //     agent's alone). This is the surviving half of the old H4 ruling;
 //   * waiting_owner is a card-lifecycle HOLD, bracketed entirely by the card:
-//     it is ENTERED only by opening a card — open_gate (which IS an M2 reply
-//     card, same machinery plus the task/step linkage) or a plain
-//     create_reply_card auto-bound to the current step (inferCardTaskStep +
-//     armStepWithCard) — and LEFT only when that card is answered, where the
+//     it is ENTERED only by opening a card — create_reply_card carrying an
+//     explicit linked_task {task_id, step_id}, which arms that step
+//     (armStepWithCard) — and LEFT only when that card is answered, where the
 //     server itself restores the task/step to in_progress
 //     (releaseCardHold). The agent reports NEITHER side: a
 //     report INTO waiting_owner is a 400 (not its lever), a report OUT of it a
@@ -29,6 +28,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -266,12 +266,71 @@ func (s *apiServer) taskDTOOf(t Task) (taskDTO, error) {
 		return taskDTO{}, err
 	}
 	dto := newTaskDTO(t, steps, deps, s.replyCardStatusesForSteps(steps))
-	artifacts, err := s.taskArtifactDTOs(t.ID)
+	// INDEX rows only (T-66, owner c-cd063427fb2f). The full set — url,
+	// filename, mime, kind, is_image, attachment_id, created_by, created_ts —
+	// is served by taskArtifactDTOs through GET /api/tasks/{task_id}/artifacts.
+	artifacts, err := s.taskArtifactRefDTOs(t.ID)
 	if err != nil {
 		return taskDTO{}, err
 	}
 	dto.Artifacts = artifacts
+	blocking, err := s.blockingTasksOf(t.ID)
+	if err != nil {
+		return taskDTO{}, err
+	}
+	dto.Blocking = blocking
 	return dto, nil
+}
+
+// blockingTasksOf resolves the REVERSE dependency edge of one task (T-91): the
+// non-terminal tasks that name it in their own blocked_by, as the same display
+// refs the forward direction serves. Never nil.
+//
+// 🔴 WHY THIS IS A READ AND NOT A NOTIFICATION. The owner ruled the blocker's
+// side is written on the TICKET and nothing is sent (deliberately unlike the
+// close notice, which he ruled the other way in the same sitting). So this is
+// the entire delivery mechanism for "N tickets are waiting on yours", together
+// with its ids-only twin on the wake snapshot. If you are here because you
+// cannot find the message, there is none by design.
+//
+// Terminal waiters are filtered out HERE rather than in SQL so the one query
+// stays the same query releaseDependentsOnClose already uses — a second,
+// nearly-identical statement is how the two answers drift apart.
+func (s *apiServer) blockingTasksOf(taskID string) ([]taskDepRefDTO, error) {
+	waiters, err := s.dal.ListTasksBlockedBy(taskID)
+	if err != nil {
+		return nil, err
+	}
+	out := []taskDepRefDTO{}
+	for _, w := range waiters {
+		if TaskIsTerminal(w.Status) {
+			continue
+		}
+		out = append(out, taskDepRefDTO{
+			ID: w.ID, TaskNo: TaskNo(w.ID), Title: w.Title, Status: w.Status,
+		})
+	}
+	return out, nil
+}
+
+// taskArtifactRefDTOs lists one task's artifacts as INDEX rows (id + label) —
+// what the shared task projection serves since T-66. Never nil.
+//
+// 🔴 IT DOES NOT TOUCH chat_attachment AT ALL. taskArtifactDTOs below runs one
+// GetChatAttachment per file/image row; this runs exactly one query no matter
+// how many artifacts a task has pinned, because the index carries no blob
+// metadata to resolve. That is why the slimming is a latency change on the task
+// read and not only a payload one.
+func (s *apiServer) taskArtifactRefDTOs(taskID string) ([]taskArtifactRefDTO, error) {
+	arts, err := s.dal.ListTaskArtifacts(taskID)
+	if err != nil {
+		return nil, err
+	}
+	out := []taskArtifactRefDTO{}
+	for _, a := range arts {
+		out = append(out, newTaskArtifactRefDTO(a))
+	}
+	return out, nil
 }
 
 // taskArtifactDTOs lists one task's artifacts and projects them onto the wire,
@@ -284,6 +343,10 @@ func (s *apiServer) taskArtifactDTOs(taskID string) ([]taskArtifactDTO, error) {
 	if err != nil {
 		return nil, err
 	}
+	retained, err := s.dal.TaskArtifactHistoryCounts(taskID)
+	if err != nil {
+		return nil, err
+	}
 	out := []taskArtifactDTO{}
 	for _, a := range arts {
 		var att *ChatAttachment
@@ -293,7 +356,7 @@ func (s *apiServer) taskArtifactDTOs(taskID string) ([]taskArtifactDTO, error) {
 				return nil, err
 			}
 		}
-		out = append(out, newTaskArtifactDTO(a, att))
+		out = append(out, newTaskArtifactDTO(a, att, retained[a.ID]))
 	}
 	return out, nil
 }
@@ -390,6 +453,19 @@ func (s *apiServer) writeTaskStepStatusReceipt(w http.ResponseWriter, t Task, st
 	})
 }
 
+// executorGuardRefusal is the sentence every executor guard writes when it turns
+// a non-executor away, named because the TESTS have to match on it. The error
+// envelope's `code` is derived from the HTTP status (errorCodeForStatus), so
+// there is no per-reason code on the wire: a test that accepts any 403 cannot
+// tell this guard from the second rule several of these handlers apply one step
+// later, and that is exactly how a widened guard passed for a shut door once.
+//
+// So this string is a CONTRACT between the guards and the range tests, not a
+// message anyone is free to reword in place. Rewording it is a deliberate act
+// that touches exactly one line here; forking a new literal at a call site, or
+// pinning the literal again in a test, silently takes a door back out of range.
+const executorGuardRefusal = "caller is not the task's executor"
+
 // callerMayDriveTask enforces the executor guard on the agent report routes
 // (plan / status / step status / gate / deps): the caller must BE the task's
 // executor — the caller-identity convention (root CLAUDE.md §14: a non-admin
@@ -400,6 +476,79 @@ func (s *apiServer) callerMayDriveTask(r *http.Request, t Task) bool {
 		return true
 	}
 	return currentActor(r) == t.ExecutorID
+}
+
+// callerMayEditTaskText is callerMayDriveTask widened by exactly one structural
+// fact: while a task has NO executor at all (executor_id == ""), its CREATOR
+// counts as the executor — but only at the text-only doors (T-52).
+//
+// 🔴 WHY. create_task opens a 發包票 with executor_id empty and leaves it empty
+// until the scheduler binds a worker to it. Every task-driving write is gated on
+// "be the executor, or be admin/owner", and the creator earns no standing from
+// having created the task — so for the whole of that window NOBODY who is
+// awake can correct the ticket, and the wording the contractor reads on arrival
+// is whatever was typed the first time. The window has no upper bound: the
+// assign loop runs without a transaction and only logs when PutTask fails, so a
+// task can sit unbound forever.
+//
+// 🔴 WHY IT CLOSES ON executor_id AND NOT ON ANYTHING ELSE. The moment a worker
+// is bound, the creator is back to a flat 403 — including when the creator is
+// the person who opened the ticket. Anything narrower that happens to be true
+// right now ("this is an outsource ticket", "no worker exists yet") would leave
+// the door open while somebody is already working to the text, which is the
+// failure this predicate exists to avoid: an unbound task has no work in flight
+// to be moved out from under.
+//
+// 🔴 WHY IT IS NOT callerMayDriveTask ITSELF. That predicate guards plan, step
+// status, deps, priority/freeze, reassign, claim, terminate, mark_duplicate,
+// closeout and reply-card linkage as well. Owner ruled (2026-09-02, card
+// rc-1bb6e01c4bf7) 「只開『改文字類』那幾道（改描述／標題／產物增刪／步驟筆記），
+// 不含凍結、撤票、改派」, so the widening is a SECOND predicate applied at the
+// named doors only. Calling this from any other handler reverses that ruling.
+//
+// A row with no CreatorID (pre-column rows) admits nobody: the empty string is
+// not an actor.
+func (s *apiServer) callerMayEditTaskText(r *http.Request, t Task) bool {
+	if s.callerMayDriveTask(r, t) {
+		return true
+	}
+	if t.ExecutorID != "" || t.CreatorID == "" {
+		return false
+	}
+	return currentActor(r) == t.CreatorID
+}
+
+// callerMayWriteHandover is callerMayDriveTask PLUS one narrow, time-boxed
+// exception (T-91): while a task sits under the `reassigning` lock, the
+// PREDECESSOR stamped on it may still write the handover record.
+//
+// 🔴 WHY IT IS NEEDED. The reassign re-points executor_id in the same handler
+// that posts the predecessor its instructions — 「請停止推進，先把交接資訊寫到這
+// 張任務上：目前進度、進行中的事項、有哪些雷要注意」 — so by the time that
+// message exists, callerMayDriveTask already answers false for the person it is
+// addressed to. The system asked for a document and took away the pen in the
+// same transaction; measured, every step-note write from the predecessor after
+// a reassign is a 403.
+//
+// 🔴 WHY IT IS THIS NARROW, and this is an owner ruling rather than caution.
+// He was offered the wide version — both sides fully authorised for the
+// duration of the handover — and REFUSED it, choosing to open the 「寫交接」 cell
+// alone. So 全域脈絡 §3.4 (交接完成前，不得讓兩個執行者同時推進同一份工作) is
+// unchanged and every other door callerMayDriveTask guards is unchanged: plan,
+// step STATUS, deps, priority, reassign, terminate, artifacts, closeout and the
+// task's own text all still 403 for the predecessor. Widening this predicate to
+// another route is reversing that ruling, not extending it.
+//
+// The window closes by itself: claim_task clears the lock, and with it this
+// exception. Nothing here is time-based and nothing needs a reaper.
+func (s *apiServer) callerMayWriteHandover(r *http.Request, t Task) bool {
+	if s.callerMayDriveTask(r, t) {
+		return true
+	}
+	if t.Lock != TaskLockReassigning || t.ReassignedFrom == "" {
+		return false
+	}
+	return currentActor(r) == t.ReassignedFrom
 }
 
 // taskCaller captures the create/reassign caller's identity facets for the
@@ -529,22 +678,76 @@ func (s *apiServer) closeTask(t *Task, status string, now float64, trigger strin
 	// SSE connection to fold this run's learnings back into the type's manual.
 	// Typed tasks only (ad-hoc has no manual); done AND terminated both nudge.
 	// Best-effort — a fan failure must never fail the close it follows.
-	// The nudge sentence carries the manual's DISPLAY label (best-effort
-	// lookup — a deleted manual honestly falls back to the raw key inside
-	// decideTaskCloseNudge); the MCP addressing string in the same sentence
-	// stays the raw type_key (T-fa76).
-	manualLabel := ""
-	if t.TypeKey != "" {
-		if m, err := s.dal.GetTaskManual(t.TypeKey); err == nil && m != nil {
-			manualLabel = manualDisplayLabel(m.DisplayName, t.TypeKey)
-		}
-	}
-	if sig := decideTaskCloseNudge(*t, manualLabel); sig != nil {
-		if frame, err := directedFrameText(taskCloseTopic, sig); err == nil {
-			s.hub.PushDirected(t.ExecutorID, frame)
+	// T-7870 — THE WORDS COME FROM THE DOCUMENT, and this is the only place they
+	// come from. 〈任務收尾〉 was the last of the ten lifecycle documents whose
+	// text an owner could edit, save, and version without any agent ever
+	// receiving the edit: the sentence was a Go literal in decideTaskCloseNudge,
+	// so the document and the delivered bytes drifted from the day they split.
+	//
+	// 🔴 A FAULT SENDS NOTHING RATHER THAN A SUBSTITUTE. taskNoticeText answers
+	// "" on any fault (missing seed, a declared name with no value, an emptied
+	// overlay), and every other send site treats that as "omit the notice" —
+	// keeping a Go fallback here would restore the second source of truth this
+	// ticket removes, and would hide an unrenderable document behind text that
+	// looks right. The cost is named, not discovered later: an unrenderable
+	// 〈任務收尾〉 means the executor gets NO close-out reminder, on the same
+	// terms the other nine documents already carry.
+	//
+	// 🔴 T-91 — IT IS A DURABLE CHAT ROW NOW, NOT AN SSE PUSH. The old delivery
+	// was hub.PushDirected, and decideTaskCloseNudge's own comment named the
+	// cost out loud: "an offline executor simply misses the reminder". So the
+	// single notice about a task's DEATH was the one lifecycle event with no
+	// durable copy — and the executor of a task somebody else terminated is,
+	// very often, an agent that is not connected. It now takes the same road
+	// the dependency-release notice takes (postTaskChat): a chat row that
+	// survives the recipient being offline and that its next wake snapshot
+	// folds in.
+	//
+	// 🔴 WHY NOT "just put it on the ticket", which is what the owner chose for
+	// the blocking side of this same ticket: 開機盤點 lists only tasks that have
+	// NOT ended, so a closed task is absent from that list by construction.
+	// There is no row there to write on.
+	if sig := decideTaskCloseNudge(*t); sig != nil {
+		sig.ClosedBy = trigger
+		sig.Reason = s.taskNoticeText(docKindTaskCloseout, map[string]string{
+			"task_no":   sig.TaskNo,
+			"closed_by": sig.ClosedBy,
+		})
+		if sig.Reason != "" {
+			s.postTaskChat(*t, wireSystemSender, sig.To, sig.Reason, trigger,
+				map[string]any{"closed_by": sig.ClosedBy})
 		}
 	}
 	return nil
+}
+
+// nameWithIDSlot composes the ONE slot that has to carry TWO facts: 「銀月（mira）」.
+//
+// 🔴 ONE VARIABLE, TWO FACTS (T-6f44, owner's decision 1, verbatim: 「名字跟 id
+// 不能都給嗎」). Both 轉派 documents declare a single name for the other party,
+// and both need both halves: the body tells the reader to post_chat that party,
+// which needs the id, while a sentence carrying only an id reads as a serial
+// number. The number of variables is not the number of facts — a slot is a
+// string this code composes.
+//
+// 🔴 ONE CALLER NOW, AND THAT IS THE POINT OF THE OTHER HALF OF THIS TICKET.
+// It used to serve both 轉派 arms; the predecessor notice stopped naming the
+// successor at all (owner: 「讓他自己去查」「不管是不是 outsource」), so only
+// 〈給接手人〉 still composes a party — and only because its body tells the reader
+// to post_chat that party. Where the body does not dial anyone, the name is not
+// carried.
+//
+// When the label already IS the id (a party with no name) the parenthesis would
+// repeat it, so it is omitted — 「mira（mira）」 reads like a bug to the agent
+// that receives it.
+func nameWithIDSlot(label, id string) string {
+	if label == "" {
+		return id
+	}
+	if label == id {
+		return label
+	}
+	return label + "（" + id + "）"
 }
 
 // deriveAndPersistTask is the DERIVATION SEAM (T-9ca5 "任務狀態全推導"): the single
@@ -677,33 +880,26 @@ const resumeTasksN = 5
 // ListReplyCards full-table scan (id → card); it is passed IN rather than
 // re-queried here, so answered_card_steps costs this path no extra query. A nil
 // map is legal and simply yields no answered_card_steps rows.
-//
-// The THIRD return is the near-cap step-note rows (T-6bd2). It rides this
-// function for the same reason the answered-card pointer does: the step rows
-// are ALREADY loaded here to compute the current node and detail_chars, so a
-// separate collector would re-run ListTaskSteps once per open task on every
-// wake to re-read bytes this loop is already holding. Only steps close to the
-// ceiling produce a row; see docCapacityNear.
-func (s *apiServer) resumeTasksFor(actor string, cards map[string]ReplyCard) ([]resumeTaskDTO, int, []docCapacityRow, error) {
+func (s *apiServer) resumeTasksFor(actor string, cards map[string]ReplyCard) ([]resumeTaskDTO, int, error) {
 	out := []resumeTaskDTO{}
-	stepNotes := []docCapacityRow{}
 	if actor == "" {
-		return out, 0, stepNotes, nil
+		return out, 0, nil
 	}
 	tasks, err := s.dal.ListOpenTasksByExecutor(actor, resumeTasksN)
 	if err != nil {
-		return nil, 0, nil, err
+		return nil, 0, err
 	}
 	total, err := s.dal.CountOpenTasksByExecutor(actor)
 	if err != nil {
-		return nil, 0, nil, err
+		return nil, 0, err
 	}
 	for _, t := range tasks {
 		steps, err := s.dal.ListTaskSteps(t.ID)
 		if err != nil {
-			return nil, 0, nil, err
+			return nil, 0, err
 		}
-		currentID, currentName := "", ""
+		// current step: the shared rule (domain.CurrentStep), not a local copy.
+		currentID, currentName := CurrentStep(steps)
 		detailChars := 0
 		answered := []resumeAnsweredCardStepDTO{}
 		for _, st := range steps {
@@ -722,22 +918,20 @@ func (s *apiServer) resumeTasksFor(actor string, cards map[string]ReplyCard) ([]
 					})
 				}
 			}
-			// current = the first non-TERMINAL step: a superseded row is
-			// frozen replan history, never the working node (T-1aea).
-			if currentID == "" && !StepIsTerminal(st.Status) {
-				currentID, currentName = st.ID, st.Name
-			}
 			detailChars += len([]rune(st.Name)) + len([]rune(st.DoD))
-			// A TERMINAL step's note is finished writing: warning about the room
-			// left in a note nobody will add to again is the noise property 1 of
-			// doc_capacity.go forbids.
-			if !StepIsTerminal(st.Status) {
-				if row := stepNoteCapacityRow(TaskNo(t.ID), st.Name, st.Note); row != nil {
-					stepNotes = append(stepNotes, *row)
-				}
-			}
 		}
 		done, stepTotal := TaskProgress(steps)
+		// T-91: the reverse dependency edge, ids only. One extra query per row,
+		// and the row count is capped at resumeTasksN — the same shape as the
+		// per-task ListTaskSteps read directly above it.
+		blockingRefs, err := s.blockingTasksOf(t.ID)
+		if err != nil {
+			return nil, 0, err
+		}
+		blocking := []string{}
+		for _, b := range blockingRefs {
+			blocking = append(blocking, b.ID)
+		}
 		out = append(out, resumeTaskDTO{
 			ID:              t.ID,
 			TaskNo:          TaskNo(t.ID),
@@ -752,11 +946,18 @@ func (s *apiServer) resumeTasksFor(actor string, cards map[string]ReplyCard) ([]
 			ProgressTotal:   stepTotal,
 			DetailChars:     detailChars,
 			UpdatedTS:       t.UpdatedTS,
+			// The handover hold, on the snapshot an agent reads at 開機盤點
+			// (T-91) — see resumeTaskDTO for why the chat notice alone was not
+			// a path anybody could rely on.
+			Lock:               t.Lock,
+			ReassignedFrom:     t.ReassignedFrom,
+			ReassignedFromKind: t.ReassignedFromKind,
+			Blocking:           blocking,
 
 			AnsweredCardSteps: answered,
 		})
 	}
-	return out, total, stepNotes, nil
+	return out, total, nil
 }
 
 // ── C.1 the read face ────────────────────────────────────────────────────────
@@ -821,6 +1022,14 @@ func (s *apiServer) HandleListTasksApiTasksGet(w http.ResponseWriter, r *http.Re
 		internalError(w, err)
 		return
 	}
+	// The current-step pointer (id + name only) — a second grouped query, NOT a
+	// per-task ListTaskSteps: this endpoint is uncapped, so the step read has to
+	// cost one statement for the whole population. dod text stays out.
+	currentByTask, err := s.dal.AllTaskCurrentStep()
+	if err != nil {
+		internalError(w, err)
+		return
+	}
 	depsByTask, err := s.dal.AllTaskDeps()
 	if err != nil {
 		internalError(w, err)
@@ -864,7 +1073,8 @@ func (s *apiServer) HandleListTasksApiTasksGet(w http.ResponseWriter, r *http.Re
 		}
 		p := progressByTask[t.ID]
 		out = append(out, newTaskListItemDTO(
-			t, depsByTask[t.ID], p.Done, p.Total, artifactCountByTask[t.ID], byID))
+			t, depsByTask[t.ID], p.Done, p.Total, artifactCountByTask[t.ID], byID,
+			currentByTask[t.ID]))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -957,12 +1167,65 @@ func (s *apiServer) HandleGetTaskApiTasksTaskIdGet(w http.ResponseWriter, r *htt
 
 // ── C.2 owner actions ────────────────────────────────────────────────────────
 
-// POST /api/tasks/{task_id}/terminate — the ONLY owner-side status change
-// (SPEC §3.7). Non-terminal only; the FE owns the double-confirm.
+// callerMayTerminateTask is the terminate gate. It is callerMayDriveTask plus
+// ONE subtraction, and the subtraction is the whole reason it is a separate
+// function: an OUTSOURCE worker may not terminate its own task.
+//
+// 🔴 WHY THE SUBTRACTION. Everywhere else "the task's own executor" is a safe
+// set to admit, because the executor is the one answering for the work. An
+// outsource worker is different in kind: the task IS the reason that worker
+// exists, and it leaves when the task closes. Letting it terminate that task is
+// letting it end itself, with no second person in the loop — and unlike a 正職,
+// there is no next session of it to notice. The owner's ruling (2026-08-20,
+// card rc-b896e3f641e7 option 0) says "執行者", and it was asked about a member
+// running its own tickets; it does not reach the contractor lifecycle. Narrowed
+// deliberately, not by oversight — widening it later needs its own ruling.
+//
+// ⚠️ It is NOT "outsource is a lower principal": an outsource worker and a 正職
+// both rank principalAgent, which is exactly why the ladder cannot express this
+// and Member.Kind has to be read (the same discriminator taskCaller uses).
+func (s *apiServer) callerMayTerminateTask(r *http.Request, t Task) (bool, string) {
+	c, err := s.taskCallerOf(r)
+	if err != nil {
+		return false, executorGuardRefusal
+	}
+	// Owner and admin scope decide FIRST, because owner scope carries no roster
+	// row at all — the nil check below is about an agent, not about it.
+	if c.isAdminCapable() {
+		return true, ""
+	}
+	// 🔴 NO ROW, NO PASS — and this is NOT the err branch above. DAL.GetMember
+	// answers (nil, nil) for "no such member": a missing row is not an error.
+	// So without this line an agent-scope caller whose row is gone reaches
+	// isOutsource() with member == nil, which answers false, and a worker whose
+	// roster row was deleted terminates its own task. An independent review
+	// measured exactly that: 200 terminated. Kind unknown must deny.
+	if c.member == nil {
+		return false, executorGuardRefusal
+	}
+	if c.actorID != t.ExecutorID {
+		return false, executorGuardRefusal
+	}
+	if c.isOutsource() {
+		return false, "an outsource worker may not terminate its own task; ask the owner or an admin agent"
+	}
+	return true, ""
+}
+
+// POST /api/tasks/{task_id}/terminate — the only status change that does not go
+// through the task's own step reports (SPEC §3.7). Non-terminal only; the FE
+// owns the double-confirm.
+//
+// Guard order: 404 → 403 authz → 409 terminal (deny before state probing), the
+// same order HandleSetTaskPriority uses.
 func (s *apiServer) HandleTerminateTaskApiTasksTaskIdTerminatePost(w http.ResponseWriter, r *http.Request, taskId string) {
 	t, err := s.resolveTask(taskId)
 	if err != nil {
 		writeResolveError(w, err, "task", taskId)
+		return
+	}
+	if ok, reason := s.callerMayTerminateTask(r, *t); !ok {
+		writeError(w, http.StatusForbidden, reason)
 		return
 	}
 	if TaskIsTerminal(t.Status) {
@@ -1013,7 +1276,7 @@ func (s *apiServer) HandleSetTaskPriorityApiTasksTaskIdPriorityPost(w http.Respo
 		return
 	}
 	if !s.callerMayDriveTask(r, *t) {
-		writeError(w, http.StatusForbidden, "caller is not the task's executor")
+		writeError(w, http.StatusForbidden, executorGuardRefusal)
 		return
 	}
 	if TaskIsTerminal(t.Status) {
@@ -1123,7 +1386,16 @@ func (s *apiServer) HandlePostTaskMessageApiTasksTaskIdMessagePost(w http.Respon
 	s.hub.Publish("chat", "patch", "chat", wireOwnerID+"::"+msg.ID,
 		map[string]any{"id": msg.ID, "from": msg.Sender, "to": msg.Recipient},
 		audienceMembers(msg.Sender, msg.Recipient), requestTrigger(r))
-	writeJSON(w, http.StatusOK, s.servedChatMessageDTO(msg))
+	// THE FIFTH READ DOOR onto servedChatMessageDTO. The meta this handler builds
+	// never carries `reply_to`, so the quote join is a no-op here today — but it
+	// goes through the same one function on purpose, so the day it does carry one
+	// there is nothing to remember.
+	dto, err := s.servedChatMessageDTO(msg)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, dto)
 }
 
 // POST /api/tasks/{task_id}/reassign — the owner/admin handover action
@@ -1178,7 +1450,7 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 	// executor-guarded — an agent may only reassign a task it EXECUTES (owner /
 	// admin capability may drive any task, callerMayDriveTask §14).
 	if !s.callerMayDriveTask(r, *t) {
-		writeError(w, http.StatusForbidden, "caller is not the task's executor")
+		writeError(w, http.StatusForbidden, executorGuardRefusal)
 		return
 	}
 	// 正職授權矩陣 (T-23cf phase 2). Rule 8: an outsource worker may not reassign
@@ -1482,65 +1754,63 @@ func (s *apiServer) HandleReassignTaskApiTasksTaskIdReassignPost(w http.Response
 	// scheduler mints it later under the cap), so there is no worker id to DM
 	// yet; its boot context folds the same takeover instruction, so the successor
 	// chat notice is a member-only step below.
-	newExecutorLabel, newExecutorID := "", ""
+	// 🔴 THE PREDECESSOR NOTICE NAMES NOBODY ANY MORE (owner, 2026-08-24), so
+	// there is no successor LABEL to compose — only the id, and only for the
+	// arm that actually sends the successor a message. The composer that used
+	// to build 「名字（id）」 for this notice is gone with the slot, and so is the
+	// branch that had nothing to put in it: an outsource successor is minted
+	// later by the scheduler, and that branch used to fill the slot with a
+	// hardcoded status label standing in for a person who did not exist yet.
+	newExecutorID := ""
 	if newMember != nil {
 		newExecutorID = newMember.ID
-		newExecutorLabel = newMember.Name
-		if newExecutorLabel == "" {
-			newExecutorLabel = newMember.ID
-		}
-	} else {
-		newExecutorLabel = "外包（待排程指派）"
 	}
-	// 🔴 A FROZEN task is reassignable (owner ruling 2026-08-11, T-b9f6) — but
-	// the successor notice below is an INSTRUCTION TO TAKE OVER, and frozen
-	// means "do not advance this". Without this line the server itself would be
-	// the thing telling someone to start work on a task the owner just paused:
-	// the outsource arm is safe (the scheduler skips frozen wholesale, so no
-	// worker is ever minted), while a MEMBER successor is not gated anywhere —
-	// `grep -rn TaskPriorityFrozen --include=*.go server/ocserverd | grep -v _test`
-	// shows the scheduler and the priority setter are the only enforcement in
-	// the whole server; claim / step reports / replan carry no frozen check.
-	// owner picked "say so in the notice" over "add a refusal" (card
-	// rc-4a166be12a29, option ①): arranging a handover while paused stays legal,
-	// starting work does not. ONE constant, used by both successor branches —
-	// two copies of a caveat drift into two different caveats.
-	frozenNotice := ""
-	if t.Priority == TaskPriorityFrozen {
-		frozenNotice = "\n\n⚠️ 這張任務現在是「凍結」（優先權 frozen ＝ 暫停推進）。" +
-			"**認領之後不要開始推進**：先問清楚為什麼被凍結，等能解凍的人解開再動。" +
-			"凍結期間安排接手是刻意允許的（owner 2026-08-11 裁定），被安排的是「之後由誰做」，不是「現在開始做」。"
-	}
+	// 🔴 THE FROZEN CAVEAT USED TO BE APPENDED HERE, AND THE OWNER REMOVED IT
+	// (2026-08-22, T-3201). It said 「這張任務現在是「凍結」…認領之後不要開始推進」
+	// on every successor notice for a frozen task — and 全域脈絡 §3.6 already
+	// says 「凍結期間不要推進任務。若要繼續執行，先開核可卡…」 to every agent on
+	// every boot. One rule, two texts, and the one in code was the one nobody
+	// could edit. A frozen task is still reassignable (owner 2026-08-11, T-b9f6);
+	// what changed is where the agent is told what frozen means.
 	no := TaskNo(t.ID)
+	// The predecessor's notice IS the 轉派程序 document (T-3201): its read-only
+	// head names the task and the successor, its editable body is what to do
+	// about it. It used to be this Go concatenation, which is exactly what the
+	// owner could not find when he went looking for the words an agent is sent.
+	// "" means it could not be rendered — post nothing rather than a template.
 	if oldExecutor != "" {
-		s.postTaskChat(*t, wireSystemSender, oldExecutor,
-			"["+no+"] 此任務已轉派給 "+newExecutorLabel+"。"+
-				"請停止推進，改為去跟接手人做交接：對方接手後會主動 post_chat 找你，"+
-				"他問目前進度、進行中的事項、有哪些雷要注意，你都要答得出來，直到他確認交接完成。交接完成後這張任務就不再是你的了。",
-			trigger)
-	}
-	if oldExecutor != "" && newExecutorID != "" {
-		predecessorLabel := s.executorLabel(oldKind, oldExecutor)
-		msg := "[" + no + "] 你接手了任務「" + t.Title + "」。你的前任是 " +
-			predecessorLabel + "（id `" + oldExecutor + "`）。請先跟他確認交接完成" +
-			"（直接 post_chat 給他，問清楚目前進度與進行中的事項），確認後再由你自己呼叫 claim_task" +
-			"（認領）解除轉派鎖——只有你這個新負責人動得了；任務狀態一律照步驟推導，不必也不能自己報。"
-		if note := trimmedOrEmpty(body.Note); note != "" {
-			msg += "\n\n交接備註：" + note
+		if notice := s.taskNoticeText(docKindTaskReassignPredecessor, map[string]string{
+			"task_no": no,
+		}); notice != "" {
+			s.postTaskChat(*t, wireSystemSender, oldExecutor, notice, trigger, nil)
 		}
-		msg += frozenNotice
-		s.postTaskChat(*t, wireSystemSender, newExecutorID, msg, trigger)
+	}
+	// 🔴 THE HANDOVER NOTE IS NO LONGER PASTED IN, AND THAT IS THE OWNER'S
+	// RULING (rc-0c36d8739b8f, verbatim: 「拿掉 —— 交接備註只留在任務上」). The
+	// note this same handler just wrote to HandoverNote/HandoverNoteTS/
+	// HandoverNoteBy rides the task DTO (wire.go), so the successor reads it
+	// with get_task; the copy stapled under the notice was a second one, and it
+	// was the copy that made these two documents unsplittable — a {note} slot
+	// AFTER the instructions leaves no prefix of facts to cut at.
+	if oldExecutor != "" && newExecutorID != "" {
+		if notice := s.taskNoticeText(docKindTaskTakeoverWithPredecessor, map[string]string{
+			"task_no": no,
+			// One slot, both facts — see newExecutorLabel above. The id is not
+			// optional here: the body's first instruction is to post_chat this
+			// person, and 「一串 id」 alone does not say who that is.
+			"predecessor": nameWithIDSlot(s.executorLabel(oldKind, oldExecutor), oldExecutor),
+		}); notice != "" {
+			s.postTaskChat(*t, wireSystemSender, newExecutorID, notice, trigger, nil)
+		}
 	} else if newMember != nil {
 		// A not_started task with no prior executor (no predecessor to hand over
 		// with) — the plain "you are now the executor" notice, member side only
 		// (a fresh worker learns it through the boot context).
-		msg := "[" + no + "] 你接手了任務「" + t.Title +
-			"」。請先讀任務內容，準備好後由你自己呼叫 claim_task（認領）解除轉派鎖再開始執行；任務狀態一律照步驟推導，不必也不能自己報。"
-		if note := trimmedOrEmpty(body.Note); note != "" {
-			msg += "\n\n交接備註：" + note
+		if notice := s.taskNoticeText(docKindTaskTakeoverFresh, map[string]string{
+			"task_no": no,
+		}); notice != "" {
+			s.postTaskChat(*t, wireSystemSender, newMember.ID, notice, trigger, nil)
 		}
-		msg += frozenNotice
-		s.postTaskChat(*t, wireSystemSender, newMember.ID, msg, trigger)
 	}
 
 	// 6. Fan the task delta: publishTask reaches the NEW executor + owner (the
@@ -1580,7 +1850,7 @@ func (s *apiServer) HandleClaimTaskApiTasksTaskIdClaimPost(w http.ResponseWriter
 		return
 	}
 	if !s.callerMayDriveTask(r, *t) {
-		writeError(w, http.StatusForbidden, "caller is not the task's executor")
+		writeError(w, http.StatusForbidden, executorGuardRefusal)
 		return
 	}
 	if t.Lock != TaskLockReassigning {
@@ -1633,18 +1903,24 @@ func (s *apiServer) executorLabel(kind, id string) string {
 // reassign handover notices — the task-message route's meta shape: task_id /
 // task_title / task_type ride along for the client linkage). Best-effort on
 // the fan; the durable write failing is the caller's internal error.
-func (s *apiServer) postTaskChat(t Task, sender, recipient, body, trigger string) {
+// extra carries any per-notice meta keys beyond the task linkage (T-91: the
+// close-out row's closed_by). nil for the notices that need none.
+func (s *apiServer) postTaskChat(t Task, sender, recipient, body, trigger string, extra map[string]any) {
+	meta := map[string]any{
+		"task_id":    t.ID,
+		"task_title": t.Title,
+		"task_type":  t.TypeKey,
+	}
+	for k, v := range extra {
+		meta[k] = v
+	}
 	msg := ChatMessage{
 		ID:        "c-" + newHexID(12),
 		Sender:    sender,
 		Recipient: recipient,
 		Body:      body,
 		TS:        nowSecs(),
-		Meta: map[string]any{
-			"task_id":    t.ID,
-			"task_title": t.Title,
-			"task_type":  t.TypeKey,
-		},
+		Meta:      meta,
 	}
 	if err := s.dal.PutChat(msg); err != nil {
 		// Not only reassign any more — T-74f8's dependency release posts the
@@ -1896,7 +2172,9 @@ func (s *apiServer) HandleCreateTaskApiTasksPost(w http.ResponseWriter, r *http.
 
 	now := nowSecs()
 	t := Task{
-		ID:           "t-" + newHexID(12),
+		// ID is minted below, INSIDE the transaction that inserts this row
+		// (dal.CreateTaskMintingID) — T-52917b 遞增票號. It is deliberately left
+		// empty here: there is no id to read until the counter has been claimed.
 		TypeKey:      typeKey,
 		Title:        title,
 		DedupeKey:    dedupeKey,
@@ -1925,34 +2203,58 @@ func (s *apiServer) HandleCreateTaskApiTasksPost(w http.ResponseWriter, r *http.
 	trigger := requestTrigger(r)
 
 	// ① explicit 發包 (target.kind=outsource): every dispatch funnels through the
-	// SINGLE spawn gate (④) — no side door. Run it BEFORE any PutTask so a deny
-	// leaves NO orphan task (③). On admit the task lands UNASSIGNED carrying its
-	// outsource_target; the event-driven scheduler tick below mints the worker
-	// under the global parallel cap (T-35e0: no inline mint, no per-task card).
+	// SINGLE spawn gate (④) — no side door. It runs BEFORE the row lands so a deny
+	// leaves NO orphan task (③).
+	//
+	// T-52917b moved it INSIDE the create transaction rather than ahead of it,
+	// because the id it is handed no longer exists before the transaction opens:
+	// the number is claimed off task_id_seq in the same transaction that inserts
+	// the row, so that a crash between the two burns nothing. Running the gate
+	// there is strictly stronger than running it before — a deny now rolls the
+	// counter back too — and it is safe only because outsourceSpawnGate touches
+	// no database (its authz check is pure and meterOutsourceDispatch is a no-op
+	// hook); everything it needs from the DB (GetMember) is resolved out here,
+	// ahead of the transaction. 🔴 A future gate that reads or writes the database
+	// must be resolved out here as well, not left to run on the write connection
+	// the transaction is already holding.
+	//
+	// On admit the task lands UNASSIGNED carrying its outsource_target; the
+	// event-driven scheduler tick below mints the worker under the global
+	// parallel cap (T-35e0: no inline mint, no per-task card).
+	var gateDenied string
+	var precheck func(id string) error
 	if dispatchTarget != nil {
 		principal := s.principalOfRequest(r)
 		var initiator *Member
 		if principal != principalOwner {
 			initiator, _ = s.dal.GetMember(currentActor(r))
 		}
-		gate, err := s.outsourceSpawnGate(outsourceGateRequest{
-			PrincipalClass: principal, Initiator: initiator, TaskID: t.ID,
-			Runtime: dispatch.Runtime, Model: dispatch.Model,
-			Effort: dispatch.Effort, Machine: dispatch.Machine,
-			IssuedBy: currentActor(r),
-		})
-		if err != nil {
-			internalError(w, err)
-			return
-		}
-		if gate.Decision == gateDeny {
-			writeError(w, http.StatusForbidden,
-				"not permitted to 發包 to an outsource worker: "+gate.Reason)
-			return
+		issuedBy := currentActor(r)
+		precheck = func(id string) error {
+			gate, err := s.outsourceSpawnGate(outsourceGateRequest{
+				PrincipalClass: principal, Initiator: initiator, TaskID: id,
+				Runtime: dispatch.Runtime, Model: dispatch.Model,
+				Effort: dispatch.Effort, Machine: dispatch.Machine,
+				IssuedBy: issuedBy,
+			})
+			if err != nil {
+				return err
+			}
+			if gate.Decision == gateDeny {
+				gateDenied = gate.Reason
+				return errOutsourceGateDenied
+			}
+			return nil
 		}
 	}
 
-	if err := s.dal.PutTask(t); err != nil {
+	t, err = s.dal.CreateTaskMintingID(t, precheck)
+	if err != nil {
+		if errors.Is(err, errOutsourceGateDenied) {
+			writeError(w, http.StatusForbidden,
+				"not permitted to 發包 to an outsource worker: "+gateDenied)
+			return
+		}
 		internalError(w, err)
 		return
 	}
@@ -1988,7 +2290,7 @@ func (s *apiServer) HandleSubmitTaskPlanApiTasksTaskIdPlanPost(w http.ResponseWr
 		return
 	}
 	if !s.callerMayDriveTask(r, *t) {
-		writeError(w, http.StatusForbidden, "caller is not the task's executor")
+		writeError(w, http.StatusForbidden, executorGuardRefusal)
 		return
 	}
 	if TaskIsTerminal(t.Status) {
@@ -2192,7 +2494,7 @@ func (s *apiServer) HandleSubmitTaskPlanApiTasksTaskIdPlanPost(w http.ResponseWr
 // outsource workers) but it does NOT nudge the learnings write-back — a
 // duplicate has no lessons (decideTaskCloseNudge excludes it). The executor
 // guard applies (owner/admin may act on any task). Validation keeps the
-// duplicate graph DEPTH-1 so the cockpit "重複於 T-xxxx" link resolves in one hop:
+// duplicate graph DEPTH-1 so the cockpit "重複於 <task id>" link resolves in one hop:
 //   - the task must be non-terminal (else 409 — already closed);
 //   - duplicate_of is required (422) and must be an EXISTING task (404);
 //   - it may not point at itself (409);
@@ -2215,7 +2517,7 @@ func (s *apiServer) HandleMarkTaskDuplicateApiTasksTaskIdDuplicatePost(w http.Re
 		return
 	}
 	if !s.callerMayDriveTask(r, *t) {
-		writeError(w, http.StatusForbidden, "caller is not the task's executor")
+		writeError(w, http.StatusForbidden, executorGuardRefusal)
 		return
 	}
 	if TaskIsTerminal(t.Status) {
@@ -2311,7 +2613,7 @@ func (s *apiServer) HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPos
 		return
 	}
 	if !s.callerMayDriveTask(r, *t) {
-		writeError(w, http.StatusForbidden, "caller is not the task's executor")
+		writeError(w, http.StatusForbidden, executorGuardRefusal)
 		return
 	}
 	if TaskIsTerminal(t.Status) {
@@ -2331,12 +2633,12 @@ func (s *apiServer) HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPos
 	if status == StepStatusWaitingOwner {
 		// The step twin of the task guard above: waiting_owner is not an
 		// agent-reportable step status. A step enters it only when a reply card
-		// binds onto it (open_gate / create_reply_card auto-bind) — never by a
-		// separate status report. A 400 (not the state-machine 409) says this is
-		// not the agent's lever.
+		// binds onto it (create_reply_card with an explicit linked_task) — never
+		// by a separate status report. A 400 (not the state-machine 409) says this
+		// is not the agent's lever.
 		writeError(w, http.StatusBadRequest,
 			"waiting_owner is not an agent-reportable status; a step enters it only "+
-				"by opening a reply card (open_gate or create_reply_card)")
+				"by opening a reply card (create_reply_card with linked_task)")
 		return
 	}
 	if status == StepStatusSuperseded {
@@ -2423,83 +2725,15 @@ func (s *apiServer) HandleUpdateTaskStepStatusApiTasksTaskIdStepsStepIdStatusPos
 	s.writeTaskStepStatusReceipt(w, *t, *step)
 }
 
-// POST /api/tasks/{task_id}/steps/{step_id}/gate — arm a gate (contract §D):
-// the SAME reply-card create machinery (validation, companion chat message,
-// deltas) plus the task linkage: step → waiting_owner + reply_card_id, task →
-// waiting_owner. The ONLY entry into waiting_owner. The owner answers through
-// the existing reply-card answer route, where the server releases the hold and
-// restores the task/step to in_progress (releaseCardHold) — it
-// still never advances the work FORWARD; the agent reports done itself. A
-// second gate may arm while another still waits (SPEC §3.2: one task, many
-// cards) — the task leaves waiting_owner only once the LAST bound card is
-// answered.
-func (s *apiServer) HandleOpenTaskGateApiTasksTaskIdStepsStepIdGatePost(w http.ResponseWriter, r *http.Request, taskId string, stepId string) {
-	var body ReplyCardCreateDTO
-	if !decodeJSONBodyRequired(w, r, &body, "kind", "summary", "options") {
-		return
-	}
-	t, err := s.resolveTask(taskId)
-	if err != nil {
-		writeResolveError(w, err, "task", taskId)
-		return
-	}
-	if !s.callerMayDriveTask(r, *t) {
-		writeError(w, http.StatusForbidden, "caller is not the task's executor")
-		return
-	}
-	if t.Status != TaskStatusInProgress && t.Status != TaskStatusWaitingOwner {
-		writeError(w, http.StatusConflict,
-			"a gate can only arm on an in_progress or waiting_owner task (is "+t.Status+")")
-		return
-	}
-	step, err := s.dal.GetTaskStep(stepId)
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	if step == nil || step.TaskID != taskId {
-		writeError(w, http.StatusNotFound, "step '"+stepId+"' not found")
-		return
-	}
-	// A plain (is_gate=false) step is armable too: open_gate on the current node
-	// is a legitimate ad-hoc 請示, the explicit twin of create_reply_card's
-	// auto-bind, which already arms whatever step is current without an is_gate
-	// check. is_gate is a plan-declared property (submit_plan) — arming does not
-	// rewrite it; the step becomes a card-carrying plain step (get_task's step
-	// view carries the reply_card_id). Only a terminal step is refused: done
-	// (nothing waits any more) and superseded (frozen replan history — its
-	// bound card pointer is part of the audit trail and must not be re-armed).
-	if StepIsTerminal(step.Status) {
-		writeError(w, http.StatusConflict,
-			"step '"+stepId+"' is already "+step.Status)
-		return
-	}
-	card, problem, err := s.openReplyCard(currentActor(r), body, t.ID, step.ID)
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	if problem != "" {
-		writeError(w, http.StatusBadRequest, problem)
-		return
-	}
-	if err := s.armStepWithCard(t, step, card.ID, requestTrigger(r)); err != nil {
-		internalError(w, err)
-		return
-	}
-	s.writeReplyCard(w, *card)
-}
-
-// armStepWithCard applies the card→step waiting state machine shared by the
-// TWO card-open paths — the explicit open_gate arming and create_reply_card's
-// auto binding (inferCardTaskStep): the step enters waiting_owner carrying
-// the CURRENT card (reply_card_id points at the latest ask; the card's own
-// task/step birth marks keep the full history), started_ts stamps on first
-// touch, and the task follows into waiting_owner — UNLESS the step sits
-// inside a parallel group, where flipping the WHOLE task would lie while
-// sibling lanes still run (the ValidatePlanParallelShape rationale; fresh
-// gates can never be grouped, so only legacy data and auto-bound plain steps
-// hit that branch). The owner's later answer releases this hold —
+// armStepWithCard applies the card→step waiting state machine behind the ONE
+// card-open path — create_reply_card carrying an explicit linked_task
+// {task_id, step_id} (T-18 collapsed the two entrances into it): the step
+// enters waiting_owner carrying the CURRENT card (reply_card_id points at the
+// latest ask; the card's own task/step birth marks keep the full history),
+// started_ts stamps on first touch, and the task follows into waiting_owner —
+// UNLESS the step sits inside a parallel group, where flipping the WHOLE task
+// would lie while sibling lanes still run (the ValidatePlanParallelShape
+// rationale). The owner's later answer releases this hold —
 // releaseCardHold restores the step (and task) to in_progress;
 // from there the agent reports the step forward itself.
 func (s *apiServer) armStepWithCard(t *Task, step *TaskStep, cardID, trigger string) error {
@@ -2533,7 +2767,7 @@ func (s *apiServer) HandleSetTaskDepsApiTasksTaskIdDepsPost(w http.ResponseWrite
 		return
 	}
 	if !s.callerMayDriveTask(r, *t) {
-		writeError(w, http.StatusForbidden, "caller is not the task's executor")
+		writeError(w, http.StatusForbidden, executorGuardRefusal)
 		return
 	}
 	if TaskIsTerminal(t.Status) {
@@ -2600,7 +2834,7 @@ func (s *apiServer) HandleReportTaskCloseoutApiTasksTaskIdCloseoutPost(w http.Re
 		return
 	}
 	if !s.callerMayDriveTask(r, *t) {
-		writeError(w, http.StatusForbidden, "caller is not the task's executor")
+		writeError(w, http.StatusForbidden, executorGuardRefusal)
 		return
 	}
 	if !TaskIsTerminal(t.Status) {
@@ -2634,8 +2868,8 @@ func (s *apiServer) HandleReportTaskCloseoutApiTasksTaskIdCloseoutPost(w http.Re
 // ── C.4 artifact set (T-3dc5) ────────────────────────────────────────────────
 
 // POST /api/tasks/{task_id}/artifact — the executing agent pins one deliverable
-// onto the task's artifact set (MCP add_task_artifact). Append-only and
-// repeatable. file/image reference a chat_attachment blob (attachment_id from a
+// onto the task's artifact set (MCP add_task_artifact). This verb only ADDS and
+// is repeatable; swapping what an existing pin points at is ReplaceTaskArtifact. file/image reference a chat_attachment blob (attachment_id from a
 // prior POST /api/chat/attachments — one blob mechanism, not two); link carries
 // a bare url (no upload). Guard order: 400 closed-set kind → 404 task → 403 not
 // the executor (admin excepted, §14) → 409 terminal → 400 missing/dangling ref.
@@ -2650,25 +2884,36 @@ func (s *apiServer) HandleAddTaskArtifactApiTasksTaskIdArtifactPost(w http.Respo
 			"kind must be one of file, image, link")
 		return
 	}
+	// The label is a one-line NAME, so it is capped at shortLabelMaxChars runes
+	// (128 CJK characters pass — the count is not in bytes). It sits with the
+	// other body-shape 400s, ahead of the task/permission guards, because it is
+	// a fault in the request itself and does not depend on which task it names.
+	// Over-length is REFUSED, never truncated. Existing rows are untouched.
+	label := trimmedOrEmpty(body.Label)
+	if n := utf8.RuneCountInString(label); n > shortLabelMaxChars {
+		writeError(w, http.StatusBadRequest, "artifact label is "+
+			strconv.Itoa(n)+" chars, over the "+
+			strconv.Itoa(shortLabelMaxChars)+"-char limit")
+		return
+	}
 	t, err := s.resolveTask(taskId)
 	if err != nil {
 		writeResolveError(w, err, "task", taskId)
 		return
 	}
-	if !s.callerMayDriveTask(r, *t) {
-		writeError(w, http.StatusForbidden, "caller is not the task's executor")
+	if !s.callerMayEditTaskText(r, *t) {
+		writeError(w, http.StatusForbidden, executorGuardRefusal)
 		return
 	}
 	if TaskIsTerminal(t.Status) {
-		writeError(w, http.StatusConflict,
-			"task '"+taskId+"' is closed ("+t.Status+") — its deliverables are frozen")
+		writeError(w, http.StatusConflict, taskFrozenDeliverablesRefusal(*t))
 		return
 	}
 	art := TaskArtifact{
 		ID:        "ta-" + newHexID(12),
 		TaskID:    t.ID,
 		Kind:      kind,
-		Label:     trimmedOrEmpty(body.Label),
+		Label:     label,
 		CreatedTS: nowSecs(),
 		// §14 caller-identity: the registrar is the verified token sub.
 		CreatedBy: currentActor(r),
@@ -2722,41 +2967,20 @@ func (s *apiServer) HandleAddTaskArtifactApiTasksTaskIdArtifactPost(w http.Respo
 // the task's executor may remove its own deliverables, admin/owner may remove on
 // any task (§14). Guard order: 404 task → 403 not the executor → 409 the task is
 // closed → 404 artifact → 400 the artifact belongs to a different task. The
-// referenced blob is left intact (it may be shared with a chat message; the blob
-// store has no delete path).
+// LIVE row's blob is left intact (it may be shared with a chat message), but the
+// delete does not stop at the live row: DeleteTaskArtifact also drops every
+// retained version of this artifact and collects the blobs only those versions
+// referenced (see dal_task_artifacts.go).
 //
-// The 409 is the SYMMETRIC twin of add's freeze (owner ruling 2026-07-25, T-2654):
-// a closed task's deliverable set is frozen in BOTH directions. It used to be
+// The 409 is the SYMMETRIC twin of add's freeze (owner ruling 2026-07-25, T-2654),
+// and since T-60 replace eats it too: a closed task's deliverable set is frozen in
+// EVERY direction. It used to be
 // add-only, which made un-pin an unrecoverable data loss — the deliverable could
 // be removed from a closed card and never put back. Like add's, this guard sits
 // after the permission check, so admin/owner are not exempt either.
 func (s *apiServer) HandleRemoveTaskArtifactApiTasksTaskIdArtifactArtifactIdDelete(w http.ResponseWriter, r *http.Request, taskId, artifactId string) {
-	t, err := s.resolveTask(taskId)
-	if err != nil {
-		writeResolveError(w, err, "task", taskId)
-		return
-	}
-	if !s.callerMayDriveTask(r, *t) {
-		writeError(w, http.StatusForbidden, "caller is not the task's executor")
-		return
-	}
-	if TaskIsTerminal(t.Status) {
-		writeError(w, http.StatusConflict,
-			"task '"+taskId+"' is closed ("+t.Status+") — its deliverables are frozen")
-		return
-	}
-	art, err := s.dal.GetTaskArtifact(artifactId)
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	if art == nil {
-		writeError(w, http.StatusNotFound, "artifact '"+artifactId+"' not found")
-		return
-	}
-	if art.TaskID != t.ID {
-		writeError(w, http.StatusBadRequest,
-			"artifact '"+artifactId+"' does not belong to task '"+taskId+"'")
+	t, _, ok := s.artifactOnTask(w, r, taskId, artifactId, artifactWrite)
+	if !ok {
 		return
 	}
 	if _, err := s.dal.DeleteTaskArtifact(artifactId); err != nil {
@@ -2765,6 +2989,251 @@ func (s *apiServer) HandleRemoveTaskArtifactApiTasksTaskIdArtifactArtifactIdDele
 	}
 	s.publishTask(*t, requestTrigger(r))
 	s.writeTaskArtifactReceipt(w, *t, artifactId)
+}
+
+// taskFrozenDeliverablesRefusal is the ONE sentence all three artifact verbs
+// refuse a closed task with. Written once because the freeze is one rule: three
+// copies could drift into telling a caller three different things about the
+// same wall (owner ruling 2026-07-25).
+func taskFrozenDeliverablesRefusal(t Task) string {
+	return "task '" + t.ID + "' is closed (" + t.Status +
+		") — its deliverables are frozen"
+}
+
+// artifactAccess says which of the two rule sets a per-artifact route is asking
+// artifactOnTask for. A named type rather than a bool because the answer is not
+// a knob but a category, and the ZERO VALUE IS THE STRICT SIDE ON PURPOSE: a
+// call site that has not declared what it is doing gets the write rules.
+type artifactAccess int
+
+const (
+	// artifactWrite — the executor guard AND the closed-task 409 both apply.
+	artifactWrite artifactAccess = iota
+	// artifactRead — neither applies.
+	artifactRead
+)
+
+// artifactOnTask resolves the (task, artifact) pair the per-artifact routes
+// address and answers every guard they share, in the ONE order the wire
+// documents for the WRITE verbs: 404 task → 403 not the executor (admin
+// excepted, §14) → 409 the task is closed → 404 artifact → 400 the artifact
+// belongs to a different task.
+//
+// 🔴 READ AND WRITE ARE DELIBERATELY ASYMMETRIC (owner ruling, T-60), and this
+// sentence is here so the next reader does not "finish the job" by making them
+// match. artifactRead runs NEITHER the executor guard NOR the freeze:
+//   - no executor guard, because CONSISTENCY IS NOT LOOSENING. The main task
+//     read (HandleGetTaskApiTasksTaskIdGet) makes no caller distinction at all
+//     and its response already carries the artifact set. Gating the version
+//     history on being the executor would mean the same deliverable is readable
+//     through one door and refused through the other — two doors disagreeing
+//     about one set of rows is the very defect this line of work is treating.
+//   - no 409, because reading a finished task's deliverables is exactly when a
+//     reader wants to.
+//
+// Writing stays the executor's responsibility, so artifactWrite keeps both. Its
+// 409 sits AFTER the permission check on purpose — admin/owner are not exempt
+// from the freeze (owner ruling 2026-07-25) — and BEFORE the artifact lookup, so
+// a frozen task answers the same 409 whether or not the caller guessed a real
+// artifact id.
+func (s *apiServer) artifactOnTask(
+	w http.ResponseWriter, r *http.Request, taskID, artifactID string, access artifactAccess,
+) (*Task, *TaskArtifact, bool) {
+	t, err := s.resolveTask(taskID)
+	if err != nil {
+		writeResolveError(w, err, "task", taskID)
+		return nil, nil, false
+	}
+	if access == artifactWrite && !s.callerMayEditTaskText(r, *t) {
+		writeError(w, http.StatusForbidden, executorGuardRefusal)
+		return nil, nil, false
+	}
+	if access == artifactWrite && TaskIsTerminal(t.Status) {
+		writeError(w, http.StatusConflict, taskFrozenDeliverablesRefusal(*t))
+		return nil, nil, false
+	}
+	art, err := s.dal.GetTaskArtifact(artifactID)
+	if err != nil {
+		internalError(w, err)
+		return nil, nil, false
+	}
+	if art == nil {
+		writeError(w, http.StatusNotFound, "artifact '"+artifactID+"' not found")
+		return nil, nil, false
+	}
+	if art.TaskID != t.ID {
+		writeError(w, http.StatusBadRequest,
+			"artifact '"+artifactID+"' does not belong to task '"+taskID+"'")
+		return nil, nil, false
+	}
+	return t, art, true
+}
+
+// POST /api/tasks/{task_id}/artifact/{artifact_id}/replace — swap ONE pinned
+// deliverable's content while its id stays put (MCP replace_task_artifact,
+// T-60). The reason the verb exists rather than remove+add: remove+add mints a
+// NEW artifact id, so every reader holding the old one is left pointing at
+// nothing — and on a task that has since closed the pair is refused outright.
+//
+// Guard order mirrors add's exactly: 404 task → 403 not the executor (admin
+// excepted, §14) → 409 terminal → 404 artifact → 400 wrong task → 400 the
+// content rules. THE 409 IS THE THIRD COPY of the same freeze (owner ruling
+// 2026-07-25): a closed task's deliverable set is frozen in EVERY direction, and
+// like add's and remove's it sits AFTER the permission check, so admin/owner are
+// not exempt. A replace verb without it would be the freeze's open back door —
+// the content of a frozen deliverable could be swapped for anything.
+//
+// KIND IS IMMUTABLE ACROSS VERSIONS. The artifact id is what does not move, and
+// a reader that resolved it as an image must not find a link there next time; a
+// caller that wants a different kind un-pins and registers a new one.
+func (s *apiServer) HandleReplaceTaskArtifactApiTasksTaskIdArtifactArtifactIdReplacePost(
+	w http.ResponseWriter, r *http.Request, taskId, artifactId string,
+) {
+	var body TaskArtifactReplaceInputDTO
+	if !decodeJSONBody(w, r, &body) {
+		return
+	}
+	t, art, ok := s.artifactOnTask(w, r, taskId, artifactId, artifactWrite)
+	if !ok {
+		return
+	}
+	if kind := trimmedOrEmpty(body.Kind); kind != "" && kind != art.Kind {
+		writeError(w, http.StatusBadRequest, artifactKindRefusal(art.Kind, kind))
+		return
+	}
+	// An ABSENT label carries the pinned one forward (owner ruling 2026-09-05):
+	// a replacement is a corrected version of the same deliverable, so making
+	// the caller re-type the display name every time is how a named artifact
+	// silently loses its name. An EXPLICIT label still replaces it, and an
+	// explicit blank still clears it — absent and empty stay different.
+	label := art.Label
+	if body.Label != nil {
+		label = trimmedOrEmpty(body.Label)
+	}
+	next := TaskArtifact{
+		ID:        art.ID,
+		TaskID:    art.TaskID,
+		Kind:      art.Kind,
+		Label:     label,
+		CreatedTS: nowSecs(),
+		CreatedBy: currentActor(r),
+	}
+	url, attID := trimmedOrEmpty(body.Url), trimmedOrEmpty(body.AttachmentId)
+	if art.Kind == ArtifactKindLink {
+		if attID != "" {
+			writeError(w, http.StatusBadRequest,
+				artifactKindRefusal(art.Kind, ArtifactKindFile))
+			return
+		}
+		if url == "" {
+			writeError(w, http.StatusBadRequest,
+				"url is required for a link artifact")
+			return
+		}
+		next.URL = url
+	} else {
+		if url != "" {
+			writeError(w, http.StatusBadRequest,
+				artifactKindRefusal(art.Kind, ArtifactKindLink))
+			return
+		}
+		if attID == "" {
+			writeError(w, http.StatusBadRequest,
+				"attachment_id is required for a "+art.Kind+" artifact")
+			return
+		}
+		if isMemberAvatarAttachmentID(attID) {
+			writeError(w, http.StatusBadRequest,
+				"attachment '"+attID+"' is reserved for a member avatar")
+			return
+		}
+		att, err := s.dal.GetChatAttachment(attID)
+		if err != nil {
+			internalError(w, err)
+			return
+		}
+		if att == nil {
+			writeError(w, http.StatusBadRequest,
+				"attachment '"+attID+"' not found (upload it first via POST /api/chat/attachments)")
+			return
+		}
+		next.AttachmentID = attID
+	}
+	replaced, err := s.dal.ReplaceTaskArtifact(next)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	if !replaced {
+		writeError(w, http.StatusNotFound, "artifact '"+artifactId+"' not found")
+		return
+	}
+	// Same fan-out as add/remove: the artifact set rides the EXISTING task
+	// topic, and the task row itself is unchanged.
+	s.publishTask(*t, requestTrigger(r))
+	versions, err := s.dal.ListTaskArtifactHistory(art.ID)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	arts, err := s.dal.ListTaskArtifacts(t.ID)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, taskArtifactReplaceReceiptDTO{
+		TaskID: t.ID, ArtifactID: art.ID, ArtifactCount: len(arts),
+		VersionCount: len(versions) + 1,
+	})
+}
+
+// artifactKindRefusal is the one sentence every cross-kind replacement is
+// refused with — written once so the three ways to ask for one (an explicit
+// kind, a url on a file, an attachment_id on a link) cannot answer differently
+// about the same rule.
+func artifactKindRefusal(pinned, asked string) string {
+	return "artifact kind cannot change across versions: this artifact is a " +
+		pinned + " and the replacement asks for a " + asked +
+		" — un-pin it and register a new artifact instead"
+}
+
+// GET /api/tasks/{task_id}/artifact/{artifact_id}/history — the retained
+// previous versions of one deliverable, newest first (T-60). MCPExclude: the
+// agent that replaced a deliverable already knows what it replaced, and this
+// list exists for the human reading the card.
+//
+// artifactRead, so NEITHER the executor guard NOR the terminal-task guard runs
+// here — see artifactOnTask for why the asymmetry with the write verbs is the
+// point rather than an omission. There is deliberately no restore face — an
+// older version goes back by replacing FORWARD with it.
+func (s *apiServer) HandleListTaskArtifactHistoryApiTasksTaskIdArtifactArtifactIdHistoryGet(
+	w http.ResponseWriter, r *http.Request, taskId, artifactId string,
+) {
+	_, art, ok := s.artifactOnTask(w, r, taskId, artifactId, artifactRead)
+	if !ok {
+		return
+	}
+	versions, err := s.dal.ListTaskArtifactHistory(art.ID)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	out := make([]taskArtifactVersionDTO, 0, len(versions))
+	for _, v := range versions {
+		// The SAME blob resolution the live projection does (taskArtifactDTOs):
+		// link kinds have no attachment, a missing blob resolves to nil and the
+		// version's filename stays honest-empty.
+		var att *ChatAttachment
+		if v.Kind != ArtifactKindLink && v.AttachmentID != "" {
+			att, err = s.dal.GetChatAttachment(v.AttachmentID)
+			if err != nil {
+				internalError(w, err)
+				return
+			}
+		}
+		out = append(out, newTaskArtifactVersionDTO(v, att))
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // T-4595 — get_my_task (GET /api/self/task) is RETIRED, tool and route alike.

@@ -825,7 +825,11 @@ func TestGetMonitoring_SessionModelRoundTrips(t *testing.T) {
 		t.Fatalf("seed worker: %v", err)
 	}
 	wk.Model = "sonnet"
-	if err := s.dal.PutOutsourceWorker(*wk); err != nil {
+	// Through model's sole writer (T-55): seedWorker already INSERTed this row
+	// with "opus", and a whole-row write no longer carries the column — leaving
+	// the configured model at "opus" would quietly undo the setup this test's
+	// comment above depends on (configured must differ from reported).
+	if err := s.dal.SetMemberModel(wk.ID, "sonnet"); err != nil {
 		t.Fatalf("seed worker model: %v", err)
 	}
 
@@ -1202,8 +1206,10 @@ func TestGetMonitoring_ReleasedWorkerIsNotASession(t *testing.T) {
 	if got, want := sessionIDs(d), []string{"ow-live"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("session ids = %v, want %v", got, want)
 	}
-	if row := accountRow(t, d, "eva-m5-claude"); row["cost"] != 4.0 {
-		t.Errorf("released worker's spend = %v, want 4 (live 1 + banked 3) — "+
+	// The 3.0 seeded as banked was never reported, so it is not in the account's
+	// accumulator (rc-5c5d7c7c6dcd); the 1.0 that WAS reported must survive.
+	if row := accountRow(t, d, "eva-m5-claude"); row["cost"] != 1.0 {
+		t.Errorf("released worker's spend = %v, want 1 (the figure it reported) — "+
 			"dropping its SESSION must not drop its money", row["cost"])
 	}
 }
@@ -1462,7 +1468,7 @@ func TestFoldCommandResult_WorkerReceiptFoldsOntoWorkerRow(t *testing.T) {
 		"reason":    reason,
 		"log":       reason,
 		"at":        "2026-07-13T08:00:00Z",
-	}, "w-test")
+	}, "w-test", "")
 
 	got, err := s.dal.GetOutsourceWorker("ow-1")
 	if err != nil || got == nil {
@@ -1490,7 +1496,7 @@ func TestFoldCommandResult_WorkerReceiptUnknownWorkerIgnored(t *testing.T) {
 	s := foldTestServer(t)
 	s.foldCommandResult(map[string]any{
 		"worker_id": "ow-nope", "rpc": "worker_start", "ok": true,
-	}, "w-test")
+	}, "w-test", "")
 }
 
 func TestFoldCommandResult_ReasonPersistedVerbatim(t *testing.T) {
@@ -1509,7 +1515,7 @@ func TestFoldCommandResult_ReasonPersistedVerbatim(t *testing.T) {
 		"reason":    reason,
 		"log":       reason,
 		"at":        "2026-07-13T08:00:00Z",
-	}, "w-test")
+	}, "w-test", "")
 
 	got, err := s.dal.GetMember("mira")
 	if err != nil || got == nil {
@@ -1531,7 +1537,7 @@ func TestFoldCommandResult_ReasonClampedAtCap(t *testing.T) {
 	long := "mkdir_failed: " + strings.Repeat("x", 2*commandResultReasonMax)
 	s.foldCommandResult(map[string]any{
 		"member_id": "mira", "rpc": "start", "ok": false, "reason": long,
-	}, "w-test")
+	}, "w-test", "")
 	got, _ := s.dal.GetMember("mira")
 	if len(got.LastOpReason) != commandResultReasonMax {
 		t.Fatalf("reason must clamp to %d bytes, got %d", commandResultReasonMax, len(got.LastOpReason))
@@ -1552,7 +1558,7 @@ func TestFoldCommandResult_NoReasonFoldsEmpty(t *testing.T) {
 	}
 	s.foldCommandResult(map[string]any{
 		"member_id": "mira", "rpc": "stop", "ok": true, "log": "session=member-mira: stopped",
-	}, "w-test")
+	}, "w-test", "")
 	got, _ := s.dal.GetMember("mira")
 	if got.LastOpReason != "" {
 		t.Fatalf("a reason-less receipt must fold an empty reason, got %q", got.LastOpReason)
@@ -1586,7 +1592,7 @@ func TestFoldCommandResult_NoopStopDoesNotPolluteLastOp(t *testing.T) {
 		"reason":    "no_such_session: stop was a no-op (no session, no member process on this warden)",
 		"log":       "session=member-mira: no_such_session",
 		"at":        "2026-07-20T04:30:00Z",
-	}, "w-test")
+	}, "w-test", "")
 	got, err := s.dal.GetMember("mira")
 	if err != nil || got == nil {
 		t.Fatalf("get: %v %v", got, err)
@@ -1613,7 +1619,7 @@ func TestFoldCommandResult_FailedStopAlwaysFolds(t *testing.T) {
 	s.foldCommandResult(map[string]any{
 		"member_id": "mira", "rpc": "stop", "ok": false,
 		"reason": "no_such_session: contradictory failed no-op (defensive)",
-	}, "w-test")
+	}, "w-test", "")
 	got, _ := s.dal.GetMember("mira")
 	if got.LastOp != "stop" || got.LastOpOK == nil || *got.LastOpOK {
 		t.Fatalf("a failed stop must fold regardless of reason, got %+v", got)
@@ -1631,7 +1637,7 @@ func TestFoldCommandResult_RealStopStillFolds(t *testing.T) {
 	}
 	s.foldCommandResult(map[string]any{
 		"member_id": "mira", "rpc": "stop", "ok": true, "reason": "stopped",
-	}, "w-test")
+	}, "w-test", "")
 	got, _ := s.dal.GetMember("mira")
 	if got.LastOp != "stop" || got.LastOpOK == nil || !*got.LastOpOK {
 		t.Fatalf("a real stop receipt must keep folding, got %+v", got)
@@ -1653,7 +1659,7 @@ func TestFoldWorkerCommandResult_NoopStopSkipped(t *testing.T) {
 	s.foldCommandResult(map[string]any{
 		"worker_id": "ow-7", "rpc": "stop", "ok": true,
 		"reason": "no_such_session: stop was a no-op (no session, no member process on this warden)",
-	}, "w-test")
+	}, "w-test", "")
 	got, err := s.dal.GetOutsourceWorker("ow-7")
 	if err != nil || got == nil {
 		t.Fatalf("get worker: %v %v", got, err)
@@ -2103,8 +2109,11 @@ func TestGetMonitoring_ReportWithoutRuntimesCannotRefreshThem(t *testing.T) {
 //
 // Root cause the sentinels below exist to keep dead: the three VALUE folds
 // (acctByHost / freshRL → five_hour+seven_day / acctCost) iterated `members`,
-// and `dal.ListMembers()` is `WHERE kind != 'outsource'` — so SQL removed every
-// worker before the fold ever ran. The accounts row itself was still MINTED,
+// and at that time `dal.ListMembers()` was `WHERE kind != 'outsource'` — so SQL
+// removed every worker before the fold ever ran. (The clause is gone since T-14
+// 項目 6; `members` is now narrowed by the handler's own driver guard instead,
+// which is what TestGetMonitoring_LiveContractorCountsAsOneAgentNotTwo pins. The
+// root cause below is unchanged — only the mechanism that produced it is.) The accounts row itself was still MINTED,
 // because the raw-key loop near the end of the handler scans the WHOLE
 // telemetry snapshot. Net effect: a green card with three dashes.
 //
@@ -2425,9 +2434,11 @@ func TestGetMonitoring_WorkerOnlyAccountFillsMachineCostAndValidWindows(t *testi
 		t.Errorf("machine = %v, want m-eva-m5 — a worker-only account must still "+
 			"attribute to the host it runs on", row["machine"])
 	}
-	// (2) cost — live (1.25) + the worker's banked balance (2.5).
-	if row["cost"] != 3.75 {
-		t.Errorf("cost = %v, want 3.75 (live 1.25 + worker banked 2.5)", row["cost"])
+	// (2) cost — what the worker REPORTED (1.25). Its 2.5 banked balance was
+	// seeded straight into the database and never reported, so it is not in the
+	// account's own accumulator (rc-5c5d7c7c6dcd).
+	if row["cost"] != 1.25 {
+		t.Errorf("cost = %v, want 1.25 (the figure the worker reported)", row["cost"])
 	}
 	// (3)+(4) both rate-limit windows.
 	for _, win := range []string{"five_hour", "seven_day"} {
@@ -2463,8 +2474,10 @@ func TestGetMonitoring_WorkerOnlyAccountFillsMachineCostAndValidWindows(t *testi
 // sentinel: the seth-m5-claude shape, a key held by a staff member AND an
 // outsource worker at once. It pins the exact total, so widening the fold to
 // `members ∪ workers` may not double-count either side's live cost or banked
-// balance. If members and workers ever stop being disjoint (they are disjoint
-// by SQL today: kind != 'outsource' vs kind = 'outsource'), this goes red.
+// balance. If members and workers ever stop being disjoint, this goes red. ⚠️
+// They are NOT disjoint by SQL any more (T-14 項目 6 deleted ListMembers'
+// `WHERE kind != 'outsource'`): the handler's own driver guard is what separates
+// them now, so this test's premise is a guard someone can delete, not a query.
 func TestGetMonitoring_SharedAccountSumsMemberAndWorkerExactlyOnce(t *testing.T) {
 	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
 		telemetry: newMemStore(), gauge: newMemStore()}
@@ -2486,10 +2499,13 @@ func TestGetMonitoring_SharedAccountSumsMemberAndWorkerExactlyOnce(t *testing.T)
 
 	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
 	row := accountRow(t, d, "seth-m5-claude")
-	// 1.0 + 4.0 (member) + 0.5 + 0.25 (worker) — each balance banked once.
-	if row["cost"] != 5.75 {
-		t.Errorf("cost = %v, want 5.75 (member 1.0+4.0, worker 0.5+0.25) — each "+
-			"actor's balance must contribute exactly once", row["cost"])
+	// 1.0 (member) + 0.5 (worker) — each REPORT contributes exactly once, which
+	// is what this test has always been about; the seeded banked balances never
+	// went through a report, so they are not in the accumulator
+	// (rc-5c5d7c7c6dcd). A missing arm reads 0.5 or 1.0, a double-counted one 2.0.
+	if row["cost"] != 1.5 {
+		t.Errorf("cost = %v, want 1.5 (member 1.0, worker 0.5) — each actor's "+
+			"report must contribute exactly once", row["cost"])
 	}
 	// Both sit on the same box, so the host set must stay a SET.
 	if row["machine"] != "m-seth-m5" {
@@ -2536,9 +2552,10 @@ func TestGetMonitoring_ReleasedWorkerSpendStaysInTheAccount(t *testing.T) {
 	}
 	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
 	row := accountRow(t, d, "eva-m5-claude")
-	// live 3.0 + banked 9.0 — the close did not claw either back.
-	if row["cost"] != 12.0 {
-		t.Errorf("cost = %v, want 12 (live 3.0 + banked 9.0) — a task close must "+
+	// The 3.0 it reported stays after the release. (The 9.0 banked balance was
+	// seeded, never reported, so it is not in the accumulator — rc-5c5d7c7c6dcd.)
+	if row["cost"] != 3.0 {
+		t.Errorf("cost = %v, want 3 (the figure it reported) — a task close must "+
 			"not make an account's cumulative spend jump backwards", row["cost"])
 	}
 	if row["machine"] != "m-eva-m5" {
@@ -2816,8 +2833,8 @@ func TestGetMonitoring_RemovedMachineLeavesNoOrphanRow(t *testing.T) {
 	// (2) REVERSE SENTINEL — the owner-reported T-fc2f bug must not regress.
 	// A worker-only, released account still reports its full spend...
 	row := accountRow(t, d, "eva-m5-claude")
-	if row["cost"] != 12.0 {
-		t.Errorf("cost = %v, want 12 (live 3.0 + banked 9.0) — removing a machine "+
+	if row["cost"] != 3.0 {
+		t.Errorf("cost = %v, want 3 (the figure it reported) — removing a machine "+
 			"must not claw back money that was spent on it", row["cost"])
 	}
 	// ...its rate-limit windows...
@@ -2974,8 +2991,8 @@ func TestGetMonitoring_UnplacedActorMintsNoBlankMachineRow(t *testing.T) {
 	}
 	// (2) the account is still observable, and honest about not knowing where.
 	row := accountRow(t, d, "eva-m5-claude")
-	if row["cost"] != 3.0 {
-		t.Errorf("cost = %v, want 3 (live 2.0 + banked 1.0) — suppressing the blank "+
+	if row["cost"] != 2.0 {
+		t.Errorf("cost = %v, want 2 (the figure it reported) — suppressing the blank "+
 			"ROW must not suppress the SPEND", row["cost"])
 	}
 	if row["machine"] != "" {
@@ -3194,5 +3211,68 @@ func TestHardwareInvalidKeys(t *testing.T) {
 	}
 	if got := hardwareInvalidKeys(map[string]any{}); len(got) != 0 {
 		t.Errorf("an empty sample accuses nobody, got %v", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// T-14 項目 6 — the merged roster read must not make ONE contractor look like TWO.
+//
+// The bug this pins is SILENT and cannot go red on its own: after
+// ListMembers' `WHERE kind != 'outsource'` was deleted (dal.go), this handler's
+// roster read returns the contractor's MEMBER row, and its worker loop returns
+// the SAME contractor off ListOutsourceWorkers. Both branches resolve the host
+// through the same expression (observedHost / observedWorkerHost both fall back
+// to telemetry `machine`), so the one contractor lands in `actors` twice on the
+// same host key and `hostCounts[host]++` runs twice for it.
+//
+// What the owner sees: a machine card reading one more agent than the box is
+// running. No error, no log line, no other assertion in this file moves.
+//
+// The discrimination is VERIFIED, not reasoned: with the driver guard at the
+// top of HandleGetMonitoringApiMonitoringGet this reads 2; with the guard's
+// `continue` deleted it reads 3.
+func TestGetMonitoring_LiveContractorCountsAsOneAgentNotTwo(t *testing.T) {
+	s := &apiServer{dal: newTestDAL(t), hub: NewHub(),
+		telemetry: newMemStore(), gauge: newMemStore()}
+	// One registered machine. Its own warden member is an actor on its own row
+	// and has always counted as one live agent (see
+	// TestGetMonitoring_ReleasedWorkerSpendStaysInTheAccount for why the
+	// baseline is 1 and not 0), so the expected total below is warden + worker.
+	seedRegisteredMachine(t, s, "m-eva-m5")
+	// Exactly ONE live contractor, on that box.
+	seedWorker(t, s, "ow-eva", "E1", 0, WorkerStatusActive)
+	if rec := doIngestTelemetry(s, "ow-eva", "m-eva-m5",
+		`{"runtime":"claude","account":"eva-m5-claude","cost":1.25}`); rec.Code != 200 {
+		t.Fatalf("worker ingest: %d %s", rec.Code, rec.Body.String())
+	}
+
+	d := monitoringOf(t, doGetMonitoring(s, map[string]any{"sub": "owner", "scope": "owner"}))
+	mr := machineRowIn(d, "m-eva-m5")
+	if mr == nil {
+		t.Fatalf("no machines row for m-eva-m5 in %v", d["machines"])
+	}
+	if mr["agents"] != 2.0 {
+		t.Errorf("machines[m-eva-m5].agents = %v, want 2 (the box's own warden + the "+
+			"ONE live contractor). 3 means the merged roster read let the same "+
+			"contractor into `actors` twice — once off its member row, once off its "+
+			"worker row — and the owner is reading an agent count for a box that "+
+			"gained no agent", mr["agents"])
+	}
+
+	// The same double-entry also duplicates the SESSIONS row. It is invisible in
+	// the cockpit today (MonitorPage filters every `ow-` id out of this list),
+	// but findSessionFor / joinSessionRuntime are `sessions.find(...)` — first
+	// match wins — so a duplicate silently decides WHICH of the two rows any
+	// telemetry join lands on. Assert the id appears once.
+	seen := 0
+	for _, raw := range d["sessions"].([]any) {
+		if raw.(map[string]any)["id"] == "ow-eva" {
+			seen++
+		}
+	}
+	if seen != 1 {
+		t.Errorf("sessions rows for ow-eva = %d, want exactly 1 — two rows share an "+
+			"id and a name but are built from different presence expressions, so "+
+			"which one a first-match join picks is decided by loop order", seen)
 	}
 }

@@ -1,0 +1,48 @@
+// api/docSplit.ts — the frontend's ONE copy of the server's document marker.
+//
+// ⚠️ THE AUTHORITY FOR THIS RULE IS THE SERVER, NOT THIS FILE.
+// `docBodyMarker` / `DocSplitHeadBody` / `DocJoinHeadBody` in
+// server/ocserverd/doc_split.go decide where a boot-context document divides.
+//
+// 🔴 THE REAL COCKPIT NEVER CALLS THIS, AND THAT IS THE POINT (T-3201). The
+// wire hands the two halves over already split (`read_only_head` / `body`) and
+// takes only the body back, so `http.ts` has no reason to know that a marker
+// exists. The one caller is the MOCK ADAPTER, which is standing in for the
+// server and therefore has to do what the server does — the same reason
+// docCap.ts exists. A second caller appearing in `src/components` or in
+// `http.ts` would mean the cockpit had started composing the document itself,
+// which is the thing the body-only wire removed.
+//
+// Mirrored, not invented: a marker that drifted from the server's would make
+// the mock split a real seed in the wrong place, which reads as the demo mode
+// showing an owner a read-only half that is not the one he would be refused on.
+
+/** `docBodyMarker`, transcribed. One exact line, so splitting is a byte
+ * comparison rather than a heuristic. */
+export const DOC_BODY_MARKER =
+  "<!-- ↑唯讀區（程式產生，改不動）｜↓本體（可編輯，零變數） -->";
+
+/** `docBodySep`: the marker as it appears on disk, a blank line either side. */
+export const DOC_BODY_SEP = "\n\n" + DOC_BODY_MARKER + "\n\n";
+
+/** Mirrors DocSplitHeadBody. `split=false` means the text carries no marker at
+ * all — a legitimate state (a row stored before the marker existed), NOT an
+ * error; the caller decides what it means. */
+export function docSplitHeadBody(text: string): {
+  head: string;
+  body: string;
+  split: boolean;
+} {
+  const cut = text.indexOf(DOC_BODY_SEP);
+  if (cut < 0) return { head: text, body: "", split: false };
+  return {
+    head: text.slice(0, cut),
+    body: text.slice(cut + DOC_BODY_SEP.length),
+    split: true,
+  };
+}
+
+/** Mirrors DocJoinHeadBody. */
+export function docJoinHeadBody(head: string, body: string): string {
+  return head + DOC_BODY_SEP + body;
+}

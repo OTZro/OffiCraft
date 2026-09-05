@@ -14,7 +14,7 @@ import "testing"
 // stamps a fresh boot_ts.
 func TestOnFirstConnectStampsBootTSWhenAbsent(t *testing.T) {
 	api, dal := newGateTestAPI(t)
-	putGateMember(t, dal, Member{ID: "bt-new", Kind: KindAssistant})
+	putGateMember(t, dal, Member{ID: "bt-new", Kind: KindStaff})
 
 	api.onFirstConnect("bt-new")
 
@@ -29,7 +29,7 @@ func TestOnFirstConnectStampsBootTSWhenAbsent(t *testing.T) {
 // unchanged so the session age keeps growing.
 func TestOnFirstConnectDoesNotResetBootTSOnReconnect(t *testing.T) {
 	api, dal := newGateTestAPI(t)
-	putGateMember(t, dal, Member{ID: "bt-flap", Kind: KindAssistant})
+	putGateMember(t, dal, Member{ID: "bt-flap", Kind: KindStaff})
 
 	// A session that connected well in the past.
 	orig := nowSecs() - 500
@@ -51,7 +51,7 @@ func TestOnFirstConnectDoesNotResetBootTSOnReconnect(t *testing.T) {
 // anchor, so the NEXT connect (a genuinely new session) re-stamps fresh.
 func TestClearSessionBootTSThenReconnectReStamps(t *testing.T) {
 	api, dal := newGateTestAPI(t)
-	putGateMember(t, dal, Member{ID: "bt-respawn", Kind: KindAssistant})
+	putGateMember(t, dal, Member{ID: "bt-respawn", Kind: KindStaff})
 
 	orig := nowSecs() - 500
 	api.gauge.Set("bt-respawn", map[string]any{"boot_ts": orig})
@@ -73,11 +73,23 @@ func TestClearSessionBootTSThenReconnectReStamps(t *testing.T) {
 	}
 }
 
-// TestClearSessionBootTSPreservesOtherGaugeFields — clearing the anchor must not
-// wipe the rest of the gauge entry (context_pct etc.).
+// TestClearSessionBootTSPreservesOtherGaugeFields — clearing the anchor is a
+// TARGETED delete of SESSION-scoped state, not a wipe of the entry: whatever on
+// the gauge outlives a session must still be there afterwards.
+//
+// 🔴 THIS TEST USED context_pct AS ITS "survives" WITNESS AND NO LONGER CAN
+// (T-72dd). context_pct / context_pct_ts are the OLD session's reading, exactly
+// like the compaction_count deleted beside them, and leaving them standing left
+// the cockpit reader (foldActorRuntime, raw) showing a number the gate reader
+// (actionableContextPct, which requires context_pct_ts > boot_ts) had already
+// stopped honouring — see the T-72dd tests in
+// session_boot_pct_clear_t72dd_test.go. The witness is now rate_limits, which
+// describes the ACCOUNT and genuinely spans sessions, so this test still pins
+// what it was written to pin: the clear does not reach past its own scope.
 func TestClearSessionBootTSPreservesOtherGaugeFields(t *testing.T) {
 	api, _ := newGateTestAPI(t)
-	api.gauge.Set("bt-keep", map[string]any{"boot_ts": 100.0, "context_pct": 42.0})
+	api.gauge.Set("bt-keep", map[string]any{
+		"boot_ts": 100.0, "rate_limits": map[string]any{"five_hour_pct": 42.0}})
 
 	api.clearSessionBootTS("bt-keep")
 
@@ -85,8 +97,9 @@ func TestClearSessionBootTSPreservesOtherGaugeFields(t *testing.T) {
 	if _, ok := entry["boot_ts"]; ok {
 		t.Fatal("boot_ts must be gone")
 	}
-	if pct, ok := asNumber(entry["context_pct"]); !ok || pct != 42.0 {
-		t.Fatalf("context_pct must survive the clear; got %v ok=%t", pct, ok)
+	rl, ok := entry["rate_limits"].(map[string]any)
+	if !ok || rl["five_hour_pct"] != 42.0 {
+		t.Fatalf("account-scoped rate_limits must survive the clear; got %v", entry["rate_limits"])
 	}
 }
 
@@ -95,7 +108,7 @@ func TestClearSessionBootTSPreservesOtherGaugeFields(t *testing.T) {
 // the respawn's first connect re-stamps.
 func TestDispatchRobustStopClearsBootTS(t *testing.T) {
 	api, dal := newGateTestAPI(t)
-	putGateMember(t, dal, Member{ID: "bt-stop", Kind: KindAssistant,
+	putGateMember(t, dal, Member{ID: "bt-stop", Kind: KindStaff,
 		DesiredState: DesiredStateOnline, DesiredMachineID: "m1"})
 	api.gauge.Set("bt-stop", map[string]any{"boot_ts": nowSecs() - 500})
 

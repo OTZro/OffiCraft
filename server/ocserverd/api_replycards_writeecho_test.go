@@ -62,7 +62,7 @@ func getReplyCardRaw(t *testing.T, api *apiServer, cardID string) *httptest.Resp
 func boundWaitingCard(t *testing.T, api *apiServer) replyCardDTO {
 	t.Helper()
 	task := createAdHocTask(t, api, "m-exec")
-	submitPlan(t, api, task.ID, "m-exec", []map[string]any{
+	view := submitPlan(t, api, task.ID, "m-exec", []map[string]any{
 		{"name": "work", "dod": "d"},
 	})
 	startFirstStep(t, api, task.ID, "m-exec")
@@ -71,10 +71,11 @@ func boundWaitingCard(t *testing.T, api *apiServer) replyCardDTO {
 	// whole card would be indistinguishable and the identity compare below would
 	// pin nothing (openPlainCard's fixture leaves body empty).
 	rec := createCardRaw(t, api, "m-exec", map[string]any{
-		"kind":    "decision",
-		"summary": "which way?",
-		"body":    "the long ask body that the light row does not carry",
-		"options": []string{"AI 建議:照做", "先等等"},
+		"kind":        "decision",
+		"summary":     "which way?",
+		"body":        "the long ask body that the light row does not carry",
+		"options":     []map[string]any{{"text": "AI 建議:照做"}, {"text": "先等等"}},
+		"linked_task": map[string]any{"task_id": task.ID, "step_id": view.Steps[0].ID},
 	})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("create card: %d %s", rec.Code, rec.Body.String())
@@ -116,8 +117,8 @@ func TestAnswerEchoesTheWholeCard(t *testing.T) {
 	card := boundWaitingCard(t, api)
 
 	rec := answerCard(t, api, card.ID, map[string]any{
-		"option_idx": 0,
-		"text":       "就這樣辦",
+		"option_idxs": []int{0},
+		"text":        "就這樣辦",
 	})
 	assertEchoIsTheWholeCard(t, api, card.ID, rec)
 
@@ -131,15 +132,15 @@ func TestAnswerEchoesTheWholeCard(t *testing.T) {
 func TestReanswerEchoesTheWholeCard(t *testing.T) {
 	api := newTasksTestServer(t)
 	card := boundWaitingCard(t, api)
-	if rec := answerCard(t, api, card.ID, map[string]any{"option_idx": 0}); rec.Code != http.StatusOK {
+	if rec := answerCard(t, api, card.ID, map[string]any{"option_idxs": []int{0}}); rec.Code != http.StatusOK {
 		t.Fatalf("seed answer: %d %s", rec.Code, rec.Body.String())
 	}
 
 	put := httptest.NewRecorder()
 	api.HandleReanswerReplyCardApiReplyCardsCardIdAnswerPut(put,
 		taskReq(t, "PUT", "/x", map[string]any{
-			"option_idx": 1,
-			"text":       "改主意了",
+			"option_idxs": []int{1},
+			"text":        "改主意了",
 		}, "owner", "owner"), card.ID)
 	assertEchoIsTheWholeCard(t, api, card.ID, put)
 

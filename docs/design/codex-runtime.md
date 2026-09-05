@@ -91,9 +91,11 @@ The Codex member boot sequence changes only execution ownership:
    itself, telling the agent to carry on with the post-SSE steps of its boot document.
    Without it the boot ends in a dead stop: this runtime's agent must not mount its own
    listener, so it hands control back after step 1 — and it only ever runs when a listener
-   line becomes a turn, while the `connected` line is exactly the one the forwarding filter
-   drops. The wake fires ONCE per session and deliberately not on reconnects, which are
-   network blips whose only effect would be to interrupt work already under way. Its text
+   line becomes a turn, and until the disconnect-notice policy below the `connected` line
+   was exactly the one the forwarding filter dropped. The wake fires ONCE per session and
+   deliberately not on reconnects, which are network blips whose only effect would be to
+   re-issue a boot instruction into work already under way — a reconnect now reaches the
+   agent as the short transport notice instead, never as this turn. Its text
    NAMES the step instead of restating it: the boot document belongs to the owner and
    moves, and a copy of its wording here would be a second source of truth.
 5. App Server `thread/tokenUsage/updated` supplies total usage plus
@@ -134,9 +136,17 @@ agent re-read authoritative state through MCP.
 
 - Idle thread: a durable pending wake starts a new turn.
 - Active thread: steer the active turn, matching Claude's Monitor delivery semantics.
-- Listener connected: transport chatter is never forwarded to the model, but the FIRST such
-  line in a session also opens the sidecar-authored post-boot wake turn described above.
-  This is the one turn whose trigger is a line the forwarding policy drops.
+- Listener transport, per the owner's disconnect-notice policy: an outage interrupts the
+  agent exactly twice — once when it starts and once when it ends — and every retry in
+  between is swallowed. The retry cadence itself is untouched; only the narration is. A
+  third line is owed when the retry loop actually STOPS, because otherwise "still
+  retrying" and "given up" are the same silence and the agent cannot tell which one it is
+  sitting in. So the sidecar forwards exactly the disconnect, the reconnect (which also
+  says whether the station changed) and the give-up line, and drops the rest of the
+  chatter. The FIRST connected line of a session is the one exception: it opens the
+  sidecar-authored post-boot wake turn described above INSTEAD of being forwarded, so one
+  line never produces two turns. Both runtimes are held to this same policy; ocagent
+  decides what is printed, and this filter decides what a codex member is shown.
 - Listener or App Server exit: terminate the sidecar. The listener child is killed/reaped,
   SSE presence drops honestly, and existing OffiCraft reconciliation restarts the selected
   runtime. Durable server state and the existing `ocagent` cursor remain authoritative.
@@ -156,18 +166,22 @@ reply-card mechanism instead of waiting for an unattended TUI:
    `create_reply_card` whenever owner input is required. This is the Codex equivalent of
    Claude's `--disallowedTools AskUserQuestion`; the explicit feature override pins the
    current default against version/config drift.
-2. If App Server nevertheless emits `item/tool/requestUserInput`, the sidecar validates and
-   bounds the question payload, then opens one OffiCraft reply card per question as that
-   member. Options map directly up to the existing four-option limit; the first card uses
-   normal automatic task/step binding and any additional simultaneous cards use
-   `bind="none"`. This preserves the existing one-question-per-card convention.
-3. Card creation uses the existing automatic current-task/current-step binding. Therefore
-   the task enters `waiting_owner` exactly as it does for Claude; no Codex-only card table,
-   status, or UI is introduced.
-4. The sidecar immediately completes the App Server request with a fixed deferred marker
-   and instructs the active Codex turn to yield. It MUST NOT leave the JSON-RPC request
-   pending, because that request belongs to one App Server client connection and would be
-   fragile across reconnects.
+2. If App Server nevertheless emits `item/tool/requestUserInput`, the sidecar REFUSES to
+   open the card on Codex's behalf (T-18) and answers each question with an instruction to
+   open it itself through `create_reply_card`. The warden holds no `task_id` and no
+   `step_id`, so every card it minted here relied on the server inferring a binding — and
+   an inference that missed produced a card with no `等我回覆` hold that the owner's answer
+   would later be refused for. `create_reply_card` now requires an explicit `linked_task`,
+   and the only party that knows what the question is about is Codex.
+3. That refusal text CARRIES the secret warning. While the warden opened the card it read
+   `question.isSecret` and put "do not paste the secret into the card" into the card body;
+   nothing executes that path any more, so the sentence moved into the refusal. Without it,
+   Codex would open its own card for a credential with nothing telling it not to type the
+   secret into the body.
+4. The sidecar immediately completes the App Server request with that text and instructs the
+   active Codex turn to yield. It MUST NOT leave the JSON-RPC request pending, because that
+   request belongs to one App Server client connection and would be fragile across
+   reconnects.
 5. The answer or expiry arrives through the existing directed `reply_card` SSE
    delta. The durable wake starts the next idle Codex turn, which reads the authoritative
    card(s) with `get_reply_card` and continues once the required answers are settled, or
@@ -210,6 +224,77 @@ at all. Either way no `start` is dispatched; the stall is named on the row the c
 reads (`last_op_reason` — `no_machine_selected`, and `machine_unavailable` for an
 outsource worker whose named machine cannot take it), and reconcile retries after
 telemetry or placement changes.
+
+### An UNSET runtime is resolved at placement, from that machine
+
+A member row may hold NO runtime at all. That is a durable third state, distinct from
+"the owner picked claude" (T-b3d0): `seedOutOfBox` writes Mira with no runtime, and the
+two creation paths that mint a member — `hire_member` (`POST /api/members`) and
+`POST /api/roles`, the cockpit's 招攬新成員 — leave it empty when the caller names none
+(T-ae8b). `resolveEmptyRuntimeForPlacement` (`server/ocserverd/reconcile.go`) fills it at
+the first START dispatch, from the target machine's reported `runtimes` map, and persists
+the choice on the roster row: claude if ready, else codex if ready, else nothing is
+persisted — the resolver refuses to freeze a guess onto the row. It does NOT follow that
+an unready box is refused: the runtime stays unset, `NormalizeRuntime` folds it to
+`claude`, and `machineSupportsRuntime`'s claude arm is deliberately permissive
+(`api_machines.go` — the `OC_CLAUDE_CRED_CHECK=0` escape hatch), so the START is still
+dispatched and the failure surfaces at spawn time, not at the gate. A member whose
+runtime is already set is never touched; the owner's choice always wins. No capability
+map reported yet leaves it unset, which is today's legacy behaviour
+(`NormalizeRuntime("") == claude`).
+
+**One reported shape is treated as UNKNOWN rather than as an answer**: a claude entry of
+`{"installed": true, "logged_in": false}`. No current warden can produce it —
+`collectRuntimeCapabilities` is evidence-only for Claude and OMITS `logged_in` when its
+two presence checks find nothing — so an explicit `false` dates the reporter to a warden
+older than v0.5.211-beta.1, where that `false` was a guess rather than a measurement. The
+spawn-side gate routinely disproves it: it honours four env-carried credential sources the
+probe never inspects (two direct keys plus the Bedrock / Vertex managed-auth flags, where
+no local claude login exists at all). Reading the stale `false` as "this box cannot run
+Claude" already cost one machine once, permanently pinned to codex with no backfill to
+undo it; T-ae8b makes every hire born UNSET, so the same stale `false` would now reach
+every future member on that machine instead of just the seeded one. So the resolver
+declines to choose, leaves the runtime unset, and logs why and what to do about it
+(upgrade that machine's warden, or set the member's 執行環境 by hand). The START still
+goes out on the permissive claude path, so either it launches — proving the `false` was a
+guess — or it fails at spawn with `claude_not_logged_in`, which names the Codex exit. A
+visible, reversible failure is preferred to an invisible irreversible guess. Codex gets no
+such grace and must not: `codex login status` is a real command, so its `false` is a
+measurement.
+
+🔴 **The consequence, which is deliberate and owner-known: hiring is not a pure
+function of the request.** The same `hire_member` call yields a Claude member on one
+machine and a Codex member on another, because the answer is read from the machine at
+placement time, not from the request. This is the point — a codex-only box must be able
+to hire without first installing Claude Code — but it means the runtime a new member ends
+up on **cannot be predicted from the request alone**. A caller who needs a specific
+runtime must name it explicitly; naming it also pins it permanently.
+
+Nothing about this is visible on the wire. Every DTO runs `NormalizeRuntime`, so an unset
+row is reported as `claude` in API responses and in the cockpit, exactly as before; only
+the persisted value changed. One trap follows from that pairing: the cockpit's 喚醒／更改
+dialog seeds its runtime cell from the normalized value (`member.runtime || "claude"`,
+`MemberDetailPanel.tsx`). Confirming it UNCHANGED is safe — both submit paths compute
+`launchChanged` over runtime/model/effort first and skip `patchMember` when nothing moved,
+and the offline wake branch sits outside that guard — so an untouched dialog writes no
+runtime. That left a narrower trap, and it is now CLOSED: editing **model or effort**
+makes `launchChanged` true, and the seeded runtime cell used to ride along in the same
+PATCH — writing a concrete `claude` onto a member nobody chose one for and permanently
+disabling the resolution above, from a dialog where the owner never touched the runtime
+control.
+
+The panel now sends `runtime` only when that control actually MOVED off what it was
+showing (`runtimeChanged`); an unsupplied field leaves the stored value untouched, and `""`
+cannot be sent instead because `ValidRuntime` 422s it. Pinned by
+`MemberDetailPanel.runtime-unset-not-submitted.test.tsx`, whose fourth case is the positive
+control that the panel still emits `runtime` for a real pick.
+
+⚠️ The cost, stated so nobody re-opens it as a bug: an owner looking at an unset member sees
+`claude` and cannot deliberately pin THAT claude from this dialog, because re-choosing the
+value already on screen is indistinguishable from not choosing at all. Only one of the two
+readings can be honoured and honouring the silent one is what broke resolution. A dirty-flag
+on the control would not fix this either — a native select re-choosing its current option
+fires no change event, so it would be a rule that only sometimes works.
 
 ## Launch policy
 

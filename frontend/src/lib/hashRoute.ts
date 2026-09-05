@@ -55,7 +55,9 @@ export interface HashRoute {
   /** office only, requires chatId — the message the chat locates + highlights
    * on open (B3 跳到原訊息: the reply card's originating ask message). */
   msgId?: string;
-  /** office only, requires chatId — a task number (e.g. "T-7d40") whose
+  /** office only, requires chatId — a task number, which IS the task id
+   * (e.g. "t-7d40aabbccdd"; the four-hex "T-7d40" projection was retired by
+   * T-5291), whose
    * "[<taskNo>] " prefix seeds the chat composer's draft (T-e987 任務卡 →
    * 負責人/建立者 聊天跳轉: the label routes here so the owner starts a message
    * already tagged with the task). One-shot, only seeds an empty draft. */

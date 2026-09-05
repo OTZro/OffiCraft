@@ -64,6 +64,62 @@
   },
   {
     "auth": "gated",
+    "mcp_tool": null,
+    "method": "GET",
+    "path": "/api/auth/mfa",
+    "requires": "owner"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": null,
+    "method": "POST",
+    "path": "/api/auth/mfa/offer",
+    "requires": "owner"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": null,
+    "method": "GET",
+    "path": "/api/auth/signing-keys",
+    "requires": "owner"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": null,
+    "method": "POST",
+    "path": "/api/auth/signing-keys/rotate",
+    "requires": "owner"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": null,
+    "method": "POST",
+    "path": "/api/auth/signing-keys/{key_id}/remove",
+    "requires": "owner"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": null,
+    "method": "POST",
+    "path": "/api/auth/mfa/enroll",
+    "requires": "owner"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": null,
+    "method": "POST",
+    "path": "/api/auth/mfa/activate",
+    "requires": "owner"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": null,
+    "method": "POST",
+    "path": "/api/auth/mfa/disable",
+    "requires": "owner"
+  },
+  {
+    "auth": "gated",
     "mcp_tool": "get_settings",
     "method": "GET",
     "path": "/api/settings",
@@ -201,6 +257,20 @@
     "method": "POST",
     "path": "/api/members/{member_id}/force-stop",
     "requires": "admin_agent"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": null,
+    "method": "POST",
+    "path": "/api/accounts/cost/reset",
+    "requires": "owner"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": null,
+    "method": "POST",
+    "path": "/api/members/{member_id}/cost/reset",
+    "requires": "owner"
   },
   {
     "auth": "gated",
@@ -403,6 +473,20 @@
     "mcp_tool": null,
     "method": "GET",
     "path": "/api/chat/unread-count",
+    "requires": "machine"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": null,
+    "method": "GET",
+    "path": "/api/diff",
+    "requires": "machine"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": "get_diff_share_link",
+    "method": "GET",
+    "path": "/api/diff/share-link",
     "requires": "machine"
   },
   {
@@ -668,21 +752,21 @@
     "auth": "gated",
     "mcp_tool": "get_lessons",
     "method": "GET",
-    "path": "/api/lessons/{role_key}/{task_type}",
+    "path": "/api/lessons/{role_key}",
     "requires": "machine"
   },
   {
     "auth": "gated",
     "mcp_tool": "replace_lessons",
     "method": "POST",
-    "path": "/api/lessons/{role_key}/{task_type}",
+    "path": "/api/lessons/{role_key}",
     "requires": "agent"
   },
   {
     "auth": "gated",
     "mcp_tool": "patch_lessons",
     "method": "POST",
-    "path": "/api/lessons/{role_key}/{task_type}/patch",
+    "path": "/api/lessons/{role_key}/patch",
     "requires": "agent"
   },
   {
@@ -739,7 +823,7 @@
     "mcp_tool": "terminate_task",
     "method": "POST",
     "path": "/api/tasks/{task_id}/terminate",
-    "requires": "admin_agent"
+    "requires": "agent"
   },
   {
     "auth": "gated",
@@ -813,10 +897,10 @@
   },
   {
     "auth": "gated",
-    "mcp_tool": "open_gate",
-    "method": "POST",
-    "path": "/api/tasks/{task_id}/steps/{step_id}/gate",
-    "requires": "agent"
+    "mcp_tool": "get_task_step",
+    "method": "GET",
+    "path": "/api/tasks/{task_id}/steps/{step_id}",
+    "requires": "machine"
   },
   {
     "auth": "gated",
@@ -858,6 +942,20 @@
     "mcp_tool": "remove_task_artifact",
     "method": "DELETE",
     "path": "/api/tasks/{task_id}/artifact/{artifact_id}",
+    "requires": "agent"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": "list_task_artifacts",
+    "method": "GET",
+    "path": "/api/tasks/{task_id}/artifacts",
+    "requires": "machine"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": null,
+    "method": "GET",
+    "path": "/api/tasks/{task_id}/artifact/{artifact_id}/history",
     "requires": "agent"
   },
   {
@@ -914,7 +1012,7 @@
     "mcp_tool": "set_outsource_worker_model",
     "method": "POST",
     "path": "/api/outsource-workers/{id}/model",
-    "requires": "admin_agent"
+    "requires": "machine"
   },
   {
     "auth": "gated",
@@ -1086,6 +1184,27 @@
   },
   {
     "auth": "gated",
+    "mcp_tool": "get_boot_doc",
+    "method": "GET",
+    "path": "/api/boot-docs/{kind}/{key}",
+    "requires": "machine"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": "replace_boot_doc",
+    "method": "POST",
+    "path": "/api/boot-docs/{kind}/{key}",
+    "requires": "admin_agent"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": "reset_boot_doc",
+    "method": "POST",
+    "path": "/api/boot-docs/{kind}/{key}/reset",
+    "requires": "admin_agent"
+  },
+  {
+    "auth": "gated",
     "mcp_tool": "list_themes",
     "method": "GET",
     "path": "/api/themes",
@@ -1111,5 +1230,33 @@
     "method": "DELETE",
     "path": "/api/themes/{theme_id}",
     "requires": "admin_agent"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": "accelerated_stop_member",
+    "method": "POST",
+    "path": "/api/members/{member_id}/accelerated-stop",
+    "requires": "admin_agent"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": "accelerated_stop_outsource_worker",
+    "method": "POST",
+    "path": "/api/outsource-workers/{id}/accelerated-stop",
+    "requires": "admin_agent"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": "force_stop_outsource_worker",
+    "method": "POST",
+    "path": "/api/outsource-workers/{id}/force-stop",
+    "requires": "admin_agent"
+  },
+  {
+    "auth": "gated",
+    "mcp_tool": "replace_task_artifact",
+    "method": "POST",
+    "path": "/api/tasks/{task_id}/artifact/{artifact_id}/replace",
+    "requires": "agent"
   }
 ]

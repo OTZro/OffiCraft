@@ -45,9 +45,9 @@ func TestFillingInsightToTheCapLeavesDutyAndLearningUntouched(t *testing.T) {
 	}
 	writeLearning := func(text string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
-		api.HandleReplaceLessonsApiLessonsRoleKeyTaskTypePost(rec,
-			req(http.MethodPost, "/api/lessons/"+role+"/general", map[string]any{"text": text}),
-			role, "general")
+		api.HandleReplaceLessonsApiLessonsRoleKeyPost(rec,
+			req(http.MethodPost, "/api/lessons/"+role, map[string]any{"text": text}),
+			role)
 		return rec
 	}
 	writeInsight := func(text string) *httptest.ResponseRecorder {
@@ -69,7 +69,7 @@ func TestFillingInsightToTheCapLeavesDutyAndLearningUntouched(t *testing.T) {
 		t.Fatal(err)
 	}
 	dutyBefore := duty.DefinitionMD
-	learning, err := api.foldLessonsDTO(role, "general")
+	learning, err := api.foldLessonsDTO(role)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestFillingInsightToTheCapLeavesDutyAndLearningUntouched(t *testing.T) {
 	}
 
 	// ── (b) Learning unchanged, byte for byte ─────────────────────────────
-	learning, err = api.foldLessonsDTO(role, "general")
+	learning, err = api.foldLessonsDTO(role)
 	if err != nil {
 		t.Fatal(err)
 	}
