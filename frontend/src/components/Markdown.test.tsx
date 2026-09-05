@@ -296,6 +296,31 @@ describe("Markdown", () => {
       expect(c.textContent).toBe("!alt");
       expect(c.querySelector("img")).toBeNull();
     });
+
+    // SECURITY PROPERTY, not an edge case: what the brackets hand over must not
+    // itself contain "<" or ">". The unwrapping pattern says so with a negated
+    // character class, and until this test that claim was unenforced — widening
+    // it to `.*` left all other cases green, so the comment beside it was a
+    // promise nothing kept. The payload below is the shape that matters: the
+    // OUTER pair is well-formed, so a greedy pattern unwraps it happily and
+    // yields a destination with a stray ">" inside, which then reaches the
+    // scheme allowlist as a URL nobody wrote.
+    it("refuses to unwrap a destination that itself contains an angle bracket", () => {
+      const c = renderMd("[x](<https://example.com/a>b>)");
+      expect(c.querySelector("a")).toBeNull();
+      expect(c.textContent).toContain("[x](<https://example.com/a>b>)");
+    });
+
+    // A CAPABILITY THIS BRANCH ADDS, pinned separately because it is a
+    // different kind of claim from the one above: whitespace around the
+    // bracketed destination is tolerated, so a hand-typed link does not fail
+    // for a reason the writer cannot see. It rests on a single `.trim()`, and
+    // removing that token left every other case in this file green.
+    it("tolerates whitespace around an angle-bracketed destination", () => {
+      const a = renderMd("[x](  <https://example.com/a>  )").querySelector("a");
+      expect(a?.getAttribute("href")).toBe("https://example.com/a");
+      expect(a?.textContent).toBe("x");
+    });
   });
 
   // T-59 — the compare url is a THIRD link class, and its whole promise is
