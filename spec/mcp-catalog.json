@@ -4314,7 +4314,7 @@
               }
             ],
             "default": null,
-            "description": "Human-readable caption for the NEW version. It is stored exactly as sent and never validated, and it is NOT inherited from the version being replaced: omit it and the new version has no label at all, so re-send the caption whenever you mean to keep it.",
+            "description": "Human-readable caption for the NEW version, stored exactly as sent and never validated. OMIT IT AND THE PINNED LABEL IS CARRIED FORWARD — you never have to re-type the display name just to swap the content — and JSON null is read as omitted rather than as a value. SENDING ONE REPLACES IT; sending an explicit blank (the empty string, or a string that is only whitespace) CLEARS it, so absent and empty are different requests. Note that this route has never applied the 128-rune label cap that ``add_task_artifact`` enforces, and a carried-forward label is re-pinned on every replace, so an over-long one that a later label-less replace used to drop now persists instead.",
             "title": "Label"
           }
         },
